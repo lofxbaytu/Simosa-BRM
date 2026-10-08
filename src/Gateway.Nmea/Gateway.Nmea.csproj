@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- NMEA 0183 閘道(規劃書第 5.2 節 NMEA Gateway):由 OwnShipState 產生句型並以 UDP 送出 -->
+  <PropertyGroup>
+    <RootNamespace>SimosaBRM.Gateway.Nmea</RootNamespace>
+    <AssemblyName>SimosaBRM.Gateway.Nmea</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SimCore/SimCore.csproj" />
+  </ItemGroup>
+</Project>

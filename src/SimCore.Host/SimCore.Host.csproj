@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 主控程序(規劃書第 5.2 節 SimCore 主控程序):啟動引擎、WebSocket、UDP 多播狀態匯流排、NMEA 閘道 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SimosaBRM.SimCore.Host</RootNamespace>
+    <AssemblyName>SimosaBRM.SimCore.Host</AssemblyName>
+    <!-- 目標固定 net8.0;機器上只有較新的執行階段時允許向上相容(Windows 開發機裝有 .NET 8 時無作用) -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SimCore/SimCore.csproj" />
+    <ProjectReference Include="../Gateway.Nmea/Gateway.Nmea.csproj" />
+  </ItemGroup>
+</Project>

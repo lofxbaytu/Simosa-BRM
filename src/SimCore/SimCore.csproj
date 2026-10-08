@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 模擬核心類別庫(規劃書第 5.2 節 SimCore):物理、環境、情境、紀錄;TargetFramework 與輸出路徑由 Directory.Build.props 統一設定 -->
+  <PropertyGroup>
+    <RootNamespace>SimosaBRM.SimCore</RootNamespace>
+    <AssemblyName>SimosaBRM.SimCore</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="16.2.1" />
+  </ItemGroup>
+</Project>

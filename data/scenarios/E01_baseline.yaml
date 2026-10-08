@@ -1,0 +1,31 @@
+# E01 基線情境:麥寮外海開闊水域(規劃書第 8.1 節 E01;schema:src/Contracts/scenario.schema.json)
+# FS Bitumen No.1 壓載出港狀態,半速進,風 15 kn 東北,微弱南向流,水深 30 m。
+id: E01_baseline
+name: 麥寮外海開闊水域 — 基線
+description: >-
+  麥寮港外約 6 浬開闊水域,壓載狀態的 FSB1 以半速進向北航行;
+  用於儀器熟悉、基本操舵與車鐘練習,以及確定性/紀錄重播的回歸測試。
+seed: 20260101
+startTimeUtc: "2026-01-01T02:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: ballast
+origin:
+  lat: 23.80
+  lon: 120.05
+initial:
+  position: { lat: 23.80, lon: 120.05 }
+  heading: 0
+  speed: 7.8        # kn,與 HAH 壓載航速一致(particulars.engine.telegraph.halfAhead.speedBallast_kn)
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind:
+    trueSpeed: 15   # kn
+    trueDir: 45     # 來向(東北)
+    gustiness: 0.1
+  current:
+    set: 200        # 去向(度)
+    drift: 0.5      # kn
+  waterDepth: 30    # m

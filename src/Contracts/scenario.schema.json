@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simosa-brm/contracts/scenario.schema.json",
+  "title": "Scenario",
+  "description": "情境檔(data/scenarios/*.yaml;規劃書第 9.1 節、第 11.3 節)。最小 schema:自船 ID 與裝載狀態、初始位置(經緯度或本地 ENU)/航向/速度、環境、亂數種子。C# SimCore 與 Python 參考實作共用;角度為度、速度為節、航向 0 至 360、風向為來向、流向為去向。",
+  "type": "object",
+  "required": ["id", "ship", "initial", "environment"],
+  "properties": {
+    "id": { "type": "string", "description": "情境代號(例如 E01_baseline),用於紀錄檔名" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "seed": { "type": "integer", "default": 1, "description": "亂數種子;所有亂數(陣風等)由 Random(seed) 產生" },
+    "startTimeUtc": { "type": "string", "format": "date-time", "description": "練習開始的 UTC 時刻(供 NMEA 時間欄位);未指定時以實際時鐘代入" },
+    "timeScale": { "type": "number", "minimum": 0.1, "maximum": 10, "default": 1 },
+    "ship": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "enum": ["FSB1", "FSB2"] },
+        "loading": { "type": "string", "enum": ["full", "ballast", "intermediate"], "default": "ballast" }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "description": "本地 ENU 原點;未指定時以初始位置的經緯度為原點(初始位置用 x/y 時必填)",
+      "required": ["lat", "lon"],
+      "properties": { "lat": { "type": "number", "minimum": -90, "maximum": 90 }, "lon": { "type": "number", "minimum": -180, "maximum": 180 } }
+    },
+    "initial": {
+      "type": "object",
+      "required": ["position", "heading"],
+      "properties": {
+        "position": {
+          "type": "object",
+          "oneOf": [
+            { "required": ["lat", "lon"], "properties": { "lat": { "type": "number", "minimum": -90, "maximum": 90 }, "lon": { "type": "number", "minimum": -180, "maximum": 180 } } },
+            { "required": ["x", "y"], "properties": { "x": { "type": "number", "description": "本地 ENU 東向 (m)" }, "y": { "type": "number", "description": "本地 ENU 北向 (m)" } } }
+          ]
+        },
+        "heading": { "type": "number", "minimum": 0, "maximum": 360 },
+        "speed": { "type": "number", "default": 0, "description": "初始對水速度 (kn)" },
+        "telegraph": { "type": "string", "enum": ["EFAS", "FAS", "HAS", "SAS", "DSAS", "STOP", "DSAH", "SAH", "HAH", "FAH", "NAVF"], "description": "未指定時取航速最接近的前進車令" },
+        "rudder": { "type": "number", "default": 0, "description": "初始舵角(度,右正)" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["waterDepth"],
+      "properties": {
+        "wind": {
+          "type": "object",
+          "properties": {
+            "trueSpeed": { "type": "number", "minimum": 0, "description": "真風速 (kn)" },
+            "trueDir": { "type": "number", "minimum": 0, "maximum": 360, "description": "真風來向(度)" },
+            "gustiness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0, "description": "陣風強度(每秒以種子亂數在 ±gustiness 內更新係數)" }
+          }
+        },
+        "current": {
+          "type": "object",
+          "properties": {
+            "set": { "type": "number", "minimum": 0, "maximum": 360, "description": "流向(去向,度)" },
+            "drift": { "type": "number", "minimum": 0, "description": "流速 (kn)" }
+          }
+        },
+        "waterDepth": { "type": "number", "exclusiveMinimum": 0, "description": "水深 (m,常數;日後改為水深網格參照)" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "E01_baseline",
+      "seed": 20260101,
+      "ship": { "id": "FSB1", "loading": "ballast" },
+      "initial": { "position": { "lat": 23.80, "lon": 120.05 }, "heading": 0, "speed": 7.8, "telegraph": "HAH" },
+      "environment": { "wind": { "trueSpeed": 15, "trueDir": 45 }, "current": { "set": 200, "drift": 0.5 }, "waterDepth": 30 }
+    }
+  ]
+}
