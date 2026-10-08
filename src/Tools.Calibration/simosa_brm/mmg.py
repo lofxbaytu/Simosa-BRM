@@ -161,9 +161,10 @@ class MMGShip:
         self.cf_a = float(cf["blendStart_deg"]) * DEG
         self.cf_b = float(cf["blendEnd_deg"]) * DEG
         # 艏搖通道:船艏/艉因 r 產生的局部流向角 atan(½L|r|/|u|) 超過此區間時切換到橫流阻力(零速/低速迴轉的艏搖阻尼);
-        # 區間(35–60°,即 r' 約 1.4–3.5)下限刻意高於 35° 定常迴旋的值(r' ≈ 1,約 27°),使正常操縱區的多項式不受影響;舊係數檔無此鍵時用預設值。
-        self.cf_ya = float(cf.get("yawBlendStart_deg", 35.0)) * DEG
-        self.cf_yb = float(cf.get("yawBlendEnd_deg", 60.0)) * DEG
+        # 區間(30–45°,即 r' 約 1.15–2.0)下限高於 35° 定常迴旋的值(r' ≈ 1,約 26–27°),使正常操縱區的多項式不受影響;
+        # 上限 45°(½L|r| = |u|,r' = 2)之後多項式完全淡出。舊係數檔無此鍵時用預設值。
+        self.cf_ya = float(cf.get("yawBlendStart_deg", 30.0)) * DEG
+        self.cf_yb = float(cf.get("yawBlendEnd_deg", 45.0)) * DEG
         self.u_floor = float(cf["uFloor_mps"])
         p = c["propeller"]
         self.prop = PropellerModel(

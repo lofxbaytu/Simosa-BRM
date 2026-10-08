@@ -25,7 +25,9 @@
       "gammaRPlus",
       "swirlAngle"
     ],
-    "notes": [],
+    "notes": [
+      "engine.reversalDelay_s 取自 trial_targets.validation.crashStop.asternStart_s(主機換向的機械特性,非水動力擬合;緊急停船的停船時間與航跡距離仍為獨立驗證項目)"
+    ],
     "trialTargets": "data/ships/FSB1/trial_targets.json",
     "identification": {
       "date": "2026-10-08",
@@ -34,85 +36,85 @@
       "priorWeight": 0.3,
       "optimizer": {
         "method": "scipy least_squares trf",
-        "nfev": 22,
-        "status": 4,
-        "message": "Both `ftol` and `xtol` termination conditions are satisfied.",
-        "evaluations": 219
+        "nfev": 19,
+        "status": 3,
+        "message": "`xtol` termination condition is satisfied.",
+        "evaluations": 164
       },
       "cost": {
-        "initial": 7.792589640488247,
-        "final": 2.1271757731487444
+        "initial": 9.339669487036826,
+        "final": 2.0319516821714405
       },
       "parameters": {
         "Yv": {
           "initial": -0.3687658557385395,
-          "final": -0.3581919748656725,
+          "final": -0.4508516050041065,
           "lower": -0.7,
           "upper": -0.12
         },
         "Yr": {
-          "initial": 0.09045565514199702,
-          "final": 0.1321345708203415,
+          "initial": 0.10768487518112509,
+          "final": 0.12913300602160643,
           "lower": 0.02,
           "upper": 0.25
         },
         "Nv": {
           "initial": -0.11517171717171716,
-          "final": -0.13862860957431108,
+          "final": -0.14625295761068577,
           "lower": -0.3,
           "upper": -0.04
         },
         "Nr": {
           "initial": -0.048928202836445264,
-          "final": -0.03725573156671659,
+          "final": -0.03899581295002487,
           "lower": -0.14,
           "upper": -0.015
         },
         "Yvvv": {
           "initial": -1.607,
-          "final": -2.107048579428845,
+          "final": -1.6179745408955912,
           "lower": -3.5,
           "upper": -0.2
         },
         "Nvvr": {
           "initial": -0.294,
-          "final": -0.6003467430280032,
+          "final": -0.6096615862148663,
           "lower": -0.9,
           "upper": 0.0
         },
         "Nrrr": {
           "initial": -0.013,
-          "final": -0.020880801287475208,
+          "final": -0.020689530360893226,
           "lower": -0.09,
           "upper": 0.0
         },
         "aH": {
           "initial": 0.30972599999999995,
-          "final": 0.2837503551298968,
+          "final": 0.28004383468058036,
           "lower": 0.08,
           "upper": 0.7
         },
         "epsilon": {
           "initial": 1.0096200727272733,
-          "final": 1.1462651400857962,
+          "final": 1.1305409451468311,
           "lower": 0.6,
           "upper": 1.8
         },
         "gammaRMinus": {
           "initial": 0.395,
-          "final": 0.5023546238801412,
+          "final": 0.43693418567543674,
           "lower": 0.15,
           "upper": 0.95
         },
         "gammaRPlus": {
           "initial": 0.64,
-          "final": 0.7123045766259871,
+          "final": 0.6592875284789219,
           "lower": 0.15,
           "upper": 0.95
         },
         "swirlAngle": {
           "initial": 0.0,
-          "final": -0.5517168260480639,
+          "final": -0.6398370771677372,
           "lower": -3.0,
           "upper": 3.0
         }
@@ -121,127 +123,127 @@
         {
           "target": "turning.port.advance_m",
           "trial": 278.0,
-          "sim": 285.7052788797254,
+          "sim": 285.10361824857137,
           "tolerance": 29.7,
-          "deviation": 7.705278879725427,
-          "deviation_pct": 2.7716830502609446,
+          "deviation": 7.103618248571365,
+          "deviation_pct": 2.5552583627954553,
           "withinTolerance": true
         },
         {
           "target": "turning.port.transfer_m",
           "trial": 157.0,
-          "sim": 132.40228241864452,
+          "sim": 133.69094045017212,
           "tolerance": 29.7,
-          "deviation": -24.597717581355482,
-          "deviation_pct": -15.667336039079926,
+          "deviation": -23.30905954982788,
+          "deviation_pct": -14.8465347451133,
           "withinTolerance": true
         },
         {
           "target": "turning.port.tacticalDiameter_m",
           "trial": 277.2,
-          "sim": 295.9348284004341,
+          "sim": 294.3629047116107,
           "tolerance": 29.7,
-          "deviation": 18.73482840043414,
-          "deviation_pct": 6.75859610405272,
+          "deviation": 17.162904711610736,
+          "deviation_pct": 6.19152406623764,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.advance_m",
           "trial": 272.9,
-          "sim": 293.71242321398125,
+          "sim": 293.21214825153606,
           "tolerance": 29.7,
-          "deviation": 20.812423213981276,
-          "deviation_pct": 7.626391796988375,
+          "deviation": 20.312148251536087,
+          "deviation_pct": 7.4430737455244005,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.transfer_m",
           "trial": 175.5,
-          "sim": 140.97247585491752,
+          "sim": 142.7889139962873,
           "tolerance": 29.7,
-          "deviation": -34.52752414508248,
-          "deviation_pct": -19.673802931670927,
+          "deviation": -32.711086003712694,
+          "deviation_pct": -18.638795443710936,
           "withinTolerance": false
         },
         {
           "target": "turning.starboard.tacticalDiameter_m",
           "trial": 339.5,
-          "sim": 312.1623423498633,
+          "sim": 311.3825839518271,
           "tolerance": 33.95,
-          "deviation": -27.33765765013669,
-          "deviation_pct": -8.052329204753075,
+          "deviation": -28.117416048172913,
+          "deviation_pct": -8.282007672510431,
           "withinTolerance": true
         },
         {
           "target": "turning.port.steadySpeed_kn",
           "trial": 4.75,
-          "sim": 4.807980227601285,
+          "sim": 4.85415795991763,
           "tolerance": 0.6500000000000004,
-          "deviation": 0.05798022760128507,
-          "deviation_pct": 1.22063637055337,
+          "deviation": 0.10415795991762966,
+          "deviation_pct": 2.1927991561606244,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.steadySpeed_kn",
           "trial": 4.75,
-          "sim": 4.8717423620755875,
+          "sim": 4.911057445092392,
           "tolerance": 0.6500000000000004,
-          "deviation": 0.12174236207558753,
-          "deviation_pct": 2.5629970963281585,
+          "deviation": 0.16105744509239184,
+          "deviation_pct": 3.3906830545766704,
           "withinTolerance": true
         },
         {
           "target": "zigzag10_10.portFirst.overshoot1",
           "trial": 6.5,
-          "sim": 7.2594602486500115,
+          "sim": 7.161000765927881,
           "tolerance": 3.0,
-          "deviation": 0.7594602486500115,
-          "deviation_pct": 11.684003825384792,
+          "deviation": 0.6610007659278807,
+          "deviation_pct": 10.169242552736627,
           "withinTolerance": true
         },
         {
           "target": "zigzag10_10.portFirst.overshoot2",
           "trial": 10.8,
-          "sim": 9.108172081109952,
+          "sim": 9.020962787968735,
           "tolerance": 3.0,
-          "deviation": -1.6918279188900485,
-          "deviation_pct": -15.665073323056003,
+          "deviation": -1.779037212031266,
+          "deviation_pct": -16.47256677806728,
           "withinTolerance": true
         },
         {
           "target": "zigzag10_10.portFirst.overshoot3",
           "trial": 11.4,
-          "sim": 11.395969211465061,
+          "sim": 11.293072819502719,
           "tolerance": 3.0,
-          "deviation": -0.004030788534938878,
-          "deviation_pct": -0.03535779416613051,
+          "deviation": -0.10692718049728178,
+          "deviation_pct": -0.9379577236603664,
           "withinTolerance": true
         },
         {
           "target": "zigzag10_10.starboardFirst.overshoot1",
           "trial": 7.4,
-          "sim": 6.30600643110672,
+          "sim": 6.254499473990773,
           "tolerance": 3.0,
-          "deviation": -1.0939935688932803,
-          "deviation_pct": -14.78369687693622,
+          "deviation": -1.1455005260092275,
+          "deviation_pct": -15.479736837962534,
           "withinTolerance": true
         },
         {
           "target": "zigzag10_10.starboardFirst.overshoot2",
           "trial": 10.5,
-          "sim": 11.114476255865345,
+          "sim": 11.085501319369985,
           "tolerance": 3.0,
-          "deviation": 0.6144762558653447,
-          "deviation_pct": 5.852154817765188,
+          "deviation": 0.5855013193699854,
+          "deviation_pct": 5.576203041618909,
           "withinTolerance": true
         },
         {
           "target": "zigzag10_10.starboardFirst.overshoot3",
           "trial": 9.6,
-          "sim": 9.269267243718527,
+          "sim": 9.201075430988674,
           "tolerance": 3.0,
-          "deviation": -0.33073275628147236,
-          "deviation_pct": -3.445132877932004,
+          "deviation": -0.3989245690113261,
+          "deviation_pct": -4.1554642605346475,
           "withinTolerance": true
         }
       ],
@@ -359,26 +361,28 @@
         }
       ]
     },
-    "Yv": -0.3581919748656725,
-    "Yr": 0.1321345708203415,
-    "Nv": -0.13862860957431108,
-    "Nr": -0.03725573156671659,
+    "Yv": -0.4508516050041065,
+    "Yr": 0.12913300602160643,
+    "Nv": -0.14625295761068577,
+    "Nr": -0.03899581295002487,
     "Xvv": -0.04,
     "Xvr": 0.002,
     "Xrr": 0.011,
     "Xvvvv": 0.771,
-    "Yvvv": -2.107048579428845,
+    "Yvvv": -1.6179745408955912,
     "Yvvr": 0.379,
     "Yvrr": -0.391,
     "Yrrr": 0.008,
     "Nvvv": -0.03,
-    "Nvvr": -0.6003467430280032,
+    "Nvvr": -0.6096615862148663,
     "Nvrr": 0.055,
-    "Nrrr": -0.020880801287475208,
+    "Nrrr": -0.020689530360893226,
     "crossFlow": {
       "Cd": 1.0,
       "blendStart_deg": 20.0,
       "blendEnd_deg": 40.0,
+      "yawBlendStart_deg": 30.0,
+      "yawBlendEnd_deg": 45.0,
       "uFloor_mps": 0.5
     }
   },
@@ -428,15 +432,15 @@
     "maxAngle_deg": 70.0,
     "rate_degps": 3.6458333333333335,
     "neutralAngle_deg": 0.0,
-    "swirlAngle_deg": -0.5517168260480639,
+    "swirlAngle_deg": -0.6398370771677372,
     "tR": 0.2433599999999999,
-    "aH": 0.2837503551298968,
+    "aH": 0.28004383468058036,
     "xH": -0.45,
     "xR": -0.5,
-    "gammaRMinus": 0.5023546238801412,
-    "gammaRPlus": 0.7123045766259871,
+    "gammaRMinus": 0.43693418567543674,
+    "gammaRPlus": 0.6592875284789219,
     "lR": -0.71,
-    "epsilon": 1.1462651400857962,
+    "epsilon": 1.1305409451468311,
     "kappa": 0.5,
     "eta": 0.9426942817932406
   },

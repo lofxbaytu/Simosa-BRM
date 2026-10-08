@@ -30,10 +30,11 @@ from .propeller import fit_quadratic, kq_bseries, kt_bseries, zero_thrust_j
 SCHEMA_VERSION = "1.0"
 NU_WATER = 1.19e-6  # 海水運動黏度 m^2/s(15 °C)
 
-# 大漂角/低速橫流阻力與多項式的混合設定(mmg.forces):漂角通道 20–40°;艏搖通道(atan(½L|r|/|u|))35–60°(r' 約 1.4–3.5),
-# 下限高於 35° 定常迴旋的值(r' ≈ 1,約 27°),使正常操縱區不受影響,只在多項式有效範圍外的低速迴轉(側推、停船末段)提供艏搖阻尼。
+# 大漂角/低速橫流阻力與多項式的混合設定(mmg.forces):漂角通道 20–40°;艏搖通道(atan(½L|r|/|u|))30–45°(r' 約 1.15–2.0),
+# 下限高於 35° 定常迴旋的值(r' ≈ 1,約 26–27°),使正常操縱區不受影響;r' > 2 時多項式完全淡出(X'_rr r'² 等項外推會給出
+# 虛假的向前推力),改由橫流阻力提供低速迴轉(側推、停船末段)的艏搖阻尼。
 CROSS_FLOW_DEFAULT: dict[str, float] = {
-    "Cd": 1.0, "blendStart_deg": 20.0, "blendEnd_deg": 40.0, "yawBlendStart_deg": 35.0, "yawBlendEnd_deg": 60.0, "uFloor_mps": 0.5,
+    "Cd": 1.0, "blendStart_deg": 20.0, "blendEnd_deg": 40.0, "yawBlendStart_deg": 30.0, "yawBlendEnd_deg": 45.0, "uFloor_mps": 0.5,
 }
 
 # KVLCC2 基準非線性導數(Yasukawa & Yoshimura 2015 Table 3)

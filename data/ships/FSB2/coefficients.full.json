@@ -32,61 +32,61 @@
       "priorWeight": 0.5,
       "optimizer": {
         "method": "scipy least_squares trf",
-        "nfev": 7,
-        "status": 2,
-        "message": "`ftol` termination condition is satisfied.",
-        "evaluations": 72
+        "nfev": 16,
+        "status": 3,
+        "message": "`xtol` termination condition is satisfied.",
+        "evaluations": 90
       },
       "cost": {
-        "initial": 29.158915485526116,
-        "final": 4.476038541397562
+        "initial": 35.885265838993625,
+        "final": 5.790794018160473
       },
       "parameters": {
         "Nr": {
           "initial": -0.055597633136094685,
-          "final": -0.06896520171300584,
+          "final": -0.06264101089796989,
           "lower": -0.14,
           "upper": -0.015
         },
         "Nvvr": {
           "initial": -0.294,
-          "final": -0.28474974304125966,
+          "final": -0.32140899248390375,
           "lower": -0.9,
           "upper": 0.0
         },
         "Nrrr": {
           "initial": -0.013,
-          "final": -0.01617971862071739,
+          "final": -0.018568862021235127,
           "lower": -0.09,
           "upper": 0.0
         },
         "aH": {
           "initial": 0.32665500000000003,
-          "final": 0.28076839189237285,
+          "final": 0.28288267137084055,
           "lower": 0.08,
           "upper": 0.7
         },
         "epsilon": {
           "initial": 0.9793733357988168,
-          "final": 1.3954677515949938,
+          "final": 1.3377241945356,
           "lower": 0.6,
           "upper": 1.8
         },
         "gammaRMinus": {
           "initial": 0.395,
-          "final": 0.3113350495308235,
+          "final": 0.2635712024390032,
           "lower": 0.15,
           "upper": 0.95
         },
         "gammaRPlus": {
           "initial": 0.64,
-          "final": 0.5146346070965429,
+          "final": 0.4768585547199624,
           "lower": 0.15,
           "upper": 0.95
         },
         "swirlAngle": {
           "initial": 0.0,
-          "final": 0.10864292134271385,
+          "final": -0.3844177920956191,
           "lower": -3.0,
           "upper": 3.0
         }
@@ -95,203 +95,203 @@
         {
           "target": "turning.port.advance_m",
           "trial": 313.0,
-          "sim": 297.00130187672283,
+          "sim": 300.8268810559836,
           "tolerance": 46.949999999999996,
-          "deviation": -15.998698123277165,
-          "deviation_pct": -5.111405151206762,
+          "deviation": -12.17311894401638,
+          "deviation_pct": -3.8891753814748817,
           "withinTolerance": true
         },
         {
           "target": "turning.port.transfer_m",
           "trial": 115.0,
-          "sim": 122.44546108370969,
+          "sim": 130.1283506965945,
           "tolerance": 46.800000000000004,
-          "deviation": 7.445461083709688,
-          "deviation_pct": 6.474313985834511,
+          "deviation": 15.12835069659451,
+          "deviation_pct": 13.155087562256096,
           "withinTolerance": true
         },
         {
           "target": "turning.port.tacticalDiameter_m",
           "trial": 208.0,
-          "sim": 266.277684130236,
+          "sim": 281.5804542624438,
           "tolerance": 46.800000000000004,
-          "deviation": 58.277684130236025,
-          "deviation_pct": 28.018117370305784,
+          "deviation": 73.58045426244382,
+          "deviation_pct": 35.37521839540568,
           "withinTolerance": false
         },
         {
           "target": "turning.port.t90_s",
           "trial": 76.0,
-          "sim": 65.69043134487217,
+          "sim": 66.13056090120973,
           "tolerance": 11.4,
-          "deviation": -10.309568655127833,
-          "deviation_pct": -13.565221914641885,
+          "deviation": -9.869439098790266,
+          "deviation_pct": -12.986104077355614,
           "withinTolerance": true
         },
         {
           "target": "turning.port.v90_kn",
           "trial": 5.4,
-          "sim": 6.859216564644952,
+          "sim": 7.218279059591163,
           "tolerance": 0.75,
-          "deviation": 1.4592165646449518,
-          "deviation_pct": 27.022528974906514,
+          "deviation": 1.8182790595911626,
+          "deviation_pct": 33.67183443687338,
           "withinTolerance": false
         },
         {
           "target": "turning.port.t180_s",
           "trial": 143.0,
-          "sim": 131.67070536544526,
+          "sim": 131.90183828127778,
           "tolerance": 21.45,
-          "deviation": -11.329294634554742,
-          "deviation_pct": -7.922583660527792,
+          "deviation": -11.098161718722224,
+          "deviation_pct": -7.760952250854702,
           "withinTolerance": true
         },
         {
           "target": "turning.port.v180_kn",
           "trial": 3.9,
-          "sim": 3.8242525722223757,
+          "sim": 4.228566993734818,
           "tolerance": 0.75,
-          "deviation": -0.07574742777762422,
-          "deviation_pct": -1.9422417378878005,
+          "deviation": 0.3285669937348179,
+          "deviation_pct": 8.424794711149177,
           "withinTolerance": true
         },
         {
           "target": "turning.port.t270_s",
           "trial": 228.0,
-          "sim": 205.484763160547,
+          "sim": 206.8733751900953,
           "tolerance": 34.199999999999996,
-          "deviation": -22.515236839452996,
-          "deviation_pct": -9.875103876953068,
+          "deviation": -21.126624809904712,
+          "deviation_pct": -9.266063513116102,
           "withinTolerance": true
         },
         {
           "target": "turning.port.v270_kn",
           "trial": 3.5,
-          "sim": 2.898207269746424,
+          "sim": 3.2731661549232682,
           "tolerance": 0.75,
-          "deviation": -0.6017927302535759,
-          "deviation_pct": -17.19407800724503,
+          "deviation": -0.22683384507673177,
+          "deviation_pct": -6.480967002192336,
           "withinTolerance": true
         },
         {
           "target": "turning.port.t360_s",
           "trial": 306.0,
-          "sim": 281.0774893846303,
+          "sim": 281.7730863842558,
           "tolerance": 45.9,
-          "deviation": -24.922510615369674,
-          "deviation_pct": -8.144611312212312,
+          "deviation": -24.226913615744195,
+          "deviation_pct": -7.917292031288953,
           "withinTolerance": true
         },
         {
           "target": "turning.port.v360_kn",
           "trial": 3.4,
-          "sim": 2.651383281447095,
+          "sim": 2.8131317313382223,
           "tolerance": 0.75,
-          "deviation": -0.7486167185529049,
-          "deviation_pct": -22.018138780967792,
+          "deviation": -0.5868682686617777,
+          "deviation_pct": -17.260831431228755,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.advance_m",
           "trial": 300.0,
-          "sim": 309.8811360769719,
+          "sim": 310.80530539028047,
           "tolerance": 46.800000000000004,
-          "deviation": 9.881136076971927,
-          "deviation_pct": 3.293712025657309,
+          "deviation": 10.805305390280466,
+          "deviation_pct": 3.601768463426822,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.transfer_m",
           "trial": 130.0,
-          "sim": 133.35020793567625,
+          "sim": 139.66894001847035,
           "tolerance": 46.800000000000004,
-          "deviation": 3.350207935676252,
-          "deviation_pct": 2.577083027443271,
+          "deviation": 9.668940018470352,
+          "deviation_pct": 7.437646168054116,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.tacticalDiameter_m",
           "trial": 245.0,
-          "sim": 290.331712319943,
+          "sim": 300.2712510187237,
           "tolerance": 46.800000000000004,
-          "deviation": 45.331712319942994,
-          "deviation_pct": 18.502739722425712,
-          "withinTolerance": true
+          "deviation": 55.27125101872372,
+          "deviation_pct": 22.559694293356618,
+          "withinTolerance": false
         },
         {
           "target": "turning.starboard.t90_s",
           "trial": 74.0,
-          "sim": 68.63211560062499,
+          "sim": 68.46387029697253,
           "tolerance": 11.1,
-          "deviation": -5.367884399375015,
-          "deviation_pct": -7.253897836993263,
+          "deviation": -5.53612970302747,
+          "deviation_pct": -7.481256355442528,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.v90_kn",
           "trial": 6.0,
-          "sim": 7.11497851838026,
+          "sim": 7.4385349496740645,
           "tolerance": 0.75,
-          "deviation": 1.1149785183802603,
-          "deviation_pct": 18.582975306337673,
+          "deviation": 1.4385349496740645,
+          "deviation_pct": 23.975582494567742,
           "withinTolerance": false
         },
         {
           "target": "turning.starboard.t180_s",
           "trial": 145.0,
-          "sim": 137.10750819593537,
+          "sim": 135.412313933665,
           "tolerance": 21.75,
-          "deviation": -7.892491804064633,
-          "deviation_pct": -5.4430977959066436,
+          "deviation": -9.58768606633501,
+          "deviation_pct": -6.612197287127593,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.v180_kn",
           "trial": 4.4,
-          "sim": 4.187679765765858,
+          "sim": 4.482167278366889,
           "tolerance": 0.75,
-          "deviation": -0.21232023423414237,
-          "deviation_pct": -4.825459868957781,
+          "deviation": 0.08216727836688875,
+          "deviation_pct": 1.867438144702017,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.t270_s",
           "trial": 235.0,
-          "sim": 213.7881833144802,
+          "sim": 210.76272721976318,
           "tolerance": 35.25,
-          "deviation": -21.211816685519807,
-          "deviation_pct": -9.02630497256162,
+          "deviation": -24.23727278023682,
+          "deviation_pct": -10.313733097973115,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.v270_kn",
           "trial": 4.2,
-          "sim": 3.2718707636968642,
+          "sim": 3.442636518766163,
           "tolerance": 0.75,
-          "deviation": -0.9281292363031359,
-          "deviation_pct": -22.098315150074665,
+          "deviation": -0.757363481233837,
+          "deviation_pct": -18.03246383890088,
           "withinTolerance": false
         },
         {
           "target": "turning.starboard.t360_s",
           "trial": 313.0,
-          "sim": 292.7414003931381,
+          "sim": 287.5060143738296,
           "tolerance": 46.949999999999996,
-          "deviation": -20.25859960686188,
-          "deviation_pct": -6.472396040530952,
+          "deviation": -25.4939856261704,
+          "deviation_pct": -8.145043331044855,
           "withinTolerance": true
         },
         {
           "target": "turning.starboard.v360_kn",
           "trial": 3.7,
-          "sim": 3.0275856557901153,
+          "sim": 3.0182278439662897,
           "tolerance": 0.75,
-          "deviation": -0.6724143442098849,
-          "deviation_pct": -18.17336065432121,
+          "deviation": -0.6817721560337104,
+          "deviation_pct": -18.426274487397578,
           "withinTolerance": true
         }
       ],
-      "withinTolerance": "18/22"
+      "withinTolerance": "17/22"
     }
   },
   "tolerances": {
@@ -421,9 +421,9 @@
       ]
     },
     "Yv": -0.4234564144792934,
-    "Yr": 0.10874743800887746,
+    "Yr": 0.1321418269450265,
     "Nv": -0.13846153846153847,
-    "Nr": -0.06896520171300584,
+    "Nr": -0.06264101089796989,
     "Xvv": -0.04,
     "Xvr": 0.002,
     "Xrr": 0.011,
@@ -433,13 +433,15 @@
     "Yvrr": -0.391,
     "Yrrr": 0.008,
     "Nvvv": -0.03,
-    "Nvvr": -0.28474974304125966,
+    "Nvvr": -0.32140899248390375,
     "Nvrr": 0.055,
-    "Nrrr": -0.01617971862071739,
+    "Nrrr": -0.018568862021235127,
     "crossFlow": {
       "Cd": 1.0,
       "blendStart_deg": 20.0,
       "blendEnd_deg": 40.0,
+      "yawBlendStart_deg": 30.0,
+      "yawBlendEnd_deg": 45.0,
       "uFloor_mps": 0.5
     }
   },
@@ -489,15 +491,15 @@
     "maxAngle_deg": 35.0,
     "rate_degps": 5.0,
     "neutralAngle_deg": 0.0,
-    "swirlAngle_deg": 0.10864292134271385,
+    "swirlAngle_deg": -0.3844177920956191,
     "tR": 0.2357999999999999,
-    "aH": 0.28076839189237285,
+    "aH": 0.28288267137084055,
     "xH": -0.45,
     "xR": -0.5,
-    "gammaRMinus": 0.3113350495308235,
-    "gammaRPlus": 0.5146346070965429,
+    "gammaRMinus": 0.2635712024390032,
+    "gammaRPlus": 0.4768585547199624,
     "lR": -0.71,
-    "epsilon": 1.3954677515949938,
+    "epsilon": 1.3377241945356,
     "kappa": 0.5,
     "eta": 0.921312346404167
   },
