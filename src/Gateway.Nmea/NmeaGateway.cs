@@ -5,7 +5,7 @@ namespace SimosaBRM.Gateway.Nmea;
 
 /// <summary>
 /// 掛在引擎上,依句型速率產生 NMEA(HDT/ROT/RSA 10 Hz,其餘 1 Hz;規劃書第 5.3 節),時間 = 情境起始 UTC + 模擬時間。
-/// 目標船:每目標 TTM 1 Hz;AIS !AIVDM 類型 1 位置報告每 10 s(固定,不依航速縮短)、類型 5 靜態資料每 6 分,
+/// 目標船:每目標 TTM 1 Hz;AIS !AIVDM 類型 1 位置報告每 10 s(固定,不依航速縮短)、類型 5 靜態資料於出現後數秒先送一次再每 6 分,
 /// 各目標依其在 targets[] 的序號錯開秒數;AIS 關閉或不發送(錯誤注入 silent)的目標只有 TTM。在引擎執行緒上執行;輸出端應避免阻塞。
 /// </summary>
 public sealed class NmeaGateway : IDisposable
@@ -53,9 +53,10 @@ public sealed class NmeaGateway : IDisposable
                 {
                     var ais = targets[i].Ais;
                     if (ais is null) continue;
-                    var offset = i % AisPositionIntervalS;
-                    if (sec % AisPositionIntervalS == offset) batch.AddRange(AisEncoder.PositionReport(ais, utc, i % 2 == 0 ? 'A' : 'B'));
-                    if (sec % AisStaticIntervalS == offset) batch.AddRange(AisEncoder.StaticAndVoyage(ais, i % 9 + 1, i % 2 == 0 ? 'A' : 'B'));
+                    // 位置:第 i 艘在 sec ≡ i (mod 10);靜態:第 2+i 秒先送一次(讓 ECDIS 儘早取得船名),之後每 6 分
+                    if ((sec - i) % AisPositionIntervalS == 0) batch.AddRange(AisEncoder.PositionReport(ais, utc, i % 2 == 0 ? 'A' : 'B'));
+                    var staticAge = sec - 2 - i;
+                    if (staticAge >= 0 && staticAge % AisStaticIntervalS == 0) batch.AddRange(AisEncoder.StaticAndVoyage(ais, i % 9 + 1, i % 2 == 0 ? 'A' : 'B'));
                 }
             }
         }

@@ -94,6 +94,7 @@ targets:
     behaviour:
       mode: follow
       follow: { leader: own, bearing: 120, range: 70, gain: 0.05, maxSpeed: 18 }
+    motion: { speedTau: 8, maxRot: 120 }        # 小艇:加減速快
     trigger:
       type: ownDistance
       point: { lat: 22.5300, lon: 120.2400 }

@@ -53,7 +53,7 @@ public class ContractsTests
         var schemaPath = Path.Combine(TestData.Root, "src", "Contracts", "command.schema.json");
         using var schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
         var examples = schema.RootElement.GetProperty("examples").EnumerateArray().Select(e => e.GetRawText()).ToList();
-        Assert.Equal(4, examples.Count);
+        Assert.True(examples.Count >= 4, "前四個範例為基本指令;其後為 targetControl 範例(TrafficScenarioTests 另驗)");
 
         var rudder = SimCommand.Parse(examples[0])!;
         Assert.Equal(SimCommandType.Rudder, rudder.Type);

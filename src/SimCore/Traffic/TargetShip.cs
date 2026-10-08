@@ -159,6 +159,10 @@ public sealed class TargetShip
     public TargetColreg ColregSettings => Spec.Behaviour.Colreg ?? DefaultColreg;
     private static readonly TargetColreg DefaultColreg = new();
 
+    /// <summary>跟隨自船的目標(引水船、拖船):不列入自船的 CPA 警報。</summary>
+    public bool EscortsOwnShip => Spec.Behaviour.Mode == TargetBehaviourMode.Follow
+        && string.Equals(Spec.Behaviour.Follow?.Leader ?? "own", "own", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>自出現起的秒數。</summary>
     public double TimeSinceActivation(long tick, double dt) => ActivatedTick < 0 ? 0.0 : (tick - ActivatedTick) * dt;
 

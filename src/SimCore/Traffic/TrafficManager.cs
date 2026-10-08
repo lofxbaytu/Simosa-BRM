@@ -270,8 +270,10 @@ public sealed class TrafficManager
     }
 
     /// <summary>
-    /// 跟隨:目標點 P = leader 位置 + 相對方位/距離;所需對地速度 = leader 對地速度 + gain·(P − 位置),
+    /// 跟隨:目標點 P = leader 位置 + 相對方位/距離;所需對地速度 = leader 對地速度 + k·(P − 位置),
     /// 減去流得到對水速度向量 → 航向/航速指令(速度極小時保持航向、停船)。
+    /// k = min(gain, 0.3/τ_V) 使位置迴路(二階:航速一階滯後 + 位置積分)阻尼比 ≥ 0.9,小艇不會繞著站位振盪。
+    /// 若直線路徑穿過 leader 船體(含跟隨船船長的安全邊界),先繞到 leader 艉後同側的過渡點再進站,避免「穿船」碰撞。
     /// </summary>
     private void FollowLeader(TargetShip t, in ShipKinematics own, in EnvironmentSample env)
     {
@@ -281,11 +283,30 @@ public sealed class TrafficManager
         else if (Find(f.Leader) is { Active: true } other) leader = other.Kinematics;
         else { t.SpeedCmdMps = 0.0; return; }
 
-        var ang = leader.HeadingRad + Units.DegToRad(f.Bearing);
-        var px = leader.X + f.Range * Math.Sin(ang);
-        var py = leader.Y + f.Range * Math.Cos(ang);
-        var vE = leader.VelE + f.Gain * (px - t.X);
-        var vN = leader.VelN + f.Gain * (py - t.Y);
+        // leader 船體座標(along 向艏、across 向右舷)
+        var hs = Math.Sin(leader.HeadingRad);
+        var hc = Math.Cos(leader.HeadingRad);
+        var dx = t.X - leader.X;
+        var dy = t.Y - leader.Y;
+        var along = dx * hs + dy * hc;
+        var across = dx * hc - dy * hs;
+        var b = Units.DegToRad(f.Bearing);
+        var alongS = f.Range * Math.Cos(b);
+        var acrossS = f.Range * Math.Sin(b);
+        var margin = Math.Max(10.0, t.Spec.Loa);
+        var halfL = leader.Loa / 2.0 + margin;
+        var halfB = leader.Beam / 2.0 + margin;
+        if (SegmentIntersectsRect(along, across, alongS, acrossS, -halfL, halfL, -halfB, halfB))
+        {
+            var side = Math.Abs(across) > 1e-6 ? Math.Sign(across) : (Math.Abs(acrossS) > 1e-6 ? Math.Sign(acrossS) : 1);
+            alongS = -(leader.Loa / 2.0 + 2.0 * margin);
+            acrossS = side * (leader.Beam / 2.0 + 2.0 * margin);
+        }
+        var px = leader.X + alongS * hs + acrossS * hc;
+        var py = leader.Y + alongS * hc - acrossS * hs;
+        var k = Math.Min(f.Gain, 0.3 / t.SpeedTauS);
+        var vE = leader.VelE + k * (px - t.X);
+        var vN = leader.VelN + k * (py - t.Y);
         var maxV = Units.KnToMps(f.MaxSpeed);
         var vg = Math.Sqrt(vE * vE + vN * vN);
         if (vg > maxV) { vE *= maxV / vg; vN *= maxV / vg; }
@@ -304,12 +325,32 @@ public sealed class TrafficManager
 
     private static readonly TargetFollow DefaultFollow = new();
 
+    /// <summary>線段 (x0,y0)–(x1,y1) 是否與軸對齊矩形相交(Liang–Barsky 裁剪)。</summary>
+    public static bool SegmentIntersectsRect(double x0, double y0, double x1, double y1, double xmin, double xmax, double ymin, double ymax)
+    {
+        var dx = x1 - x0;
+        var dy = y1 - y0;
+        double t0 = 0.0, t1 = 1.0;
+        foreach (var (p, q) in new[] { (-dx, x0 - xmin), (dx, xmax - x0), (-dy, y0 - ymin), (dy, ymax - y0) })
+        {
+            if (Math.Abs(p) < 1e-12)
+            {
+                if (q < 0) return false; // 平行且在外側
+                continue;
+            }
+            var r = q / p;
+            if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+            else { if (r < t0) return false; if (r < t1) t1 = r; }
+        }
+        return t0 <= t1;
+    }
+
     // ------------------------------------------------------------------ COLREG 第一版
 
     /// <summary>
     /// 以目標為本船、自船為他船的會遇幾何判定情境(對遇/橫越/追越)與角色,依 CPA/TCPA 門檻觸發:
     /// 對遇右轉;橫越讓路方右轉並減速、直航方保持(第 17 條最後手段);追越船向遠離側轉向;obey = false 只辨識不行動。
-    /// 行動後 CPA 仍低於門檻則每 escalateAfter 秒再加轉向(累計 ≤ 90°);通過 CPA(TCPA ≤ 0)後回到基底行為並冷卻 60 s。
+    /// 行動後轉向完成且 CPA 仍低於門檻則每 escalateAfter 秒再加轉向(累計 ≤ 90°);通過 CPA(TCPA ≤ 0)後回到基底行為並冷卻 60 s。
     /// </summary>
     private void EvaluateColreg(TargetShip t, in ShipKinematics own, long tick)
     {
@@ -324,7 +365,12 @@ public sealed class TrafficManager
         string situation;
         bool giveWay;
         double turnSign = 1.0; // 右轉正
-        if (Math.Abs(dh) > Units.DegToRad(165.0) && Math.Abs(rb) < Units.DegToRad(15.0))
+        if (g.TcpaS <= 0.0)
+        {
+            situation = "none"; // 距離增加中(已通過或分離):無會遇
+            giveWay = false;
+        }
+        else if (Math.Abs(dh) > Units.DegToRad(165.0) && Math.Abs(rb) < Units.DegToRad(15.0))
         {
             situation = "headOn";
             giveWay = true;
@@ -392,6 +438,7 @@ public sealed class TrafficManager
                     Resume(t, tick, g);
                 }
                 else if (g.CpaNm < c.CpaThreshold && tick - t.ColregActionTick >= (long)(c.EscalateAfter * _evalDivider)
+                         && Math.Abs(Units.WrapRadPi(t.ColregHeadingRad - t.Psi)) < Units.DegToRad(3.0) // 前一次轉向已完成
                          && t.ColregTurnAccumRad < Units.DegToRad(90.0) - 1e-9)
                 {
                     StartAction(t, tick, Math.Sign(t.ColregTurnAccumRad == 0 ? 1.0 : t.ColregTurnAccumRad) * Units.DegToRad(c.Turn),
@@ -416,8 +463,8 @@ public sealed class TrafficManager
         }
     }
 
-    private static bool Passed(in EncounterGeometry g, TargetColreg c)
-        => g.TcpaS <= 0.0 || g.RangeNm > 3.0 * c.CpaThreshold && g.CpaNm >= c.CpaThreshold;
+    /// <summary>「已通過並遠離」:TCPA ≤ 0(距離增加中)。讓路船在此之前保持避讓航向,不因 CPA 暫時達標而提前回航(第 16 條「保持充分遠離」)。</summary>
+    private static bool Passed(in EncounterGeometry g, TargetColreg c) => g.TcpaS <= 0.0;
 
     private void StartAction(TargetShip t, long tick, double turnRad, double speedFactor, ColregPhase phase, string label, in EncounterGeometry g)
     {
@@ -459,7 +506,7 @@ public sealed class TrafficManager
             if (g.RangeNm < t.MinRangeNm) t.MinRangeNm = g.RangeNm;
             if (g.TcpaS > 0 && g.CpaNm < t.MinCpaNm) t.MinCpaNm = g.CpaNm;
 
-            if (evalTick)
+            if (evalTick && !t.EscortsOwnShip) // 跟隨自船的引水船/拖船本來就貼近,不列入 CPA 警報
             {
                 var alarm = g.TcpaS > 0 && g.CpaNm < MinCpaThresholdNm;
                 if (alarm && !t.CpaAlarm)
