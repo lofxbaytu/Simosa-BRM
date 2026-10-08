@@ -5,10 +5,26 @@ on:
   pull_request:
   workflow_dispatch:
 jobs:
+  detect:
+    name: 偵測各部分是否存在
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.d.outputs.python }}
+      web: ${{ steps.d.outputs.web }}
+      dotnet: ${{ steps.d.outputs.dotnet }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: d
+        shell: bash
+        run: |
+          echo "python=$([ -f src/Tools.Calibration/pyproject.toml ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "web=$([ -f src/Instruments.Web/package.json ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "dotnet=$([ -f SimosaBRM.sln ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
   python:
     name: Python 參考實作與校正工具
+    needs: detect
+    if: needs.detect.outputs.python == 'true'
     runs-on: ubuntu-latest
-    if: ${{ hashFiles('src/Tools.Calibration/pyproject.toml') != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -19,14 +35,17 @@ jobs:
           uv run pytest -q
   web:
     name: 網頁儀器
+    needs: detect
+    if: needs.detect.outputs.web == 'true'
     runs-on: ubuntu-latest
-    if: ${{ hashFiles('src/Instruments.Web/package.json') != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+        with:
+          version: 9
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm, cache-dependency-path: src/Instruments.Web/pnpm-lock.yaml }
+        with:
+          node-version: 22
       - name: 建置與測試
         working-directory: src/Instruments.Web
         run: |
@@ -35,12 +54,14 @@ jobs:
           pnpm test
   dotnet:
     name: .NET 核心(Windows)
+    needs: detect
+    if: needs.detect.outputs.dotnet == 'true'
     runs-on: windows-latest
-    if: ${{ hashFiles('SimosaBRM.sln') != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: 8.0.x }
+        with:
+          dotnet-version: 8.0.x
       - name: 建置
         run: dotnet build SimosaBRM.sln -c Release
       - name: 測試
