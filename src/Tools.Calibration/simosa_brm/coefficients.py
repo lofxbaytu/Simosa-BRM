@@ -30,6 +30,12 @@ from .propeller import fit_quadratic, kq_bseries, kt_bseries, zero_thrust_j
 SCHEMA_VERSION = "1.0"
 NU_WATER = 1.19e-6  # 海水運動黏度 m^2/s(15 °C)
 
+# 大漂角/低速橫流阻力與多項式的混合設定(mmg.forces):漂角通道 20–40°;艏搖通道(atan(½L|r|/|u|))35–60°(r' 約 1.4–3.5),
+# 下限高於 35° 定常迴旋的值(r' ≈ 1,約 27°),使正常操縱區不受影響,只在多項式有效範圍外的低速迴轉(側推、停船末段)提供艏搖阻尼。
+CROSS_FLOW_DEFAULT: dict[str, float] = {
+    "Cd": 1.0, "blendStart_deg": 20.0, "blendEnd_deg": 40.0, "yawBlendStart_deg": 35.0, "yawBlendEnd_deg": 60.0, "uFloor_mps": 0.5,
+}
+
 # KVLCC2 基準非線性導數(Yasukawa & Yoshimura 2015 Table 3)
 KVLCC2 = {
     "Xvv": -0.040, "Xvr": 0.002, "Xrr": 0.011, "Xvvvv": 0.771,
@@ -68,13 +74,17 @@ def added_mass_zhou(cb: float, lpp: float, b: float, d: float, mass: float) -> t
 # ---------------------------------------------------------------------------
 # 船體導數
 # ---------------------------------------------------------------------------
-def hull_derivatives(cb: float, lpp: float, b: float, d: float) -> dict[str, float]:
-    """線性導數:Kijima (1990) / Inoue (1981);非線性:KVLCC2 基準值(見模組 docstring)。"""
+def hull_derivatives(cb: float, lpp: float, b: float, d: float, mx_prime: float = 0.0) -> dict[str, float]:
+    """線性導數:Kijima (1990) / Inoue (1981)(k = 2d/L,β = −v' 故 Y'v = −Y'β、N'v = −N'β);非線性:KVLCC2 基準值(見模組 docstring)。
+
+    Kijima/Inoue 的回歸式給的是 ``Y'_r − m'_x = ¼πk``(其運動方程式左側為 (m'+m'_x)u'r'),
+    因此 MMG 的純水動力導數 Y'_r = ¼πk + m'_x;``mx_prime`` 為縱向附加質量 m'_x = m_x/(½ρL²d)。
+    """
     k = 2.0 * d / lpp
     cbbl = cb * b / lpp
     out = {
         "Yv": -(0.5 * math.pi * k + 1.4 * cbbl),
-        "Yr": 0.25 * math.pi * k,
+        "Yr": 0.25 * math.pi * k + mx_prime,
         "Nv": -k,
         "Nr": -0.54 * k + k * k,
     }
@@ -386,10 +396,15 @@ def estimate_coefficients(sp: ShipParticulars, trial_targets: dict[str, Any] | N
         "note": "K_T、K_Q 為 Wageningen B 系列在 0≤J≤J0 的二次擬合;倒車/鎖定為簡化四象限(README)",
     }
     resistance = fit_resistance_from_trial(sp, prop, w0, t0)
-    hull = hull_derivatives(cb, lpp, b, d)
+    hull = hull_derivatives(cb, lpp, b, d, mx / nd_m)
     hull_out: dict[str, Any] = {"resistance": resistance}
     hull_out.update(hull)
-    hull_out["crossFlow"] = {"Cd": 1.0, "blendStart_deg": 20.0, "blendEnd_deg": 40.0, "uFloor_mps": 0.5}
+    hull_out["crossFlow"] = CROSS_FLOW_DEFAULT.copy()
+    notes = list(sp.estimated)
+    cs = ((trial_targets or {}).get("validation") or {}).get("crashStop") or {}
+    if cs.get("asternStart_s"):
+        notes.append("engine.reversalDelay_s 取自 trial_targets.validation.crashStop.asternStart_s(主機換向的機械特性,"
+                     "非水動力擬合;緊急停船的停船時間與航跡距離仍為獨立驗證項目)")
 
     coeffs: dict[str, Any] = {
         "$schema": "../../../src/Contracts/coefficients.schema.json",
@@ -405,7 +420,7 @@ def estimate_coefficients(sp: ShipParticulars, trial_targets: dict[str, Any] | N
             "particulars": f"data/ships/{sp.ship_id}/particulars.json",
             "dataGrade": (trial_targets or {}).get("dataGrade", "trial"),
             "identifiedParameters": [],
-            "notes": list(sp.estimated),
+            "notes": notes,
         },
         "tolerances": (trial_targets or {}).get("tolerances", {}),
         "reference": {
@@ -455,9 +470,10 @@ def load_or_estimate(sp: ShipParticulars, prefer_file: bool = True) -> dict[str,
 def kvlcc2_coefficients() -> dict[str, Any]:
     """KVLCC2(SIMMAN 基準船)的 MMG 係數(Yasukawa & Yoshimura 2015 Table 2、3),供 MMG 實作本身的回歸測試(規劃書 6.3)。
 
-    主尺寸:L 320 m、B 58 m、d 20.8 m、∇ 312,622 m³、D_P 9.86 m、A_R 112.5 m²、H_R 15.8 m。
+    主尺寸:L 320 m、B 58 m、d 20.8 m、∇ 312,622 m³、x_G 11.2 m(船舯前)、D_P 9.86 m、A_R 112.5 m²、H_R 15.8 m。
     """
     lpp, b, d = 320.0, 58.0, 20.8
+    x_g = 11.2  # 重心距船舯(前正),Yasukawa & Yoshimura 2015 Table 1;式 (1)–(3) 的 x_G 耦合項由此進入
     vol = 312622.0
     mass = vol * RHO_WATER
     nd_m = 0.5 * RHO_WATER * lpp * lpp * d
@@ -467,7 +483,7 @@ def kvlcc2_coefficients() -> dict[str, Any]:
     hull: dict[str, Any] = {"resistance": {"model": "constant", "R0": 0.022}}
     for key in ("Xvv", "Xvr", "Xrr", "Xvvvv", "Yv", "Yr", "Yvvv", "Yvvr", "Yvrr", "Yrrr", "Nv", "Nr", "Nvvv", "Nvvr", "Nvrr", "Nrrr"):
         hull[key] = k[key]
-    hull["crossFlow"] = {"Cd": 1.0, "blendStart_deg": 20.0, "blendEnd_deg": 40.0, "uFloor_mps": 0.5}
+    hull["crossFlow"] = CROSS_FLOW_DEFAULT.copy()
     tele = {"NAVF": 76.0, "FAH": 60.0, "HAH": 45.0, "SAH": 35.0, "DSAH": 25.0, "STOP": 0.0, "DSAS": -25.0, "SAS": -35.0, "HAS": -45.0, "FAS": -60.0, "EFAS": -60.0}
     return {
         "schemaVersion": SCHEMA_VERSION, "shipId": "FSB1", "shipName": "KVLCC2 benchmark", "loading": "full",
@@ -475,7 +491,7 @@ def kvlcc2_coefficients() -> dict[str, Any]:
         "source": {"method": "estimate", "particulars": "KVLCC2 (Yasukawa & Yoshimura 2015)", "dataGrade": "trial", "identifiedParameters": [], "notes": []},
         "tolerances": {},
         "reference": {"length_m": lpp, "breadth_m": b, "draft_m": d, "blockCoefficient": 0.81, "displacement_t": mass / 1000.0,
-                      "mass_kg": mass, "xG_m": 0.0, "density_kgm3": RHO_WATER, "airDensity_kgm3": RHO_AIR},
+                      "mass_kg": mass, "xG_m": x_g, "density_kgm3": RHO_WATER, "airDensity_kgm3": RHO_AIR},
         "mass": {"m": mass / nd_m, "mx": k["mx"], "my": k["my"], "Izz": izz / nd_i, "Jzz": k["Jzz"]},
         "hull": hull,
         "propeller": {"diameter_m": 9.86, "pitchRatio": 0.721, "expandedAreaRatio": 0.431, "blades": 4, "rotation": "right",

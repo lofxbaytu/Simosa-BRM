@@ -170,7 +170,10 @@ def compare(results: dict[str, Any], tt: dict[str, Any], lpp: float) -> list[Row
     spd = val.get("speedPower") or []
     tbl = results.get("speedPower") or []
     for p, s in zip(spd, tbl):
-        rows.append(Row("速度-轉速(驗證)", f"{p['rpm']} rpm", float(p["speed_kn"]), s["speed_kn"], v_kn, "kn", str(p.get("note", ""))))
+        note = str(p.get("note", ""))
+        # 阻力/推進係數即由同一組速度-轉速資料以推力恆等擬合(規劃書 6.3 識別第一步),此處為驗收項目但非獨立驗證
+        note = (note + ";" if note else "") + "阻力由同一組速度資料擬合,非獨立驗證"
+        rows.append(Row("速度-轉速(驗收)", f"{p['rpm']} rpm", float(p["speed_kn"]), s["speed_kn"], v_kn, "kn", note))
     return rows
 
 

@@ -83,6 +83,8 @@ class SimServer:
 
     # ---- 迴圈 ----
     async def handler(self, ws: Any) -> None:
+        from websockets.exceptions import ConnectionClosed
+
         self.clients.add(ws)
         try:
             await ws.send(json.dumps(self.ship.state_json()))
@@ -93,6 +95,8 @@ class SimServer:
                     await ws.send(json.dumps({"type": "ack", "ok": False, "detail": "JSON 解析失敗"}))
                     continue
                 await ws.send(json.dumps(self.apply_command(cmd), ensure_ascii=False))
+        except ConnectionClosed:
+            pass  # 客戶端斷線屬正常
         finally:
             self.clients.discard(ws)
 

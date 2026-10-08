@@ -76,7 +76,7 @@
         "Nv": { "type": "number" }, "Nr": { "type": "number" }, "Nvvv": { "type": "number" }, "Nvvr": { "type": "number" }, "Nvrr": { "type": "number" }, "Nrrr": { "type": "number" },
         "crossFlow": {
           "type": "object",
-          "description": "大漂角/低速橫流阻力:Cd 以吃水為特徵長度;blendStart/End 為與多項式混合的漂角範圍;uFloor 為無因次化速度下限",
+          "description": "大漂角/低速橫流阻力:Cd 以吃水為特徵長度;blendStart/End 為與多項式混合的船舯漂角範圍(度);yawBlendStart/End(選填,預設 35/60)為艏搖通道 atan(½L|r|/|u|) 的混合範圍,使零速/低速迴轉仍有艏搖阻尼;uFloor 為無因次化速度下限",
           "required": ["Cd", "blendStart_deg", "blendEnd_deg", "uFloor_mps"]
         }
       }

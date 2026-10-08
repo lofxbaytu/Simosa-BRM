@@ -160,6 +160,10 @@ class MMGShip:
         self.cf_cd = float(cf["Cd"])
         self.cf_a = float(cf["blendStart_deg"]) * DEG
         self.cf_b = float(cf["blendEnd_deg"]) * DEG
+        # 艏搖通道:船艏/艉因 r 產生的局部流向角 atan(½L|r|/|u|) 超過此區間時切換到橫流阻力(零速/低速迴轉的艏搖阻尼);
+        # 區間(35–60°,即 r' 約 1.4–3.5)下限刻意高於 35° 定常迴旋的值(r' ≈ 1,約 27°),使正常操縱區的多項式不受影響;舊係數檔無此鍵時用預設值。
+        self.cf_ya = float(cf.get("yawBlendStart_deg", 35.0)) * DEG
+        self.cf_yb = float(cf.get("yawBlendEnd_deg", 60.0)) * DEG
         self.u_floor = float(cf["uFloor_mps"])
         p = c["propeller"]
         self.prop = PropellerModel(
@@ -378,22 +382,32 @@ class MMGShip:
         rp = r * L / Ue
         beta = math.atan2(-v, u) if U > 1e-9 else 0.0
 
-        # ---- 船體 ----
+        # ---- 船體(Yasukawa & Yoshimura 2015 式 (6)–(8);X、Y 以 ½ρLdU²、N 以 ½ρL²dU² 無因次化)----
         q = 0.5 * rho * L * d * U2
         r0 = r0_prime(self.resistance, U, L, d) * self.f_res
         vp2 = vp * vp
         rp2 = rp * rp
-        XH = q * (-r0 + h["Xvv"] * vp2 + h["Xvr"] * vp * rp + h["Xrr"] * rp2 + h["Xvvvv"] * vp2 * vp2)
+        X_nl = q * (h["Xvv"] * vp2 + h["Xvr"] * vp * rp + h["Xrr"] * rp2 + h["Xvvvv"] * vp2 * vp2)
         YH_lin = q * self.f_lin_sway * (h["Yv"] * vp + h["Yr"] * rp)
         NH_lin = q * L * self.f_lin_yaw * (h["Nv"] * vp + h["Nr"] * rp)
         YH_nl = q * self.f_nonlin * (h["Yvvv"] * vp2 * vp + h["Yvvr"] * vp2 * rp + h["Yvrr"] * vp * rp2 + h["Yrrr"] * rp2 * rp)
         NH_nl = q * L * self.f_nonlin * (h["Nvvv"] * vp2 * vp + h["Nvvr"] * vp2 * rp + h["Nvrr"] * vp * rp2 + h["Nrrr"] * rp2 * rp)
-        # 大漂角:橫流阻力(截面)與多項式非線性項依漂角混合(規劃書 6.2)
+        # 大漂角 / 低速:MMG 多項式只在 |β| 約 20–30°、r' 約 1 內有效(規劃書 6.2),超出時與截面橫流阻力混合。
+        # 混合權重取兩個通道的最大值:(1) 船舯漂角 |β|(blendStart/End);(2) 艏搖在船艏/艉造成的局部流向角
+        # atan(½L|r|/|u|)(yawBlendStart/End)。通道 (2) 使 U→0 時(多項式以 U 無因次化而歸零)仍有艏搖阻尼。
         ab = abs(beta)
         if ab > math.pi / 2:
             ab = math.pi - ab
-        w_cf = _smoothstep(ab, self.cf_a, self.cf_b) if U > 1e-6 else 0.0
+        a_yaw = math.atan2(0.5 * L * abs(r), abs(u))
+        w_cf = max(_smoothstep(ab, self.cf_a, self.cf_b), _smoothstep(a_yaw, self.cf_ya, self.cf_yb))
+        # 阻力永遠與縱向速度反向(倒退時向前推):正常區用標準式 −R0'·½ρLdU²(β 小時 U² ≈ u²),
+        # 橫流區改用 −R0'·½ρLd·u|u|,純橫移時縱向阻力為零(橫向力由橫流阻力提供)。
+        su = 1.0 if u > 0.0 else (-1.0 if u < 0.0 else 0.0)
+        X_res = -0.5 * rho * L * d * r0 * ((1.0 - w_cf) * U2 * su + w_cf * u * abs(u))
         if w_cf > 0.0:
+            # 線性項為升力型(Munk 力矩 ∝ sin 2β),在橫流區隨 |cos β| 消失:純橫移(β = 90°)時不再產生
+            # 虛假的艏搖力矩;正常區(w_cf = 0)係數不變。多項式 X 項同樣淡出(X'vvvv v'⁴ 在 β → 90° 會給出向前推力)。
+            f_lin = 1.0 - w_cf * (1.0 - abs(math.cos(beta)))
             Ycf = 0.0
             Ncf = 0.0
             nstrip = 10
@@ -405,9 +419,11 @@ class MMGShip:
                 f = -coef * vl * abs(vl)
                 Ycf += f
                 Ncf += xs * f
-            YH = YH_lin + (1.0 - w_cf) * YH_nl + w_cf * Ycf
-            NH = NH_lin + (1.0 - w_cf) * NH_nl + w_cf * Ncf
+            XH = X_res + (1.0 - w_cf) * X_nl
+            YH = f_lin * YH_lin + (1.0 - w_cf) * YH_nl + w_cf * Ycf
+            NH = f_lin * NH_lin + (1.0 - w_cf) * NH_nl + w_cf * Ncf
         else:
+            XH = X_res + X_nl
             YH = YH_lin + YH_nl
             NH = NH_lin + NH_nl
 
@@ -437,7 +453,8 @@ class MMGShip:
             slip = math.sqrt(va * va + 8.0 * KT * n * n * self.prop.diameter**2 / math.pi)
             ur_core = va + self.kappa * (slip - va)
             uR = self.eps * math.sqrt(self.eta * ur_core * ur_core + (1.0 - self.eta) * va * va)
-            if va < 0:
+            # 流向由舵面積加權的平均流速決定(η 在滑流內、1−η 在滑流外):倒退中正車時滑流仍由前向後流過舵,u_R > 0
+            if self.eta * ur_core + (1.0 - self.eta) * va < 0.0:
                 uR = -uR
             # 滑流旋轉造成的有效舵角偏移:隨螺槳負荷(滑流加速因子)增大,上限 5 倍
             if va > 1e-6 and self.swirl_angle != 0.0:
@@ -489,9 +506,11 @@ class MMGShip:
             if Vrw2 > 1e-6:
                 epsw = math.atan2(-v_rw, -u_rw)  # 0 頂風;正 = 風自右舷
                 ae = abs(epsw)
-                cdl = self.w_CDlH if ae <= math.pi / 2 else self.w_CDlT
+                cdl = self.w_CDlH if ae <= math.pi / 2 else self.w_CDlT  # C_Dl,AF(以正面積為基準的表列值)
                 s2 = math.sin(2.0 * ae)
-                den = 1.0 - 0.5 * self.w_delta * (1.0 - cdl / self.w_CDt) * s2 * s2
+                # Blendermann (1994):分母中的 C_Dl 以側面積 A_L 為基準,C_Dl = C_Dl,AF·A_F/A_L(MSS blendermann94 同)
+                cdl_al = cdl * self.w_AT / self.w_AL if self.w_AL > 0.0 else cdl
+                den = 1.0 - 0.5 * self.w_delta * (1.0 - cdl_al / self.w_CDt) * s2 * s2
                 qa = 0.5 * self.rho_a * Vrw2
                 XW = -qa * self.w_AT * cdl * math.cos(ae) / den
                 cy = self.w_CDt * math.sin(ae) / den
@@ -724,9 +743,9 @@ class MMGShip:
             "r": s.r,
             "drift": math.degrees(math.atan2(-s.v, s.u)) if math.hypot(s.u, s.v) > 1e-3 else 0.0,
             "rudder": math.degrees(s.delta),
-            "rudderOrder": math.degrees(self.ctl.rudder_order),
+            "rudderOrder": round(math.degrees(self.ctl.rudder_order), 6),  # 度→弧度→度的浮點誤差
             "rpm": s.n * 60.0,
-            "rpmOrder": self.ctl.rpm_order,
+            "rpmOrder": round(self.ctl.rpm_order, 6),
             "telegraph": self.ctl.telegraph,
             "thruster": {"order": self.ctl.thruster_order, "actual": s.thr},
             "depthBelowKeel": self.depth_below_keel(),
