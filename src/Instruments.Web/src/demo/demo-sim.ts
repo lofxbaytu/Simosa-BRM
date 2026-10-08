@@ -168,8 +168,21 @@ export class DemoSim {
         if (typeof a['waterDepth'] === 'number') s.waterDepth = a['waterDepth'];
         break;
       }
+      case 'injectFault': {
+        // 示範模式只記錄故障名稱(供教官站清單預覽),不改變運動學
+        if (typeof cmd.value === 'string' && cmd.value.trim()) {
+          const faults = s.faults ?? [];
+          if (!faults.includes(cmd.value)) s.faults = [...faults, cmd.value];
+        }
+        break;
+      }
+      case 'clearFault': {
+        if (typeof cmd.value === 'string') s.faults = (s.faults ?? []).filter((f) => f !== cmd.value);
+        else s.faults = [];
+        break;
+      }
       default:
-        // 其他指令(情境載入、故障注入等)示範模式不支援,忽略
+        // 其他指令(情境載入、時間倍率、快照等)示範模式不支援,忽略;情境載入由教官站重建示範來源
         break;
     }
     this.updateDerived(s);

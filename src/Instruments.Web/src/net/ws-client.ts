@@ -5,7 +5,7 @@ import { parseState } from '../lib/state-parser.js';
 import { serializeCommand } from '../lib/command.js';
 import type { SimCommand } from '../types/command.js';
 import type { OwnShipState } from '../types/state.js';
-import type { ConnectionStatus, SimSource, StateListener, StatusListener } from './sim-source.js';
+import type { ConnectionStatus, MessageListener, SimSource, StateListener, StatusListener } from './sim-source.js';
 
 export const DEFAULT_WS_URL = 'ws://localhost:8765';
 
@@ -23,6 +23,7 @@ export class WsClient implements SimSource {
   private _status: ConnectionStatus = 'disconnected';
   private stateListeners = new Set<StateListener>();
   private statusListeners = new Set<StatusListener>();
+  private messageListeners = new Set<MessageListener>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay: number;
   private readonly minDelay: number;
@@ -89,6 +90,12 @@ export class WsClient implements SimSource {
     return () => this.statusListeners.delete(listener);
   }
 
+  /** 非狀態訊息(例如指令回應 ack):教官站用來顯示核心對各指令的實際反應。 */
+  onMessage(listener: MessageListener): () => void {
+    this.messageListeners.add(listener);
+    return () => this.messageListeners.delete(listener);
+  }
+
   private connect(): void {
     if (this.stopped || this.socket) return;
     this.setStatus('connecting', `連線中 ${this.url}`);
@@ -111,7 +118,10 @@ export class WsClient implements SimSource {
       const data: unknown = ev.data;
       if (typeof data !== 'string') return;
       const result = parseState(data, this.lastState);
-      if (!result) return;
+      if (!result) {
+        if (this.messageListeners.size > 0) this.dispatchMessage(data);
+        return;
+      }
       this.lastState = result.state;
       for (const l of this.stateListeners) l(result);
     };
@@ -124,6 +134,17 @@ export class WsClient implements SimSource {
       this.setStatus('disconnected', ev.reason ? `連線中斷:${ev.reason}` : '連線中斷');
       this.scheduleReconnect();
     };
+  }
+
+  private dispatchMessage(data: string): void {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return;
+    for (const l of this.messageListeners) l(obj as Record<string, unknown>);
   }
 
   private scheduleReconnect(): void {

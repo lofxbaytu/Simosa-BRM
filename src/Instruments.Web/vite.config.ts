@@ -28,6 +28,13 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     target: 'es2022',
+    rollupOptions: {
+      // 兩個進入點:index.html(駕駛台儀器)與 instructor.html(教官站 / 簡化教官模式 / 重播檢視),共用程式庫與主題
+      input: {
+        index: path.join(here, 'index.html'),
+        instructor: path.join(here, 'instructor.html'),
+      },
+    },
   },
   test: {
     include: ['tests/**/*.test.ts'],

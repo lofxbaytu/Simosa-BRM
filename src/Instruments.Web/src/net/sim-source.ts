@@ -13,6 +13,8 @@ export interface StateEvent {
 
 export type StateListener = (ev: StateEvent) => void;
 export type StatusListener = (status: ConnectionStatus, detail?: string) => void;
+/** 非狀態訊息(例如 Python 參考伺服器的 {"type":"ack",...}),已解析為 JSON 物件 */
+export type MessageListener = (message: Record<string, unknown>) => void;
 
 export interface SimSource {
   readonly status: ConnectionStatus;
@@ -21,4 +23,6 @@ export interface SimSource {
   send(cmd: SimCommand): void;
   onState(listener: StateListener): () => void;
   onStatus(listener: StatusListener): () => void;
+  /** 訂閱非狀態訊息(指令回應等);來源不支援時可省略 */
+  onMessage?(listener: MessageListener): () => void;
 }

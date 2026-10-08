@@ -64,7 +64,7 @@ export class ConningBar extends LitElement {
           .engineState=${s.engine?.state}
           .loadPct=${s.engine?.load_pct}
         ></brm-engine>
-        <brm-thruster .order=${s.thruster?.order ?? 0} .actual=${s.thruster?.actual ?? 0} .available=${!(s.faults ?? []).includes('thruster')}></brm-thruster>
+        <brm-thruster .order=${s.thruster?.order ?? 0} .actual=${s.thruster?.actual ?? 0} .available=${!(s.faults ?? []).some((f) => f === 'thruster' || f === 'bowThruster')}></brm-thruster>
         <brm-depth
           .ukc=${s.depthBelowKeel}
           .waterDepth=${s.waterDepth}

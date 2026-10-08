@@ -144,7 +144,8 @@ body {
 }
 
 /* 版面由 <brm-app> 的 :host 規則(display: grid)決定;文件層只給高度,勿在此設定 display */
-brm-app {
+brm-app,
+brm-instructor-app {
   height: 100%;
   box-sizing: border-box;
 }
