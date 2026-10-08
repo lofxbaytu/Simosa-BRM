@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simosa-brm/contracts/coefficients.schema.json",
+  "title": "ShipCoefficients",
+  "description": "data/ships/<ID>/coefficients.<loading>.json:MMG 船模係數檔,由 src/Tools.Calibration(simosa-brm estimate/identify)產生,C# SimCore 與 Python 參考實作讀同一份。無因次化依 Yasukawa & Yoshimura (2015):X、Y 以 ½ρLdU²,N 以 ½ρL²dU²,質量以 ½ρL²d,慣性矩以 ½ρL⁴d;參考長度 L = LPP、d = 平均吃水。船舯座標,u 向艏、v_m 右正、r 右轉正;舵角右正。",
+  "type": "object",
+  "required": ["schemaVersion", "shipId", "loading", "version", "generatedAt", "source", "tolerances", "reference", "mass", "hull", "propeller", "rudder", "engine", "thruster", "wind", "shallowWater", "squat"],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "1.0" },
+    "shipId": { "type": "string", "enum": ["FSB1", "FSB2"] },
+    "shipName": { "type": "string" },
+    "loading": { "type": "string", "enum": ["full", "ballast", "intermediate"] },
+    "loadingLabel": { "type": "string" },
+    "version": { "type": "string", "description": "產生工具版本(simosa_brm.__version__)" },
+    "generatedAt": { "type": "string", "description": "識別/估計日期 ISO 8601" },
+    "source": {
+      "type": "object",
+      "required": ["method", "particulars", "dataGrade", "identifiedParameters", "notes"],
+      "properties": {
+        "method": { "type": "string", "enum": ["estimate", "identify"] },
+        "particulars": { "type": "string" },
+        "trialTargets": { "type": "string" },
+        "dataGrade": { "type": "string", "enum": ["trial", "poster"], "description": "trial:試俥實測;poster:IMO 駕駛台海報讀值" },
+        "identifiedParameters": { "type": "array", "items": { "type": "string" } },
+        "identification": { "type": "object", "description": "識別結果:目標、殘差、是否在公差內、最佳化資訊" },
+        "notes": { "type": "array", "items": { "type": "string" }, "description": "以經驗式補足的欄位清單" }
+      }
+    },
+    "tolerances": { "type": "object", "description": "複製自 trial_targets.tolerances(turning_pct、turning_minL、zigzag_deg、zigzag_pct、stopping_pct、speed_kn)" },
+    "reference": {
+      "type": "object",
+      "required": ["length_m", "breadth_m", "draft_m", "blockCoefficient", "displacement_t", "mass_kg", "xG_m", "density_kgm3", "airDensity_kgm3"],
+      "properties": {
+        "length_m": { "type": "number", "description": "LPP" },
+        "breadth_m": { "type": "number" },
+        "draft_m": { "type": "number", "description": "平均吃水" },
+        "draftFore_m": { "type": "number" },
+        "draftAft_m": { "type": "number" },
+        "blockCoefficient": { "type": "number" },
+        "displacement_t": { "type": "number" },
+        "mass_kg": { "type": "number" },
+        "xG_m": { "type": "number", "description": "重心距船舯(前正);目前假設 0" },
+        "density_kgm3": { "type": "number" },
+        "airDensity_kgm3": { "type": "number" },
+        "nondimensionalisation": { "type": "string" }
+      }
+    },
+    "mass": {
+      "type": "object",
+      "required": ["m", "mx", "my", "Izz", "Jzz"],
+      "properties": {
+        "m": { "type": "number", "description": "m' = m/(½ρL²d)" },
+        "mx": { "type": "number", "description": "縱向附加質量 m_x'" },
+        "my": { "type": "number", "description": "橫向附加質量 m_y'" },
+        "Izz": { "type": "number", "description": "I_zz' = I_zz/(½ρL⁴d)" },
+        "Jzz": { "type": "number", "description": "艏搖附加慣性矩 J_zz'" }
+      }
+    },
+    "hull": {
+      "type": "object",
+      "required": ["resistance", "Xvv", "Xvr", "Xrr", "Xvvvv", "Yv", "Yr", "Yvvv", "Yvvr", "Yvrr", "Yrrr", "Nv", "Nr", "Nvvv", "Nvvr", "Nvrr", "Nrrr", "crossFlow"],
+      "properties": {
+        "resistance": {
+          "type": "object",
+          "description": "R0'(U) = 黏性(ITTC-57·形狀因子·S/(L·d)) + coefficient·(Fn/froudeRef)^froudeExponent",
+          "required": ["model", "viscous", "wave"],
+          "properties": {
+            "model": { "type": "string", "const": "viscous+wave" },
+            "viscous": { "type": "object", "required": ["wettedSurface_m2", "formFactor"] },
+            "wave": { "type": "object", "required": ["coefficient", "froudeExponent", "froudeRef"] },
+            "trialFit": { "type": "array" }
+          }
+        },
+        "Xvv": { "type": "number" }, "Xvr": { "type": "number" }, "Xrr": { "type": "number" }, "Xvvvv": { "type": "number" },
+        "Yv": { "type": "number" }, "Yr": { "type": "number" }, "Yvvv": { "type": "number" }, "Yvvr": { "type": "number" }, "Yvrr": { "type": "number" }, "Yrrr": { "type": "number" },
+        "Nv": { "type": "number" }, "Nr": { "type": "number" }, "Nvvv": { "type": "number" }, "Nvvr": { "type": "number" }, "Nvrr": { "type": "number" }, "Nrrr": { "type": "number" },
+        "crossFlow": {
+          "type": "object",
+          "description": "大漂角/低速橫流阻力:Cd 以吃水為特徵長度;blendStart/End 為與多項式混合的漂角範圍;uFloor 為無因次化速度下限",
+          "required": ["Cd", "blendStart_deg", "blendEnd_deg", "uFloor_mps"]
+        }
+      }
+    },
+    "propeller": {
+      "type": "object",
+      "required": ["diameter_m", "pitchRatio", "expandedAreaRatio", "blades", "rotation", "kt", "kq", "jMax", "wP0", "tP", "xP", "wakeDriftFactor", "asternThrustFactor", "jClip", "lockedDragCd", "lockRps", "sideForceFactor"],
+      "properties": {
+        "kt": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "K_T = k0 + k1·J + k2·J²" },
+        "kq": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+        "jMax": { "type": "number", "description": "多項式適用上限(風車區截止)" },
+        "wP0": { "type": "number", "description": "直航伴流分數" },
+        "tP": { "type": "number", "description": "推力減額" },
+        "xP": { "type": "number", "description": "螺槳位置 x_P' = x_P/L" },
+        "wakeDriftFactor": { "type": "number", "description": "w_P = w_P0·exp(−C·β_P²) 的 C" },
+        "asternThrustFactor": { "type": "number" },
+        "jClip": { "type": "number" },
+        "lockedDragCd": { "type": "number" },
+        "lockRps": { "type": "number" },
+        "sideForceFactor": { "type": "number", "description": "倒車橫向力/推力(右旋槳艉向左)" }
+      }
+    },
+    "rudder": {
+      "type": "object",
+      "required": ["type", "area_m2", "span_m", "fAlpha", "schilling", "maxAngle_deg", "rate_degps", "neutralAngle_deg", "tR", "aH", "xH", "xR", "gammaRMinus", "gammaRPlus", "lR", "epsilon", "kappa", "eta"],
+      "properties": {
+        "fAlpha": { "type": "number", "description": "Fujii 升力斜率 6.13Λ/(Λ+2.25)" },
+        "schilling": {
+          "type": "object",
+          "required": ["enabled", "linearLimit_deg", "maxAngle_deg", "highLiftSlopeFactor"],
+          "description": "enabled 時 |α|>linearLimit 用 highLiftSlopeFactor·fα 的斜率延伸至 maxAngle"
+        },
+        "rate_degps": { "type": "number", "description": "舵機速率(70° 行程 / hardOverTime35_s)" },
+        "neutralAngle_deg": { "type": "number", "description": "直航中立舵角(右正)" },
+        "swirlAngle_deg": { "type": "number", "description": "螺槳滑流旋轉造成的有效舵角偏移(右正),乘以滑流加速因子 √(1+8K_T/(πJ²))−1(上限 5)" },
+        "tR": { "type": "number" }, "aH": { "type": "number" }, "xH": { "type": "number", "description": "x_H' = x_H/L" },
+        "xR": { "type": "number", "description": "x_R' = x_R/L(通常 −0.5)" },
+        "gammaRMinus": { "type": "number", "description": "β_R < 0 的整流係數" },
+        "gammaRPlus": { "type": "number", "description": "β_R > 0 的整流係數" },
+        "lR": { "type": "number", "description": "l_R' = l_R/L" },
+        "epsilon": { "type": "number", "description": "舵處伴流比 (1−w_R)/(1−w_P)" },
+        "kappa": { "type": "number", "description": "螺槳滑流加速修正" },
+        "eta": { "type": "number", "description": "D_P / H_R" }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "required": ["mcr_rpm", "maxRpm", "minRpm", "telegraph", "rpmTimeConstant_s", "rpmRateLimit_rpmps", "startDelay_s", "reversalDelay_s", "shaftStopTimeConstant_s"],
+      "properties": {
+        "telegraph": { "type": "object", "description": "車鐘 → rpm(倒車負),鍵為 state.schema.json 的 telegraph enum" },
+        "criticalRpmRange": { "type": ["array", "null"] }
+      }
+    },
+    "thruster": {
+      "type": "object",
+      "required": ["installed", "x_m", "nominalThrust_kN", "effectiveness", "fullThrustDelay_s", "halfThrustSpeed_kn"],
+      "properties": {
+        "x_m": { "type": "number", "description": "側推距船舯(前正)" },
+        "effectiveness": { "type": "number", "description": "有效推力/額定推力(由零速迴轉率校準)" },
+        "halfThrustSpeed_kn": { "type": "number", "description": "推力降至一半的前進速度" }
+      }
+    },
+    "wind": {
+      "type": "object",
+      "required": ["model", "lateralArea_m2", "frontalArea_m2", "lateralCentroid_m", "CDt", "CDlHead", "CDlTail", "delta", "airDensity_kgm3"]
+    },
+    "shallowWater": {
+      "type": "object",
+      "required": ["model", "linearSway", "linearYaw", "nonlinear", "addedMassSway", "addedMassSurge", "addedInertia", "resistance", "minDepthRatio"],
+      "description": "各組倍率 f = 1 + a·(T/(h−T))^n"
+    },
+    "squat": {
+      "type": "object",
+      "required": ["model", "Cs"],
+      "description": "ICORELS:S = Cs·∇/L²·Fnh²/√(1−Fnh²)"
+    }
+  }
+}

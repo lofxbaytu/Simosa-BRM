@@ -1,0 +1,38 @@
+[project]
+name = "simosa-brm"
+version = "0.1.0"
+description = "Simosa BRM 操船模擬器:MMG 船舶運動模型參考實作與校正工具(規劃書第 6 章)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "matplotlib>=3.8",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+simosa-brm = "simosa_brm.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["simosa_brm"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+# 規則:所有快取留在專案資料夾內(CLAUDE.md);Windows 上 tools/setup-windows.ps1 另設 UV_CACHE_DIR
+cache-dir = "../../.cache/uv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+cache_dir = ".cache/pytest"
+addopts = "-ra"

@@ -1,0 +1,33 @@
+{
+  "name": "@simosa-brm/instruments-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "中塑海運 FS Bitumen No.1 / No.2 BRM 操船模擬器 — 駕駛台儀器與操船台(規劃書第 7 章第一版)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "lit": "^3.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "happy-dom": "^20.14.5",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

@@ -1,0 +1,150 @@
+/*
+ * 主題色票:參考 OpenBridge 設計指南的日/黃昏/夜三種配色(自寫,不使用 @oicl/openbridge-webcomponents)。
+ * 規則:紅色只用於警報(--ob-alarm);橙色警告、黃色注意(規劃書第 7.3 節)。
+ * 以 <html data-theme="day|dusk|night"> 切換;CSS 變數可穿透 Lit 的 shadow DOM。
+ */
+:root,
+:root[data-theme='day'] {
+  color-scheme: light;
+  --ob-bg-app: #e3e8ee;
+  --ob-bg-container: #f3f5f8;
+  --ob-bg-surface: #ffffff;
+  --ob-bg-surface-raised: #f7f9fb;
+  --ob-bg-input: #ffffff;
+  --ob-border: #b9c3ce;
+  --ob-border-strong: #7d8a98;
+  --ob-text: #16212b;
+  --ob-text-secondary: #4e5c6a;
+  --ob-text-muted: #7b8794;
+  --ob-text-on-accent: #ffffff;
+  --ob-accent: #0a5fb4;
+  --ob-accent-soft: #d3e4f7;
+  --ob-accent-strong: #063f79;
+  --ob-scale: #3e4c59;
+  --ob-scale-minor: #9aa5b1;
+  --ob-pointer: #16212b;
+  --ob-order: #0a5fb4;
+  --ob-ship-fill: #cfd8e3;
+  --ob-ship-stroke: #16212b;
+  --ob-track: #0a5fb4;
+  --ob-vector-hdg: #16212b;
+  --ob-vector-cog: #0a5fb4;
+  --ob-grid: #cbd3dc;
+  --ob-plot-bg: #dde6ee;
+  --ob-alarm: #d62828;
+  --ob-alarm-text: #ffffff;
+  --ob-warning: #e0850c;
+  --ob-caution: #d4b106;
+  --ob-ok: #2e7d32;
+  --ob-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  --ob-focus: 0 0 0 2px var(--ob-accent);
+  --ob-dim: 1;
+}
+
+:root[data-theme='dusk'] {
+  color-scheme: dark;
+  --ob-bg-app: #1b2024;
+  --ob-bg-container: #22282d;
+  --ob-bg-surface: #2b3238;
+  --ob-bg-surface-raised: #333b42;
+  --ob-bg-input: #1f252a;
+  --ob-border: #434c55;
+  --ob-border-strong: #6b7680;
+  --ob-text: #dfe5ea;
+  --ob-text-secondary: #a3aeb8;
+  --ob-text-muted: #76818b;
+  --ob-text-on-accent: #0d1117;
+  --ob-accent: #5aa2ff;
+  --ob-accent-soft: #223a58;
+  --ob-accent-strong: #8ec0ff;
+  --ob-scale: #c3ccd4;
+  --ob-scale-minor: #5f6a74;
+  --ob-pointer: #f2f5f7;
+  --ob-order: #5aa2ff;
+  --ob-ship-fill: #4a5661;
+  --ob-ship-stroke: #e4e9ee;
+  --ob-track: #5aa2ff;
+  --ob-vector-hdg: #f2f5f7;
+  --ob-vector-cog: #5aa2ff;
+  --ob-grid: #343c43;
+  --ob-plot-bg: #181d21;
+  --ob-alarm: #ff4d4d;
+  --ob-alarm-text: #140000;
+  --ob-warning: #f59e0b;
+  --ob-caution: #e8cc2f;
+  --ob-ok: #4cc26a;
+  --ob-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --ob-focus: 0 0 0 2px var(--ob-accent);
+  --ob-dim: 1;
+}
+
+:root[data-theme='night'] {
+  color-scheme: dark;
+  --ob-bg-app: #000000;
+  --ob-bg-container: #07090b;
+  --ob-bg-surface: #0f1316;
+  --ob-bg-surface-raised: #151a1e;
+  --ob-bg-input: #0a0d10;
+  --ob-border: #242b31;
+  --ob-border-strong: #3a444d;
+  --ob-text: #a9b1b8;
+  --ob-text-secondary: #7b848c;
+  --ob-text-muted: #596268;
+  --ob-text-on-accent: #05080b;
+  --ob-accent: #4f86c6;
+  --ob-accent-soft: #15243a;
+  --ob-accent-strong: #76a6dc;
+  --ob-scale: #8e979e;
+  --ob-scale-minor: #3c454c;
+  --ob-pointer: #c4ccd2;
+  --ob-order: #4f86c6;
+  --ob-ship-fill: #2b343b;
+  --ob-ship-stroke: #b4bcc3;
+  --ob-track: #4f86c6;
+  --ob-vector-hdg: #c4ccd2;
+  --ob-vector-cog: #4f86c6;
+  --ob-grid: #1b2126;
+  --ob-plot-bg: #04060a;
+  --ob-alarm: #e03c3c;
+  --ob-alarm-text: #0b0000;
+  --ob-warning: #c47f12;
+  --ob-caution: #b8a21f;
+  --ob-ok: #3a9a56;
+  --ob-shadow: none;
+  --ob-focus: 0 0 0 2px var(--ob-accent);
+  --ob-dim: 0.85;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--ob-bg-app);
+  color: var(--ob-text);
+  /* 只用系統字型(船上離線,規劃書第 5.5 節);中文優先微軟正黑體 */
+  font-family:
+    'Segoe UI',
+    'Microsoft JhengHei',
+    'PingFang TC',
+    'Noto Sans TC',
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.3;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 版面由 <brm-app> 的 :host 規則(display: grid)決定;文件層只給高度,勿在此設定 display */
+brm-app {
+  height: 100%;
+  box-sizing: border-box;
+}
