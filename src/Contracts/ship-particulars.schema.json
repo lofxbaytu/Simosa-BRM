@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simosa-brm/contracts/ship-particulars.schema.json",
+  "title": "ShipParticulars",
+  "description": "data/ships/<ID>/particulars.json 的結構(來源為造船廠文件,見規劃書附錄 F);null 表示尚未取得。",
+  "type": "object",
+  "required": ["id", "name", "hull", "loadingConditions", "engine", "propeller", "rudder"],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "hull": { "type": "object", "required": ["lengthOverall_m", "lengthBetweenPerpendiculars_m", "breadth_m", "depth_m"] },
+    "loadingConditions": { "type": "object", "required": ["full", "ballast"] },
+    "engine": { "type": "object", "required": ["mcr_kW", "mcr_rpm", "telegraph"] },
+    "propeller": { "type": "object", "required": ["diameter_m", "pitchRatio", "expandedAreaRatio", "blades", "rotation"] },
+    "rudder": { "type": "object", "required": ["type", "maxAngle_deg"] },
+    "bowThruster": { "type": "object" }
+  }
+}

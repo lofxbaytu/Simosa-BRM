@@ -1,0 +1,2 @@
+# uv(Python)快取改放在專案資料夾內,不寫到 C:\Users
+cache-dir = ".cache/uv"

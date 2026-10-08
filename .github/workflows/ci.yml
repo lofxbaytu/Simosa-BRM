@@ -1,0 +1,47 @@
+name: CI
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  python:
+    name: Python 參考實作與校正工具
+    runs-on: ubuntu-latest
+    if: ${{ hashFiles('src/Tools.Calibration/pyproject.toml') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: 測試
+        working-directory: src/Tools.Calibration
+        run: |
+          uv sync --all-extras
+          uv run pytest -q
+  web:
+    name: 網頁儀器
+    runs-on: ubuntu-latest
+    if: ${{ hashFiles('src/Instruments.Web/package.json') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: src/Instruments.Web/pnpm-lock.yaml }
+      - name: 建置與測試
+        working-directory: src/Instruments.Web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm test
+  dotnet:
+    name: .NET 核心(Windows)
+    runs-on: windows-latest
+    if: ${{ hashFiles('SimosaBRM.sln') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+      - name: 建置
+        run: dotnet build SimosaBRM.sln -c Release
+      - name: 測試
+        run: dotnet test SimosaBRM.sln -c Release --no-build --logger "trx;LogFileName=test.trx"

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simosa-brm/contracts/command.schema.json",
+  "title": "SimCommand",
+  "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": { "type": "string", "enum": ["rudder", "telegraph", "rpm", "thruster", "autopilot", "freeze", "resume", "reset", "timeScale", "loadScenario", "setEnvironment", "injectFault", "clearFault", "snapshot", "restore"] },
+    "value": {},
+    "args": { "type": "object" }
+  },
+  "examples": [
+    { "type": "rudder", "value": -20 },
+    { "type": "telegraph", "value": "HAH" },
+    { "type": "autopilot", "args": { "enabled": true, "heading": 275, "rotLimit": 15 } },
+    { "type": "setEnvironment", "args": { "wind": { "trueSpeed": 20, "trueDir": 40 }, "current": { "set": 265, "drift": 2.5 }, "waterDepth": 12 } }
+  ]
+}

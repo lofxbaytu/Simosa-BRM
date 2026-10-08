@@ -1,0 +1,122 @@
+{
+  "$schema": "../../../src/Contracts/ship-particulars.schema.json",
+  "id": "FSB2",
+  "name": "FS BITUMEN NO.2",
+  "imo": "9796559",
+  "callSign": "3FPO6",
+  "builder": "Nanjing Tanker Corporation Zijinshan Shipyard, hull ZJS-T031, design Shanghai Bestway, completed 2017-01-18",
+  "sources": "Final Loading Manual JH538-050-06、EEDI 技術檔、螺槳/舵/舵機完工圖、船檢證書清單、IMO 駕駛台海報 2019-08(docs 規劃書附錄 F)",
+  "hull": {
+    "lengthOverall_m": 109.90,
+    "lengthBetweenPerpendiculars_m": 104.00,
+    "breadth_m": 20.00,
+    "depth_m": 11.10,
+    "bulbousBow": true,
+    "transomStern": true,
+    "bilgeKeelArea_m2": null
+  },
+  "loadingConditions": {
+    "full": {
+      "label": "夏季滿載(海報試俥吃水 7.20 m 平吃水)",
+      "displacement_t": 11773.2,
+      "draftFore_m": 7.20,
+      "draftAft_m": 7.20,
+      "draftMean_m": 7.20,
+      "blockCoefficient": 0.765,
+      "kg_m": null,
+      "gm_m": null,
+      "propellerImmersion_pct": null,
+      "source": "loading manual / poster"
+    },
+    "ballast": {
+      "label": "壓載(海報估計 5.80 m 平吃水;2026-09 實際航次 F 4.4 / A 6.5 m)",
+      "displacement_t": null,
+      "draftFore_m": 4.4,
+      "draftAft_m": 6.5,
+      "draftMean_m": 5.45,
+      "blockCoefficient": null,
+      "kg_m": null,
+      "gm_m": null,
+      "propellerImmersion_pct": null,
+      "source": "poster (estimated) / drill report 2026-09-23"
+    }
+  },
+  "lightShip": { "mass_t": 4004.4, "kg_m": 8.284, "lcgFromAP_m": 45.155 },
+  "engine": {
+    "maker": "Makita-Mitsui-MAN B&W",
+    "type": "6S35MC7.1",
+    "mcr_kW": 3030,
+    "mcr_rpm": 147,
+    "ncr_kW": 2272.5,
+    "ncr_rpm": 133.6,
+    "minimumRpm": null,
+    "criticalRpmRange": null,
+    "asternPowerFraction": null,
+    "maxConsecutiveStarts": null,
+    "asternTimeLimit_min": null,
+    "remoteControl": "Nabtesco M-800-V",
+    "serviceSpeed75pctMcr_kn": 13.06,
+    "telegraph": {
+      "fullSea": { "rpm": 133.6, "speedLoaded_kn": 12.8, "speedBallast_kn": 13.3 },
+      "fullAhead": { "rpm": 103, "speedLoaded_kn": 10.0, "speedBallast_kn": 10.3 },
+      "halfAhead": { "rpm": 93, "speedLoaded_kn": 9.3, "speedBallast_kn": 9.3 },
+      "slowAhead": { "rpm": 70, "speedLoaded_kn": 7.0, "speedBallast_kn": 7.0 },
+      "deadSlowAhead": { "rpm": 60, "speedLoaded_kn": 6.0, "speedBallast_kn": 6.0 },
+      "deadSlowAstern": { "rpm": -60 },
+      "slowAstern": { "rpm": -70 },
+      "halfAstern": { "rpm": -93 },
+      "fullAstern": { "rpm": -103 }
+    },
+    "posterTimes": { "emergencyFullAheadToFullAstern_s": 257, "stopToFullAstern_s": 223 }
+  },
+  "propeller": {
+    "maker": "Nakashima",
+    "type": "FPP",
+    "blades": 4,
+    "diameter_m": 4.300,
+    "pitch_m": 3.0735,
+    "pitchRatio": 0.7148,
+    "expandedAreaRatio": 0.40,
+    "skew_deg": 24.9,
+    "rotation": "right",
+    "mass_kg": 4200,
+    "inertiaAir_kgm2": 3130,
+    "inertiaWater_kgm2": 3920
+  },
+  "rudder": {
+    "maker": "Bestway design",
+    "type": "NACA 0025 conventional",
+    "area_m2": null,
+    "maxAngle_deg": 35,
+    "mechanicalLimit_deg": 37,
+    "stockDiameter_mm": 280,
+    "ruleTorque_kNm": 140,
+    "steeringGear": { "type": "Mitsubishi SFC-20 ram", "torque_kNm": 180, "hardOverTime35_onePump_s": 28, "hardOverTime35_twoPumps_s": 14, "pumps": 2 }
+  },
+  "bowThruster": {
+    "maker": "Nakashima",
+    "type": "TCT-105",
+    "power_kW": 335,
+    "tunnelDiameter_m": 1.050,
+    "nominalThrust_kN": null,
+    "fullThrustDelay_s": 30,
+    "reversalTime_s": 30,
+    "notEffectiveAbove_kn": 5,
+    "note": "海報 335 kW;完工圖為影像檔待讀"
+  },
+  "anchors": { "type": "Spek", "mass_kg": null, "chainDiameter_mm": 58, "shacklesPort": 10, "shacklesStbd": 10 },
+  "windage": { "note": "風壓曲線見裝載手冊 7.4(p.187),待數位化", "lateralArea_m2": null, "frontalArea_m2": null },
+  "bridge": {
+    "blindDistanceAheadLoaded_m": 87.334,
+    "blindDistanceAheadBallast_m": 91.94,
+    "mastTopAboveBase_m": 36.42,
+    "parallelWaterlineLoaded_m": 60.424,
+    "parallelWaterlineBallast_m": 56.112
+  },
+  "squatTable": [
+    { "ukc_m": 5.0, "speed_kn": 10.0, "bowSquat_m": 1.04 },
+    { "ukc_m": 5.0, "speed_kn": 8.0, "bowSquat_m": 0.67 },
+    { "ukc_m": 5.0, "speed_kn": 5.0, "bowSquat_m": 0.26 }
+  ],
+  "heelDraftIncrease": [ [2, 0.471], [4, 0.944], [8, 1.897], [12, 2.869], [16, 3.871] ]
+}

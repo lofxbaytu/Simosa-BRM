@@ -1,0 +1,127 @@
+{
+  "$schema": "../../../src/Contracts/ship-particulars.schema.json",
+  "id": "FSB1",
+  "name": "FS BITUMEN NO.1",
+  "imo": "9692428",
+  "callSign": "BIAX",
+  "builder": "Fukuoka Shipbuilding Co., Ltd. (Nagasaki), hull N-2060, delivered 2014-03-06",
+  "sources": "交船規格書 Final Particular、試俥報告 GH-1071、裝載手冊 GH-3000、復原性資料 GH-1040、IMO 駕駛台海報 2019-08(docs 規劃書附錄 F)",
+  "hull": {
+    "lengthOverall_m": 105.50,
+    "lengthBetweenPerpendiculars_m": 99.00,
+    "breadth_m": 18.00,
+    "depth_m": 8.00,
+    "bulbousBow": true,
+    "transomStern": true,
+    "bilgeKeelArea_m2": 15.75
+  },
+  "loadingConditions": {
+    "full": {
+      "label": "滿載(試俥狀態 2014-02-10)",
+      "displacement_t": 7724.77,
+      "draftFore_m": 5.690,
+      "draftAft_m": 5.711,
+      "draftMean_m": 5.701,
+      "blockCoefficient": 0.738,
+      "kg_m": 5.61,
+      "gm_m": 1.96,
+      "propellerImmersion_pct": 120.8,
+      "source": "trial"
+    },
+    "ballast": {
+      "label": "壓載出港(裝載手冊 COND.3)",
+      "displacement_t": 4472.8,
+      "draftFore_m": 2.03,
+      "draftAft_m": 5.41,
+      "draftMean_m": 3.72,
+      "blockCoefficient": 0.70,
+      "kg_m": 5.06,
+      "gm_m": 4.15,
+      "propellerImmersion_pct": 84.1,
+      "source": "loading manual / poster (estimated manoeuvring data)"
+    }
+  },
+  "lightShip": { "mass_t": 2718.93, "kg_m": 6.429 },
+  "engine": {
+    "maker": "Makita-B&W",
+    "type": "5L35MC6.1",
+    "mcr_kW": 2750,
+    "mcr_rpm": 178,
+    "ncr_kW": 2338,
+    "ncr_rpm": 169,
+    "minimumRpm": 58,
+    "criticalRpmRange": [107, 127],
+    "asternPowerFraction": 0.61,
+    "maxConsecutiveStarts": 19,
+    "asternTimeLimit_min": 30,
+    "telegraph": {
+      "fullSea": { "rpm": 169, "speedLoaded_kn": 13.0, "speedBallast_kn": 14.0 },
+      "fullAhead": { "rpm": 135, "speedLoaded_kn": 10.5, "speedBallast_kn": 10.9 },
+      "halfAhead": { "rpm": 100, "speedLoaded_kn": 7.5, "speedBallast_kn": 7.8 },
+      "slowAhead": { "rpm": 80, "speedLoaded_kn": 6.0, "speedBallast_kn": 6.2 },
+      "deadSlowAhead": { "rpm": 70, "speedLoaded_kn": 5.0, "speedBallast_kn": 5.2 },
+      "deadSlowAstern": { "rpm": -70 },
+      "slowAstern": { "rpm": -80 },
+      "halfAstern": { "rpm": -100 },
+      "fullAstern": { "rpm": -135 },
+      "emergencyFullAstern": { "rpm": -150 }
+    },
+    "speedTrial": [
+      { "load_pct": 50, "power_kW": 1412, "rpm": 147.0, "speed_kn": 12.463 },
+      { "load_pct": 75, "power_kW": 2179, "rpm": 168.0, "speed_kn": 13.771 },
+      { "load_pct": 85, "power_kW": 2375, "rpm": 173.5, "speed_kn": 14.057 },
+      { "load_pct": 100, "power_kW": 2795, "rpm": 183.0, "speed_kn": 14.540 }
+    ]
+  },
+  "propeller": {
+    "maker": "Nakashima",
+    "type": "FPP",
+    "blades": 4,
+    "diameter_m": 3.700,
+    "pitch_m": 2.5094,
+    "pitchRatio": 0.693,
+    "expandedAreaRatio": 0.51,
+    "rotation": "right",
+    "pbcf": true
+  },
+  "rudder": {
+    "maker": "Japan Hamworthy",
+    "type": "Schilling MONOVEC",
+    "area_m2": 10.27,
+    "areaRatio": "1/56.9",
+    "maxAngle_deg": 70,
+    "normalMaxAngle_deg": 35,
+    "steeringGear": { "type": "rotary vane J2-22T", "torque_kNm": 116.7, "hardOverTime35_s": 19.2, "pumps": 2 }
+  },
+  "bowThruster": {
+    "maker": "Nakashima",
+    "type": "TCT-105 CPP",
+    "power_kW": 325,
+    "tunnelDiameter_m": 1.050,
+    "nominalThrust_kN": 49.0,
+    "fullThrustDelay_s": 35,
+    "turningRateAtZeroSpeed_degPerMin": 20,
+    "reversalTime_s": 264,
+    "note": "海報記 315 kW;規格書 325 kW"
+  },
+  "anchors": { "type": "AC-14", "mass_kg": 2140, "chainDiameter_mm": 42, "shacklesPort": 9, "shacklesStbd": 9, "heavingRate_mPerMin": 21.7 },
+  "windage": { "note": "風壓側面積曲線見復原性資料 GH-1040 10-5,待數位化", "lateralArea_m2": null, "frontalArea_m2": null },
+  "bridge": {
+    "eyeHeightAboveBase_m": null,
+    "blindDistanceAheadLoaded_m": 125.15,
+    "blindDistanceAheadBallast_m": 208.16,
+    "airDraftLoaded_m": 31.02,
+    "airDraftBallast_m": 33.87,
+    "mastTopAboveBase_m": 31.716,
+    "parallelWaterlineLoaded_m": 50.64,
+    "parallelWaterlineBallast_m": 43.56
+  },
+  "squatTable": [
+    { "ukc_m": 6.0, "speed_kn": 14.0, "bowSquat_m": 0.42 },
+    { "ukc_m": 6.0, "speed_kn": 10.0, "bowSquat_m": 0.27 },
+    { "ukc_m": 6.0, "speed_kn": 8.0, "bowSquat_m": 0.13 },
+    { "ukc_m": 3.0, "speed_kn": 10.0, "bowSquat_m": 0.19 },
+    { "ukc_m": 3.0, "speed_kn": 8.0, "bowSquat_m": 0.20 }
+  ],
+  "heelDraftIncrease": [ [2, 0.31], [4, 0.63], [8, 1.26], [12, 1.91], [16, 2.58] ]
+}

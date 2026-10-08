@@ -1,0 +1,20 @@
+{
+  "ship": "FSB2",
+  "source": "IMO 駕駛台海報 2019-08 圖面讀值(滿載 7.20 m 標示為試俥值);造船廠操縱試驗報告尚未取得(docs 規劃書第 3.5 節)",
+  "condition": "full",
+  "dataGrade": "poster",
+  "identification": {
+    "turningCircle35": {
+      "approachSpeed_kn": 12.8,
+      "rudder_deg": 35,
+      "port": { "advance_m": 313, "tacticalDiameter_m": 208, "transfer_m": 115, "marks": [ { "heading_deg": 90, "t_s": 76, "speed_kn": 5.4 }, { "heading_deg": 180, "t_s": 143, "speed_kn": 3.9 }, { "heading_deg": 270, "t_s": 228, "speed_kn": 3.5 }, { "heading_deg": 360, "t_s": 306, "speed_kn": 3.4 } ] },
+      "starboard": { "advance_m": 300, "tacticalDiameter_m": 245, "transfer_m": 130, "marks": [ { "heading_deg": 90, "t_s": 74, "speed_kn": 6.0 }, { "heading_deg": 180, "t_s": 145, "speed_kn": 4.4 }, { "heading_deg": 270, "t_s": 235, "speed_kn": 4.2 }, { "heading_deg": 360, "t_s": 313, "speed_kn": 3.7 } ] }
+    }
+  },
+  "validation": {
+    "crashStop": { "approachSpeed_kn": 12.8, "stopTime_s": 204, "trackReach_cables": 5.0, "note": "海報圖面讀值 3.4 min / 約 5 鏈" },
+    "inertiaStop": { "fromFullSea": [ { "t_min": 0, "speed_kn": 16.6 }, { "t_min": 1, "speed_kn": 14.3 }, { "t_min": 2, "speed_kn": 11.4 }, { "t_min": 3, "speed_kn": 9.3 }, { "t_min": 4, "speed_kn": 7.5 }, { "t_min": 5, "speed_kn": 6.6 }, { "t_min": 6, "speed_kn": 5.4 }, { "t_min": 7, "speed_kn": 4.9 }, { "t_min": 8, "speed_kn": 4.0 } ], "note": "海報初速 16.6 kn 與車鐘表 12.8 kn 不一致,待核" },
+    "speedPower": [ { "rpm": 133.6, "speed_kn": 12.8, "note": "poster full sea loaded" }, { "rpm": 110.25, "speed_kn": 13.06, "note": "EEDI 75% MCR summer draft (rpm estimated by cube law)" } ]
+  },
+  "tolerances": { "turning_pct": 15, "turning_minL": 0.45, "zigzag_deg": null, "stopping_pct": 22, "speed_kn": 0.75, "note": "No.2 僅海報資料,公差為 No.1 的 1.5 倍;Z 形不列入數值驗收" }
+}

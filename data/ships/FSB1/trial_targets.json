@@ -1,0 +1,55 @@
+{
+  "ship": "FSB1",
+  "source": "福岡造船 N-2060 正式試俥 2014-02-10,長崎三重沖,滿載 Δ 7,724.77 t,F 5.690 / A 5.711 m,海況平靜(GH-1071;docs 規劃書第 3.5 節)",
+  "condition": "full",
+  "identification": {
+    "turningCircle35": {
+      "approachSpeed_kn": 14.5,
+      "rudder_deg": 35,
+      "port": { "advance_m": 278.0, "tacticalDiameter_m": 277.2, "transfer_m": 157.0 },
+      "starboard": { "advance_m": 272.9, "tacticalDiameter_m": 339.5, "transfer_m": 175.5 },
+      "steadySpeedInTurn_kn": [4.6, 4.9]
+    },
+    "zigzag10_10": {
+      "approachSpeed_kn": 14.5,
+      "portFirst": { "overshoots_deg": [6.5, 10.8, 11.4] },
+      "starboardFirst": { "overshoots_deg": [7.4, 10.5, 9.6] }
+    }
+  },
+  "validation": {
+    "zigzag20_20": {
+      "approachSpeed_kn": 14.5,
+      "portFirst": { "overshoots_deg": [20.9, 17.8] },
+      "starboardFirst": { "overshoots_deg": [19.2, 19.4] }
+    },
+    "crashStop": {
+      "approachSpeed_kn": 14.5,
+      "asternStart_s": 115,
+      "stopTime_s": 259,
+      "trackReach_m": 1191
+    },
+    "inertiaStop": {
+      "approachSpeed_kn": 14.1,
+      "timeTo5kn_s": 258,
+      "distanceTo5kn_m": 1249.7,
+      "headReach_m": 1098,
+      "sideReach_m": 402
+    },
+    "crashAhead": { "approachSpeedAstern_kn": 6.2, "time_s": 121, "distance_m": 212 },
+    "bowThrusterTurn90": { "speed_kn": 1.0, "port_s": 264, "starboard_s": 251 },
+    "speedPower": [
+      { "rpm": 147.0, "power_kW": 1412, "speed_kn": 12.463 },
+      { "rpm": 168.0, "power_kW": 2179, "speed_kn": 13.771 },
+      { "rpm": 173.5, "power_kW": 2375, "speed_kn": 14.057 },
+      { "rpm": 183.0, "power_kW": 2795, "speed_kn": 14.540 }
+    ]
+  },
+  "posterEstimates": {
+    "note": "IMO 駕駛台海報 2019-08 估計值(非實測),供壓載與淺水趨勢參考",
+    "ballastTurning": { "approachSpeed_kn": 15.5, "marks": [ { "heading_deg": 90, "t_min": 0.9, "speed_kn": 9.8 }, { "heading_deg": 180, "t_min": 1.8, "speed_kn": 6.5 }, { "heading_deg": 270, "t_min": 2.9, "speed_kn": 5.1 }, { "heading_deg": 360, "t_min": 3.9, "speed_kn": 4.9 } ] },
+    "shallowTurning_hT1_2": { "approachSpeed_kn": 15.3, "marks": [ { "heading_deg": 90, "t_min": 1.0, "speed_kn": 9.4 }, { "heading_deg": 180, "t_min": 1.7, "speed_kn": 6.3 }, { "heading_deg": 270, "t_min": 2.8, "speed_kn": 4.9 }, { "heading_deg": 360, "t_min": 4.0, "speed_kn": 4.5 } ] },
+    "ballastCrashStop": { "time_min": 3.4, "trackReach_cables": 5.2 },
+    "loadedCrashStopPoster": { "time_min": 4.3, "trackReach_cables": 6.4 }
+  },
+  "tolerances": { "turning_pct": 10, "turning_minL": 0.3, "zigzag_deg": 3, "zigzag_pct": 25, "stopping_pct": 15, "speed_kn": 0.5 }
+}
