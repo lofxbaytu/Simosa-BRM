@@ -4,6 +4,8 @@ using SimosaBRM.Gateway.Nmea;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Engine;
 using SimosaBRM.SimCore.Host;
+using SimosaBRM.SimCore.Physics;
+using SimosaBRM.SimCore.Physics.Mmg;
 using SimosaBRM.SimCore.Recording;
 using SimosaBRM.SimCore.Scenario;
 using SimosaBRM.SimCore.Ship;
@@ -26,12 +28,22 @@ if (options.Help)
 var root = RepositoryPaths.FindRoot();
 ShipParticulars LoadShip(string id) => ShipParticulars.LoadFromDataRoot(root, id);
 
+// 動力學工廠(規劃書第 6.2 節):預設 MMG 完整模型(係數檔由 src/Tools.Calibration 產生);--dynamics placeholder 切回 Nomoto 暫代模型
+Func<ShipParticulars, LoadingCondition, IShipDynamics> DynamicsFactory(string name) => name switch
+{
+    "placeholder" => (s, l) => new PlaceholderDynamics(s, l),
+    _ => (s, l) => MmgDynamics.Load(root, s, l),
+};
+
 // ---------------------------------------------------------------- 重播模式
 if (options.Replay is { } replayPath)
 {
     var full = Path.IsPathRooted(replayPath) ? replayPath : Path.Combine(root, replayPath);
     Console.WriteLine($"重播:{full}");
-    var result = Replayer.Replay(full, LoadShip);
+    // 依紀錄標頭的模型名稱選擇動力學(紀錄用暫代模型時不會因預設 MMG 而雜湊不一致)
+    var recordedDynamics = RecordReader.Read(full).Header.Dynamics;
+    var replayFactory = DynamicsFactory(recordedDynamics.StartsWith("mmg", StringComparison.OrdinalIgnoreCase) ? "mmg" : "placeholder");
+    var result = Replayer.Replay(full, LoadShip, replayFactory);
     Console.WriteLine($"  完整性雜湊:{(result.IntegrityOk ? "一致" : "不一致或缺少 footer")}");
     Console.WriteLine($"  動力學模型:紀錄 {result.DynamicsRecorded} / 目前 {result.DynamicsUsed}");
     Console.WriteLine($"  重播指令數:{result.InputsReplayed},最終 tick {result.FinalTick}");
@@ -51,7 +63,14 @@ if (options.TimeScale is { } ts) scenario.TimeScale = ts;
 scenario.Validate();
 
 var ship = LoadShip(scenario.Ship.Id);
-var engine = new SimulationEngine(ship, scenario);
+SimulationEngine engine;
+try { engine = new SimulationEngine(ship, scenario, DynamicsFactory(options.Dynamics)); }
+catch (FileNotFoundException ex) when (options.Dynamics == "mmg")
+{
+    Console.Error.WriteLine(ex.Message);
+    Console.Error.WriteLine("(或以 --dynamics placeholder 使用暫代模型)");
+    return 3;
+}
 engine.ScenarioLoadRequested += (e, path) =>
 {
     try

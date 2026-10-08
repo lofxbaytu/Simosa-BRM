@@ -1,0 +1,319 @@
+{
+  "$schema": "../../../src/Contracts/coefficients.schema.json",
+  "schemaVersion": "1.0",
+  "shipId": "FSB1",
+  "shipName": "FS BITUMEN NO.1",
+  "loading": "ballast",
+  "loadingLabel": "壓載出港(裝載手冊 COND.3)",
+  "version": "0.1.0",
+  "generatedAt": "2026-10-08",
+  "source": {
+    "method": "estimate",
+    "particulars": "data/ships/FSB1/particulars.json",
+    "dataGrade": "trial",
+    "identifiedParameters": [],
+    "notes": [
+      "未識別(estimated):壓載狀態無試俥實測,係數全部由經驗公式估計;海報壓載迴旋/停船值僅供趨勢參考,黃金測試公差依規劃書 6.4 放寬 1.5 倍並註明資料來源為估計",
+      "engine.reversalDelay_s 取自 trial_targets.validation.crashStop.asternStart_s(主機換向的機械特性,非水動力擬合;緊急停船的停船時間與航跡距離仍為獨立驗證項目)"
+    ]
+  },
+  "tolerances": {
+    "turning_pct": 10,
+    "turning_minL": 0.3,
+    "zigzag_deg": 3,
+    "zigzag_pct": 25,
+    "stopping_pct": 15,
+    "speed_kn": 0.5
+  },
+  "reference": {
+    "length_m": 99.0,
+    "breadth_m": 18.0,
+    "draft_m": 3.72,
+    "draftFore_m": 2.03,
+    "draftAft_m": 5.41,
+    "blockCoefficient": 0.7,
+    "displacement_t": 4472.8,
+    "mass_kg": 4472800.0,
+    "xG_m": 0.0,
+    "density_kgm3": 1025.0,
+    "airDensity_kgm3": 1.225,
+    "nondimensionalisation": "X,Y:0.5·ρ·L·d·U²;N:0.5·ρ·L²·d·U²;m:0.5·ρ·L²·d;I:0.5·ρ·L⁴·d;L=LPP,d=平均吃水"
+  },
+  "mass": {
+    "m": 0.23937141135879106,
+    "mx": 0.01046730906634651,
+    "my": 0.13047561016988146,
+    "Izz": 0.014960713209924441,
+    "Jzz": 0.008891629003985749
+  },
+  "hull": {
+    "resistance": {
+      "model": "viscous+wave",
+      "viscous": {
+        "method": "ITTC-57 摩擦線 × 形狀因子 × S/(L·d),S 用 Mumford 式;形狀因子為擬合值(≥4 點時)",
+        "wettedSurface_m2": 1920.3129,
+        "formFactor": 2.1269307671219986
+      },
+      "wave": {
+        "method": "由 engine.telegraph(海報車鐘對照) 以推力恆等反推(w_P0、t_P 為經驗值)後擬合 c_w·(Fn/Fn_ref)^q",
+        "coefficient": 1.179001653135428e-17,
+        "froudeExponent": 1.000305706069001,
+        "froudeRef": 0.23114717082637437
+      },
+      "lowSpeedFloor": {
+        "speed_mps": 2.675111111111111,
+        "R0": 0.01810766339224705,
+        "note": "U 低於最低資料點時 R0' 不低於該點模型值"
+      },
+      "trialFit": [
+        {
+          "rpm": 70.0,
+          "speed_kn": 5.2,
+          "froude": 0.08585466344979618,
+          "J": 0.4338018018018017,
+          "KT": 0.1484034377465841,
+          "thrust_kN": 38.80326791658104,
+          "resistance_kN": 31.818679691596454,
+          "R0_total": 0.023557353561087457,
+          "R0_viscous": 0.020644892870618953,
+          "R0_wave": 0.002912460690468504,
+          "power_trial_kW": null,
+          "power_model_kW": 134.9038303585867,
+          "R0_model": 0.020644892870618957
+        },
+        {
+          "rpm": 80.0,
+          "speed_kn": 6.2,
+          "froude": 0.10236517565168007,
+          "J": 0.452572072072072,
+          "KT": 0.14106808940164436,
+          "thrust_kN": 48.176696762418146,
+          "resistance_kN": 39.504891345182884,
+          "R0_total": 0.020573990041394152,
+          "R0_viscous": 0.02015681784825063,
+          "R0_wave": 0.0004171721931435224,
+          "power_trial_kW": null,
+          "power_model_kW": 194.2979869692,
+          "R0_model": 0.020156817848250637
+        },
+        {
+          "rpm": 100.0,
+          "speed_kn": 7.8,
+          "froude": 0.1287819951746943,
+          "J": 0.4554918918918919,
+          "KT": 0.13991747393765044,
+          "thrust_kN": 74.66210269285347,
+          "resistance_kN": 61.22292420813985,
+          "R0_total": 0.02014540006190444,
+          "R0_viscous": 0.0195453886264835,
+          "R0_wave": 0.0006000114354209399,
+          "power_trial_kW": null,
+          "power_model_kW": 377.31265683841127,
+          "R0_model": 0.019545388626483508
+        },
+        {
+          "rpm": 135.0,
+          "speed_kn": 10.9,
+          "froude": 0.17996458300053433,
+          "J": 0.47149683016349675,
+          "KT": 0.13356466851359972,
+          "thrust_kN": 129.8934908557833,
+          "resistance_kN": 106.51266250174233,
+          "R0_total": 0.017947306417179006,
+          "R0_viscous": 0.018702779996307203,
+          "R0_wave": -0.0007554735791281963,
+          "power_trial_kW": null,
+          "power_model_kW": 898.6778929798945,
+          "R0_model": 0.018702779996307213
+        },
+        {
+          "rpm": 169.0,
+          "speed_kn": 14.0,
+          "froude": 0.23114717082637437,
+          "J": 0.483757129910976,
+          "KT": 0.12864589620281952,
+          "thrust_kN": 196.0638863530838,
+          "resistance_kN": 160.7723868095287,
+          "R0_total": 0.0164212578518788,
+          "R0_viscous": 0.01810766339224704,
+          "R0_wave": -0.0016864055403682417,
+          "power_trial_kW": null,
+          "power_model_kW": 1717.7756837736833,
+          "R0_model": 0.01810766339224705
+        }
+      ]
+    },
+    "Yv": -0.29622954213488917,
+    "Yr": 0.06949117104288201,
+    "Nv": -0.07515151515151515,
+    "Nr": -0.03493406795224977,
+    "Xvv": -0.04,
+    "Xvr": 0.002,
+    "Xrr": 0.011,
+    "Xvvvv": 0.771,
+    "Yvvv": -1.607,
+    "Yvvr": 0.379,
+    "Yvrr": -0.391,
+    "Yrrr": 0.008,
+    "Nvvv": -0.03,
+    "Nvvr": -0.294,
+    "Nvrr": 0.055,
+    "Nrrr": -0.013,
+    "crossFlow": {
+      "Cd": 1.0,
+      "blendStart_deg": 20.0,
+      "blendEnd_deg": 40.0,
+      "yawBlendStart_deg": 30.0,
+      "yawBlendEnd_deg": 45.0,
+      "uFloor_mps": 0.5
+    }
+  },
+  "propeller": {
+    "diameter_m": 3.7,
+    "pitchRatio": 0.693,
+    "expandedAreaRatio": 0.51,
+    "blades": 4,
+    "rotation": "right",
+    "kt": [
+      0.28829152967502647,
+      -0.2569778175160483,
+      -0.1509727244439199
+    ],
+    "kq": [
+      0.030258409101121264,
+      -0.01868950955236897,
+      -0.018758720975852072
+    ],
+    "ktFitRange_J": 0.7744531420631824,
+    "jMax": 0.9293437704758188,
+    "wP0": 0.3,
+    "tP": 0.18,
+    "xP": -0.48,
+    "wakeDriftFactor": 4.0,
+    "asternThrustFactor": 0.85,
+    "jClip": 0.9,
+    "lockedDragCd": 0.5,
+    "lockRps": 0.3,
+    "sideForceFactor": 0.08,
+    "note": "K_T、K_Q 為 Wageningen B 系列在 0≤J≤J0 的二次擬合;倒車/鎖定為簡化四象限(README)"
+  },
+  "rudder": {
+    "type": "Schilling MONOVEC",
+    "area_m2": 10.27,
+    "span_m": 3.924920381358073,
+    "aspectRatio": 1.5,
+    "aspectRatioEffective": 2.25,
+    "fAlpha": 3.065,
+    "schilling": {
+      "enabled": true,
+      "linearLimit_deg": 35.0,
+      "maxAngle_deg": 70.0,
+      "highLiftSlopeFactor": 0.5,
+      "note": "35° 以上以 sin(α) 的 highLiftSlopeFactor 倍斜率延伸至 70°(係數可調;無實測升力曲線)"
+    },
+    "maxAngle_deg": 70.0,
+    "rate_degps": 3.6458333333333335,
+    "neutralAngle_deg": 0.0,
+    "swirlAngle_deg": 0.0,
+    "tR": 0.254,
+    "aH": 0.28589999999999993,
+    "xH": -0.45,
+    "xR": -0.5,
+    "gammaRMinus": 0.395,
+    "gammaRPlus": 0.64,
+    "lR": -0.71,
+    "epsilon": 1.0043636363636368,
+    "kappa": 0.5,
+    "eta": 0.9426942817932406
+  },
+  "engine": {
+    "mcr_rpm": 178.0,
+    "maxRpm": 183.0,
+    "minRpm": 58.0,
+    "criticalRpmRange": [
+      107,
+      127
+    ],
+    "telegraph": {
+      "NAVF": 169.0,
+      "FAH": 135.0,
+      "HAH": 100.0,
+      "SAH": 80.0,
+      "DSAH": 70.0,
+      "STOP": 0.0,
+      "DSAS": -70.0,
+      "SAS": -80.0,
+      "HAS": -100.0,
+      "FAS": -135.0,
+      "EFAS": -150.0
+    },
+    "rpmTimeConstant_s": 6.0,
+    "rpmRateLimit_rpmps": 3.0,
+    "startDelay_s": 5.0,
+    "reversalDelay_s": 110.0,
+    "shaftStopTimeConstant_s": 20.0,
+    "note": "一階滯後+速率限制;換向:燃油切斷→軸轉速衰減→逾 reversalDelay_s 且軸轉速低於 5% MCR 後反向起動。reversalDelay_s 取自試俥緊急停船紀錄的倒車啟動時間(機械特性,非水動力擬合;停船時間與航跡距離仍為獨立驗證)"
+  },
+  "thruster": {
+    "installed": true,
+    "x_m": 42.57,
+    "nominalThrust_kN": 49.0,
+    "effectiveness": 1.0,
+    "fullThrustDelay_s": 35.0,
+    "halfThrustSpeed_kn": 2.5,
+    "zeroSpeedTurningRate_degPerMin": 20,
+    "notes": []
+  },
+  "wind": {
+    "model": "Blendermann (1994) 參數式(油輪典型係數;Fujiwara 1998 / Isherwood 1972 回歸表尚未數位化)",
+    "lateralArea_m2": 783.8649999999999,
+    "frontalArea_m2": 255.23999999999998,
+    "lateralCentroid_m": -10.436406460296098,
+    "CDt": 0.7,
+    "CDlHead": 0.75,
+    "CDlTail": 0.55,
+    "delta": 0.4,
+    "airDensity_kgm3": 1.225,
+    "notes": [
+      "windage.lateralArea_m2 以 LOA×乾舷+上層建築估計 = 784 m^2",
+      "windage.frontalArea_m2 以 B×乾舷+住艙估計 = 255 m^2"
+    ]
+  },
+  "shallowWater": {
+    "model": "f(h/T) = 1 + a·(T/(h−T))^n(Kijima & Nakiri 型;h/T ≥ 1.05)",
+    "linearSway": {
+      "a": 0.4,
+      "n": 1.0
+    },
+    "linearYaw": {
+      "a": 0.3,
+      "n": 1.0
+    },
+    "nonlinear": {
+      "a": 0.4,
+      "n": 1.0
+    },
+    "addedMassSway": {
+      "a": 0.3,
+      "n": 1.2
+    },
+    "addedMassSurge": {
+      "a": 0.1,
+      "n": 1.0
+    },
+    "addedInertia": {
+      "a": 0.3,
+      "n": 1.2
+    },
+    "resistance": {
+      "a": 0.2,
+      "n": 1.0
+    },
+    "minDepthRatio": 1.05
+  },
+  "squat": {
+    "model": "ICORELS",
+    "Cs": 1.1889810641221377,
+    "fittedFromTable": true
+  }
+}

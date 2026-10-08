@@ -37,8 +37,13 @@ public sealed record EngineSnapshot
 
 public sealed record MotionSnapshot(double U, double V, double R, double X, double Y, double Psi);
 
+/// <summary>
+/// 致動器狀態;後四項為主機換向狀態機(MMG 模式;規劃書第 6.2 節「主機/推進控制」),
+/// 舊快照未含時取預設值(暫代模型不使用)。
+/// </summary>
 public sealed record ActuatorSnapshot(
-    double RudderOrderDeg, double RudderDeg, double RpmOrder, double Rpm, double ThrusterOrder, double ThrusterActual);
+    double RudderOrderDeg, double RudderDeg, double RpmOrder, double Rpm, double ThrusterOrder, double ThrusterActual,
+    Physics.EngineMode EngineMode = Physics.EngineMode.Stopped, double EngineTimerSec = 0.0, double RpmTarget = 0.0, double RpmTau = 0.0);
 
 public sealed record EnvironmentSnapshot(
     double WindTrueSpeedMps, double WindTrueDirFromRad, double Gustiness, double GustFactor,

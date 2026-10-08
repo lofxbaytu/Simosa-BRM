@@ -22,6 +22,8 @@ public sealed class HostOptions
     public double? TimeScale { get; set; }
     /// <summary>模擬秒數到達後自動結束(0 = 不限)</summary>
     public double Duration { get; set; }
+    /// <summary>動力學模型:mmg(預設,讀 data/ships/&lt;ID&gt;/coefficients.&lt;loading&gt;.json)或 placeholder(Nomoto 暫代)</summary>
+    public string Dynamics { get; set; } = "mmg";
     public bool Help { get; set; }
 
     public const string Usage = """
@@ -34,6 +36,7 @@ public sealed class HostOptions
           --port 8765                 WebSocket 埠(ws://0.0.0.0:8765)
           --timescale 1               初始時間倍率(0.1–10)
           --duration <秒>             模擬時間到達後自動結束(煙霧測試用)
+          --dynamics mmg|placeholder  動力學模型(預設 mmg:MMG 完整模型,係數 data/ships/<ID>/coefficients.<loading>.json)
           --no-ws | --no-udp | --no-nmea
           --multicast 239.255.70.1:7001     狀態匯流排多播群組
           --nmea-port 10110                 NMEA 單播埠(127.0.0.1,OpenCPN 預設)
@@ -58,6 +61,10 @@ public sealed class HostOptions
                 case "--port": o.Port = int.Parse(Next()); break;
                 case "--timescale": o.TimeScale = double.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--duration": o.Duration = double.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;
+                case "--dynamics":
+                    o.Dynamics = Next().ToLowerInvariant();
+                    if (o.Dynamics is not ("mmg" or "placeholder")) throw new ArgumentException($"--dynamics 須為 mmg 或 placeholder:{o.Dynamics}");
+                    break;
                 case "--no-ws": o.EnableWebSocket = false; break;
                 case "--no-udp": o.EnableUdpBus = false; break;
                 case "--no-nmea": o.EnableNmea = false; break;

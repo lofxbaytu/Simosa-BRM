@@ -37,11 +37,19 @@ public static class Rk4Integrator
     /// 回傳的 Psi 已正規化到 [0, 2π)。
     /// </summary>
     public static StateVector Step(IShipDynamics dynamics, double t, StateVector y, in EnvironmentSample env, in ControlInput control, double dt)
+        => Step(dynamics, t, y, env, ControlStages.Constant(control), dt);
+
+    /// <summary>
+    /// 自船一步,控制量逐階段給定(<see cref="ControlStages"/>):致動器以同一 RK4 在引擎內先行積分,
+    /// 第 2/3 階段用半步、第 4 階段用整步的致動器狀態,與 Python 參考實作把舵角/軸轉速/側推放進同一狀態向量積分的結果一致。
+    /// 回傳的 Psi 已正規化到 [0, 2π)。
+    /// </summary>
+    public static StateVector Step(IShipDynamics dynamics, double t, StateVector y, in EnvironmentSample env, in ControlStages c, double dt)
     {
-        var k1 = dynamics.Derivative(t, y, env, control);
-        var k2 = dynamics.Derivative(t + 0.5 * dt, y + 0.5 * dt * k1, env, control);
-        var k3 = dynamics.Derivative(t + 0.5 * dt, y + 0.5 * dt * k2, env, control);
-        var k4 = dynamics.Derivative(t + dt, y + dt * k3, env, control);
+        var k1 = dynamics.Derivative(t, y, env, c.C1);
+        var k2 = dynamics.Derivative(t + 0.5 * dt, y + 0.5 * dt * k1, env, c.C2);
+        var k3 = dynamics.Derivative(t + 0.5 * dt, y + 0.5 * dt * k2, env, c.C3);
+        var k4 = dynamics.Derivative(t + dt, y + dt * k3, env, c.C4);
         var next = y + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
         return next with { Psi = Contracts.Units.NormalizeHeadingRad(next.Psi) };
     }

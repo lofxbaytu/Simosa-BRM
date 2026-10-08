@@ -39,7 +39,8 @@
         },
         "heading": { "type": "number", "minimum": 0, "maximum": 360 },
         "speed": { "type": "number", "default": 0, "description": "初始對水速度 (kn)" },
-        "telegraph": { "type": "string", "enum": ["EFAS", "FAS", "HAS", "SAS", "DSAS", "STOP", "DSAH", "SAH", "HAH", "FAH", "NAVF"], "description": "未指定時取航速最接近的前進車令" },
+        "telegraph": { "type": "string", "enum": ["EFAS", "FAS", "HAS", "SAS", "DSAS", "STOP", "DSAH", "SAH", "HAH", "FAH", "NAVF"], "description": "未指定時:MMG 模型取該航速的直航平衡轉速(以最接近的車令標示);暫代模型取航速最接近的前進車令" },
+        "rpm": { "type": "number", "description": "初始軸轉速 (rpm,倒車負);指定時優先於車鐘/航速推得的轉速,轉速令同值" },
         "rudder": { "type": "number", "default": 0, "description": "初始舵角(度,右正)" }
       }
     },

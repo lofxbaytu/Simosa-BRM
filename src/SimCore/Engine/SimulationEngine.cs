@@ -96,7 +96,7 @@ public sealed class SimulationEngine
         Scenario = scenario.Validate();
         Loading = scenario.Ship.Loading;
         Dynamics = _dynamicsFactory(ship, Loading);
-        _act = new ActuatorModel(ActuatorParameters.FromParticulars(ship));
+        _act = new ActuatorModel(ActuatorParametersForDynamics());
         _rng = new DeterministicRandom(scenario.Seed);
         _projection = new LocalTangentPlane(scenario.Origin!.Lat, scenario.Origin.Lon);
         Initialize();
@@ -132,15 +132,16 @@ public sealed class SimulationEngine
         var u = Units.KnToMps(sc.Initial.Speed);
         Motion = new StateVector(u, 0.0, 0.0, x, y, psi);
 
-        _telegraph = ResolveInitialTelegraph(sc);
-        var rpm = Ship.TelegraphRpm(_telegraph);
-        _act = new ActuatorModel(ActuatorParameters.FromParticulars(Ship))
+        var (telegraph, rpm) = ResolveInitialPropulsion(sc, u);
+        _telegraph = telegraph;
+        _act = new ActuatorModel(ActuatorParametersForDynamics())
         {
             RudderOrderDeg = sc.Initial.Rudder,
             RudderDeg = sc.Initial.Rudder,
             RpmOrder = rpm,
             Rpm = rpm,
         };
+        _act.InitializeEngineState();
 
         Environment = new EnvironmentConditions
         {
@@ -166,11 +167,50 @@ public sealed class SimulationEngine
         _startsRemaining = Ship.Engine.MaxConsecutiveStarts;
     }
 
+    /// <summary>致動器參數:動力學模型提供者(MMG 由係數檔)優先,否則依 particulars(暫代模型)。</summary>
+    private ActuatorParameters ActuatorParametersForDynamics()
+        => Dynamics.ActuatorParameters ?? ActuatorParameters.FromParticulars(Ship);
+
+    /// <summary>
+    /// 初始車鐘與轉速:initial.rpm 指定時優先(車鐘未指定時取最接近者);否則車鐘指定時取其轉速;
+    /// 否則(航速 &gt; 0 且模型能解直航穩態,如 MMG)取該航速的平衡轉速,與 Python 參考實作 reset() 相同;
+    /// 最後退回「航速最接近的前進車令」(暫代模型)。
+    /// </summary>
+    private (TelegraphOrder Telegraph, double Rpm) ResolveInitialPropulsion(Scenario.Scenario sc, double u)
+    {
+        var explicitOrder = !string.IsNullOrWhiteSpace(sc.Initial.Telegraph) &&
+                            Enum.TryParse<TelegraphOrder>(sc.Initial.Telegraph, ignoreCase: true, out var parsed)
+            ? parsed : (TelegraphOrder?)null;
+        if (sc.Initial.Rpm is { } rpm0)
+            return (explicitOrder ?? NearestTelegraphForRpm(rpm0), rpm0);
+        if (explicitOrder is { } o)
+            return (o, Ship.TelegraphRpm(o));
+        if (u > 0.0 && Dynamics.SteadyRpmForSpeed(u, sc.Environment.WaterDepth) is { } steady)
+            return (NearestTelegraphForRpm(steady), steady);
+        var order = ResolveInitialTelegraph(sc);
+        return (order, Ship.TelegraphRpm(order));
+    }
+
+    /// <summary>與轉速同向且最接近的車鐘(0 → STOP);與 Python _telegraph_for_rpm 相同。</summary>
+    private TelegraphOrder NearestTelegraphForRpm(double rpm)
+    {
+        if (Math.Abs(rpm) < 1e-6) return TelegraphOrder.STOP;
+        var best = TelegraphOrder.STOP;
+        var bestErr = double.MaxValue;
+        foreach (var o in Enum.GetValues<TelegraphOrder>())
+        {
+            if (o == TelegraphOrder.STOP) continue;
+            double v;
+            try { v = Ship.TelegraphRpm(o); } catch (KeyNotFoundException) { continue; }
+            if (v == 0.0 || (v > 0) != (rpm > 0)) continue;
+            var err = Math.Abs(v - rpm);
+            if (err < bestErr) (best, bestErr) = (o, err);
+        }
+        return best;
+    }
+
     private TelegraphOrder ResolveInitialTelegraph(Scenario.Scenario sc)
     {
-        if (!string.IsNullOrWhiteSpace(sc.Initial.Telegraph) &&
-            Enum.TryParse<TelegraphOrder>(sc.Initial.Telegraph, ignoreCase: true, out var explicitOrder))
-            return explicitOrder;
         if (sc.Initial.Speed < 0.5) return TelegraphOrder.STOP;
         var best = TelegraphOrder.STOP;
         var bestErr = double.MaxValue;
@@ -218,7 +258,10 @@ public sealed class SimulationEngine
 
             case SimCommandType.Rpm:
                 if (cmd.ValueAsDouble() is { } rpm)
-                    SetRpmOrder(Units.Clamp(rpm, -Ship.Engine.McrRpm, Ship.Engine.McrRpm));
+                {
+                    var limit = _act.Parameters.MaxRpm ?? Ship.Engine.McrRpm;
+                    SetRpmOrder(Units.Clamp(rpm, -limit, limit));
+                }
                 break;
 
             case SimCommandType.Thruster:
@@ -341,13 +384,14 @@ public sealed class SimulationEngine
         if (Autopilot.Enabled)
             _act.RudderOrderDeg = Autopilot.RudderOrderDeg(Motion.Psi, Motion.R, _act.Parameters.RudderMaxDeg);
 
-        _act.Step(Options.Dt,
+        // 致動器(含主機換向狀態機)先推進;MMG 模式回傳 RK4 各階段的舵角/轉速/側推,與 Python 參考實作的耦合積分一致
+        var controls = _act.Step(Options.Dt,
             rudderJammed: _faults.Contains(FaultNames.SteeringGear),
             engineFailed: _faults.Contains(FaultNames.MainEngine),
             thrusterFailed: _faults.Contains(FaultNames.BowThruster));
 
         var sample = Environment.SampleAt(Motion.X, Motion.Y);
-        Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, _act.ToControlInput(), Options.Dt);
+        Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
         Tick++;
 
         if (!Aground && UnderKeelClearance() <= 0.0)
@@ -368,7 +412,7 @@ public sealed class SimulationEngine
 
     private void UpdateHash()
     {
-        Span<byte> buf = stackalloc byte[32 + 8 + 8 * 12];
+        Span<byte> buf = stackalloc byte[32 + 8 + 8 * 16];
         _hash.CopyTo(buf);
         var o = 32;
         BinaryPrimitives.WriteInt64LittleEndian(buf[o..], Tick); o += 8;
@@ -376,6 +420,8 @@ public sealed class SimulationEngine
                  {
                      Motion.U, Motion.V, Motion.R, Motion.X, Motion.Y, Motion.Psi,
                      _act.RudderDeg, _act.RudderOrderDeg, _act.Rpm, _act.RpmOrder, _act.ThrusterActual, Environment.GustFactor,
+                     // 主機換向狀態機(MMG 模式;暫代模型為常數)
+                     (double)_act.EngineMode, _act.EngineTimerSec, _act.RpmTarget, _act.RpmTau,
                  })
         {
             BinaryPrimitives.WriteInt64LittleEndian(buf[o..], BitConverter.DoubleToInt64Bits(d));
@@ -395,7 +441,8 @@ public sealed class SimulationEngine
         Tick = Tick,
         Dt = Options.Dt,
         Motion = new MotionSnapshot(Motion.U, Motion.V, Motion.R, Motion.X, Motion.Y, Motion.Psi),
-        Actuators = new ActuatorSnapshot(_act.RudderOrderDeg, _act.RudderDeg, _act.RpmOrder, _act.Rpm, _act.ThrusterOrder, _act.ThrusterActual),
+        Actuators = new ActuatorSnapshot(_act.RudderOrderDeg, _act.RudderDeg, _act.RpmOrder, _act.Rpm, _act.ThrusterOrder, _act.ThrusterActual,
+            _act.EngineMode, _act.EngineTimerSec, _act.RpmTarget, _act.RpmTau),
         Telegraph = _telegraph,
         Environment = new EnvironmentSnapshot(
             Environment.WindTrueSpeedMps, Environment.WindTrueDirFromRad, Environment.Gustiness, Environment.GustFactor,
@@ -450,7 +497,7 @@ public sealed class SimulationEngine
 
         Tick = s.Tick;
         Motion = new StateVector(s.Motion.U, s.Motion.V, s.Motion.R, s.Motion.X, s.Motion.Y, s.Motion.Psi);
-        _act = new ActuatorModel(ActuatorParameters.FromParticulars(Ship))
+        _act = new ActuatorModel(ActuatorParametersForDynamics())
         {
             RudderOrderDeg = s.Actuators.RudderOrderDeg,
             RudderDeg = s.Actuators.RudderDeg,
@@ -458,6 +505,10 @@ public sealed class SimulationEngine
             Rpm = s.Actuators.Rpm,
             ThrusterOrder = s.Actuators.ThrusterOrder,
             ThrusterActual = s.Actuators.ThrusterActual,
+            EngineMode = s.Actuators.EngineMode,
+            EngineTimerSec = s.Actuators.EngineTimerSec,
+            RpmTarget = s.Actuators.RpmTarget,
+            RpmTau = s.Actuators.RpmTau,
         };
         _telegraph = s.Telegraph;
         var depth = Environment.Depth;
@@ -493,12 +544,18 @@ public sealed class SimulationEngine
 
     // ------------------------------------------------------------------ 廣播狀態
 
+    /// <summary>Squat:動力學模型提供者(MMG:ICORELS)優先,否則 Barrass 開闊水域簡式。</summary>
+    private double SquatAt(double waterDepth)
+    {
+        if (Dynamics.Squat(Motion, waterDepth) is { } s) return s;
+        var lc = Ship.GetLoading(Loading);
+        return EnvironmentMath.SquatBarrass(lc.BlockCoefficient ?? 0.75, Units.MpsToKn(Math.Abs(Motion.U)));
+    }
+
     private double UnderKeelClearance()
     {
         var depth = Environment.Depth.DepthAt(Motion.X, Motion.Y);
-        var lc = Ship.GetLoading(Loading);
-        var squat = EnvironmentMath.SquatBarrass(lc.BlockCoefficient ?? 0.75, Units.MpsToKn(Math.Abs(Motion.U)));
-        return EnvironmentMath.UnderKeelClearance(depth, lc.MaxDraft_m, squat);
+        return EnvironmentMath.UnderKeelClearance(depth, Ship.GetLoading(Loading).MaxDraft_m, SquatAt(depth));
     }
 
     /// <summary>組出 state.schema.json 的自船狀態(引擎執行緒)。</summary>
@@ -513,10 +570,16 @@ public sealed class SimulationEngine
         var (lat, lon) = _projection.ToGeodetic(m.X, m.Y);
         var lc = Ship.GetLoading(Loading);
         var stwKn = Units.MpsToKn(m.U);
-        var squat = EnvironmentMath.SquatBarrass(lc.BlockCoefficient ?? 0.75, Math.Abs(stwKn));
+        var squat = SquatAt(sample.WaterDepthM);
         var ukc = EnvironmentMath.UnderKeelClearance(sample.WaterDepthM, lc.MaxDraft_m, squat);
         var drift = Math.Abs(m.U) > 0.05 ? Units.RadToDeg(Math.Atan2(-m.V, m.U)) : 0.0;
         var engineState = _faults.Contains(FaultNames.MainEngine) ? EngineRunState.Failed
+            : _act.Parameters.EngineStateMachine ? _act.EngineMode switch
+            {
+                EngineMode.Stopped => EngineRunState.Stopped,
+                EngineMode.Starting or EngineMode.Reversing => EngineRunState.Starting,
+                _ => EngineRunState.Running, // run 與停俥滑行(stopping)
+            }
             : Math.Abs(_act.Rpm) > 1.0 ? EngineRunState.Running
             : EngineRunState.Stopped;
         var loadPct = Ship.Engine.McrRpm > 0 ? 100.0 * Math.Pow(Math.Abs(_act.Rpm) / Ship.Engine.McrRpm, 3) : 0.0;

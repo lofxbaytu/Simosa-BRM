@@ -27,3 +27,12 @@ public readonly record struct StateVector(double U, double V, double R, double X
 /// 實際舵角(弧度,右正)、實際螺槳轉速(rpm,倒車負)、側推實際推力比例(−1 至 +1,正 = 推艏向右)。
 /// </summary>
 public readonly record struct ControlInput(double RudderRad, double Rpm, double Thruster);
+
+/// <summary>
+/// RK4 四個階段各自看到的控制輸入(第 1 階段 = 步首、第 2/3 階段 = 半步、第 4 階段 = 整步的致動器狀態)。
+/// 顯式更新的致動器(暫代模型)四個階段相同(<see cref="Constant"/>)。
+/// </summary>
+public readonly record struct ControlStages(ControlInput C1, ControlInput C2, ControlInput C3, ControlInput C4)
+{
+    public static ControlStages Constant(in ControlInput c) => new(c, c, c, c);
+}

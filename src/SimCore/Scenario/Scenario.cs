@@ -77,8 +77,13 @@ public sealed class ScenarioInitial
     public double Heading { get; set; }
     /// <summary>對水速度(kn)</summary>
     public double Speed { get; set; }
-    /// <summary>初始車鐘代號(EFAS…NAVF);未指定時取航速最接近的前進車令(0 kn → STOP)</summary>
+    /// <summary>
+    /// 初始車鐘代號(EFAS…NAVF);未指定時:動力學模型能解直航穩態者(MMG)取該航速的平衡轉速並以最接近的車令標示,
+    /// 否則取航速最接近的前進車令(0 kn → STOP)
+    /// </summary>
     public string? Telegraph { get; set; }
+    /// <summary>初始軸轉速(rpm,倒車負);指定時優先於車鐘/航速推得的轉速(轉速令同值)</summary>
+    public double? Rpm { get; set; }
     /// <summary>初始舵角(度)</summary>
     public double Rudder { get; set; }
 }
