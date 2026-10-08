@@ -80,6 +80,7 @@ def turning_circle(ship: MMGShip, rudder_deg: float = 35.0, side: str = "starboa
     speeds_after_360: list[float] = []
     rots_after_360: list[float] = []
     steps = int(round(max_time_s / ship.dt))
+    prev = (0.0, 0.0, 0.0, 0.0, 0.0)  # (change, t, speed_kn, along, across) 前一步,供線性內插
     for _ in range(steps):
         ship.step()
         s = ship.state
@@ -93,15 +94,21 @@ def turning_circle(ship: MMGShip, rudder_deg: float = 35.0, side: str = "starboa
         dx, dy = s.x - x0, s.y - y0
         along = dx * math.sin(psi0) + dy * math.cos(psi0)
         across = sign * (dx * math.cos(psi0) - dy * math.sin(psi0))
+        spd = math.hypot(s.u, s.v) / KN_TO_MPS
+        cur = (change, s.t, spd, along, across)
         while next_mark <= 360 and change >= next_mark:
-            spd = math.hypot(s.u, s.v) / KN_TO_MPS
-            res.marks[next_mark] = {"t_s": s.t, "speed_kn": spd, "along_m": along, "across_m": across}
+            # 在前一步與本步之間對航向變化做線性內插,使量測值對步長平滑(識別用)
+            f = (next_mark - prev[0]) / (cur[0] - prev[0]) if cur[0] > prev[0] else 1.0
+            f = min(max(f, 0.0), 1.0)
+            t_m, v_m, al_m, ac_m = (prev[i] + f * (cur[i] - prev[i]) for i in (1, 2, 3, 4))
+            res.marks[next_mark] = {"t_s": t_m, "speed_kn": v_m, "along_m": al_m, "across_m": ac_m}
             if next_mark == 90:
-                res.advance_m = along
-                res.transfer_m = across
+                res.advance_m = al_m
+                res.transfer_m = ac_m
             elif next_mark == 180:
-                res.tactical_diameter_m = across
+                res.tactical_diameter_m = ac_m
             next_mark += 90
+        prev = cur
         if change >= 360.0:
             speeds_after_360.append(math.hypot(s.u, s.v))
             rots_after_360.append(s.r)

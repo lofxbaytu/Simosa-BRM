@@ -197,7 +197,9 @@ def fit_resistance_from_trial(sp: ShipParticulars, prop: dict[str, Any], w0: flo
 
 
 def r0_prime(resistance: dict[str, Any], u: float, lpp: float, d: float) -> float:
-    """總阻力係數 R0'(U)(模擬時每步呼叫)。"""
+    """總阻力係數 R0'(U)(模擬時每步呼叫)。``model == "constant"`` 時回傳固定 R0(KVLCC2 基準用)。"""
+    if resistance.get("model") == "constant":
+        return float(resistance["R0"]) * float(resistance.get("scale", 1.0))
     v = resistance["viscous"]
     w = resistance["wave"]
     fn = froude_number(abs(u), lpp)
@@ -448,3 +450,47 @@ def load_or_estimate(sp: ShipParticulars, prefer_file: bool = True) -> dict[str,
     except FileNotFoundError:
         tt = None
     return estimate_coefficients(sp, tt)
+
+
+def kvlcc2_coefficients() -> dict[str, Any]:
+    """KVLCC2(SIMMAN 基準船)的 MMG 係數(Yasukawa & Yoshimura 2015 Table 2、3),供 MMG 實作本身的回歸測試(規劃書 6.3)。
+
+    主尺寸:L 320 m、B 58 m、d 20.8 m、∇ 312,622 m³、D_P 9.86 m、A_R 112.5 m²、H_R 15.8 m。
+    """
+    lpp, b, d = 320.0, 58.0, 20.8
+    vol = 312622.0
+    mass = vol * RHO_WATER
+    nd_m = 0.5 * RHO_WATER * lpp * lpp * d
+    nd_i = 0.5 * RHO_WATER * lpp**4 * d
+    izz = mass * (0.25 * lpp) ** 2
+    k = KVLCC2
+    hull: dict[str, Any] = {"resistance": {"model": "constant", "R0": 0.022}}
+    for key in ("Xvv", "Xvr", "Xrr", "Xvvvv", "Yv", "Yr", "Yvvv", "Yvvr", "Yvrr", "Yrrr", "Nv", "Nr", "Nvvv", "Nvvr", "Nvrr", "Nrrr"):
+        hull[key] = k[key]
+    hull["crossFlow"] = {"Cd": 1.0, "blendStart_deg": 20.0, "blendEnd_deg": 40.0, "uFloor_mps": 0.5}
+    tele = {"NAVF": 76.0, "FAH": 60.0, "HAH": 45.0, "SAH": 35.0, "DSAH": 25.0, "STOP": 0.0, "DSAS": -25.0, "SAS": -35.0, "HAS": -45.0, "FAS": -60.0, "EFAS": -60.0}
+    return {
+        "schemaVersion": SCHEMA_VERSION, "shipId": "FSB1", "shipName": "KVLCC2 benchmark", "loading": "full",
+        "version": __version__, "generatedAt": _dt.date.today().isoformat(),
+        "source": {"method": "estimate", "particulars": "KVLCC2 (Yasukawa & Yoshimura 2015)", "dataGrade": "trial", "identifiedParameters": [], "notes": []},
+        "tolerances": {},
+        "reference": {"length_m": lpp, "breadth_m": b, "draft_m": d, "blockCoefficient": 0.81, "displacement_t": mass / 1000.0,
+                      "mass_kg": mass, "xG_m": 0.0, "density_kgm3": RHO_WATER, "airDensity_kgm3": RHO_AIR},
+        "mass": {"m": mass / nd_m, "mx": k["mx"], "my": k["my"], "Izz": izz / nd_i, "Jzz": k["Jzz"]},
+        "hull": hull,
+        "propeller": {"diameter_m": 9.86, "pitchRatio": 0.721, "expandedAreaRatio": 0.431, "blades": 4, "rotation": "right",
+                      "kt": list(k["kt"]), "kq": [0.03, -0.03, -0.01], "jMax": 1.0, "wP0": k["wP0"], "tP": k["tP"], "xP": k["xP"],
+                      "wakeDriftFactor": 4.0, "asternThrustFactor": 0.85, "jClip": 0.9, "lockedDragCd": 0.5, "lockRps": 0.3, "sideForceFactor": 0.08},
+        "rudder": {"type": "conventional", "area_m2": 112.5, "span_m": 15.8, "fAlpha": 2.747,
+                   "schilling": {"enabled": False, "linearLimit_deg": 35.0, "maxAngle_deg": 35.0, "highLiftSlopeFactor": 0.5},
+                   "maxAngle_deg": 35.0, "rate_degps": 2.32, "neutralAngle_deg": 0.0, "swirlAngle_deg": 0.0,
+                   "tR": k["tR"], "aH": k["aH"], "xH": k["xH"], "xR": k["xR"], "gammaRMinus": k["gammaRMinus"], "gammaRPlus": k["gammaRPlus"],
+                   "lR": k["lR"], "epsilon": k["epsilon"], "kappa": k["kappa"], "eta": 9.86 / 15.8},
+        "engine": {"mcr_rpm": 76.0, "maxRpm": 90.0, "minRpm": 20.0, "criticalRpmRange": None, "telegraph": tele,
+                   "rpmTimeConstant_s": 10.0, "rpmRateLimit_rpmps": 1.0, "startDelay_s": 5.0, "reversalDelay_s": 120.0, "shaftStopTimeConstant_s": 30.0},
+        "thruster": {"installed": False, "x_m": 0.43 * lpp, "nominalThrust_kN": 0.0, "effectiveness": 1.0, "fullThrustDelay_s": 30.0, "halfThrustSpeed_kn": 2.5},
+        "wind": {"model": "Blendermann", "lateralArea_m2": 3000.0, "frontalArea_m2": 900.0, "lateralCentroid_m": -30.0,
+                 "CDt": 0.70, "CDlHead": 0.90, "CDlTail": 0.55, "delta": 0.40, "airDensity_kgm3": RHO_AIR},
+        "shallowWater": shallow_water_coefficients(),
+        "squat": {"model": "ICORELS", "Cs": 2.0},
+    }

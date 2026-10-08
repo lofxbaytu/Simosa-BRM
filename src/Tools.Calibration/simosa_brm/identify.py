@@ -240,7 +240,7 @@ class Objective:
 
     def jac(self, x: np.ndarray) -> np.ndarray:
         """前向差分 Jacobian,各欄平行計算。"""
-        h = np.maximum(1e-3 * np.abs(x), 1e-4)
+        h = np.maximum(0.01 * np.abs(x), 0.002 * (self.ub - self.lb))
         vecs = [x] + [x + np.eye(len(x))[i] * h[i] for i in range(len(x))]
         sims = self._evaluate_many(vecs)
         f0 = self.full_residual(sims[0], x)
@@ -277,7 +277,7 @@ def identify(ship_id: str, loading: str = "full", params: list[str] | None = Non
         pass
 
     sol = least_squares(obj, x0, jac=obj.jac, bounds=(obj.lb, obj.ub), method="trf", x_scale="jac",
-                        max_nfev=max_nfev, ftol=1e-4, xtol=1e-4, gtol=1e-6, verbose=2 if verbose else 0)
+                        max_nfev=max_nfev, ftol=1e-5, xtol=1e-5, gtol=1e-6, verbose=2 if verbose else 0)
     x = sol.x
     sim = obj._evaluate_many([x])[0]
     obj.close()

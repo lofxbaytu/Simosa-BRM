@@ -1,0 +1,593 @@
+{
+  "$schema": "../../../src/Contracts/coefficients.schema.json",
+  "schemaVersion": "1.0",
+  "shipId": "FSB2",
+  "shipName": "FS BITUMEN NO.2",
+  "loading": "full",
+  "loadingLabel": "夏季滿載(海報試俥吃水 7.20 m 平吃水)",
+  "version": "0.1.0",
+  "generatedAt": "2026-10-08",
+  "source": {
+    "method": "identify",
+    "particulars": "data/ships/FSB2/particulars.json",
+    "dataGrade": "poster",
+    "identifiedParameters": [
+      "Nr",
+      "Nvvr",
+      "Nrrr",
+      "aH",
+      "epsilon",
+      "gammaRMinus",
+      "gammaRPlus",
+      "swirlAngle"
+    ],
+    "notes": [
+      "rudder.area_m2 以 L·T/55 估計 = 13.61 m^2"
+    ],
+    "trialTargets": "data/ships/FSB2/trial_targets.json",
+    "identification": {
+      "date": "2026-10-08",
+      "toolVersion": "0.1.0",
+      "dt_s": 0.1,
+      "priorWeight": 0.5,
+      "optimizer": {
+        "method": "scipy least_squares trf",
+        "nfev": 7,
+        "status": 2,
+        "message": "`ftol` termination condition is satisfied.",
+        "evaluations": 72
+      },
+      "cost": {
+        "initial": 29.158915485526116,
+        "final": 4.476038541397562
+      },
+      "parameters": {
+        "Nr": {
+          "initial": -0.055597633136094685,
+          "final": -0.06896520171300584,
+          "lower": -0.14,
+          "upper": -0.015
+        },
+        "Nvvr": {
+          "initial": -0.294,
+          "final": -0.28474974304125966,
+          "lower": -0.9,
+          "upper": 0.0
+        },
+        "Nrrr": {
+          "initial": -0.013,
+          "final": -0.01617971862071739,
+          "lower": -0.09,
+          "upper": 0.0
+        },
+        "aH": {
+          "initial": 0.32665500000000003,
+          "final": 0.28076839189237285,
+          "lower": 0.08,
+          "upper": 0.7
+        },
+        "epsilon": {
+          "initial": 0.9793733357988168,
+          "final": 1.3954677515949938,
+          "lower": 0.6,
+          "upper": 1.8
+        },
+        "gammaRMinus": {
+          "initial": 0.395,
+          "final": 0.3113350495308235,
+          "lower": 0.15,
+          "upper": 0.95
+        },
+        "gammaRPlus": {
+          "initial": 0.64,
+          "final": 0.5146346070965429,
+          "lower": 0.15,
+          "upper": 0.95
+        },
+        "swirlAngle": {
+          "initial": 0.0,
+          "final": 0.10864292134271385,
+          "lower": -3.0,
+          "upper": 3.0
+        }
+      },
+      "targets": [
+        {
+          "target": "turning.port.advance_m",
+          "trial": 313.0,
+          "sim": 297.00130187672283,
+          "tolerance": 46.949999999999996,
+          "deviation": -15.998698123277165,
+          "deviation_pct": -5.111405151206762,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.transfer_m",
+          "trial": 115.0,
+          "sim": 122.44546108370969,
+          "tolerance": 46.800000000000004,
+          "deviation": 7.445461083709688,
+          "deviation_pct": 6.474313985834511,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.tacticalDiameter_m",
+          "trial": 208.0,
+          "sim": 266.277684130236,
+          "tolerance": 46.800000000000004,
+          "deviation": 58.277684130236025,
+          "deviation_pct": 28.018117370305784,
+          "withinTolerance": false
+        },
+        {
+          "target": "turning.port.t90_s",
+          "trial": 76.0,
+          "sim": 65.69043134487217,
+          "tolerance": 11.4,
+          "deviation": -10.309568655127833,
+          "deviation_pct": -13.565221914641885,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.v90_kn",
+          "trial": 5.4,
+          "sim": 6.859216564644952,
+          "tolerance": 0.75,
+          "deviation": 1.4592165646449518,
+          "deviation_pct": 27.022528974906514,
+          "withinTolerance": false
+        },
+        {
+          "target": "turning.port.t180_s",
+          "trial": 143.0,
+          "sim": 131.67070536544526,
+          "tolerance": 21.45,
+          "deviation": -11.329294634554742,
+          "deviation_pct": -7.922583660527792,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.v180_kn",
+          "trial": 3.9,
+          "sim": 3.8242525722223757,
+          "tolerance": 0.75,
+          "deviation": -0.07574742777762422,
+          "deviation_pct": -1.9422417378878005,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.t270_s",
+          "trial": 228.0,
+          "sim": 205.484763160547,
+          "tolerance": 34.199999999999996,
+          "deviation": -22.515236839452996,
+          "deviation_pct": -9.875103876953068,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.v270_kn",
+          "trial": 3.5,
+          "sim": 2.898207269746424,
+          "tolerance": 0.75,
+          "deviation": -0.6017927302535759,
+          "deviation_pct": -17.19407800724503,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.t360_s",
+          "trial": 306.0,
+          "sim": 281.0774893846303,
+          "tolerance": 45.9,
+          "deviation": -24.922510615369674,
+          "deviation_pct": -8.144611312212312,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.port.v360_kn",
+          "trial": 3.4,
+          "sim": 2.651383281447095,
+          "tolerance": 0.75,
+          "deviation": -0.7486167185529049,
+          "deviation_pct": -22.018138780967792,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.advance_m",
+          "trial": 300.0,
+          "sim": 309.8811360769719,
+          "tolerance": 46.800000000000004,
+          "deviation": 9.881136076971927,
+          "deviation_pct": 3.293712025657309,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.transfer_m",
+          "trial": 130.0,
+          "sim": 133.35020793567625,
+          "tolerance": 46.800000000000004,
+          "deviation": 3.350207935676252,
+          "deviation_pct": 2.577083027443271,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.tacticalDiameter_m",
+          "trial": 245.0,
+          "sim": 290.331712319943,
+          "tolerance": 46.800000000000004,
+          "deviation": 45.331712319942994,
+          "deviation_pct": 18.502739722425712,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.t90_s",
+          "trial": 74.0,
+          "sim": 68.63211560062499,
+          "tolerance": 11.1,
+          "deviation": -5.367884399375015,
+          "deviation_pct": -7.253897836993263,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.v90_kn",
+          "trial": 6.0,
+          "sim": 7.11497851838026,
+          "tolerance": 0.75,
+          "deviation": 1.1149785183802603,
+          "deviation_pct": 18.582975306337673,
+          "withinTolerance": false
+        },
+        {
+          "target": "turning.starboard.t180_s",
+          "trial": 145.0,
+          "sim": 137.10750819593537,
+          "tolerance": 21.75,
+          "deviation": -7.892491804064633,
+          "deviation_pct": -5.4430977959066436,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.v180_kn",
+          "trial": 4.4,
+          "sim": 4.187679765765858,
+          "tolerance": 0.75,
+          "deviation": -0.21232023423414237,
+          "deviation_pct": -4.825459868957781,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.t270_s",
+          "trial": 235.0,
+          "sim": 213.7881833144802,
+          "tolerance": 35.25,
+          "deviation": -21.211816685519807,
+          "deviation_pct": -9.02630497256162,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.v270_kn",
+          "trial": 4.2,
+          "sim": 3.2718707636968642,
+          "tolerance": 0.75,
+          "deviation": -0.9281292363031359,
+          "deviation_pct": -22.098315150074665,
+          "withinTolerance": false
+        },
+        {
+          "target": "turning.starboard.t360_s",
+          "trial": 313.0,
+          "sim": 292.7414003931381,
+          "tolerance": 46.949999999999996,
+          "deviation": -20.25859960686188,
+          "deviation_pct": -6.472396040530952,
+          "withinTolerance": true
+        },
+        {
+          "target": "turning.starboard.v360_kn",
+          "trial": 3.7,
+          "sim": 3.0275856557901153,
+          "tolerance": 0.75,
+          "deviation": -0.6724143442098849,
+          "deviation_pct": -18.17336065432121,
+          "withinTolerance": true
+        }
+      ],
+      "withinTolerance": "18/22"
+    }
+  },
+  "tolerances": {
+    "turning_pct": 15,
+    "turning_minL": 0.45,
+    "zigzag_deg": null,
+    "stopping_pct": 22,
+    "speed_kn": 0.75,
+    "note": "No.2 僅海報資料,公差為 No.1 的 1.5 倍;Z 形不列入數值驗收"
+  },
+  "reference": {
+    "length_m": 104.0,
+    "breadth_m": 20.0,
+    "draft_m": 7.2,
+    "draftFore_m": 7.2,
+    "draftAft_m": 7.2,
+    "blockCoefficient": 0.765,
+    "displacement_t": 11773.2,
+    "mass_kg": 11773200.0,
+    "xG_m": 0.0,
+    "density_kgm3": 1025.0,
+    "airDensity_kgm3": 1.225,
+    "nondimensionalisation": "X,Y:0.5·ρ·L·d·U²;N:0.5·ρ·L²·d·U²;m:0.5·ρ·L²·d;I:0.5·ρ·L⁴·d;L=LPP,d=平均吃水"
+  },
+  "mass": {
+    "m": 0.29498604897291575,
+    "mx": 0.02339438893614903,
+    "my": 0.23260426487320693,
+    "Izz": 0.018436628060807234,
+    "Jzz": 0.010326104695106772
+  },
+  "hull": {
+    "resistance": {
+      "model": "viscous+wave",
+      "viscous": {
+        "method": "ITTC-57 摩擦線 × 形狀因子 × S/(L·d),S 用 Mumford 式;形狀因子為擬合值(≥4 點時)",
+        "wettedSurface_m2": 2935.7639999999997,
+        "formFactor": 1.4440348247102164
+      },
+      "wave": {
+        "method": "由 engine.telegraph(海報車鐘對照) 以推力恆等反推(w_P0、t_P 為經驗值)後擬合 c_w·(Fn/Fn_ref)^q",
+        "coefficient": 0.003362828696885323,
+        "froudeExponent": 2.119860120479073,
+        "froudeRef": 0.20619182557465418
+      },
+      "lowSpeedFloor": {
+        "speed_mps": 3.086666666666667,
+        "R0": 0.01094168153270198,
+        "note": "U 低於最低資料點時 R0' 不低於該點模型值"
+      },
+      "trialFit": [
+        {
+          "rpm": 60.0,
+          "speed_kn": 6.0,
+          "froude": 0.09665241823811914,
+          "J": 0.47915116279069775,
+          "KT": 0.1432056757461813,
+          "thrust_kN": 50.18315001328883,
+          "resistance_kN": 40.171611585637706,
+          "R0_total": 0.01098702431195819,
+          "R0_viscous": 0.010266926257439185,
+          "R0_wave": 0.0007200980545190045,
+          "power_trial_kW": null,
+          "power_model_kW": 182.01544201272645,
+          "R0_model": 0.01094168153270198
+        },
+        {
+          "rpm": 70.0,
+          "speed_kn": 7.0,
+          "froude": 0.11276115461113899,
+          "J": 0.47915116279069775,
+          "KT": 0.1432056757461813,
+          "thrust_kN": 68.30484307364314,
+          "resistance_kN": 54.67802688045134,
+          "R0_total": 0.010987024311958193,
+          "R0_viscous": 0.010056459924815795,
+          "R0_wave": 0.000930564387142398,
+          "power_trial_kW": null,
+          "power_model_kW": 289.03378060354254,
+          "R0_model": 0.010992003710012951
+        },
+        {
+          "rpm": 93.0,
+          "speed_kn": 9.3,
+          "froude": 0.14981124826908468,
+          "J": 0.4791511627906978,
+          "KT": 0.1432056757461813,
+          "thrust_kN": 120.56501790692641,
+          "resistance_kN": 96.51229683449459,
+          "R0_total": 0.010987024311958186,
+          "R0_viscous": 0.009685157329426927,
+          "R0_wave": 0.00130186698253126,
+          "power_trial_kW": null,
+          "power_model_kW": 677.8027541251416,
+          "R0_model": 0.011393688337439175
+        },
+        {
+          "rpm": 103.0,
+          "speed_kn": 10.0,
+          "froude": 0.16108736373019855,
+          "J": 0.46519530368028905,
+          "KT": 0.14843505785124136,
+          "thrust_kN": 153.28728157409222,
+          "resistance_kN": 122.70646890006081,
+          "R0_total": 0.012081776293678632,
+          "R0_viscous": 0.009593609883283713,
+          "R0_wave": 0.0024881664103949194,
+          "power_trial_kW": null,
+          "power_model_kW": 942.5938440573109,
+          "R0_model": 0.011586276319063856
+        },
+        {
+          "rpm": 133.6,
+          "speed_kn": 12.8,
+          "froude": 0.20619182557465418,
+          "J": 0.459066982314441,
+          "KT": 0.15071218623339394,
+          "thrust_kN": 261.8523482799031,
+          "resistance_kN": 209.61280479806243,
+          "R0_total": 0.012596828054867813,
+          "R0_viscous": 0.009291725434301028,
+          "R0_wave": 0.0033051026205667845,
+          "power_trial_kW": null,
+          "power_model_kW": 2077.5601054176955,
+          "R0_model": 0.012654554131186352
+        }
+      ]
+    },
+    "Yv": -0.4234564144792934,
+    "Yr": 0.10874743800887746,
+    "Nv": -0.13846153846153847,
+    "Nr": -0.06896520171300584,
+    "Xvv": -0.04,
+    "Xvr": 0.002,
+    "Xrr": 0.011,
+    "Xvvvv": 0.771,
+    "Yvvv": -1.607,
+    "Yvvr": 0.379,
+    "Yvrr": -0.391,
+    "Yrrr": 0.008,
+    "Nvvv": -0.03,
+    "Nvvr": -0.28474974304125966,
+    "Nvrr": 0.055,
+    "Nrrr": -0.01617971862071739,
+    "crossFlow": {
+      "Cd": 1.0,
+      "blendStart_deg": 20.0,
+      "blendEnd_deg": 40.0,
+      "uFloor_mps": 0.5
+    }
+  },
+  "propeller": {
+    "diameter_m": 4.3,
+    "pitchRatio": 0.7148,
+    "expandedAreaRatio": 0.4,
+    "blades": 4,
+    "rotation": "right",
+    "kt": [
+      0.28796428407303604,
+      -0.22734285305802557,
+      -0.1560506363577788
+    ],
+    "kq": [
+      0.029801917495920944,
+      -0.012701037927308974,
+      -0.021634082925266137
+    ],
+    "ktFitRange_J": 0.8153982264087936,
+    "jMax": 0.9784778716905522,
+    "wP0": 0.3325,
+    "tP": 0.1995,
+    "xP": -0.48,
+    "wakeDriftFactor": 4.0,
+    "asternThrustFactor": 0.85,
+    "jClip": 0.9,
+    "lockedDragCd": 0.5,
+    "lockRps": 0.3,
+    "sideForceFactor": 0.08,
+    "note": "K_T、K_Q 為 Wageningen B 系列在 0≤J≤J0 的二次擬合;倒車/鎖定為簡化四象限(README)"
+  },
+  "rudder": {
+    "type": "NACA 0025 conventional",
+    "area_m2": 13.614545454545455,
+    "span_m": 4.6672553741222185,
+    "aspectRatio": 1.6,
+    "aspectRatioEffective": 1.6,
+    "fAlpha": 2.5475324675324673,
+    "schilling": {
+      "enabled": false,
+      "linearLimit_deg": 35.0,
+      "maxAngle_deg": 35.0,
+      "highLiftSlopeFactor": 0.5,
+      "note": "35° 以上以 sin(α) 的 highLiftSlopeFactor 倍斜率延伸至 70°(係數可調;無實測升力曲線)"
+    },
+    "maxAngle_deg": 35.0,
+    "rate_degps": 5.0,
+    "neutralAngle_deg": 0.0,
+    "swirlAngle_deg": 0.10864292134271385,
+    "tR": 0.2357999999999999,
+    "aH": 0.28076839189237285,
+    "xH": -0.45,
+    "xR": -0.5,
+    "gammaRMinus": 0.3113350495308235,
+    "gammaRPlus": 0.5146346070965429,
+    "lR": -0.71,
+    "epsilon": 1.3954677515949938,
+    "kappa": 0.5,
+    "eta": 0.921312346404167
+  },
+  "engine": {
+    "mcr_rpm": 147.0,
+    "maxRpm": 147.0,
+    "minRpm": 44.1,
+    "criticalRpmRange": null,
+    "telegraph": {
+      "NAVF": 133.6,
+      "FAH": 103.0,
+      "HAH": 93.0,
+      "SAH": 70.0,
+      "DSAH": 60.0,
+      "STOP": 0.0,
+      "DSAS": -60.0,
+      "SAS": -70.0,
+      "HAS": -93.0,
+      "FAS": -103.0,
+      "EFAS": -103.0
+    },
+    "rpmTimeConstant_s": 6.0,
+    "rpmRateLimit_rpmps": 3.0,
+    "startDelay_s": 5.0,
+    "reversalDelay_s": 90.0,
+    "shaftStopTimeConstant_s": 20.0,
+    "note": "一階滯後+速率限制;換向:燃油切斷→軸轉速衰減→逾 reversalDelay_s 且軸轉速低於 5% MCR 後反向起動。reversalDelay_s 為 2 行程直接換向主機的典型假設值"
+  },
+  "thruster": {
+    "installed": true,
+    "x_m": 44.72,
+    "nominalThrust_kN": 50.25,
+    "effectiveness": 1.0,
+    "fullThrustDelay_s": 30.0,
+    "halfThrustSpeed_kn": 2.5,
+    "zeroSpeedTurningRate_degPerMin": null,
+    "notes": [
+      "bowThruster.nominalThrust_kN 以 0.15 kN/kW 估計 = 50.2 kN"
+    ]
+  },
+  "wind": {
+    "model": "Blendermann (1994) 參數式(油輪典型係數;Fujiwara 1998 / Isherwood 1972 回歸表尚未數位化)",
+    "lateralArea_m2": 774.795,
+    "frontalArea_m2": 276.0,
+    "lateralCentroid_m": -11.457659574468085,
+    "CDt": 0.7,
+    "CDlHead": 0.9,
+    "CDlTail": 0.55,
+    "delta": 0.4,
+    "airDensity_kgm3": 1.225,
+    "notes": [
+      "windage.lateralArea_m2 以 LOA×乾舷+上層建築估計 = 775 m^2",
+      "windage.frontalArea_m2 以 B×乾舷+住艙估計 = 276 m^2"
+    ]
+  },
+  "shallowWater": {
+    "model": "f(h/T) = 1 + a·(T/(h−T))^n(Kijima & Nakiri 型;h/T ≥ 1.05)",
+    "linearSway": {
+      "a": 0.4,
+      "n": 1.0
+    },
+    "linearYaw": {
+      "a": 0.3,
+      "n": 1.0
+    },
+    "nonlinear": {
+      "a": 0.4,
+      "n": 1.0
+    },
+    "addedMassSway": {
+      "a": 0.3,
+      "n": 1.2
+    },
+    "addedMassSurge": {
+      "a": 0.1,
+      "n": 1.0
+    },
+    "addedInertia": {
+      "a": 0.3,
+      "n": 1.2
+    },
+    "resistance": {
+      "a": 0.2,
+      "n": 1.0
+    },
+    "minDepthRatio": 1.05
+  },
+  "squat": {
+    "model": "ICORELS",
+    "Cs": 3.9793171974431534,
+    "fittedFromTable": true
+  }
+}
