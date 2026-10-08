@@ -38,6 +38,11 @@ def coefficients_path(ship_id: str, loading: str) -> Path:
     return ship_dir(ship_id) / f"coefficients.{loading}.json"
 
 
+def scenarios_dir() -> Path:
+    """情境檔資料夾 ``data/scenarios``(規劃書第 11.3 節)。"""
+    return data_dir() / "scenarios"
+
+
 def contracts_dir() -> Path:
     return repo_root() / "src" / "Contracts"
 

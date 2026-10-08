@@ -3,14 +3,20 @@
 - 船舯座標,狀態 u(縱向)、v_m(橫向,右正)、r(艏搖,右轉正);內部一律 SI 與弧度。
 - 固定步長 RK4(預設 0.02 s = 50 Hz,規劃書 5.3);所有狀態含致動器(舵、軸轉速、側推)一併積分。
 - 均勻流以「相對水速」處理:u、v_m 為對水速度,對地位置積分時加上流速向量(均勻定常流時嚴格成立)。
-- 確定性:純 Python 浮點運算、無亂數;相同輸入序列 → 相同狀態雜湊(``state_hash``)。
+- 確定性:純 Python 浮點運算;唯一的亂數是陣風係數,由情境種子的 ``random.Random(seed)`` 每秒抽一次
+  (與 C# SimulationEngine.Advance 相同;gustiness = 0 時係數恆為 1 但仍抽號,使快照的亂數計數一致)。
+  相同輸入序列 → 相同狀態雜湊(``state_hash``)。
+- 故障(與 src/SimCore/Engine/FaultNames.cs 相同):``steeringGear`` 舵角停在目前位置、``mainEngine`` 轉速衰減到 0 且
+  engine.state = failed、``bowThruster`` 側推令視為 0;其餘名稱只記錄並廣播。
 - 對外狀態欄位依 src/Contracts/state.schema.json(度、節、航向 0–360、舵右正、ROT 度/分)。
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
+import random
 import struct
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,6 +28,40 @@ from .propeller import PropellerModel
 TWO_PI = 2.0 * math.pi
 DEG = math.pi / 180.0
 TELEGRAPH_ORDERS = ("EFAS", "FAS", "HAS", "SAS", "DSAS", "STOP", "DSAH", "SAH", "HAH", "FAH", "NAVF")
+
+# 會改變模型行為的故障名稱(src/SimCore/Engine/FaultNames.cs;規劃書第 7.2 節故障目錄)
+FAULT_STEERING_GEAR = "steeringGear"  # 舵機故障:舵角停在目前位置
+FAULT_MAIN_ENGINE = "mainEngine"  # 主機故障:轉速衰減至 0,engine.state = failed
+FAULT_BOW_THRUSTER = "bowThruster"  # 艏側推不可用
+MODELLED_FAULTS = (FAULT_STEERING_GEAR, FAULT_MAIN_ENGINE, FAULT_BOW_THRUSTER)
+
+# WGS-84(與 C# Geo/LocalTangentPlane.cs 相同常數)
+WGS84_A = 6378137.0
+WGS84_F = 1.0 / 298.257223563
+WGS84_E2 = WGS84_F * (2.0 - WGS84_F)
+
+
+class LocalTangentPlane:
+    """本地 ENU(x 東、y 北,公尺)與 WGS-84 經緯度的換算,與 C# ``Geo/LocalTangentPlane.cs`` 同式:
+    等距圓柱近似,以原點緯度的子午圈/卯酉圈曲率半徑為尺度(港區與沿岸數十公里內誤差小於數公尺)。"""
+
+    def __init__(self, origin_lat: float, origin_lon: float) -> None:
+        self.origin_lat = float(origin_lat)
+        self.origin_lon = float(origin_lon)
+        phi = self.origin_lat * DEG
+        s2 = math.sin(phi) * math.sin(phi)
+        m = WGS84_A * (1.0 - WGS84_E2) / (1.0 - WGS84_E2 * s2) ** 1.5  # 子午圈曲率半徑
+        n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * s2)  # 卯酉圈曲率半徑
+        self.m_per_deg_lat = m * DEG
+        self.m_per_deg_lon = n * math.cos(phi) * DEG
+
+    def to_geodetic(self, x_east: float, y_north: float) -> tuple[float, float]:
+        """(x, y) m → (lat, lon) 度。"""
+        return self.origin_lat + y_north / self.m_per_deg_lat, self.origin_lon + x_east / self.m_per_deg_lon
+
+    def to_local(self, lat: float, lon: float) -> tuple[float, float]:
+        """(lat, lon) 度 → (x, y) m。"""
+        return (lon - self.origin_lon) * self.m_per_deg_lon, (lat - self.origin_lat) * self.m_per_deg_lat
 
 
 def wrap_pi(a: float) -> float:
@@ -50,11 +90,13 @@ def _smoothstep(x: float, a: float, b: float) -> float:
 class Environment:
     """環境:風(來向、kn 換成 m/s)、均勻流(去向)、水深(None 或 ≥10 倍吃水視為深水)。"""
 
-    wind_speed: float = 0.0  # m/s(真風)
+    wind_speed: float = 0.0  # m/s(真風,平均值;陣風係數另見 MMGShip.gust_factor)
     wind_dir_from: float = 0.0  # rad,來向(自北順時針)
+    gustiness: float = 0.0  # 0–1,每秒以種子亂數在 ±gustiness 內更新風速係數(scenario.schema.json)
     current_speed: float = 0.0  # m/s
     current_set: float = 0.0  # rad,去向
     water_depth: float | None = None  # m
+    visibility_nm: float | None = None  # 能見度 (nm):僅記錄(state.schema.json 無此欄位、運動模型不使用;視景/雷達用)
 
     @property
     def current_en(self) -> tuple[float, float]:
@@ -114,12 +156,15 @@ class MMGShip:
     """一艘自船的 MMG 模型 + 致動器 + 環境。"""
 
     def __init__(self, sp: ShipParticulars, coeffs: dict[str, Any], dt: float = 0.02,
-                 origin_lat: float = 23.80, origin_lon: float = 120.15) -> None:
+                 origin_lat: float = 23.80, origin_lon: float = 120.15, seed: int = 1) -> None:
         self.sp = sp
         self.c = coeffs
         self.dt = float(dt)
-        self.origin_lat = origin_lat
-        self.origin_lon = origin_lon
+        self._steps_per_second = max(1, int(round(1.0 / self.dt)))
+        self.ltp = LocalTangentPlane(origin_lat, origin_lon)
+        self.seed = int(seed)  # 情境種子(scenario.seed;預設 1 與 C# Scenario.Seed 相同)
+        self.rng = random.Random(self.seed)
+        self.gust_factor = 1.0  # 本秒的風速係數 1 ± gustiness
         self.env = Environment()
         self.state = ShipState()
         self.ctl = Controls()
@@ -130,6 +175,18 @@ class MMGShip:
         self._n_target = 0.0
         self._n_tau = 1.0
         self._prepare()
+
+    @property
+    def origin_lat(self) -> float:
+        return self.ltp.origin_lat
+
+    @property
+    def origin_lon(self) -> float:
+        return self.ltp.origin_lon
+
+    def set_origin(self, lat: float, lon: float) -> None:
+        """重設本地 ENU 原點(情境 origin);x、y 不變,只影響經緯度輸出。"""
+        self.ltp = LocalTangentPlane(lat, lon)
 
     # ------------------------------------------------------------------
     # 常數前處理
@@ -255,26 +312,35 @@ class MMGShip:
     # ------------------------------------------------------------------
     def set_environment(self, wind_speed_kn: float | None = None, wind_dir_deg: float | None = None,
                         current_set_deg: float | None = None, current_drift_kn: float | None = None,
-                        water_depth_m: float | None | str = "keep") -> None:
+                        water_depth_m: float | None | str = "keep", gustiness: float | None = None,
+                        visibility_nm: float | None | str = "keep") -> None:
+        """部分更新環境(None = 不變;水深與能見度以 ``"keep"`` 表示不變、None 表示深水 / 未指定)。
+        風速、流速不為負,角度正規化到 [0, 360),陣風強度夾到 [0, 1](與 C# ApplyEnvironment 相同)。"""
         if wind_speed_kn is not None:
-            self.env.wind_speed = float(wind_speed_kn) * KN_TO_MPS
+            self.env.wind_speed = max(0.0, float(wind_speed_kn)) * KN_TO_MPS
         if wind_dir_deg is not None:
-            self.env.wind_dir_from = float(wind_dir_deg) * DEG
+            self.env.wind_dir_from = (float(wind_dir_deg) % 360.0) * DEG
+        if gustiness is not None:
+            self.env.gustiness = min(1.0, max(0.0, float(gustiness)))
         if current_set_deg is not None:
-            self.env.current_set = float(current_set_deg) * DEG
+            self.env.current_set = (float(current_set_deg) % 360.0) * DEG
         if current_drift_kn is not None:
-            self.env.current_speed = float(current_drift_kn) * KN_TO_MPS
+            self.env.current_speed = max(0.0, float(current_drift_kn)) * KN_TO_MPS
         if water_depth_m != "keep":
             self.env.water_depth = None if water_depth_m is None else float(water_depth_m)
+        if visibility_nm != "keep":
+            self.env.visibility_nm = None if visibility_nm is None else max(0.0, float(visibility_nm))
         self._update_shallow()
 
     def reset(self, x: float = 0.0, y: float = 0.0, heading_deg: float = 0.0, speed_kn: float = 0.0,
               rpm: float | None = None, telegraph: str | None = None) -> None:
-        """重設到直航狀態;rpm 省略時取該速度的穩態轉速(速度為 0 則主機停俥)。"""
-        self.state = ShipState(x=x, y=y, psi=heading_deg * DEG, u=speed_kn * KN_TO_MPS)
+        """重設到直航狀態(tick/時間歸零、亂數依種子重建、故障與自動舵清除);rpm 省略時取該速度的穩態轉速(速度為 0 則主機停俥)。"""
+        self.state = ShipState(x=x, y=y, psi=(heading_deg % 360.0) * DEG, u=speed_kn * KN_TO_MPS)
         self.ctl = Controls()
         self.aground = False
         self.faults = []
+        self.rng = random.Random(self.seed)
+        self.gust_factor = 1.0
         if rpm is None:
             rpm = self.steady_rpm_for_speed(self.state.u) if speed_kn > 0 else 0.0
         self.state.n = rpm / 60.0
@@ -332,6 +398,52 @@ class MMGShip:
             self.ctl.autopilot_rot_limit = rot_limit_degpm * DEG / 60.0
         if rudder_limit_deg is not None:
             self.ctl.autopilot_rudder_limit = rudder_limit_deg * DEG
+
+    # ------------------------------------------------------------------
+    # 故障、快照
+    # ------------------------------------------------------------------
+    def inject_fault(self, name: str) -> bool:
+        """加入故障(同名不重複,與 C# InjectFault 相同);回傳該名稱是否會改變模型行為(``MODELLED_FAULTS``)。"""
+        name = str(name)
+        if name not in self.faults:
+            self.faults.append(name)
+        return name in MODELLED_FAULTS
+
+    def clear_fault(self, name: str | None = None) -> int:
+        """清除故障:``name`` 為 None 或空字串時清除全部(C# ClearFault 無 value 的語意);回傳清除的筆數。"""
+        if name is None or str(name) == "":
+            n = len(self.faults)
+            self.faults = []
+            return n
+        name = str(name)
+        n = self.faults.count(name)
+        self.faults = [f for f in self.faults if f != name]
+        return n
+
+    def snapshot(self) -> dict[str, Any]:
+        """完整可還原的快照(運動狀態、控制、環境、主機狀態機、故障、擱淺、陣風係數與亂數狀態)。"""
+        return {
+            "state": copy.deepcopy(self.state),
+            "ctl": copy.deepcopy(self.ctl),
+            "env": copy.deepcopy(self.env),
+            "engine": (self._eng_mode, self._eng_timer, self._n_target, self._n_tau),
+            "aground": self.aground,
+            "faults": list(self.faults),
+            "gust_factor": self.gust_factor,
+            "rng": self.rng.getstate(),
+        }
+
+    def restore(self, snap: dict[str, Any]) -> None:
+        """還原 ``snapshot()`` 的內容(快照本身不被修改,可重複還原)。"""
+        self.state = copy.deepcopy(snap["state"])
+        self.ctl = copy.deepcopy(snap["ctl"])
+        self.env = copy.deepcopy(snap["env"])
+        self._eng_mode, self._eng_timer, self._n_target, self._n_tau = snap["engine"]
+        self.aground = bool(snap["aground"])
+        self.faults = list(snap["faults"])
+        self.gust_factor = float(snap["gust_factor"])
+        self.rng.setstate(snap["rng"])
+        self._update_shallow()
 
     # ------------------------------------------------------------------
     # 穩態輔助
@@ -496,7 +608,7 @@ class MMGShip:
         # ---- 風 ----
         XW = YW = NW = 0.0
         if self.env.wind_speed > 0.0:
-            Vw = self.env.wind_speed
+            Vw = self.env.wind_speed * self.gust_factor  # 本秒有效風速(C# EnvironmentConditions.WindEffectiveSpeedMps)
             wd = self.env.wind_dir_from
             we = -Vw * math.sin(wd) - ug_e
             wn = -Vw * math.cos(wd) - ug_n
@@ -536,7 +648,11 @@ class MMGShip:
     # ------------------------------------------------------------------
     # 積分
     # ------------------------------------------------------------------
-    def _derivs(self, s: tuple[float, ...], delta_cmd: float, n_target: float, n_tau: float, thr_cmd: float) -> tuple[float, ...]:
+    def _derivs(self, s: tuple[float, ...], delta_cmd: float, n_target: float, n_tau: float, thr_cmd: float,
+                rudder_rate: float | None = None) -> tuple[float, ...]:
+        """狀態導數。``rudder_rate`` 為本步的舵機速率(rad/s;舵機故障時 0,舵角不動),None 取係數檔值。"""
+        if rudder_rate is None:
+            rudder_rate = self.delta_rate
         x, y, psi, u, v, r, delta, n, thr, _track = s
         ce, cn_ = self.env.current_en
         sp_, cp_ = math.sin(psi), math.cos(psi)
@@ -558,10 +674,10 @@ class MMGShip:
         # 致動器
         e_d = delta_cmd - delta
         dd = e_d / 1.0
-        if dd > self.delta_rate:
-            dd = self.delta_rate
-        elif dd < -self.delta_rate:
-            dd = -self.delta_rate
+        if dd > rudder_rate:
+            dd = rudder_rate
+        elif dd < -rudder_rate:
+            dd = -rudder_rate
         e_n = n_target - n
         dn = e_n / n_tau
         if dn > self.n_rate:
@@ -576,13 +692,14 @@ class MMGShip:
             dth = -self.thr_rate
         return (ug_e, ug_n, r, du, dv, dr, dd, dn, dth, math.sqrt(ug_e * ug_e + ug_n * ug_n))
 
-    def _engine_logic(self) -> None:
+    def _engine_logic(self, engine_failed: bool = False) -> None:
         """車鐘/轉速指令 → 本步的轉速目標與時間常數(規劃書 6.2「主機/推進控制」)。
 
         模式:stopped / stopping(停俥滑行)/ run(已點火朝指令轉速)/ reversing(換向:燃油切斷、等軸轉速降到起動門檻且逾
         reversalDelay_s)/ starting(停俥後重新起動,startDelay_s)。一旦進入 run,直到指令改變方向或歸零才離開。
+        ``engine_failed``(mainEngine 故障):指令視為 0,軸轉速以停俥時間常數衰減(C# ActuatorModel.EffectiveRpmOrder)。
         """
-        n_cmd = self.ctl.rpm_order / 60.0
+        n_cmd = 0.0 if engine_failed else self.ctl.rpm_order / 60.0
         n = self.state.n
         small = 0.02 * self.n_max
         dt = self.dt
@@ -637,12 +754,18 @@ class MMGShip:
         self.ctl.rudder_order = max(-lim, min(lim, delta_cmd))
 
     def step(self) -> None:
-        """前進一個固定步長(RK4)。凍結或擱淺時狀態不變(時間不前進)。"""
+        """前進一個固定步長(RK4)。凍結時狀態不變(時間不前進);擱淺時只前進時間。"""
         if self.ctl.frozen:
             return
-        self._autopilot()
-        self._engine_logic()
         s = self.state
+        # 陣風:每秒以種子亂數更新一次(即使 gustiness = 0 也抽號,使亂數序列與快照的計數一致;C# Advance 同)
+        if s.tick % self._steps_per_second == 0:
+            self.gust_factor = 1.0 + self.env.gustiness * (2.0 * self.rng.random() - 1.0)
+        rudder_jammed = FAULT_STEERING_GEAR in self.faults
+        engine_failed = FAULT_MAIN_ENGINE in self.faults
+        thruster_failed = FAULT_BOW_THRUSTER in self.faults
+        self._autopilot()
+        self._engine_logic(engine_failed)
         if self.aground:
             s.u = s.v = s.r = 0.0
             s.t += self.dt
@@ -650,14 +773,16 @@ class MMGShip:
             return
         dt = self.dt
         y0 = s.as_tuple()
-        dcmd, nt, ntau, tcmd = self.ctl.rudder_order, self._n_target, self._n_tau, self.ctl.thruster_order
-        k1 = self._derivs(y0, dcmd, nt, ntau, tcmd)
+        dcmd, nt, ntau = self.ctl.rudder_order, self._n_target, self._n_tau
+        tcmd = 0.0 if thruster_failed else self.ctl.thruster_order  # 側推故障:令視為 0,實際推力依延遲衰減
+        rate = 0.0 if rudder_jammed else self.delta_rate  # 舵機故障:速率 0,舵角停在目前位置(舵令照記)
+        k1 = self._derivs(y0, dcmd, nt, ntau, tcmd, rate)
         y1 = tuple(a + 0.5 * dt * b for a, b in zip(y0, k1))
-        k2 = self._derivs(y1, dcmd, nt, ntau, tcmd)
+        k2 = self._derivs(y1, dcmd, nt, ntau, tcmd, rate)
         y2 = tuple(a + 0.5 * dt * b for a, b in zip(y0, k2))
-        k3 = self._derivs(y2, dcmd, nt, ntau, tcmd)
+        k3 = self._derivs(y2, dcmd, nt, ntau, tcmd, rate)
         y3 = tuple(a + dt * b for a, b in zip(y0, k3))
-        k4 = self._derivs(y3, dcmd, nt, ntau, tcmd)
+        k4 = self._derivs(y3, dcmd, nt, ntau, tcmd, rate)
         yn = tuple(a + dt / 6.0 * (b1 + 2.0 * b2 + 2.0 * b3 + b4) for a, b1, b2, b3, b4 in zip(y0, k1, k2, k3, k4))
         s.x, s.y, s.psi, s.u, s.v, s.r, s.delta, s.n, s.thr, s.track = yn
         if s.psi >= TWO_PI or s.psi < 0.0:
@@ -708,26 +833,29 @@ class MMGShip:
         return s.u * math.sin(s.psi) + s.v * math.cos(s.psi) + ce, s.u * math.cos(s.psi) - s.v * math.sin(s.psi) + cn_
 
     def state_hash(self) -> str:
-        """狀態雜湊(sha256 over 全部浮點狀態的 IEEE-754 位元)。"""
+        """狀態雜湊(sha256 over 全部浮點狀態的 IEEE-754 位元,含本秒陣風係數)。"""
         s = self.state
-        payload = struct.pack("<d9dq", s.t, s.x, s.y, s.psi, s.u, s.v, s.r, s.delta, s.n, s.thr, s.tick)
+        payload = struct.pack("<d10dq", s.t, s.x, s.y, s.psi, s.u, s.v, s.r, s.delta, s.n, s.thr, self.gust_factor, s.tick)
         return hashlib.sha256(payload).hexdigest()
 
     def state_json(self) -> dict[str, Any]:
-        """依 state.schema.json 的自船狀態。"""
+        """依 state.schema.json 的自船狀態(wind.trueSpeed 為含陣風係數的有效風速,與 C# BuildState 相同)。"""
         s = self.state
         ug_e, ug_n = self.ground_velocity()
         sog = math.hypot(ug_e, ug_n)
         cog = deg360(math.atan2(ug_e, ug_n)) if sog > 1e-3 else deg360(s.psi)
-        lat = self.origin_lat + s.y / 111320.0
-        lon = self.origin_lon + s.x / (111320.0 * math.cos(self.origin_lat * DEG))
+        lat, lon = self.ltp.to_geodetic(s.x, s.y)
         wind = self.env
+        w_eff = wind.wind_speed * self.gust_factor
         # 相對風(船體座標)
-        we = -wind.wind_speed * math.sin(wind.wind_dir_from) - ug_e
-        wn = -wind.wind_speed * math.cos(wind.wind_dir_from) - ug_n
+        we = -w_eff * math.sin(wind.wind_dir_from) - ug_e
+        wn = -w_eff * math.cos(wind.wind_dir_from) - ug_n
         rel_speed = math.hypot(we, wn)
         rel_dir = deg360(math.atan2(-we, -wn) - s.psi) if rel_speed > 1e-6 else 0.0
-        eng_state = "stopped" if self._eng_mode == "stopped" else ("starting" if self._eng_mode in ("starting", "reversing") else "running")
+        if FAULT_MAIN_ENGINE in self.faults:
+            eng_state = "failed"
+        else:
+            eng_state = "stopped" if self._eng_mode == "stopped" else ("starting" if self._eng_mode in ("starting", "reversing") else "running")
         load_pct = min(100.0, 100.0 * (abs(s.n) / self.n_max) ** 3) if self.n_max > 0 else 0.0
         return {
             "t": round(s.t, 6),
@@ -752,7 +880,7 @@ class MMGShip:
             "depthBelowKeel": self.depth_below_keel(),
             "waterDepth": self.env.water_depth if self.env.water_depth is not None else 999.0,
             "squat": self.squat(),
-            "wind": {"trueSpeed": wind.wind_speed / KN_TO_MPS, "trueDir": deg360(wind.wind_dir_from),
+            "wind": {"trueSpeed": w_eff / KN_TO_MPS, "trueDir": deg360(wind.wind_dir_from),
                      "relSpeed": rel_speed / KN_TO_MPS, "relDir": rel_dir},
             "current": {"set": deg360(wind.current_set), "drift": wind.current_speed / KN_TO_MPS},
             "loading": self.sp.loading.name,
@@ -764,11 +892,11 @@ class MMGShip:
 
 
 def make_ship(ship_id: str, loading: str = "full", dt: float = 0.02, coeffs: dict[str, Any] | None = None,
-              prefer_file: bool = True) -> MMGShip:
+              prefer_file: bool = True, seed: int = 1) -> MMGShip:
     """便利函式:讀 particulars 與係數檔(無則即時估計)建立模型。"""
     from .coefficients import load_or_estimate
     from .particulars import load_particulars
 
     sp = load_particulars(ship_id, loading)
     c = coeffs if coeffs is not None else load_or_estimate(sp, prefer_file=prefer_file)
-    return MMGShip(sp, c, dt=dt)
+    return MMGShip(sp, c, dt=dt, seed=seed)

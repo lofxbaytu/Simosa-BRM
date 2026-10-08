@@ -100,7 +100,8 @@ def cmd_manoeuvre(a: argparse.Namespace) -> int:
 def cmd_serve(a: argparse.Namespace) -> int:
     from .server import serve
 
-    serve(a.ship, a.loading, host=a.host, port=a.port, time_scale=a.time_scale, speed_kn=a.speed, heading_deg=a.heading)
+    serve(a.ship, a.loading, host=a.host, port=a.port, time_scale=a.time_scale, speed_kn=a.speed, heading_deg=a.heading,
+          scenario=a.scenario)
     return 0
 
 
@@ -145,13 +146,14 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--csv", help="把歷程寫成 CSV")
     m.set_defaults(func=cmd_manoeuvre)
 
-    s = sub.add_parser("serve", help="WebSocket 即時模擬(每 40 ms 送 state JSON)")
+    s = sub.add_parser("serve", help="WebSocket 即時模擬(每 40 ms 送 state JSON;命令含 loadScenario / injectFault 等)")
     _ship_args(s)
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
-    s.add_argument("--time-scale", type=float, default=1.0)
+    s.add_argument("--time-scale", type=float, default=None, help="時間倍率(預設 1;給 --scenario 時預設取情境的 timeScale)")
     s.add_argument("--speed", type=float, default=0.0, help="初始速度(kn)")
     s.add_argument("--heading", type=float, default=0.0, help="初始航向(度)")
+    s.add_argument("--scenario", help="啟動時載入情境(代號如 E01_baseline,或 YAML 路徑;船舶/裝載/初始狀態/環境依情境,覆蓋 --ship/--loading/--speed/--heading)")
     s.set_defaults(func=cmd_serve)
     return p
 
