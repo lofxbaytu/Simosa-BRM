@@ -2,68 +2,238 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/scenario.schema.json",
   "title": "Scenario",
-  "description": "情境檔(data/scenarios/*.yaml;規劃書第 9.1 節、第 11.3 節)。最小 schema:自船 ID 與裝載狀態、初始位置(經緯度或本地 ENU)/航向/速度、環境、亂數種子。C# SimCore 與 Python 參考實作共用;角度為度、速度為節、航向 0 至 360、風向為來向、流向為去向。",
+  "description": "情境檔(data/scenarios/*.yaml;規劃書第 9.1 節、第 11.3 節)。最小 schema:自船 ID 與裝載狀態、初始位置(經緯度或本地 ENU)/航向/速度、環境、亂數種子;選填 targets(目標船)與 assessment(評估門檻)。C# SimCore 與 Python 參考實作共用(Python 無目標船,忽略 targets/assessment);角度為度、速度為節、航向 0 至 360、風向為來向、流向為去向。",
   "type": "object",
-  "required": ["id", "ship", "initial", "environment"],
+  "required": [
+    "id",
+    "ship",
+    "initial",
+    "environment"
+  ],
   "properties": {
-    "id": { "type": "string", "description": "情境代號(例如 E01_baseline),用於紀錄檔名" },
-    "name": { "type": "string" },
-    "description": { "type": "string" },
-    "seed": { "type": "integer", "default": 1, "description": "亂數種子;所有亂數(陣風等)由 Random(seed) 產生" },
-    "startTimeUtc": { "type": "string", "format": "date-time", "description": "練習開始的 UTC 時刻(供 NMEA 時間欄位);未指定時以實際時鐘代入" },
-    "timeScale": { "type": "number", "minimum": 0.1, "maximum": 10, "default": 1 },
+    "id": {
+      "type": "string",
+      "description": "情境代號(例如 E01_baseline),用於紀錄檔名"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer",
+      "default": 1,
+      "description": "亂數種子;所有亂數(陣風等)由 Random(seed) 產生"
+    },
+    "startTimeUtc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "練習開始的 UTC 時刻(供 NMEA 時間欄位);未指定時以實際時鐘代入"
+    },
+    "timeScale": {
+      "type": "number",
+      "minimum": 0.1,
+      "maximum": 10,
+      "default": 1
+    },
     "ship": {
       "type": "object",
-      "required": ["id"],
+      "required": [
+        "id"
+      ],
       "properties": {
-        "id": { "type": "string", "enum": ["FSB1", "FSB2"] },
-        "loading": { "type": "string", "enum": ["full", "ballast", "intermediate"], "default": "ballast" }
+        "id": {
+          "type": "string",
+          "enum": [
+            "FSB1",
+            "FSB2"
+          ]
+        },
+        "loading": {
+          "type": "string",
+          "enum": [
+            "full",
+            "ballast",
+            "intermediate"
+          ],
+          "default": "ballast"
+        }
       }
     },
     "origin": {
       "type": "object",
       "description": "本地 ENU 原點;未指定時以初始位置的經緯度為原點(初始位置用 x/y 時必填)",
-      "required": ["lat", "lon"],
-      "properties": { "lat": { "type": "number", "minimum": -90, "maximum": 90 }, "lon": { "type": "number", "minimum": -180, "maximum": 180 } }
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "properties": {
+        "lat": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "lon": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        }
+      }
     },
     "initial": {
       "type": "object",
-      "required": ["position", "heading"],
+      "required": [
+        "position",
+        "heading"
+      ],
       "properties": {
         "position": {
           "type": "object",
           "oneOf": [
-            { "required": ["lat", "lon"], "properties": { "lat": { "type": "number", "minimum": -90, "maximum": 90 }, "lon": { "type": "number", "minimum": -180, "maximum": 180 } } },
-            { "required": ["x", "y"], "properties": { "x": { "type": "number", "description": "本地 ENU 東向 (m)" }, "y": { "type": "number", "description": "本地 ENU 北向 (m)" } } }
+            {
+              "required": [
+                "lat",
+                "lon"
+              ],
+              "properties": {
+                "lat": {
+                  "type": "number",
+                  "minimum": -90,
+                  "maximum": 90
+                },
+                "lon": {
+                  "type": "number",
+                  "minimum": -180,
+                  "maximum": 180
+                }
+              }
+            },
+            {
+              "required": [
+                "x",
+                "y"
+              ],
+              "properties": {
+                "x": {
+                  "type": "number",
+                  "description": "本地 ENU 東向 (m)"
+                },
+                "y": {
+                  "type": "number",
+                  "description": "本地 ENU 北向 (m)"
+                }
+              }
+            }
           ]
         },
-        "heading": { "type": "number", "minimum": 0, "maximum": 360 },
-        "speed": { "type": "number", "default": 0, "description": "初始對水速度 (kn)" },
-        "telegraph": { "type": "string", "enum": ["EFAS", "FAS", "HAS", "SAS", "DSAS", "STOP", "DSAH", "SAH", "HAH", "FAH", "NAVF"], "description": "未指定時:MMG 模型取該航速的直航平衡轉速(以最接近的車令標示);暫代模型取航速最接近的前進車令" },
-        "rpm": { "type": "number", "description": "初始軸轉速 (rpm,倒車負);指定時優先於車鐘/航速推得的轉速,轉速令同值" },
-        "rudder": { "type": "number", "default": 0, "description": "初始舵角(度,右正)" }
+        "heading": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "speed": {
+          "type": "number",
+          "default": 0,
+          "description": "初始對水速度 (kn)"
+        },
+        "telegraph": {
+          "type": "string",
+          "enum": [
+            "EFAS",
+            "FAS",
+            "HAS",
+            "SAS",
+            "DSAS",
+            "STOP",
+            "DSAH",
+            "SAH",
+            "HAH",
+            "FAH",
+            "NAVF"
+          ],
+          "description": "未指定時:MMG 模型取該航速的直航平衡轉速(以最接近的車令標示);暫代模型取航速最接近的前進車令"
+        },
+        "rpm": {
+          "type": "number",
+          "description": "初始軸轉速 (rpm,倒車負);指定時優先於車鐘/航速推得的轉速,轉速令同值"
+        },
+        "rudder": {
+          "type": "number",
+          "default": 0,
+          "description": "初始舵角(度,右正)"
+        }
       }
     },
     "environment": {
       "type": "object",
-      "required": ["waterDepth"],
+      "required": [
+        "waterDepth"
+      ],
       "properties": {
         "wind": {
           "type": "object",
           "properties": {
-            "trueSpeed": { "type": "number", "minimum": 0, "description": "真風速 (kn)" },
-            "trueDir": { "type": "number", "minimum": 0, "maximum": 360, "description": "真風來向(度)" },
-            "gustiness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0, "description": "陣風強度(每秒以種子亂數在 ±gustiness 內更新係數)" }
+            "trueSpeed": {
+              "type": "number",
+              "minimum": 0,
+              "description": "真風速 (kn)"
+            },
+            "trueDir": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 360,
+              "description": "真風來向(度)"
+            },
+            "gustiness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0,
+              "description": "陣風強度(每秒以種子亂數在 ±gustiness 內更新係數)"
+            }
           }
         },
         "current": {
           "type": "object",
           "properties": {
-            "set": { "type": "number", "minimum": 0, "maximum": 360, "description": "流向(去向,度)" },
-            "drift": { "type": "number", "minimum": 0, "description": "流速 (kn)" }
+            "set": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 360,
+              "description": "流向(去向,度)"
+            },
+            "drift": {
+              "type": "number",
+              "minimum": 0,
+              "description": "流速 (kn)"
+            }
           }
         },
-        "waterDepth": { "type": "number", "exclusiveMinimum": 0, "description": "水深 (m,常數;日後改為水深網格參照)" }
+        "waterDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "水深 (m,常數;日後改為水深網格參照)"
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "description": "目標船(交通);Python 參考實作忽略",
+      "items": {
+        "$ref": "#/$defs/target"
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "description": "評估參數(規劃書第 8.3 節)",
+      "properties": {
+        "minCpa_nm": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.5,
+          "description": "自船與任一目標 CPA 低於此值且 TCPA > 0 時記錄 cpaAlarm 事件"
+        }
       }
     }
   },
@@ -71,9 +241,531 @@
     {
       "id": "E01_baseline",
       "seed": 20260101,
-      "ship": { "id": "FSB1", "loading": "ballast" },
-      "initial": { "position": { "lat": 23.80, "lon": 120.05 }, "heading": 0, "speed": 7.8, "telegraph": "HAH" },
-      "environment": { "wind": { "trueSpeed": 15, "trueDir": 45 }, "current": { "set": 200, "drift": 0.5 }, "waterDepth": 30 }
+      "ship": {
+        "id": "FSB1",
+        "loading": "ballast"
+      },
+      "initial": {
+        "position": {
+          "lat": 23.8,
+          "lon": 120.05
+        },
+        "heading": 0,
+        "speed": 7.8,
+        "telegraph": "HAH"
+      },
+      "environment": {
+        "wind": {
+          "trueSpeed": 15,
+          "trueDir": 45
+        },
+        "current": {
+          "set": 200,
+          "drift": 0.5
+        },
+        "waterDepth": 30
+      },
+      "assessment": {
+        "minCpa_nm": 0.5
+      },
+      "targets": [
+        {
+          "id": "T1",
+          "name": "HAI XING 8",
+          "mmsi": 416123456,
+          "shipType": "cargo",
+          "loa": 120,
+          "beam": 19,
+          "initial": {
+            "position": {
+              "x": -100,
+              "y": 9260
+            },
+            "heading": 180,
+            "speed": 9
+          },
+          "behaviour": {
+            "mode": "colreg",
+            "colreg": {
+              "obey": true,
+              "cpaThreshold": 1.0,
+              "tcpaThreshold": 12,
+              "turn": 30
+            }
+          }
+        },
+        {
+          "id": "T2",
+          "shipType": "tanker",
+          "loa": 90,
+          "beam": 15,
+          "initial": {
+            "position": {
+              "x": 1500,
+              "y": 2200
+            },
+            "heading": 45
+          },
+          "behaviour": {
+            "mode": "anchored"
+          }
+        },
+        {
+          "id": "PILOT",
+          "shipType": "pilot",
+          "loa": 18,
+          "beam": 5,
+          "initial": {
+            "position": {
+              "lat": 23.82,
+              "lon": 120.06
+            },
+            "heading": 0
+          },
+          "behaviour": {
+            "mode": "follow",
+            "follow": {
+              "leader": "own",
+              "bearing": 120,
+              "range": 70
+            }
+          },
+          "trigger": {
+            "type": "ownDistance",
+            "point": {
+              "lat": 23.82,
+              "lon": 120.06
+            },
+            "lessThan": 1.5
+          }
+        }
+      ]
     }
-  ]
+  ],
+  "$defs": {
+    "position": {
+      "type": "object",
+      "description": "經緯度或本地 ENU(m),二擇一",
+      "oneOf": [
+        {
+          "required": [
+            "lat",
+            "lon"
+          ],
+          "properties": {
+            "lat": {
+              "type": "number",
+              "minimum": -90,
+              "maximum": 90
+            },
+            "lon": {
+              "type": "number",
+              "minimum": -180,
+              "maximum": 180
+            }
+          }
+        },
+        {
+          "required": [
+            "x",
+            "y"
+          ],
+          "properties": {
+            "x": {
+              "type": "number",
+              "description": "本地 ENU 東向 (m)"
+            },
+            "y": {
+              "type": "number",
+              "description": "本地 ENU 北向 (m)"
+            }
+          }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "description": "目標船(規劃書第 5.2 節 Traffic、第 9.1 節):靜態資料、初始狀態、行為、觸發、AIS",
+      "required": [
+        "id",
+        "initial"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "情境內唯一;targetControl 指令與狀態 targets[].id 以此引用"
+        },
+        "name": {
+          "type": "string",
+          "description": "船名(AIS;未指定用 id)"
+        },
+        "mmsi": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999999,
+          "description": "未指定時自 416000001 起依序配置"
+        },
+        "shipType": {
+          "type": "string",
+          "enum": [
+            "cargo",
+            "tanker",
+            "fishing",
+            "pilot",
+            "tug",
+            "passenger",
+            "pleasure",
+            "sar",
+            "hsc",
+            "sailing",
+            "other"
+          ],
+          "default": "cargo"
+        },
+        "loa": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 100,
+          "description": "總長 (m)"
+        },
+        "beam": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 16,
+          "description": "船寬 (m)"
+        },
+        "draft": {
+          "type": "number",
+          "minimum": 0,
+          "default": 5
+        },
+        "callSign": {
+          "type": "string"
+        },
+        "imo": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "lights": {
+          "type": "string",
+          "enum": [
+            "powerDriven",
+            "anchored",
+            "notUnderCommand",
+            "restrictedManoeuvrability",
+            "constrainedByDraught",
+            "fishing",
+            "towing",
+            "pilot",
+            "sailing"
+          ],
+          "description": "燈號類別;未指定依行為(錨泊)與船型(引水、漁船)推定"
+        },
+        "aisOn": {
+          "type": "boolean",
+          "default": true
+        },
+        "aisError": {
+          "type": "object",
+          "description": "AIS 錯誤資料注入",
+          "properties": {
+            "positionOffset": {
+              "type": "number",
+              "minimum": 0,
+              "description": "位置偏移 (m)"
+            },
+            "positionOffsetBearing": {
+              "type": "number",
+              "description": "偏移方向(真方位,度)"
+            },
+            "headingError": {
+              "type": "number",
+              "description": "航向誤差(度)"
+            },
+            "cogError": {
+              "type": "number"
+            },
+            "sogError": {
+              "type": "number",
+              "description": "kn"
+            },
+            "staticError": {
+              "type": "boolean",
+              "description": "靜態資料錯誤(預設:船名加 \" II\"、船型 pleasure、尺寸減半;可用 name/shipType/mmsi 指定)"
+            },
+            "name": {
+              "type": "string"
+            },
+            "shipType": {
+              "type": "string"
+            },
+            "mmsi": {
+              "type": "integer"
+            },
+            "silent": {
+              "type": "boolean",
+              "description": "AIS 開啟但不發送"
+            }
+          }
+        },
+        "initial": {
+          "type": "object",
+          "required": [
+            "position"
+          ],
+          "properties": {
+            "position": {
+              "$ref": "#/$defs/position"
+            },
+            "heading": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 360,
+              "default": 0
+            },
+            "speed": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0,
+              "description": "對水速度 (kn)"
+            },
+            "rot": {
+              "type": "number",
+              "default": 0,
+              "description": "初始迴轉率(度/分)"
+            }
+          }
+        },
+        "behaviour": {
+          "type": "object",
+          "description": "mode 決定主要行為;colreg 可疊加在 hold/waypoints/scripted 上(mode = colreg 時自動啟用)",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "hold",
+                "waypoints",
+                "scripted",
+                "anchored",
+                "follow",
+                "colreg"
+              ],
+              "default": "hold"
+            },
+            "waypoints": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "lat": {
+                    "type": "number"
+                  },
+                  "lon": {
+                    "type": "number"
+                  },
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "speed": {
+                    "type": "number",
+                    "description": "航向此航點的航速 (kn)"
+                  },
+                  "radius": {
+                    "type": "number",
+                    "description": "到達半徑 (m;預設 2 倍船長,最少 100)"
+                  }
+                }
+              }
+            },
+            "loop": {
+              "type": "boolean",
+              "default": false
+            },
+            "stopAtEnd": {
+              "type": "boolean",
+              "default": false
+            },
+            "script": {
+              "type": "array",
+              "description": "時間觸發的指令表(秒,自出現起)",
+              "items": {
+                "type": "object",
+                "required": [
+                  "t"
+                ],
+                "properties": {
+                  "t": {
+                    "type": "number"
+                  },
+                  "heading": {
+                    "type": "number"
+                  },
+                  "speed": {
+                    "type": "number"
+                  },
+                  "rot": {
+                    "type": "number",
+                    "description": "此次轉向的迴轉率上限(度/分)"
+                  }
+                }
+              }
+            },
+            "anchor": {
+              "type": "object",
+              "properties": {
+                "swing": {
+                  "type": "number",
+                  "default": 15,
+                  "description": "迴盪振幅(度)"
+                },
+                "period": {
+                  "type": "number",
+                  "default": 360,
+                  "description": "迴盪週期(秒)"
+                },
+                "scope": {
+                  "type": "number",
+                  "description": "錨位至船舯距離 (m;預設船長)"
+                }
+              }
+            },
+            "follow": {
+              "type": "object",
+              "properties": {
+                "leader": {
+                  "type": "string",
+                  "default": "own",
+                  "description": "own 或目標 id"
+                },
+                "bearing": {
+                  "type": "number",
+                  "default": 90,
+                  "description": "相對 leader 艏向的方位(度,右舷正)"
+                },
+                "range": {
+                  "type": "number",
+                  "default": 80,
+                  "description": "m"
+                },
+                "gain": {
+                  "type": "number",
+                  "default": 0.05,
+                  "description": "位置誤差 → 速度修正 (1/s)"
+                },
+                "maxSpeed": {
+                  "type": "number",
+                  "default": 15,
+                  "description": "kn"
+                }
+              }
+            },
+            "colreg": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "obey": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false = 不守規則(辨識情境但不行動)"
+                },
+                "cpaThreshold": {
+                  "type": "number",
+                  "default": 1.0,
+                  "description": "nm"
+                },
+                "tcpaThreshold": {
+                  "type": "number",
+                  "default": 12,
+                  "description": "分"
+                },
+                "turn": {
+                  "type": "number",
+                  "default": 30,
+                  "description": "每次轉向幅度(度)"
+                },
+                "speedFactor": {
+                  "type": "number",
+                  "default": 0.7,
+                  "description": "橫越讓路時的減速倍率"
+                },
+                "escalateAfter": {
+                  "type": "number",
+                  "default": 60,
+                  "description": "秒"
+                },
+                "lastResort": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "直航船的第 17 條最後手段"
+                }
+              }
+            }
+          }
+        },
+        "trigger": {
+          "type": "object",
+          "description": "出現條件;未指定即情境開始存在",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "none",
+                "time",
+                "ownDistance",
+                "ownHeading"
+              ]
+            },
+            "time": {
+              "type": "number",
+              "description": "秒(type = time)"
+            },
+            "point": {
+              "$ref": "#/$defs/position"
+            },
+            "lessThan": {
+              "type": "number",
+              "description": "ownDistance:距離 (nm);ownHeading:航向上限(度)"
+            },
+            "greaterThan": {
+              "type": "number",
+              "description": "ownDistance:距離 (nm);ownHeading:航向下限(度);兩者皆給時為順時針扇區"
+            }
+          }
+        },
+        "motion": {
+          "type": "object",
+          "description": "運動模型參數覆寫(未指定依船長估計)",
+          "properties": {
+            "headingTau": {
+              "type": "number",
+              "description": "迴轉率一階響應時間常數 (s)"
+            },
+            "maxRot": {
+              "type": "number",
+              "description": "度/分"
+            },
+            "speedTau": {
+              "type": "number",
+              "description": "航速一階滯後時間常數 (s)"
+            },
+            "maxSpeed": {
+              "type": "number",
+              "description": "kn"
+            }
+          }
+        }
+      }
+    }
+  }
 }

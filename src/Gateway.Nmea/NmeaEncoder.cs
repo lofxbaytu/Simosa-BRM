@@ -15,6 +15,8 @@ public static class NmeaEncoder
     public const string TalkerSounder = "SD";
     public const string TalkerWind = "WI";
     public const string TalkerRudder = "ER";
+    /// <summary>雷達/ARPA(TTM)</summary>
+    public const string TalkerRadar = "RA";
 
     /// <summary>10 Hz 句型:HDT、ROT、RSA。</summary>
     public static IReadOnlyList<string> FastSentences(OwnShipState s) => new[] { Hdt(s), Rot(s), Rsa(s) };
@@ -82,4 +84,28 @@ public static class NmeaEncoder
 
     /// <summary>RSA:右舵(單舵)舵角,右正,狀態 A;左舵欄位無效。</summary>
     public static string Rsa(OwnShipState s) => NmeaSentence.Build(TalkerRudder, "RSA", NmeaSentence.F1(s.Rudder), "A", "", "V");
+
+    /// <summary>
+    /// TTM(追蹤目標訊息,供 OpenCPN/ARPA 顯示):目標編號 01–99、距離(nm)與真方位、對地速度(kn)與對地航向(真)、
+    /// CPA(nm)與 TCPA(分,負 = 已通過)、單位 N、船名(≤ 12 字)、狀態 T(追蹤中)、無參考目標、UTC 時間、取得方式 A(自動)。
+    /// </summary>
+    public static string Ttm(TargetState t, int number, DateTime utc)
+    {
+        var name = new string(t.Name.Where(c => c != ',' && c != '*' && c != '$' && c != '!' && c != '\\' && c != '^' && c != '~' && c < 127).Take(12).ToArray());
+        return NmeaSentence.Build(TalkerRadar, "TTM",
+            Math.Clamp(number, 0, 99).ToString("00", System.Globalization.CultureInfo.InvariantCulture),
+            NmeaSentence.F2(t.RangeNm), NmeaSentence.F1(t.BearingDeg), "T",
+            NmeaSentence.F1(t.Sog), NmeaSentence.F1(t.Cog), "T",
+            NmeaSentence.F2(t.CpaNm), NmeaSentence.F1(t.TcpaMin), "N",
+            name, "T", "", NmeaSentence.FormatTime(utc), "A");
+    }
+
+    /// <summary>所有目標的 TTM(編號依 targets[] 順序自 01 起)。</summary>
+    public static IReadOnlyList<string> TtmSentences(OwnShipState s, DateTime utc)
+    {
+        if (s.Targets is not { Count: > 0 } targets) return Array.Empty<string>();
+        var list = new List<string>(targets.Count);
+        for (var i = 0; i < targets.Count; i++) list.Add(Ttm(targets[i], i + 1, utc));
+        return list;
+    }
 }

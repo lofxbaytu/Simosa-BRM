@@ -52,6 +52,8 @@ public sealed record OwnShipState
     [JsonPropertyName("engine")] public EngineStatus? Engine { get; init; }
     [JsonPropertyName("faults")] public IReadOnlyList<string>? Faults { get; init; }
     [JsonPropertyName("flags")] public StateFlags? Flags { get; init; }
+    /// <summary>已出現的目標船(情境無目標船時省略;規劃書第 5.2 節 Traffic)</summary>
+    [JsonPropertyName("targets")] public IReadOnlyList<TargetState>? Targets { get; init; }
 }
 
 /// <summary>位置:WGS-84 經緯度與本地 ENU(m)。</summary>

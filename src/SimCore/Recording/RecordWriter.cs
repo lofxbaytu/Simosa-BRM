@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Engine;
+using SimosaBRM.SimCore.Traffic;
 
 namespace SimosaBRM.SimCore.Recording;
 
@@ -51,8 +52,11 @@ public sealed class RecordWriter : IDisposable
 
         engine.CommandApplied += OnCommand;
         engine.SnapshotTaken += OnSnapshot;
+        engine.TrafficEventRaised += OnTrafficEvent;
         if (includeStates) engine.Broadcast += OnBroadcast;
     }
+
+    private void OnTrafficEvent(SimulationEngine e, TrafficEvent ev) => WriteLine(new RecordEvent { Tick = ev.Tick, Event = ev });
 
     private void OnCommand(SimulationEngine e, SimCommand cmd, long tick)
     {
@@ -81,6 +85,7 @@ public sealed class RecordWriter : IDisposable
         _closed = true;
         _engine.CommandApplied -= OnCommand;
         _engine.SnapshotTaken -= OnSnapshot;
+        _engine.TrafficEventRaised -= OnTrafficEvent;
         if (_includeStates) _engine.Broadcast -= OnBroadcast;
 
         var footer = new RecordFooter

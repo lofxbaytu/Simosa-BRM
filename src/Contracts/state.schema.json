@@ -2,38 +2,473 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/state.schema.json",
   "title": "OwnShipState",
-  "description": "模擬核心每個廣播週期(25 Hz)對各站(儀器、視景、雷達、教官站、講評站)送出的自船狀態。Python 參考實作與 C# SimCore 必須產生相同欄位。角度一律以度表示、航向 0 至 360、舵角右正左負、ROT 右轉正(度/分)。",
+  "description": "模擬核心每個廣播週期(25 Hz)對各站(儀器、視景、雷達、教官站、講評站)送出的自船狀態。Python 參考實作與 C# SimCore 必須產生相同欄位(Python 無目標船,不輸出 targets)。角度一律以度表示、航向 0 至 360、舵角右正左負、ROT 右轉正(度/分)。",
   "type": "object",
-  "required": ["t", "shipId", "pos", "heading", "cog", "sog", "stw", "rot", "u", "v", "r", "rudder", "rudderOrder", "rpm", "rpmOrder", "telegraph", "depthBelowKeel", "wind", "current", "loading", "tick"],
+  "required": [
+    "t",
+    "shipId",
+    "pos",
+    "heading",
+    "cog",
+    "sog",
+    "stw",
+    "rot",
+    "u",
+    "v",
+    "r",
+    "rudder",
+    "rudderOrder",
+    "rpm",
+    "rpmOrder",
+    "telegraph",
+    "depthBelowKeel",
+    "wind",
+    "current",
+    "loading",
+    "tick"
+  ],
   "properties": {
-    "t": { "type": "number", "description": "模擬時間(秒,自練習開始)" },
-    "tick": { "type": "integer", "description": "核心步數(50 Hz)" },
-    "shipId": { "type": "string", "enum": ["FSB1", "FSB2"] },
-    "pos": { "type": "object", "required": ["lat", "lon", "x", "y"], "properties": { "lat": { "type": "number" }, "lon": { "type": "number" }, "x": { "type": "number", "description": "本地 ENU 東向 (m)" }, "y": { "type": "number", "description": "本地 ENU 北向 (m)" } } },
-    "heading": { "type": "number", "minimum": 0, "maximum": 360 },
-    "cog": { "type": "number", "minimum": 0, "maximum": 360 },
-    "sog": { "type": "number", "description": "對地速度 (kn)" },
-    "stw": { "type": "number", "description": "對水速度 (kn),縱向" },
-    "rot": { "type": "number", "description": "迴轉率 (度/分),右轉正" },
-    "u": { "type": "number", "description": "船體座標縱向速度 (m/s)" },
-    "v": { "type": "number", "description": "船體座標橫向速度 (m/s),右正(MMG 慣例:船舯)" },
-    "r": { "type": "number", "description": "艏搖角速度 (rad/s)" },
-    "drift": { "type": "number", "description": "漂角 (度)" },
-    "rudder": { "type": "number", "description": "實際舵角 (度)" },
-    "rudderOrder": { "type": "number", "description": "舵令 (度)" },
-    "rpm": { "type": "number", "description": "實際轉速,倒車負" },
-    "rpmOrder": { "type": "number" },
-    "telegraph": { "type": "string", "enum": ["EFAS", "FAS", "HAS", "SAS", "DSAS", "STOP", "DSAH", "SAH", "HAH", "FAH", "NAVF"] },
-    "thruster": { "type": "object", "properties": { "order": { "type": "number", "minimum": -1, "maximum": 1 }, "actual": { "type": "number" } } },
-    "depthBelowKeel": { "type": "number" },
-    "waterDepth": { "type": "number" },
-    "squat": { "type": "number" },
-    "wind": { "type": "object", "required": ["trueSpeed", "trueDir"], "properties": { "trueSpeed": { "type": "number", "description": "kn" }, "trueDir": { "type": "number", "description": "來向,度" }, "relSpeed": { "type": "number" }, "relDir": { "type": "number" } } },
-    "current": { "type": "object", "required": ["set", "drift"], "properties": { "set": { "type": "number", "description": "流向(去向),度" }, "drift": { "type": "number", "description": "kn" } } },
-    "loading": { "type": "string", "enum": ["full", "ballast", "intermediate"] },
-    "draft": { "type": "object", "properties": { "fore": { "type": "number" }, "aft": { "type": "number" } } },
-    "engine": { "type": "object", "properties": { "state": { "type": "string", "enum": ["stopped", "running", "starting", "failed"] }, "startsRemaining": { "type": "integer" }, "load_pct": { "type": "number" } } },
-    "faults": { "type": "array", "items": { "type": "string" } },
-    "flags": { "type": "object", "properties": { "frozen": { "type": "boolean" }, "aground": { "type": "boolean" }, "collision": { "type": "boolean" } } }
+    "t": {
+      "type": "number",
+      "description": "模擬時間(秒,自練習開始)"
+    },
+    "tick": {
+      "type": "integer",
+      "description": "核心步數(50 Hz)"
+    },
+    "shipId": {
+      "type": "string",
+      "enum": [
+        "FSB1",
+        "FSB2"
+      ]
+    },
+    "pos": {
+      "type": "object",
+      "required": [
+        "lat",
+        "lon",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "lat": {
+          "type": "number"
+        },
+        "lon": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number",
+          "description": "本地 ENU 東向 (m)"
+        },
+        "y": {
+          "type": "number",
+          "description": "本地 ENU 北向 (m)"
+        }
+      }
+    },
+    "heading": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 360
+    },
+    "cog": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 360
+    },
+    "sog": {
+      "type": "number",
+      "description": "對地速度 (kn)"
+    },
+    "stw": {
+      "type": "number",
+      "description": "對水速度 (kn),縱向"
+    },
+    "rot": {
+      "type": "number",
+      "description": "迴轉率 (度/分),右轉正"
+    },
+    "u": {
+      "type": "number",
+      "description": "船體座標縱向速度 (m/s)"
+    },
+    "v": {
+      "type": "number",
+      "description": "船體座標橫向速度 (m/s),右正(MMG 慣例:船舯)"
+    },
+    "r": {
+      "type": "number",
+      "description": "艏搖角速度 (rad/s)"
+    },
+    "drift": {
+      "type": "number",
+      "description": "漂角 (度)"
+    },
+    "rudder": {
+      "type": "number",
+      "description": "實際舵角 (度)"
+    },
+    "rudderOrder": {
+      "type": "number",
+      "description": "舵令 (度)"
+    },
+    "rpm": {
+      "type": "number",
+      "description": "實際轉速,倒車負"
+    },
+    "rpmOrder": {
+      "type": "number"
+    },
+    "telegraph": {
+      "type": "string",
+      "enum": [
+        "EFAS",
+        "FAS",
+        "HAS",
+        "SAS",
+        "DSAS",
+        "STOP",
+        "DSAH",
+        "SAH",
+        "HAH",
+        "FAH",
+        "NAVF"
+      ]
+    },
+    "thruster": {
+      "type": "object",
+      "properties": {
+        "order": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "actual": {
+          "type": "number"
+        }
+      }
+    },
+    "depthBelowKeel": {
+      "type": "number"
+    },
+    "waterDepth": {
+      "type": "number"
+    },
+    "squat": {
+      "type": "number"
+    },
+    "wind": {
+      "type": "object",
+      "required": [
+        "trueSpeed",
+        "trueDir"
+      ],
+      "properties": {
+        "trueSpeed": {
+          "type": "number",
+          "description": "kn"
+        },
+        "trueDir": {
+          "type": "number",
+          "description": "來向,度"
+        },
+        "relSpeed": {
+          "type": "number"
+        },
+        "relDir": {
+          "type": "number"
+        }
+      }
+    },
+    "current": {
+      "type": "object",
+      "required": [
+        "set",
+        "drift"
+      ],
+      "properties": {
+        "set": {
+          "type": "number",
+          "description": "流向(去向),度"
+        },
+        "drift": {
+          "type": "number",
+          "description": "kn"
+        }
+      }
+    },
+    "loading": {
+      "type": "string",
+      "enum": [
+        "full",
+        "ballast",
+        "intermediate"
+      ]
+    },
+    "draft": {
+      "type": "object",
+      "properties": {
+        "fore": {
+          "type": "number"
+        },
+        "aft": {
+          "type": "number"
+        }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "stopped",
+            "running",
+            "starting",
+            "failed"
+          ]
+        },
+        "startsRemaining": {
+          "type": "integer"
+        },
+        "load_pct": {
+          "type": "number"
+        }
+      }
+    },
+    "faults": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "flags": {
+      "type": "object",
+      "properties": {
+        "frozen": {
+          "type": "boolean"
+        },
+        "aground": {
+          "type": "boolean"
+        },
+        "collision": {
+          "type": "boolean",
+          "description": "自船與任一目標船外形曾相交"
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "description": "已出現的目標船(情境無目標船時省略;規劃書第 5.2 節 Traffic、第 8.3 節避碰指標)。位置/航向/速度為真值;AIS 報告值(含注入錯誤)在 ais,AIS 關或不發送時省略",
+      "items": {
+        "$ref": "#/$defs/target"
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "mmsi",
+        "shipType",
+        "loa",
+        "beam",
+        "pos",
+        "heading",
+        "cog",
+        "sog",
+        "rot",
+        "range_nm",
+        "bearing_deg",
+        "cpa_nm",
+        "tcpa_min",
+        "aisOn",
+        "lights",
+        "behaviour"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mmsi": {
+          "type": "integer"
+        },
+        "shipType": {
+          "type": "string",
+          "description": "cargo、tanker、fishing、pilot、tug、passenger、pleasure、sar、hsc、sailing、other"
+        },
+        "loa": {
+          "type": "number",
+          "description": "總長 (m)"
+        },
+        "beam": {
+          "type": "number"
+        },
+        "draft": {
+          "type": "number"
+        },
+        "pos": {
+          "type": "object",
+          "required": [
+            "lat",
+            "lon",
+            "x",
+            "y"
+          ],
+          "properties": {
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            },
+            "x": {
+              "type": "number",
+              "description": "本地 ENU 東向 (m)"
+            },
+            "y": {
+              "type": "number",
+              "description": "本地 ENU 北向 (m)"
+            }
+          }
+        },
+        "heading": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "cog": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "sog": {
+          "type": "number",
+          "description": "kn"
+        },
+        "stw": {
+          "type": "number",
+          "description": "對水速度 (kn)"
+        },
+        "rot": {
+          "type": "number",
+          "description": "度/分,右轉正"
+        },
+        "range_nm": {
+          "type": "number",
+          "description": "自船至目標距離 (nm)"
+        },
+        "bearing_deg": {
+          "type": "number",
+          "description": "自船看目標的真方位"
+        },
+        "relBearing_deg": {
+          "type": "number",
+          "description": "相對自船艏向 0–360"
+        },
+        "cpa_nm": {
+          "type": "number"
+        },
+        "tcpa_min": {
+          "type": "number",
+          "description": "負值 = 已通過 CPA"
+        },
+        "bcr_nm": {
+          "type": "number",
+          "description": "艏越距離:正 = 由自船艏前通過、負 = 由艉後通過;無交會時省略"
+        },
+        "bct_min": {
+          "type": "number",
+          "description": "艏越時間(分)"
+        },
+        "aisOn": {
+          "type": "boolean"
+        },
+        "lights": {
+          "type": "string",
+          "description": "燈號類別:powerDriven、anchored、notUnderCommand、restrictedManoeuvrability、constrainedByDraught、fishing、towing、pilot、sailing"
+        },
+        "sound": {
+          "type": "string",
+          "description": "鳴放中的聲號(oneShort、twoShort、threeShort、fiveShort、prolonged…);無時省略"
+        },
+        "behaviour": {
+          "type": "string",
+          "description": "hold、waypoints、scripted、anchored、follow、colreg;manual = 教官覆寫中"
+        },
+        "colreg": {
+          "type": "string",
+          "description": "COLREG 判定/行動,例如 crossing/giveWay/avoiding、headOn/giveWay/avoiding、crossing/standOn/holding、crossing/giveWay(ignored)、resumed"
+        },
+        "ais": {
+          "type": "object",
+          "description": "AIS 報告(ITU-R M.1371 類型 1/5 欄位;含注入錯誤)",
+          "properties": {
+            "mmsi": {
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "callSign": {
+              "type": "string"
+            },
+            "imo": {
+              "type": "integer"
+            },
+            "shipType": {
+              "type": "integer",
+              "description": "AIS 船型碼"
+            },
+            "navStatus": {
+              "type": "integer"
+            },
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            },
+            "cog": {
+              "type": "number"
+            },
+            "sog": {
+              "type": "number"
+            },
+            "heading": {
+              "type": "number"
+            },
+            "rot": {
+              "type": "number"
+            },
+            "dimToBow": {
+              "type": "number"
+            },
+            "dimToStern": {
+              "type": "number"
+            },
+            "dimToPort": {
+              "type": "number"
+            },
+            "dimToStarboard": {
+              "type": "number"
+            },
+            "draught": {
+              "type": "number"
+            },
+            "destination": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
   }
 }

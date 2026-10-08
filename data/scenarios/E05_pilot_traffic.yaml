@@ -1,0 +1,100 @@
+# E05 高雄港外(Charlie 引水站附近)交通與引水船(規劃書第 8.1 節 E04/E05 前段、第 3.4 節高雄港;schema:src/Contracts/scenario.schema.json)
+# FSB1 滿載自西南方接近高雄第二港口,航向 045、8 kn;漲潮向西北 1.2 kn、西南風 10 kn、水深 25 m。
+# 交通:T1 出港貨櫃船(對遇,COLREG 自動)、T2 自東而來的油輪(自船應讓路;目標為直航船,自船不讓時依第 17 條採最後手段)、
+#       T3 自西南而來的漁船(應讓路但「不守規則」,不採取行動)、PILOT 引水船:自船距引水站 1.5 nm 內出現,跟隨自船右舷後方。
+id: E05_pilot_traffic
+name: 高雄港外交通與引水船
+description: >-
+  Charlie 引水站附近的進港前段:三艘交通船形成對遇、橫越(自船讓路)與不守規則的漁船橫越,
+  引水船於自船接近引水站時出現並跟隨自船右舷;用於 ARPA/AIS 目標、CPA/TCPA 判讀、COLREG 決策與引水人登船前的 BRM。
+seed: 20260505
+startTimeUtc: "2026-05-05T22:30:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin:
+  lat: 22.5300
+  lon: 120.2400
+initial:
+  position: { lat: 22.4950, lon: 120.2050 }   # 引水站西南約 3 nm
+  heading: 45
+  speed: 8.0
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind:
+    trueSpeed: 10
+    trueDir: 225
+    gustiness: 0.15
+  current:
+    set: 315        # 漲潮向西北
+    drift: 1.2
+  waterDepth: 25
+assessment:
+  minCpa_nm: 0.5
+targets:
+  - id: T1
+    name: EVER ORIENT
+    mmsi: 416300101
+    shipType: cargo
+    loa: 200
+    beam: 32
+    draft: 11
+    callSign: BKEO
+    destination: HONG KONG
+    initial:
+      position: { lat: 22.5500, lon: 120.2550 }  # 自船正前方約 4 nm 出港
+      heading: 225
+      speed: 10
+    behaviour:
+      mode: colreg
+      colreg: { obey: true, cpaThreshold: 1.0, tcpaThreshold: 12, turn: 30 }
+  - id: T2
+    name: GOLDEN WAVE
+    mmsi: 416300102
+    shipType: tanker
+    loa: 150
+    beam: 24
+    draft: 9
+    destination: MAILIAO
+    initial:
+      position: { x: 5000, y: -500 }            # 自船右舷,向西航行與自船航線交會(CPA 約 0.1 nm;自船為讓路船)
+      heading: 270
+      speed: 8
+    behaviour:
+      mode: colreg
+      colreg: { obey: true, cpaThreshold: 1.0, tcpaThreshold: 12, turn: 30, lastResort: true }
+  - id: T3
+    name: CHIN FU 66
+    mmsi: 416300103
+    shipType: fishing
+    loa: 25
+    beam: 6
+    draft: 2.5
+    initial:
+      position: { x: -2800, y: 2000 }           # 自船左舷前方,向東南橫越(CPA 約 0.2 nm;應讓路但不守規則)
+      heading: 135
+      speed: 7
+    behaviour:
+      mode: colreg
+      colreg: { obey: false }
+  - id: PILOT
+    name: PILOT 3
+    mmsi: 416300104
+    shipType: pilot
+    loa: 18
+    beam: 5
+    draft: 1.5
+    callSign: BPL3
+    initial:
+      position: { lat: 22.5300, lon: 120.2400 }  # 引水站
+      heading: 225
+      speed: 0
+    behaviour:
+      mode: follow
+      follow: { leader: own, bearing: 120, range: 70, gain: 0.05, maxSpeed: 18 }
+    trigger:
+      type: ownDistance
+      point: { lat: 22.5300, lon: 120.2400 }
+      lessThan: 1.5                             # nm

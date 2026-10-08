@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Engine;
+using SimosaBRM.SimCore.Traffic;
 
 namespace SimosaBRM.SimCore.Recording;
 
@@ -14,6 +15,8 @@ public static class RecordKinds
     public const string Input = "input";
     public const string State = "state";
     public const string Snapshot = "snapshot";
+    /// <summary>交通事件(碰撞、CPA 低於門檻、目標出現、航點、COLREG、聲號、目標控制);目標船狀態在 state 行的 targets[]、目標指令在 input 行</summary>
+    public const string Event = "event";
     public const string Footer = "footer";
 }
 
@@ -51,6 +54,14 @@ public sealed record RecordSnapshot
     [JsonPropertyName("kind")] public string Kind { get; init; } = RecordKinds.Snapshot;
     [JsonPropertyName("tick")] public required long Tick { get; init; }
     [JsonPropertyName("snapshot")] public required EngineSnapshot Snapshot { get; init; }
+}
+
+/// <summary>衍生事件行(規劃書第 5.3 節「衍生事件(警報、CPA、UKC)」;目前為交通事件)。</summary>
+public sealed record RecordEvent
+{
+    [JsonPropertyName("kind")] public string Kind { get; init; } = RecordKinds.Event;
+    [JsonPropertyName("tick")] public required long Tick { get; init; }
+    [JsonPropertyName("event")] public required TrafficEvent Event { get; init; }
 }
 
 public sealed record RecordFooter

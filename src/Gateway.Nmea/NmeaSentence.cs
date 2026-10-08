@@ -17,20 +17,23 @@ public static class NmeaSentence
     }
 
     /// <summary>組成 "$TTSSS,f1,f2,...*hh"(不含 CR LF)。</summary>
-    public static string Build(string talker, string type, params string[] fields)
+    public static string Build(string talker, string type, params string[] fields) => Build('$', talker, type, fields);
+
+    /// <summary>組成以 <paramref name="start"/>('$' 參數句、'!' 封裝句如 AIVDM)開頭的句型。</summary>
+    public static string Build(char start, string talker, string type, params string[] fields)
     {
         var sb = new StringBuilder(96);
         sb.Append(talker).Append(type);
         foreach (var f in fields) sb.Append(',').Append(f);
         var payload = sb.ToString();
-        return "$" + payload + "*" + Checksum(payload);
+        return start + payload + "*" + Checksum(payload);
     }
 
-    /// <summary>驗證一句的校驗和(接受有無 CR LF)。</summary>
+    /// <summary>驗證一句的校驗和(接受 '$' 與 '!' 開頭、有無 CR LF)。</summary>
     public static bool Verify(string sentence)
     {
         var s = sentence.TrimEnd('\r', '\n');
-        if (s.Length < 4 || s[0] != '$') return false;
+        if (s.Length < 4 || (s[0] != '$' && s[0] != '!')) return false;
         var star = s.LastIndexOf('*');
         if (star < 0 || star + 3 != s.Length) return false;
         return string.Equals(Checksum(s[1..star]), s[(star + 1)..], StringComparison.OrdinalIgnoreCase);

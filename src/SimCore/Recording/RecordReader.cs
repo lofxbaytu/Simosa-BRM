@@ -11,6 +11,8 @@ public sealed class RecordFile
     public required RecordHeader Header { get; init; }
     public required IReadOnlyList<RecordInput> Inputs { get; init; }
     public required IReadOnlyList<RecordSnapshot> Snapshots { get; init; }
+    /// <summary>交通事件(碰撞、CPA 警報…;講評站用)</summary>
+    public required IReadOnlyList<RecordEvent> Events { get; init; }
     public required long StateLines { get; init; }
     public RecordFooter? Footer { get; init; }
     /// <summary>重新計算的 SHA-256(hex)</summary>
@@ -28,6 +30,7 @@ public static class RecordReader
         RecordFooter? footer = null;
         var inputs = new List<RecordInput>();
         var snapshots = new List<RecordSnapshot>();
+        var events = new List<RecordEvent>();
         long stateLines = 0;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
@@ -47,6 +50,7 @@ public static class RecordReader
                 case RecordKinds.Header: header = ContractJson.Deserialize<RecordHeader>(line); break;
                 case RecordKinds.Input: inputs.Add(ContractJson.Deserialize<RecordInput>(line)!); break;
                 case RecordKinds.Snapshot: snapshots.Add(ContractJson.Deserialize<RecordSnapshot>(line)!); break;
+                case RecordKinds.Event: events.Add(ContractJson.Deserialize<RecordEvent>(line)!); break;
                 case RecordKinds.State: stateLines++; break;
                 default: break; // 未知行型別:保留在雜湊內但忽略
             }
@@ -58,6 +62,7 @@ public static class RecordReader
             Header = header,
             Inputs = inputs,
             Snapshots = snapshots,
+            Events = events,
             StateLines = stateLines,
             Footer = footer,
             ComputedSha256 = Convert.ToHexString(hash.GetCurrentHash()),

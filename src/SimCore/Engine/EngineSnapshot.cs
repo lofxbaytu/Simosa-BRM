@@ -27,6 +27,8 @@ public sealed record EngineSnapshot
     public required IReadOnlyList<string> Faults { get; init; }
     public required bool Aground { get; init; }
     public int? StartsRemaining { get; init; }
+    /// <summary>目標船與碰撞旗標(交通模組;舊快照無此欄位時沿用引擎目前的目標船)</summary>
+    public Traffic.TrafficSnapshot? Traffic { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
     public required string StateHash { get; init; }
 

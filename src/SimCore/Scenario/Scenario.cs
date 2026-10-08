@@ -24,6 +24,10 @@ public sealed class Scenario
     public GeoPoint? Origin { get; set; }
     public ScenarioInitial Initial { get; set; } = new();
     public ScenarioEnvironment Environment { get; set; } = new();
+    /// <summary>目標船(交通;規劃書第 9.1 節);Python 參考實作無目標船,忽略此欄位</summary>
+    public List<ScenarioTarget> Targets { get; set; } = new();
+    /// <summary>評估參數(最小 CPA 門檻等;規劃書第 8.3 節)</summary>
+    public ScenarioAssessment Assessment { get; set; } = new();
 
     /// <summary>檢查必要欄位並補齊原點;回傳自身以便串接。</summary>
     public Scenario Validate()
@@ -40,7 +44,50 @@ public sealed class Scenario
             Origin = new GeoPoint { Lat = pos.Lat!.Value, Lon = pos.Lon!.Value };
         }
         if (Environment.WaterDepth <= 0) throw new InvalidDataException("environment.waterDepth 必須為正");
+        ValidateTargets();
         return this;
+    }
+
+    /// <summary>目標船定義檢查:id 唯一、位置可解析、航點/跟隨/腳本的必要欄位。</summary>
+    private void ValidateTargets()
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in Targets)
+        {
+            if (string.IsNullOrWhiteSpace(t.Id)) throw new InvalidDataException("targets[] 缺少 id");
+            if (!ids.Add(t.Id)) throw new InvalidDataException($"目標船 id 重複:{t.Id}");
+            ValidateTarget(t);
+        }
+    }
+
+    /// <summary>單一目標船定義檢查(情境載入與 targetControl add 共用)。</summary>
+    public static void ValidateTarget(ScenarioTarget t)
+    {
+        if (string.IsNullOrWhiteSpace(t.Id)) throw new InvalidDataException("目標船缺少 id");
+        if (t.Loa <= 0 || t.Beam <= 0) throw new InvalidDataException($"目標船 {t.Id} 的 loa/beam 必須為正");
+        var pos = t.Initial.Position ?? throw new InvalidDataException($"目標船 {t.Id} 缺少 initial.position");
+        if (!((pos.Lat is not null && pos.Lon is not null) || (pos.X is not null && pos.Y is not null)))
+            throw new InvalidDataException($"目標船 {t.Id} 的 initial.position 需為 {{lat, lon}} 或 {{x, y}}");
+        var b = t.Behaviour;
+        if (b.Mode == TargetBehaviourMode.Waypoints && (b.Waypoints is null || b.Waypoints.Count == 0))
+            throw new InvalidDataException($"目標船 {t.Id} 為 waypoints 模式但無航點");
+        foreach (var w in b.Waypoints ?? new List<TargetWaypoint>())
+            if (!((w.Lat is not null && w.Lon is not null) || (w.X is not null && w.Y is not null)))
+                throw new InvalidDataException($"目標船 {t.Id} 的航點需為 {{lat, lon}} 或 {{x, y}}");
+        if (b.Mode == TargetBehaviourMode.Scripted && (b.Script is null || b.Script.Count == 0))
+            throw new InvalidDataException($"目標船 {t.Id} 為 scripted 模式但無腳本");
+        if (t.Trigger is { } tr)
+        {
+            switch (tr.Type)
+            {
+                case TargetTriggerType.Time when tr.Time is null:
+                    throw new InvalidDataException($"目標船 {t.Id} 的 time 觸發缺少 time");
+                case TargetTriggerType.OwnDistance when tr.Point is null || (tr.LessThan is null && tr.GreaterThan is null):
+                    throw new InvalidDataException($"目標船 {t.Id} 的 ownDistance 觸發需要 point 與 lessThan/greaterThan");
+                case TargetTriggerType.OwnHeading when tr.LessThan is null && tr.GreaterThan is null:
+                    throw new InvalidDataException($"目標船 {t.Id} 的 ownHeading 觸發需要 lessThan/greaterThan");
+            }
+        }
     }
 
     public string ToJson() => ContractJson.Serialize(this);

@@ -1,10 +1,12 @@
 # E01 基線情境:麥寮外海開闊水域(規劃書第 8.1 節 E01;schema:src/Contracts/scenario.schema.json)
 # FS Bitumen No.1 壓載出港狀態,半速進,風 15 kn 東北,微弱南向流,水深 30 m。
+# 目標船:1 艘對遇(COLREG 自動,約 6 分鐘後右轉)、1 艘錨泊(右艏 1.4 nm);最小 CPA 門檻 0.5 nm。
 id: E01_baseline
 name: 麥寮外海開闊水域 — 基線
 description: >-
   麥寮港外約 6 浬開闊水域,壓載狀態的 FSB1 以半速進向北航行;
   用於儀器熟悉、基本操舵與車鐘練習,以及確定性/紀錄重播的回歸測試。
+  含一艘對遇的雜貨船與一艘錨泊的油輪,供 AIS/雷達目標與 CPA 指標的熟悉。
 seed: 20260101
 startTimeUtc: "2026-01-01T02:00:00Z"
 timeScale: 1
@@ -29,3 +31,36 @@ environment:
     set: 200        # 去向(度)
     drift: 0.5      # kn
   waterDepth: 30    # m
+assessment:
+  minCpa_nm: 0.5    # 自船與任一目標 CPA 低於此值且 TCPA > 0 時記錄事件
+targets:
+  - id: T1
+    name: HAI XING 8
+    mmsi: 416123456
+    shipType: cargo
+    loa: 120
+    beam: 19
+    draft: 6.5
+    callSign: BXHX8
+    destination: KAOHSIUNG
+    initial:
+      position: { x: -100, y: 9260 }   # 自船正前方 5 nm,略偏左(對遇,CPA 約 0.05 nm)
+      heading: 180
+      speed: 9
+    behaviour:
+      mode: colreg                     # 對遇:TCPA < 12 min 時右轉 30°
+      colreg: { obey: true, cpaThreshold: 1.0, tcpaThreshold: 12, turn: 30 }
+  - id: T2
+    name: SHUN FENG
+    mmsi: 416234567
+    shipType: tanker
+    loa: 90
+    beam: 15
+    draft: 5
+    initial:
+      position: { x: 1500, y: 2200 }   # 右艏約 34°、1.4 nm
+      heading: 45
+      speed: 0
+    behaviour:
+      mode: anchored
+      anchor: { swing: 15, period: 360 }

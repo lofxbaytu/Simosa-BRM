@@ -43,6 +43,9 @@ public static class ContractJson
             => name.All(c => char.IsUpper(c) || char.IsDigit(c)) ? name : CamelCase.ConvertName(name);
     }
 
+    /// <summary>列舉值在 JSON 中的名稱(與序列化一致;供狀態欄位以字串輸出列舉)。</summary>
+    public static string EnumName<T>(T value) where T : struct, Enum => ContractEnumNamingPolicy.Instance.ConvertName(value.ToString());
+
     public static string Serialize<T>(T value) => JsonSerializer.Serialize(value, Options);
     public static byte[] SerializeToUtf8Bytes<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value, Options);
     public static T? Deserialize<T>(string json) => JsonSerializer.Deserialize<T>(json, Options);

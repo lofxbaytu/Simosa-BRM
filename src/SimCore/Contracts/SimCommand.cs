@@ -21,6 +21,8 @@ public enum SimCommandType
     ClearFault,
     Snapshot,
     Restore,
+    /// <summary>目標船控制(args:id、heading/speed 覆寫、add/remove、waypoints、aisOn/aisError、behaviour、colreg、lights/sound、activate、position)</summary>
+    TargetControl,
 }
 
 /// <summary>
@@ -47,6 +49,15 @@ public sealed record SimCommand
     public static SimCommand InjectFault(string fault) => new() { Type = SimCommandType.InjectFault, Value = Str(fault) };
     public static SimCommand ClearFault(string fault) => new() { Type = SimCommandType.ClearFault, Value = Str(fault) };
     public static SimCommand LoadScenario(string path) => new() { Type = SimCommandType.LoadScenario, Value = Str(path) };
+
+    /// <summary>目標船控制:<paramref name="args"/> 為匿名物件或字典,鍵名見 README「targetControl」。</summary>
+    public static SimCommand TargetControl(object args) => new() { Type = SimCommandType.TargetControl, Args = Obj(args) };
+    /// <summary>目標船航向/航速覆寫(教官手動接管;release 解除)。</summary>
+    public static SimCommand TargetOverride(string id, double? headingDeg = null, double? speedKn = null)
+        => TargetControl(new { id, heading = headingDeg, speed = speedKn });
+    public static SimCommand TargetRelease(string id) => TargetControl(new { id, release = true });
+    public static SimCommand TargetRemove(string id) => TargetControl(new { id, remove = true });
+    public static SimCommand TargetAis(string id, bool aisOn) => TargetControl(new { id, aisOn });
 
     public static SimCommand Autopilot(bool enabled, double? heading = null, double? rotLimit = null)
         => new() { Type = SimCommandType.Autopilot, Args = Obj(new { enabled, heading, rotLimit }) };

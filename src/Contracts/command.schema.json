@@ -4,16 +4,152 @@
   "title": "SimCommand",
   "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。",
   "type": "object",
-  "required": ["type"],
+  "required": [
+    "type"
+  ],
   "properties": {
-    "type": { "type": "string", "enum": ["rudder", "telegraph", "rpm", "thruster", "autopilot", "freeze", "resume", "reset", "timeScale", "loadScenario", "setEnvironment", "injectFault", "clearFault", "snapshot", "restore"] },
+    "type": {
+      "type": "string",
+      "enum": [
+        "rudder",
+        "telegraph",
+        "rpm",
+        "thruster",
+        "autopilot",
+        "freeze",
+        "resume",
+        "reset",
+        "timeScale",
+        "loadScenario",
+        "setEnvironment",
+        "injectFault",
+        "clearFault",
+        "snapshot",
+        "restore",
+        "targetControl"
+      ]
+    },
     "value": {},
-    "args": { "type": "object" }
+    "args": {
+      "type": "object",
+      "description": "targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate"
+    }
   },
   "examples": [
-    { "type": "rudder", "value": -20 },
-    { "type": "telegraph", "value": "HAH" },
-    { "type": "autopilot", "args": { "enabled": true, "heading": 275, "rotLimit": 15 } },
-    { "type": "setEnvironment", "args": { "wind": { "trueSpeed": 20, "trueDir": 40 }, "current": { "set": 265, "drift": 2.5 }, "waterDepth": 12 } }
+    {
+      "type": "rudder",
+      "value": -20
+    },
+    {
+      "type": "telegraph",
+      "value": "HAH"
+    },
+    {
+      "type": "autopilot",
+      "args": {
+        "enabled": true,
+        "heading": 275,
+        "rotLimit": 15
+      }
+    },
+    {
+      "type": "setEnvironment",
+      "args": {
+        "wind": {
+          "trueSpeed": 20,
+          "trueDir": 40
+        },
+        "current": {
+          "set": 265,
+          "drift": 2.5
+        },
+        "waterDepth": 12
+      }
+    },
+    {
+      "type": "targetControl",
+      "args": {
+        "id": "T1",
+        "heading": 250,
+        "speed": 6
+      }
+    },
+    {
+      "type": "targetControl",
+      "args": {
+        "id": "T1",
+        "aisOn": false
+      }
+    },
+    {
+      "type": "targetControl",
+      "args": {
+        "id": "T1",
+        "aisError": {
+          "positionOffset": 500,
+          "positionOffsetBearing": 90,
+          "headingError": 20
+        }
+      }
+    },
+    {
+      "type": "targetControl",
+      "args": {
+        "id": "T1",
+        "colreg": "giveWay",
+        "sound": "oneShort"
+      }
+    },
+    {
+      "type": "targetControl",
+      "args": {
+        "id": "T1",
+        "waypoints": [
+          {
+            "x": 2000,
+            "y": 5000,
+            "speed": 8
+          },
+          {
+            "lat": 23.9,
+            "lon": 120.1
+          }
+        ]
+      }
+    },
+    {
+      "type": "targetControl",
+      "args": {
+        "add": {
+          "id": "T9",
+          "shipType": "tug",
+          "loa": 30,
+          "beam": 10,
+          "initial": {
+            "position": {
+              "x": 500,
+              "y": 500
+            },
+            "heading": 90,
+            "speed": 5
+          },
+          "behaviour": {
+            "mode": "follow",
+            "follow": {
+              "leader": "own",
+              "bearing": 180,
+              "range": 150
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "targetControl",
+      "args": {
+        "id": "T9",
+        "remove": true
+      }
+    }
   ]
 }

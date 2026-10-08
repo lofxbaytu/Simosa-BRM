@@ -83,6 +83,7 @@ engine.ScenarioLoadRequested += (e, path) =>
     catch (Exception ex) { Console.Error.WriteLine($"載入情境失敗:{ex.Message}"); }
 };
 engine.Grounded += e => Console.WriteLine($"[t={e.Time:F1}] 擱淺:UKC ≤ 0");
+engine.TrafficEventRaised += (e, ev) => Console.WriteLine($"[t={ev.T:F1}] 交通事件 {ev.Kind}{(ev.TargetId is null ? "" : $" {ev.TargetId}")}:{ev.Message}");
 
 var startUtc = scenario.StartTimeUtc is { } st
     ? DateTime.Parse(st, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal)
@@ -90,6 +91,8 @@ var startUtc = scenario.StartTimeUtc is { } st
 
 Console.WriteLine($"Simosa BRM SimCore Host — {ship.Name} ({ship.Id}),裝載 {scenario.Ship.Loading},情境 {scenario.Id}");
 Console.WriteLine($"  dt = {engine.Dt} s(50 Hz)、廣播 25 Hz、快照每 {engine.Options.AutoSnapshotIntervalTicks * engine.Dt:F0} s、動力學 {engine.Dynamics.ModelName}、種子 {scenario.Seed}");
+if (scenario.Targets.Count > 0)
+    Console.WriteLine($"  目標船 {scenario.Targets.Count} 艘:{string.Join("、", scenario.Targets.Select(t => $"{t.Id}({t.Behaviour.Mode}{(t.Trigger is { Type: not SimosaBRM.SimCore.Scenario.TargetTriggerType.None } ? ",觸發" : "")})"))};最小 CPA 門檻 {scenario.Assessment.MinCpaNm} nm");
 
 RecordWriter? recorder = null;
 if (options.Record)
@@ -124,7 +127,7 @@ if (options.EnableNmea)
         new IPEndPoint(IPAddress.Parse(options.NmeaMulticastGroup), options.NmeaMulticastPort),
     });
     nmea = new NmeaGateway(engine, sink, startUtc);
-    Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV 1 Hz,起始 UTC {startUtc:O})");
+    Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV 1 Hz,目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,起始 UTC {startUtc:O})");
 }
 
 OwnShipState? latest = null;
@@ -156,7 +159,7 @@ while (!cts.IsCancellationRequested)
     var rate = s.Tick - lastTick;
     lastTick = s.Tick;
     Console.WriteLine(
-        $"t={s.T,8:F1}s  HDG {s.Heading,6:F1}  COG {s.Cog,6:F1}  SOG {s.Sog,5:F1}kn  STW {s.Stw,5:F1}  ROT {s.Rot,6:F1}  舵 {s.Rudder,5:F1}/{s.RudderOrder,5:F1}  rpm {s.Rpm,6:F1}  {s.Telegraph}  UKC {s.DepthBelowKeel,5:F1}m  ×{engine.TimeScale:F1}{(engine.Frozen ? " 凍結" : "")}  steps/s {rate}  ws {ws?.ClientCount ?? 0}{(runner.DroppedSteps > 0 ? $"  掉拍 {runner.DroppedSteps}" : "")}");
+        $"t={s.T,8:F1}s  HDG {s.Heading,6:F1}  COG {s.Cog,6:F1}  SOG {s.Sog,5:F1}kn  STW {s.Stw,5:F1}  ROT {s.Rot,6:F1}  舵 {s.Rudder,5:F1}/{s.RudderOrder,5:F1}  rpm {s.Rpm,6:F1}  {s.Telegraph}  UKC {s.DepthBelowKeel,5:F1}m  ×{engine.TimeScale:F1}{(engine.Frozen ? " 凍結" : "")}  steps/s {rate}  ws {ws?.ClientCount ?? 0}{(runner.DroppedSteps > 0 ? $"  掉拍 {runner.DroppedSteps}" : "")}{(s.Targets is { Count: > 0 } tg ? $"  目標 {tg.Count}(最近 {tg.MinBy(x => x.RangeNm)!.Id} {tg.Min(x => x.RangeNm):F2} nm,CPA {tg.MinBy(x => x.CpaNm)!.CpaNm:F2} nm)" : "")}{(s.Flags?.Collision == true ? "  碰撞" : "")}");
 }
 
 thread.Join(TimeSpan.FromSeconds(2));

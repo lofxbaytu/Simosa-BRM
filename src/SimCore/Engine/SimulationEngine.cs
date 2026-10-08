@@ -6,6 +6,7 @@ using SimosaBRM.SimCore.Environment;
 using SimosaBRM.SimCore.Geo;
 using SimosaBRM.SimCore.Physics;
 using SimosaBRM.SimCore.Ship;
+using SimosaBRM.SimCore.Traffic;
 
 namespace SimosaBRM.SimCore.Engine;
 
@@ -43,6 +44,7 @@ public sealed class SimulationEngine
     private LocalTangentPlane _projection;
     private TelegraphOrder _telegraph;
     private int? _startsRemaining;
+    private TrafficManager _traffic;
 
     public EngineOptions Options { get; }
     public ShipParticulars Ship { get; private set; }
@@ -67,8 +69,12 @@ public sealed class SimulationEngine
     public DeterministicRandom Random => _rng;
     public IReadOnlyList<EngineSnapshot> Snapshots => _snapshots;
     public int PendingCommandCount => _queue.Count;
+    /// <summary>交通模組(目標船;規劃書第 5.2 節)</summary>
+    public TrafficManager Traffic => _traffic;
+    /// <summary>自船與任一目標船外形曾相交(flags.collision)</summary>
+    public bool Collision => _traffic.Collision;
 
-    /// <summary>狀態鏈雜湊:h_n = SHA-256(h_{n−1} ‖ tick ‖ 狀態向量 ‖ 致動器 ‖ 陣風係數)。</summary>
+    /// <summary>狀態鏈雜湊:h_n = SHA-256(h_{n−1} ‖ tick ‖ 狀態向量 ‖ 致動器 ‖ 陣風係數 ‖ 主機狀態機 ‖ 各目標船 x,y,ψ,V,r)。</summary>
     public string StateHash => Convert.ToHexString(_hash);
     public ReadOnlySpan<byte> StateHashBytes => _hash;
 
@@ -84,6 +90,8 @@ public sealed class SimulationEngine
     public event Action<SimulationEngine, string>? ScenarioLoadRequested;
     /// <summary>擱淺(UKC ≤ 0)</summary>
     public event Action<SimulationEngine>? Grounded;
+    /// <summary>交通事件(碰撞、CPA 低於門檻、目標出現、航點、COLREG 行動、聲號、目標控制)— 紀錄器與教官站用</summary>
+    public event Action<SimulationEngine, TrafficEvent>? TrafficEventRaised;
 
     public SimulationEngine(ShipParticulars ship, Scenario.Scenario scenario,
         Func<ShipParticulars, LoadingCondition, IShipDynamics>? dynamicsFactory = null, EngineOptions? options = null)
@@ -99,6 +107,7 @@ public sealed class SimulationEngine
         _act = new ActuatorModel(ActuatorParametersForDynamics());
         _rng = new DeterministicRandom(scenario.Seed);
         _projection = new LocalTangentPlane(scenario.Origin!.Lat, scenario.Origin.Lon);
+        _traffic = new TrafficManager(_projection, Options.Dt);
         Initialize();
     }
 
@@ -165,6 +174,25 @@ public sealed class SimulationEngine
         Autopilot.Enabled = false;
         Autopilot.HeadingRad = psi;
         _startsRemaining = Ship.Engine.MaxConsecutiveStarts;
+        AttachTraffic(TrafficManager.FromScenario(sc, _projection, Options.Dt));
+    }
+
+    private void AttachTraffic(TrafficManager traffic)
+    {
+        if (_traffic is not null) _traffic.EventRaised -= OnTrafficEvent;
+        _traffic = traffic;
+        _traffic.EventRaised += OnTrafficEvent;
+    }
+
+    private void OnTrafficEvent(TrafficEvent e) => TrafficEventRaised?.Invoke(this, e);
+
+    /// <summary>自船運動學(ENU 位置、航向、對地速度、尺寸),供交通模組。</summary>
+    private ShipKinematics OwnKinematics()
+    {
+        var m = Motion;
+        var sample = Environment.SampleAt(m.X, m.Y);
+        var (velE, velN) = EnvironmentMath.GroundVelocity(m.U, m.V, m.Psi, sample.CurrentEastMps, sample.CurrentNorthMps);
+        return new ShipKinematics(m.X, m.Y, m.Psi, velE, velN, Ship.Hull.LengthOverall_m > 0 ? Ship.Hull.LengthOverall_m : Ship.Hull.LengthBetweenPerpendiculars_m, Ship.Hull.Breadth_m);
     }
 
     /// <summary>致動器參數:動力學模型提供者(MMG 由係數檔)優先,否則依 particulars(暫代模型)。</summary>
@@ -320,6 +348,10 @@ public sealed class SimulationEngine
             case SimCommandType.Restore:
                 RestoreFromHistory(cmd.ArgAsDouble("tick") is { } t ? (long)t : null);
                 break;
+
+            case SimCommandType.TargetControl:
+                _traffic.ApplyControl(cmd, Tick);
+                break;
         }
     }
 
@@ -400,6 +432,10 @@ public sealed class SimulationEngine
             Grounded?.Invoke(this);
         }
 
+        // 目標船:與自船同 dt,依自船推進後的狀態更新(跟隨、COLREG、會遇指標、碰撞)
+        if (_traffic.Targets.Count > 0)
+            _traffic.Step(OwnKinematics(), sample, Tick);
+
         UpdateHash();
         Stepped?.Invoke(this);
 
@@ -412,7 +448,9 @@ public sealed class SimulationEngine
 
     private void UpdateHash()
     {
-        Span<byte> buf = stackalloc byte[32 + 8 + 8 * 16];
+        // 既有欄位的位元組配置不變;目標船(若有)接在其後,因此無目標船的情境雜湊與舊版完全相同
+        var size = 32 + 8 + 8 * 16 + _traffic.Targets.Count * TrafficManager.HashDoublesPerTarget * 8;
+        Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
         BinaryPrimitives.WriteInt64LittleEndian(buf[o..], Tick); o += 8;
@@ -427,7 +465,8 @@ public sealed class SimulationEngine
             BinaryPrimitives.WriteInt64LittleEndian(buf[o..], BitConverter.DoubleToInt64Bits(d));
             o += 8;
         }
-        SHA256.HashData(buf, _hash);
+        o += _traffic.WriteHash(buf[o..]);
+        SHA256.HashData(buf[..o], _hash);
     }
 
     // ------------------------------------------------------------------ 快照 / 還原
@@ -456,6 +495,7 @@ public sealed class SimulationEngine
         Faults = _faults.ToArray(),
         Aground = Aground,
         StartsRemaining = _startsRemaining,
+        Traffic = _traffic.CreateSnapshot(),
         StateHash = StateHash,
     };
 
@@ -534,6 +574,7 @@ public sealed class SimulationEngine
         _faults.AddRange(s.Faults);
         Aground = s.Aground;
         _startsRemaining = s.StartsRemaining;
+        if (s.Traffic is { } ts) _traffic.Restore(ts, _projection);
         var hash = Convert.FromHexString(s.StateHash);
         if (hash.Length != 32) throw new InvalidDataException("快照雜湊長度錯誤");
         hash.CopyTo(_hash, 0);
@@ -624,7 +665,9 @@ public sealed class SimulationEngine
             Draft = lc.DraftFore_m is { } df && lc.DraftAft_m is { } da ? new DraftState { Fore = df, Aft = da } : null,
             Engine = new EngineStatus { State = engineState, StartsRemaining = _startsRemaining, LoadPct = loadPct },
             Faults = _faults.Count == 0 ? Array.Empty<string>() : _faults.ToArray(),
-            Flags = new StateFlags { Frozen = Frozen, Aground = Aground, Collision = false },
+            Flags = new StateFlags { Frozen = Frozen, Aground = Aground, Collision = _traffic.Collision },
+            Targets = _traffic.BuildStates(new ShipKinematics(m.X, m.Y, m.Psi, velE, velN,
+                Ship.Hull.LengthOverall_m > 0 ? Ship.Hull.LengthOverall_m : Ship.Hull.LengthBetweenPerpendiculars_m, Ship.Hull.Breadth_m)),
         };
     }
 }
