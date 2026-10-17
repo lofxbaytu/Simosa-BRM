@@ -106,6 +106,8 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 
 為了離線測試教官站的情境引擎面板,示範模式也產生**假的**情境引擎資料(與核心無關):狀態含 `scenario`(階段、參數集版次 `2026.10.1`、已觸發/待觸發數)、`route`(沿初始航向的假航線,下一航點 2 nm,走廊 50 m)與 `visibility_nm`;固定時刻的假時間表事件(30 s 教官訊息、60 s 機控室語音、120 s 學員可見訊息);`injectFault` / `clearFault` / `acknowledge` / `triggerTimeline` / `freeze` / `resume` / `setEnvironment` / `endExercise` 各產生對應事件(首次注入故障時階段轉 `degraded`);`getAssessment` 與 `endExercise` 回假的 summary(通知機控室是否在 120 s 內確認、擱淺為硬性失敗)。
 
+示範模式也模擬**操舵模式**與**假目標船**(離線預覽教官站的操舵面板與航跡圖/CPA 小表):狀態含 `steering`(初始 `fu` / 泵 `both`),`steeringMode` 指令切 `fu` / `nfu` / `autopilot` / `emergency` 與泵;NFU 推桿 `direction: port|starboard` 把舵令推向滿舵、`stop`(或不明方向)舵停在目前舵角,進出 NFU 時舵令同步到目前舵角(D35);`autopilot` 模式與 `autopilot {enabled: true}` 同義、人工舵令切回 `fu`;應急操舵下自動舵(`steeringMode autopilot` 或 `autopilot {enabled: true}`)被拒並發 `commandRejected {command, reason: emergencySteering}`,舵機速率減半;模式/泵變更發 `steeringModeChanged {from, to, pump}`。兩艘直線等速的假目標船:`DEMO-01` 交叉船在右艏 1.5 nm、朝自船艏前駛來(CPA < 0.5 nm,t = 0 即發 `cpaAlarm`,通過後 `cpaClear`;AIS 開)與 `DEMO-02` 錨泊船在左正橫 1.2 nm(AIS 關);`range_nm` / `bearing_deg` / `cpa_nm` / `tcpa_min` 由相對運動每步計算,警報每秒評估。
+
 ## 教官站(`instructor.html`)
 
 規劃書第 9.1 節教官站功能的第一版子集,與儀器頁共用 WebSocket 客戶端、狀態解析、conning 條、鳥瞰航跡圖與主題。`?mode=` 選版面:
@@ -128,10 +130,11 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 - **環境**:真風速/向、陣風、流向/流速、水深、能見度,分組「套用」或「全部套用」(只送有改的欄位);**漸變 s** 欄位附在每次套用上(`ramp_s`,0 = 立即);「帶入目前值」把核心現況(含能見度)填回表單。只有 C# 核心支援的欄位(陣風、能見度、漸變)標示「僅 C# 核心」但仍送出。
 - **故障**:目錄按鈕(舵機失效、主機失效、側推失效、電羅經漂移、GPS 跳點、雷達失效、全船失電,名稱優先取自 `src/SimCore/Engine/FaultNames.cs`,讀不到時用內建預設;核心不改變行為者標「僅記錄」)、自訂名稱、現行故障清單(由狀態 `faults` 欄位)逐項或全部清除。
 - **自船覆寫**:位置 x/y、航向、速度、裝載、拖船數,按兩次確認後以 `reset` 附 `args` 送出(支援情形見上表)。
+- **操舵模式**(`src/components/instructor/steering-panel.ts`、`src/lib/steering.ts`;規劃書第 7.2 節,設計文件 D32/D35):顯示 `state.steering`(模式、泵、NFU 推舵中;C# SimCore 產生,Python 參考伺服器不輸出時標「核心未回報」。`state-parser.ts` 不認得此欄位,由 `ws-client.ts` 以原始框補上);按鈕 **FU / NFU / 自動舵 / 應急操舵** 送 `steeringMode`(`value` 為模式);NFU 的 **左 / 右推桿按住**送 `args.direction: port|starboard`、**放開**(含指標離開)送 `stop`,「NFU 停」送 `stop`;舵機泵選擇(No.1 / No.2 / 1 + 2)附在每筆指令的 `args.pump`,已在某模式時改選泵即送同模式 + 新泵;自動舵可帶設定航向與 ROT 限制(`args.heading` / `rotLimit`,只在 `autopilot` 時送)。應急操舵中自動舵鈕停用並提示需先切回 FU;核心仍拒絕時(`commandRejected` 事件,C# 不回 ack 框)把最近一筆同類型的教官指令標為「核心拒絕:應急操舵中不可自動舵」。
 - **鳥瞰航跡圖**:與儀器頁相同的 `<brm-track-plot>`,疊上情境的航線(航點、檢查點/報告點空心圓、到達半徑、各航段走廊半寬虛線;`route.xtdLimit_m` 為參數引用時無走廊)與區域多邊形(禁區紅、速限橙、UKC 政策藍、報告灰;`src/lib/plot-overlay.ts`,經緯度以情境 `origin` 平面近似換算),以及事件標記(warning 橙、alarm 紅三角,位置取事件時刻的狀態抽樣)。**目標船**(`state.targets[]`,`src/types/target.ts`、`src/lib/targets.ts`):三角形依航向、船名/ID 標籤、COG/SOG 虛線短向量;AIS 關閉者空心虛線並標「(AIS 關)」;處於 `cpaAlarm` 的目標紅色(由事件流 `cpaAlarm` / `cpaClear` 推得);完整模式左上角列 **CPA/TCPA 小表**(目標、距離、方位、CPA、TCPA;警報者在前,其餘依距離,最多 8 列)。簡化教官模式只畫目標船,不列小表。
 - **事件**(`src/components/instructor/event-stream.ts`):核心推送的 `{"type":"event"}` 框(`src/lib/sim-event.ts` 的 `parseSimEvent` / `eventLabel`;舊 `TrafficEvent` 欄位不變,`source` 缺時由 kind 推得)依時間列出,最新在上,只保留最近 2,000 筆;左緣顏色依來源(時間表藍、評估綠、目標船黃、教官灰、引擎),`hardFail` / `collision` / `grounding` / `bandFail` / `requiredEventMissed` 紅字,`cpaAlarm` / `faultInjected` / `xtdExceeded` / `zoneEntered` / `ukcAlarm` / `speedLimitExceeded` 橙字,`visible: true` 標「學員可見」;來源篩選鈕;語音事件有「播放」鈕;點擊事件 → 切到重播檢視並跳至該時刻(需已載入紀錄)。
 - **語音腳本**(`src/lib/voice-script.ts`):收到 `voiceScript` 事件時,有 `file` 用 `<audio>` 播情境包音檔(`data/scenarios/<id>/<file>`,建置時以 `import.meta.glob` 打包 `*.ogg|mp3|wav|m4a|opus`;找不到或載入失敗退回 TTS),無檔用 `speechSynthesis`(語言依 `lang`,預設 zh-TW);完整教官站按「播放」,簡化教官模式自動播放;每次播放記入學員操作紀錄(kind `voiceScript`,含音檔/TTS/被瀏覽器阻擋/僅顯示),並寫入下載的紀錄。
-- **學員操作紀錄**:教官站收不到學員站的指令(指令直接進核心),因此由連續狀態推導(`src/lib/operation-log.ts`):舵令(1 秒內的連續變更合併)、車鐘、轉速令、側推、凍結/恢復、故障注入/清除、擱淺/碰撞、時間倒退,附模擬時間與本地時鐘。
+- **學員操作紀錄**:教官站收不到學員站的指令(指令直接進核心),因此由連續狀態推導(`src/lib/operation-log.ts`):舵令(1 秒內的連續變更合併)、車鐘、轉速令、側推、凍結/恢復、故障注入/清除、擱淺/碰撞、時間倒退、**操舵模式/泵**(`state.steering` 變化,NFU 推桿推舵/放開亦記;核心的 `steeringModeChanged` 事件經 `recordSteering()` 記入,同一模式與泵在 1 s 內已記過時不重複),附模擬時間與本地時鐘。
 - **教官指令**:本站送出的每筆指令與核心回應(Python 參考伺服器的 ack;C# 不回應)。
 - **參數集版次**:標題列顯示 `state.scenario.parameterSetVersion`(例如「參數集 2026.10.1」)與情境階段(`degraded` 橙、`emergency` 紅)、硬性失敗、練習已結束;以下情形標「參數集不一致」(滑鼠停留看原因):核心載入的情境 id 與所選不同、情境檔有參數引用但核心未回報版次、核心 summary 的版次與狀態不同。
 - **BRM 快速標記**:第 8.2 節五大類(領導、狀況覺知、溝通、團隊合作、決策)各一鈕,可先填一句備註與 ＋(做得好)/ Δ(待改進)再按類別;鍵盤 1–5 亦可(焦點不在輸入欄時)。標記含模擬時間、tick、本地時鐘、情境 id,不經核心;「匯出 JSON / CSV」下載(`src/lib/brm-markers.ts`;CSV 含 UTF-8 BOM 供 Excel)。
@@ -175,10 +178,10 @@ src/Instruments.Web/
 │  ├─ instructor-main.ts, instructor-app.ts
 │  │                          <brm-instructor-app>:教官站 / 簡化教官模式 / 重播檢視的版面與流程
 │  ├─ styles/theme.css        日/黃昏/夜 CSS 變數(穿透 shadow DOM)
-│  ├─ types/                  state.ts(含 scenario/route/visibility_nm/targets)、target.ts(TargetState、AIS 報告)、command.ts、event.ts(SimEvent、kind 列舉、
+│  ├─ types/                  state.ts(含 scenario/route/visibility_nm/steering/targets)、target.ts(TargetState、AIS 報告)、command.ts、event.ts(SimEvent、kind 列舉、
 │  │                          AcknowledgeKind;對應 Contracts 的 JSON Schema 與設計文件第 3.2 節)
 │  ├─ lib/                    angles(正規化、角差)、format(度/分、航向、時間)、state-parser(缺欄位防呆;含 targets[])、
-│  │                          targets(cpaAlarm 目標集合、CPA/TCPA 小表列)、
+│  │                          targets(cpaAlarm 目標集合、CPA/TCPA 小表列)、steering(steeringMode 指令、由原始框取 state.steering)、
 │  │                          command(指令建構與序列化)、ship-config(由 particulars.json 取量程/車鐘表)、
 │  │                          ship-geometry(船形、船體→ENU)、track-history、theme(主題讀寫)、download(下載)、
 │  │                          scenario(情境 YAML 解析與摘要)、timeline(timeline/route/zones/briefing 與 ${params:…} 解析、
@@ -188,19 +191,20 @@ src/Instruments.Web/
 │  │                          operation-log(學員操作推導)、debrief(本地講評摘要)、brm-markers(BRM 標記與匯出)、
 │  │                          session-record(教官站紀錄 v2)、record-replay(JSON Lines / 教官站紀錄解析,含 event/summary)
 │  ├─ net/                    sim-source.ts(來源介面,含非狀態訊息)、ws-client.ts(WebSocket + 重連 + ack/事件框)
-│  ├─ demo/                   demo-sim.ts(示範運動學;假事件、情境/航線狀態、假 summary)、demo-source.ts(25 Hz 廣播 + 事件框)
+│  ├─ demo/                   demo-sim.ts(示範運動學;假事件、情境/航線狀態、假 summary、操舵模式、假目標船)、demo-source.ts(25 Hz 廣播 + 事件框)
 │  └─ components/             brm-conning-bar 及其各儀器(含 route-readout)、brm-track-plot(含疊圖、目標船)、brm-helm、
 │     │                       brm-telegraph、brm-thruster-lever、brm-autopilot、brm-instructor
 │     └─ instructor/          scenario-panel、timeline-panel、event-stream、run-control-panel、environment-panel、
-│                             fault-panel、ownship-panel、operation-log-view、command-log-view、brm-marker-bar、
+│                             fault-panel、ownship-panel、steering-panel、operation-log-view、command-log-view、brm-marker-bar、
 │                             debrief-summary(核心/本地)、replay-view
 └─ tests/                     vitest:angles、format、state-parser、command、ship-config、demo-sim、
                               ws-client(假 WebSocket)、components(happy-dom 渲染與指令事件)、
                               scenario、timeline(含設計文件 E07 範例)、assessment(含設計文件 summary 範例)、
                               sim-event、voice-script、session-record、instructor-command、operation-log、debrief、
                               brm-markers、record-replay、timeline-panel(時間表面板與事件流、必要事件倒數三種來源)、
-                              targets(targets[] 解析含舊狀態、cpaAlarm 集合、小表)、
-                              instructor-components(教官站元件事件、講評摘要、重播檢視、航線方塊)、
+                              targets(targets[] 解析含舊狀態、cpaAlarm 集合、小表)、steering(指令建構、state.steering 取出、WsClient 補欄位、事件文字)、
+                              instructor-components(教官站元件事件、操舵模式面板、講評摘要、重播檢視、航線方塊)、
+                              instructor-app(重播檢視常駐、示範模式的操舵模式指令/操作紀錄/commandRejected)、
                               core-record(C# 主控程序實際紀錄的契約一致性:header v2/parameterSet/event/summary/state.scenario+route,
                               以及 header.scenario 與 data/scenarios YAML 經 parseScenario 結構相同)
                               fixtures/:E07_steering_failure.yaml、summary-E07.json(取自設計文件第 8.2、4.8 節);
@@ -213,7 +217,7 @@ src/Instruments.Web/
 ## 已知限制(第一版)
 
 - 自動舵的開/關與設定航向由本頁面保存(`state.schema.json` 尚無自動舵狀態欄位);核心若另有自動舵狀態,之後需加欄位同步。
-- 操舵模式只有 FU/NFU/自動舵;舵機泵選擇、應急操舵、航跡模式與第 7.2 節其他儀器(雷達、ECDIS、BNWAS、BAM、VHF)不在本版範圍。
+- 學員站儀器頁的操舵模式只有 FU/NFU/自動舵(舵機泵選擇與應急操舵目前只在教官站的操舵模式面板);航跡模式與第 7.2 節其他儀器(雷達、ECDIS、BNWAS、BAM、VHF)不在本版範圍。
 - 鳥瞰圖有自船、目標船與情境航線/區域,尚無海圖;目標船只畫真值位置(AIS 報告值 `ais` 已解析但未另畫 AIS 位置);3D 視景另見 `src/Visual.*`。
 - 示範模式為簡化運動學,不可用於訓練或驗證。
 - UKC 警報門檻先固定 1.0 m(警告 2.0 m),之後改由公司程序參數集提供(規劃書第 9.1 節)。

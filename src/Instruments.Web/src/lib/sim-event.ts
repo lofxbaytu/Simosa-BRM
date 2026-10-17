@@ -55,7 +55,7 @@ const ASSESSMENT_KINDS: ReadonlySet<string> = new Set([
   'bandWarn',
   'bandFail',
 ]);
-const INSTRUCTOR_KINDS: ReadonlySet<string> = new Set(['acknowledge', 'timelineManual']);
+const INSTRUCTOR_KINDS: ReadonlySet<string> = new Set(['acknowledge', 'timelineManual', 'steeringModeChanged', 'commandRejected']);
 
 /** 由 kind 推得預設來源(舊 TrafficEvent 紀錄沒有 source 欄位)。 */
 export function defaultSourceFor(kind: string): SimEventSource {
@@ -155,6 +155,14 @@ export const ACK_KIND_LABEL: Readonly<Record<string, string>> = {
   steeringMode: '切換操舵模式',
   anchorReady: '備錨',
   other: '其他',
+};
+
+/** 操舵模式顯示名稱(state.steering.mode / steeringMode 指令 value)。 */
+export const STEERING_MODE_LABEL: Readonly<Record<string, string>> = {
+  fu: 'FU 隨動',
+  nfu: 'NFU 非隨動',
+  autopilot: '自動舵',
+  emergency: '應急操舵',
 };
 
 export const ROLE_LABEL: Readonly<Record<string, string>> = {
@@ -331,6 +339,10 @@ export function eventLabel(e: SimEvent): string {
       return `確認:${ACK_KIND_LABEL[ds(e, 'kind')] ?? ds(e, 'kind')}${ds(e, 'role') ? `(${ROLE_LABEL[ds(e, 'role')] ?? ds(e, 'role')})` : ''}${ds(e, 'note') ? ` ${ds(e, 'note')}` : ''}`;
     case 'timelineManual':
       return `手動觸發${item}${d(e, 'ok') === false ? ' — 核心拒絕' : ''}${e.message ? ` ${e.message}` : ''}`;
+    case 'steeringModeChanged':
+      return `操舵模式 ${STEERING_MODE_LABEL[ds(e, 'from')] ?? ds(e, 'from') ?? '?'} → ${STEERING_MODE_LABEL[ds(e, 'to')] ?? ds(e, 'to') ?? '?'}${ds(e, 'pump') ? `(泵 ${ds(e, 'pump')})` : ''}`;
+    case 'commandRejected':
+      return `指令被拒 ${ds(e, 'command')}${ds(e, 'reason') === 'emergencySteering' ? '(應急操舵中不可自動舵)' : ds(e, 'reason') ? `(${ds(e, 'reason')})` : ''}`;
     default:
       return `${e.kind}${item}${target}${e.message ? ` ${e.message}` : ''}`;
   }
@@ -372,6 +384,15 @@ export class EventStore {
 
   clear(): void {
     this.events.length = 0;
+  }
+
+  /** 倒帶(restore):丟棄 t > tMax 的舊分支事件(與 record-replay.pushState 的規則相同,D31);回傳丟棄筆數。 */
+  dropAfter(tMax: number): number {
+    const before = this.events.length;
+    let w = 0;
+    for (const e of this.events) if (e.t <= tMax) this.events[w++] = e;
+    this.events.length = w;
+    return before - w;
   }
 
   /** 該 kind(可再依 itemId/targetId)最後一次發生的事件。 */

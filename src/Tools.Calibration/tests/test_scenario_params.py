@@ -91,7 +91,7 @@ def test_parameter_set_loads_with_sha256_and_suffix_rules() -> None:
     path = paths.repo_root() / DEFAULT_PARAMETER_SET_PATH
     pset = ParameterSet.load(path)
     assert pset.id == "simosa-company-procedures" and pset.version.count(".") == 2
-    assert pset.path == str(path)
+    assert pset.path == DEFAULT_PARAMETER_SET_PATH  # 相對專案根目錄、'/' 分隔(C# ToProjectRelative,D34)
     assert pset.sha256 == hashlib.sha256(path.read_bytes()).hexdigest().upper()
     assert len(pset.parameters) >= 20 and "navigation.cpa.openSea_nm" in pset.parameters
     for key, p in pset.parameters.items():
@@ -136,6 +136,31 @@ def _pset_yaml(**overrides: str) -> str:
 def test_parameter_set_validation_errors(override: dict[str, str], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         ParameterSet.from_yaml(_pset_yaml(**override))
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"parameters": "parameters:\n  a.b.min_nm: { value: 3, unit: nm, source: DOC-1, min: \"5\" }"}, "低於 min"),
+        ({"parameters": "parameters:\n  a.b.min_nm: { value: 3, unit: nm, source: DOC-1, min: five }"}, "min 須為數值"),
+        ({"parameters": "parameters:\n  a.b.min_nm: { value: 3, unit: nm, source: DOC-1, max: true }"}, "max 須為數值"),
+        ({"sources": "sources:\n  DOC-1: { title: 文件一, revision: \"1\", external: \"no\" }"}, "external 須為布林"),
+        ({"sources": "sources:\n  DOC-1: { title: 文件一, revision: \"1\", external: 1 }"}, "external 須為布林"),
+    ],
+)
+def test_parameter_set_min_max_external_typing_matches_csharp(override: dict[str, str], message: str) -> None:
+    """C# ContractJson:min/max 可自數值字串讀取(仍檢查範圍)、非數值字串為錯誤;external 為嚴格布林。"""
+    with pytest.raises(ValueError, match=message):
+        ParameterSet.from_yaml(_pset_yaml(**override))
+
+
+def test_parameter_set_numeric_string_min_max_are_read() -> None:
+    pset = ParameterSet.from_yaml(_pset_yaml(
+        parameters="parameters:\n  a.b.min_nm: { value: 3, unit: nm, source: DOC-1, min: \"1\", max: \" 5.5 \" }",
+        sources="sources:\n  DOC-1: { title: 文件一, revision: \"1\", external: true }",
+    ))
+    assert pset.get("a.b.min_nm")["min"] == 1.0 and pset.get("a.b.min_nm")["max"] == 5.5
+    assert pset.sources["DOC-1"]["external"] is True
 
 
 def test_parameter_set_unitless_units_need_no_suffix() -> None:
@@ -189,6 +214,26 @@ def test_yaml_to_tree_scalar_rules_match_csharp() -> None:
     assert tree["fl"] == 2.5 and tree["exp"] == 1000.0 and isinstance(tree["exp"], float) and tree["dot"] == 1.0 and tree["lead"] == 0.5
     assert tree["quoted_num"] == "3" and tree["quoted_bool"] == "true" and tree["ref"] == "${params:a.b_nm}"
     assert yaml_to_tree("") is None and yaml_to_tree("- 1\n- a\n") == [1, "a"]
+
+
+def test_yaml_to_tree_leading_zero_ints_and_case_insensitive_bool_null() -> None:
+    """C# long.TryParse 為十進位(010 → 10、08 → 8),不是 PyYAML 的八進位;true/false/null 不分大小寫(OrdinalIgnoreCase)。"""
+    tree = yaml_to_tree(textwrap.dedent("""
+        a: 010
+        b: -010
+        c: 08
+        d: 09
+        e: 0042
+        f: +007
+        g: 0
+        t: TRue
+        f2: fAlSe
+        n: NuLL
+        n2: Null
+    """))
+    assert tree["a"] == 10 and tree["b"] == -10 and tree["c"] == 8 and tree["d"] == 9 and tree["e"] == 42 and tree["f"] == 7 and tree["g"] == 0
+    assert all(isinstance(tree[k], int) for k in "abcdefg")
+    assert tree["t"] is True and tree["f2"] is False and tree["n"] is None and tree["n2"] is None
 
 
 # ---------------------------------------------------------------- 引用解析
@@ -287,6 +332,32 @@ def test_auto_load_parameter_set_by_declared_path(tmp_path: Path) -> None:
     # 無引用的情境:parameterSet 為 None,也不需要參數集檔案
     sc_file.write_text(sc_file.read_text(encoding="utf-8").replace('"${params:navigation.cpa.coastal_nm}"', "0.3"), encoding="utf-8")
     assert load_scenario(sc_file)["parameterSet"] is None
+
+
+def test_empty_parameter_set_declaration_is_not_default(tmp_path: Path) -> None:
+    """assessment.parameterSet 為空字串/空白:與 C# TryAutoLoadParameterSet 相同視為已宣告但找不到 → 引用參數時錯誤。"""
+    assert find_parameter_set("") is None and find_parameter_set("   ") is None
+    assert find_parameter_set(None) is not None
+    for declared in ('""', '"  "'):
+        sc_file = tmp_path / "T03.yaml"
+        sc_file.write_text(textwrap.dedent(f"""
+            ship: {{ id: FSB1, loading: full }}
+            initial: {{ position: {{ lat: 23.8, lon: 120.0 }}, heading: 10 }}
+            environment: {{ waterDepth: 20 }}
+            assessment:
+              parameterSet: {declared}
+              minCpa_nm: "${{params:navigation.cpa.openSea_nm}}"
+        """), encoding="utf-8")
+        with pytest.raises(ValueError, match="未提供參數集"):
+            load_scenario(sc_file)
+
+
+def test_loaded_parameter_set_path_is_project_relative(tmp_path: Path) -> None:
+    """紀錄標頭 parameterSet.path:專案內為相對根目錄('/' 分隔);專案外保留原路徑(C# RepositoryPaths.ToProjectRelative)。"""
+    assert load_scenario("E07_steering_failure")["parameterSet"]["path"] == "data/parameters/company-procedures.yaml"
+    outside = tmp_path / "ps.yaml"
+    outside.write_text(_pset_yaml(), encoding="utf-8")
+    assert ParameterSet.load(outside).path == str(outside)
 
 
 # ---------------------------------------------------------------- 跨語言一致性(與 C# 紀錄標頭比對)
@@ -433,7 +504,6 @@ def _mutate(fn: Any) -> dict[str, Any]:
         (lambda t: t["assessment"]["required"].append({"id": "r9", "after": {"event": "x"}, "expect": "dance", "within_s": 1}), "assessment.required[1].expect", "未知的 expect"),
         (lambda t: t["assessment"]["required"].append({"id": "r9", "after": {"event": "x"}, "expect": "rpmOrder", "within_s": 0}), "assessment.required[1]", "within_s 必須為正"),
         (lambda t: t["briefing"].update(roles=[{"playedBy": "leader"}]), "briefing.roles[0]", "需要 role"),
-        (lambda t: t["briefing"].update(minParticipants=0), "briefing.minParticipants", "正整數"),
     ],
 )
 def test_structural_check_errors(mutate: Any, path: str, message: str) -> None:
@@ -442,6 +512,69 @@ def test_structural_check_errors(mutate: Any, path: str, message: str) -> None:
     assert any(p == path and message in m for p, m in issues), issues
     with pytest.raises(ValueError, match=message):
         validate_scenario(_mutate(mutate))
+
+
+def test_structural_check_derives_origin_before_geometry_checks() -> None:
+    """C# Scenario.Validate 先以 initial.position 補 origin 再做 StructuralIssues:無 origin 的情境也會檢查航點重合與多邊形自交。"""
+    t = _full_tree()
+    del t["origin"]
+    t["route"]["waypoints"].append({"name": "C", "lat": 23.81, "lon": 120.01})  # 與 B 重合
+    assert structural_issues(t) == []  # 單獨呼叫且無 origin 時無幾何檢查(與 C# StructuralIssues 的 Origin is null 相同)
+    with pytest.raises(ValueError, match=r"route\.waypoints\[2\]:航點 C 與前一航點重合"):
+        validate_scenario(t)
+    assert any("重合" in m for _, m in structural_issues(t, origin={"lat": 23.8, "lon": 120.0}))
+
+
+@pytest.mark.parametrize("with_origin", [True, False])
+def test_structural_check_rejects_self_intersecting_polygon(with_origin: bool) -> None:
+    t = _full_tree()
+    if not with_origin:
+        del t["origin"]
+    bowtie = [{"x": 0, "y": 0}, {"x": 10, "y": 10}, {"x": 10, "y": 0}, {"x": 0, "y": 10}]
+    t["zones"][0]["polygon"] = bowtie
+    with pytest.raises(ValueError, match=r"zones\[0\]\.polygon:多邊形自交"):
+        validate_scenario(t)
+    # 經緯度頂點亦經原點投影後檢查;凸四邊形與三角形不自交
+    t["zones"][0]["polygon"] = [{"lat": 23.80, "lon": 120.00}, {"lat": 23.81, "lon": 120.01}, {"lat": 23.81, "lon": 120.00}, {"lat": 23.80, "lon": 120.01}]
+    with pytest.raises(ValueError, match="多邊形自交"):
+        validate_scenario(t)
+    t["zones"][0]["polygon"] = [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 10, "y": 10}, {"x": 0, "y": 10}]
+    assert validate_scenario(t)["zones"][0]["polygon"] == t["zones"][0]["polygon"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda t: t["briefing"].update(minParticipants=0, duration_s=0),  # C# 無 briefing 數值檢查
+        lambda t: t["timeline"].append({"id": 1, "actions": []}),  # LenientStringConverter 讀成 "1"
+        lambda t: t["timeline"][1].update(repeat="ONCE"),  # RepeatSpecConverter ToLowerInvariant
+        lambda t: t["timeline"][1].update(repeat="Always"),
+        lambda t: t["assessment"]["bands"][0].update(fail="2 x"),  # BandThresholdConverter:Trim 後 s[..^1] 的 TryParse 允許空白
+        lambda t: t["assessment"]["bands"][0].update(fail=" 3x "),
+        lambda t: t["assessment"]["bands"][0].update(fail="120"),  # 數值字串
+        lambda t: t["zones"].append({"id": 7, "type": "noGo", "polygon": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 0, "y": 1}]}),
+        lambda t: t["route"]["waypoints"][0].update(name=1),
+    ],
+)
+def test_structural_check_accepts_csharp_lenient_forms(mutate: Any) -> None:
+    t = _mutate(mutate)
+    assert structural_issues(t) == []
+    validate_scenario(t)
+
+
+def test_structural_check_lenient_ids_still_resolve_references() -> None:
+    """數字 id 讀成字串後,arm 與 after.itemId 仍須找得到;錯誤寫法仍被拒。"""
+    t = _full_tree()
+    t["timeline"][0]["id"] = 1
+    t["timeline"][1]["actions"][0] = {"arm": 1}
+    assert structural_issues(t) == []
+    t["timeline"][1]["actions"][0] = {"arm": "1"}
+    assert structural_issues(t) == []
+    t["timeline"][1]["repeat"] = "twice"
+    assert any(p == "timeline[1].repeat" for p, _ in structural_issues(t))
+    t["timeline"][1]["repeat"] = "once"
+    t["assessment"]["bands"][0]["fail"] = "2 y"
+    assert any(p == "assessment.bands[0]" and "<n>x" in m for p, m in structural_issues(t))
 
 
 def test_scenario_from_tree_resolves_then_checks() -> None:

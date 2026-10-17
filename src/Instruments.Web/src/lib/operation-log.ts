@@ -1,9 +1,11 @@
 // 學員操作紀錄:教官站收不到學員站送出的指令(指令直接進核心),因此由連續的狀態推導
-// 舵令、車鐘、轉速令、側推令的變更,以及凍結/恢復、故障、擱淺/碰撞、時間倒退等事件,並加上時間戳
+// 舵令、車鐘、轉速令、側推令的變更,以及凍結/恢復、故障、擱淺/碰撞、時間倒退、操舵模式(state.steering;
+// 核心的 steeringModeChanged 事件經 recordSteering() 記入,同一時刻的狀態變化不重複)等事件,並加上時間戳
 // (模擬時間與本地時鐘)。規劃書第 9.1 節「警報與學員操作紀錄」、第 8.3 節操縱控制指標的資料來源。
 
-import type { OwnShipState } from '../types/state.js';
+import type { OwnShipState, SteeringStatus } from '../types/state.js';
 import { formatRudder, formatThruster } from './format.js';
+import { STEERING_MODE_LABEL } from './sim-event.js';
 
 export type OperationKind =
   | 'rudder'
@@ -18,7 +20,9 @@ export type OperationKind =
   | 'collision'
   | 'timeReset'
   /** 教官站播放語音腳本(lib/voice-script.ts;非由狀態推導) */
-  | 'voiceScript';
+  | 'voiceScript'
+  /** 操舵模式/泵變更(state.steering 或 steeringModeChanged 事件);NFU 推桿推舵/放開亦記 */
+  | 'steeringMode';
 
 export interface OperationEvent {
   seq: number;
@@ -87,6 +91,22 @@ export class OperationLogDeriver {
     return ev;
   }
 
+  /**
+   * 記錄操舵模式/泵變更(核心事件 steeringModeChanged 的 from/to/pump,或狀態推導)。
+   * 同一模式與泵在 coalesceWindow 內已記過(事件與狀態各來一次)時不重複,回傳 null。
+   */
+  recordSteering(to: SteeringStatus, t: number, from?: SteeringStatus): OperationEvent | null {
+    const value = `${to.mode}/${to.pump}`;
+    const last = [...this.events].reverse().find((e) => e.kind === 'steeringMode' && e.value !== undefined && typeof e.value === 'string' && !e.value.startsWith('nfu:'));
+    if (last && last.value === value && Math.abs(t - last.t) <= this.window) return null;
+    const toLabel = STEERING_MODE_LABEL[to.mode] ?? to.mode;
+    let label: string;
+    if (!from || from.mode !== to.mode) label = `操舵模式 ${from ? `${STEERING_MODE_LABEL[from.mode] ?? from.mode} → ` : ''}${toLabel}(泵 ${to.pump})`;
+    else if (from.pump !== to.pump) label = `舵機泵 ${from.pump} → ${to.pump}`;
+    else label = `操舵模式 ${toLabel}(泵 ${to.pump})`;
+    return this.addExternal('steeringMode', label, t, value);
+  }
+
   push(s: OwnShipState): OperationEvent[] {
     const out: OperationEvent[] = [];
     const p = this.prev;
@@ -143,6 +163,17 @@ export class OperationLogDeriver {
     const pfaults = p.faults ?? [];
     for (const f of faults) if (!pfaults.includes(f)) add('fault', `故障注入 ${f}`, f);
     for (const f of pfaults) if (!faults.includes(f)) add('faultCleared', `故障清除 ${f}`, f);
+
+    // 操舵模式(state.steering;核心事件已記過同一變更時 recordSteering 回 null)
+    const st = s.steering;
+    const pst = p.steering;
+    if (st && (!pst || pst.mode !== st.mode || pst.pump !== st.pump)) {
+      const ev = this.recordSteering(st, s.t, pst);
+      if (ev) out.push(ev);
+    }
+    if (st && pst && st.mode === 'nfu' && pst.mode === 'nfu' && (st.nfuActive ?? false) !== (pst.nfuActive ?? false)) {
+      add('steeringMode', st.nfuActive ? 'NFU 推桿推舵' : 'NFU 推桿放開', st.nfuActive ? 'nfu:push' : 'nfu:stop');
+    }
 
     // 擱淺/碰撞(上升緣)
     if ((s.flags?.aground ?? false) && !(p.flags?.aground ?? false)) add('aground', '擱淺');

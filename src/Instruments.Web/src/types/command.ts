@@ -22,7 +22,8 @@ export type CommandType =
   | 'triggerTimeline'
   | 'acknowledge'
   | 'endExercise'
-  | 'getAssessment';
+  | 'getAssessment'
+  | 'steeringMode';
 
 export const COMMAND_TYPES: readonly CommandType[] = [
   'rudder',
@@ -45,10 +46,16 @@ export const COMMAND_TYPES: readonly CommandType[] = [
   'acknowledge',
   'endExercise',
   'getAssessment',
+  'steeringMode',
 ] as const;
 
 /** 舵令來源:FU 隨動(舵輪)或 NFU 非隨動(舵柄按鈕),僅作提示,核心可忽略。 */
 export type SteeringMode = 'FU' | 'NFU';
+
+/** NFU 推桿方向(steeringMode nfu 的 args.direction;不明方向核心視同 stop,D35)。 */
+export type NfuDirection = 'port' | 'starboard' | 'stop';
+
+export const NFU_DIRECTIONS: readonly NfuDirection[] = ['port', 'starboard', 'stop'] as const;
 
 export interface AutopilotArgs {
   enabled: boolean;
@@ -85,6 +92,13 @@ export interface ThrusterCommand extends SimCommand {
 export interface AutopilotCommand extends SimCommand {
   type: 'autopilot';
   args: AutopilotArgs & Record<string, unknown>;
+}
+
+/** steeringMode:操舵模式選擇(規劃書第 7.2 節;設計文件 D32/D35):value 為模式,args 依模式(pump 皆可;direction 僅 nfu;heading/rotLimit 僅 autopilot)。 */
+export interface SteeringModeCommand extends SimCommand {
+  type: 'steeringMode';
+  value: 'fu' | 'nfu' | 'autopilot' | 'emergency';
+  args?: { pump?: '1' | '2' | 'both'; direction?: NfuDirection; heading?: number; rotLimit?: number } & Record<string, unknown>;
 }
 
 /** triggerTimeline:手動觸發時間表項目(manual 項目;其他需 force 跳過條件),設計文件第 5.2 節。 */

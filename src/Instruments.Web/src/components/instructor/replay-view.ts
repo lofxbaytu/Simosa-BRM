@@ -402,9 +402,9 @@ export class ReplayView extends LitElement {
   }
 }
 
-/** 倒帶標記的懸停文字:倒帶 tick(由 t / dt 推得)、來源時刻與丟棄的舊分支筆數。 */
+/** 倒帶標記的懸停文字:倒帶 tick(restore 要求的 tick;舊紀錄無此欄時由 t / dt 推得)、來源時刻與丟棄的舊分支筆數。 */
 export function rewindTitle(r: ReplayRewind, dt: number): string {
-  const tick = Math.round(r.t / (dt > 0 ? dt : 0.02));
+  const tick = Number.isFinite(r.tick) ? r.tick : Math.round(r.t / (dt > 0 ? dt : 0.02));
   return `倒帶至 ${shortTime(r.t)}(tick ${tick})← 自 ${shortTime(r.from)};丟棄 ${r.droppedStates} 筆狀態、${r.droppedEvents} 筆事件`;
 }
 

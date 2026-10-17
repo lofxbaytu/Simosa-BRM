@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { SimCommand } from '../src/types/command.js';
+import type { OwnShipState } from '../src/types/state.js';
 import { parseAssessmentSummary } from '../src/lib/assessment.js';
 import type { DebriefSummaryView } from '../src/components/instructor/debrief-summary.js';
 import { COMMAND_EVENT } from '../src/components/shared.js';
@@ -73,6 +74,7 @@ beforeAll(async () => {
   await import('../src/components/instructor/environment-panel.js');
   await import('../src/components/instructor/fault-panel.js');
   await import('../src/components/instructor/ownship-panel.js');
+  await import('../src/components/instructor/steering-panel.js');
   await import('../src/components/instructor/brm-marker-bar.js');
   await import('../src/components/instructor/operation-log-view.js');
   await import('../src/components/instructor/command-log-view.js');
@@ -204,6 +206,57 @@ describe('自船覆寫', () => {
     expect(cmds.length).toBe(before);
     q<HTMLButtonElement>(el, 'button.apply').click();
     expect(cmds.at(-1)).toEqual({ type: 'reset', args: { x: 150, y: 0, heading: 90, speed: 5, loading: 'full', tugs: 2 } });
+  });
+});
+
+describe('操舵模式面板', () => {
+  it('顯示 state.steering;FU/NFU/自動舵/應急鈕送 steeringMode;NFU 推桿按住送 direction、放開送 stop;泵選擇附在指令上', async () => {
+    const cmds = captureCommands();
+    const el = await mount('brm-steering-panel', { state: { ...defaultState('FSB1'), steering: { mode: 'nfu', pump: '1', nfuActive: true } } });
+    expect(shadowText(el)).toContain('NFU 非隨動 · 泵 1 · 推舵中');
+    expect(q<HTMLButtonElement>(el, 'button.mode-nfu').classList.contains('active')).toBe(true);
+    q<HTMLButtonElement>(el, 'button.mode-fu').click();
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'fu' });
+    q<HTMLButtonElement>(el, 'button.mode-emergency').click();
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'emergency' });
+    q<HTMLButtonElement>(el, 'button.mode-nfu').click();
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'stop' } });
+    // NFU 推桿:pointerdown → direction、pointerup → stop;只放開不會多送
+    const stbd = q<HTMLButtonElement>(el, 'button.nfu-stbd');
+    stbd.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'starboard' } });
+    await el.updateComplete;
+    expect(stbd.classList.contains('pushing')).toBe(true);
+    stbd.dispatchEvent(new Event('pointerup', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'stop' } });
+    const n = cmds.length;
+    stbd.dispatchEvent(new Event('pointerleave', { bubbles: true }));
+    expect(cmds.length).toBe(n);
+    q<HTMLButtonElement>(el, 'button.nfu-port').dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'port' } });
+    q<HTMLButtonElement>(el, 'button.nfu-port').dispatchEvent(new Event('pointercancel', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'stop' } });
+    // 泵:選擇即送同模式 + 泵(目前 nfu → 帶 direction stop)
+    const pump = q<HTMLSelectElement>(el, 'select.pump');
+    pump.value = '2';
+    pump.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { pump: '2', direction: 'stop' } });
+    // 自動舵:帶航向/ROT 與已選的泵
+    setInput(el, 'input.ap-heading', '123');
+    setInput(el, 'input.ap-rot', '12');
+    q<HTMLButtonElement>(el, 'button.mode-autopilot').click();
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'autopilot', args: { pump: '2', heading: 123, rotLimit: 12 } });
+  });
+
+  it('核心未回報時顯示提示;應急操舵中自動舵鈕停用', async () => {
+    const el = await mount<HTMLElement & { state: OwnShipState | null }>('brm-steering-panel', { state: null });
+    expect(shadowText(el)).toContain('核心未回報');
+    expect(q<HTMLButtonElement>(el, 'button.mode-autopilot').disabled).toBe(false);
+    el.state = { ...defaultState('FSB1'), steering: { mode: 'emergency', pump: 'both' } };
+    await el.updateComplete;
+    expect(shadowText(el)).toContain('應急操舵 · 泵 both');
+    expect(q<HTMLButtonElement>(el, 'button.mode-autopilot').disabled).toBe(true);
+    expect(shadowText(el)).toContain('需先切回 FU');
   });
 });
 
@@ -449,7 +502,7 @@ describe('重播檢視', () => {
       '{"kind":"footer","finalTick":200}',
     ].join('\n');
     const data = el.loadText(text, 'rewind.jsonl');
-    expect(data.rewinds).toEqual([{ t: 2.02, from: 6, droppedStates: 2, droppedEvents: 1 }]);
+    expect(data.rewinds).toEqual([{ t: 2.02, tick: 101, from: 6, droppedStates: 2, droppedEvents: 1 }]); // 無 restore input 行:倒帶點取倒帶後第一筆狀態
     await el.updateComplete;
     const rewindMarks = Array.from(el.shadowRoot!.querySelectorAll<HTMLElement>('.marks .mark.rewind'));
     expect(rewindMarks).toHaveLength(1);

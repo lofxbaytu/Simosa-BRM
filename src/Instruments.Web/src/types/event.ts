@@ -53,8 +53,8 @@ export type AssessmentEventKind =
   | 'bandWarn'
   | 'bandFail';
 
-/** 教官指令產生的事件 kind。 */
-export type InstructorEventKind = 'acknowledge' | 'timelineManual';
+/** 教官指令產生的事件 kind;steeringModeChanged / commandRejected 來源依指令來源(instructor 或 timeline,D32/D35)。 */
+export type InstructorEventKind = 'acknowledge' | 'timelineManual' | 'steeringModeChanged' | 'commandRejected';
 
 export type SimEventKind = TrafficEventKind | TimelineEventKind | AssessmentEventKind | InstructorEventKind;
 
@@ -107,6 +107,8 @@ export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'bandFail',
   'acknowledge',
   'timelineManual',
+  'steeringModeChanged',
+  'commandRejected',
 ] as const;
 
 export interface SimEvent {

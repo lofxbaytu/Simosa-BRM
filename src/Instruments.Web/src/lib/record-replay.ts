@@ -5,6 +5,8 @@
 // 未知的 kind 只計數(不逐行列為錯誤),舊紀錄(無 event/summary 行、header 無 parameterSet)仍可載入。
 // 倒帶(restore/reset):核心紀錄在倒帶後 state 的 tick/t 會倒退;解析時依 tick 遞減切分,倒帶時丟棄 t > 倒帶點的舊分支狀態與事件
 // (只保留練習最終的歷史),倒帶點記在 rewinds[];不對 states 做全域排序(設計文件 D31)。
+// 倒帶點的 tick 取自 input 行的 restore args.tick(無 args 時最近一筆 snapshot 行的 tick):C# Restore 後第一筆 state 行晚
+// BroadcastDivider 個 tick 才寫出,直接用該 state 的 t 會把倒帶標記畫晚、也漏丟該區間的舊分支事件。
 
 import type { SimCommand } from '../types/command.js';
 import type { SimEvent } from '../types/event.js';
@@ -54,9 +56,11 @@ export interface ReplayFooter {
   sha256?: string;
 }
 
-/** 倒帶點:自 from(倒帶前最後一筆狀態的 t)回到 t */
+/** 倒帶點:自 from(倒帶前最後一筆狀態的 t)回到 t(= tick × dt) */
 export interface ReplayRewind {
   t: number;
+  /** 倒帶到的核心 tick(restore args.tick / snapshot tick;無法得知時為倒帶後第一筆狀態的 tick) */
+  tick: number;
   from: number;
   /** 倒帶時丟棄的舊分支狀態數 */
   droppedStates: number;
@@ -132,15 +136,19 @@ function empty(source: ReplayData['source'], errors: string[]): ReplayData {
 /**
  * 依序加入一筆狀態;tick(或 t)比前一筆小即為倒帶:丟棄 t > 倒帶點的舊分支狀態與事件(倒帶後核心從快照 tick 重新推進,
  * 快照 tick 當下的狀態與之前的歷史仍然有效),並記錄倒帶點。
+ * rewindTick:restore 指令要求的 tick(已知時倒帶點 = rewindTick × dt,而非倒帶後第一筆狀態的 t)。
  */
-function pushState(data: ReplayData, s: OwnShipState): void {
+function pushState(data: ReplayData, s: OwnShipState, rewindTick?: number): void {
   const prev = data.states[data.states.length - 1];
   if (prev && (Number.isFinite(s.tick) && Number.isFinite(prev.tick) ? s.tick < prev.tick : s.t < prev.t)) {
+    const known = rewindTick !== undefined && Number.isFinite(rewindTick) && rewindTick <= s.tick;
+    const tick = known ? rewindTick : s.tick;
+    const t = known ? tick * data.header.dt : s.t;
     const nStates = data.states.length;
     const nEvents = data.events.length;
-    data.states = data.states.filter((x) => x.t <= s.t);
-    data.events = data.events.filter((e) => e.t <= s.t);
-    data.rewinds.push({ t: s.t, from: prev.t, droppedStates: nStates - data.states.length, droppedEvents: nEvents - data.events.length });
+    data.states = data.states.filter((x) => x.t <= t);
+    data.events = data.events.filter((e) => e.t <= t);
+    data.rewinds.push({ t, tick, from: prev.t, droppedStates: nStates - data.states.length, droppedEvents: nEvents - data.events.length });
   }
   data.states.push(s);
 }
@@ -158,6 +166,8 @@ export function parseJsonLines(text: string): ReplayData {
   const data = empty('simcore-jsonl', []);
   const lines = text.split(/\r?\n/);
   let prev: OwnShipState | undefined;
+  /** 最近一筆 restore 指令要求的 tick;下一筆 state 行(倒帶後第一筆)消耗之 */
+  let pendingRewindTick: number | undefined;
   lines.forEach((line, i) => {
     const s = line.trim();
     if (!s) return;
@@ -221,6 +231,10 @@ export function parseJsonLines(text: string): ReplayData {
           return;
         }
         data.inputs.push({ tick, t: tick * data.header.dt, command: cmd });
+        if (cmd.type === 'restore') {
+          const want = cmd.args?.['tick'];
+          pendingRewindTick = typeof want === 'number' && Number.isFinite(want) ? want : data.snapshots[data.snapshots.length - 1]?.tick;
+        }
         break;
       }
       case 'state': {
@@ -230,7 +244,8 @@ export function parseJsonLines(text: string): ReplayData {
           return;
         }
         prev = parsed.state;
-        pushState(data, parsed.state);
+        pushState(data, parsed.state, pendingRewindTick);
+        pendingRewindTick = undefined;
         break;
       }
       case 'snapshot': {

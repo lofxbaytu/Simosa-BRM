@@ -12,7 +12,10 @@
   (相對專案根目錄或情境檔目錄,預設 data/parameters/company-procedures.yaml)自動載入,仍無則 ``ValueError``。
   載入結果的 ``parameterSet`` 為 ``{id, version, path, sha256, resolved}``(無引用時 None),形狀同紀錄標頭 ``header.parameterSet``。
 - timeline / route / zones / assessment / briefing 只做結構檢查(C# ``Scenario.StructuralIssues`` 的便宜規則:必要欄位、
-  id 唯一、參照存在、動作/條件/規則名稱在允許清單、航點 ≥ 2、多邊形 3–64 點 …),**不模擬**;解析後的子樹原樣保留在結果中。
+  id 唯一、參照存在、動作/條件/規則名稱在允許清單、航點 ≥ 2 且不重合、多邊形 3–64 點且不自交 …),**不模擬**;解析後的子樹
+  原樣保留在結果中。與 C# 相同:origin 未給時先以 initial.position 推導再做航點/多邊形幾何檢查;id/name 可為數字(讀成字串)、
+  ``repeat`` 不分大小寫、``bands[].fail`` 字串 strip 後再比對、briefing 不檢查數值範圍。
+  **刻意比 C# 嚴**(C# 目前缺口):``required[].expect`` 必填、``ukc`` 規則的 lessThan 需 metres|fractionOfDraft。
 """
 
 from __future__ import annotations
@@ -116,6 +119,41 @@ def _resolve_xy(ltp: LocalTangentPlane, p: dict[str, Any]) -> tuple[float, float
     return ltp.to_local(float(p["lat"]), float(p["lon"]))
 
 
+def _lenient_str(v: Any) -> str | None:
+    """字串欄位的寬鬆讀法(C# ContractJson LenientStringConverter):數字/布林讀成字串;其餘非字串為 None。"""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if _is_num(v):
+        return str(v)
+    return None
+
+
+def _cross(a: tuple[float, float], b: tuple[float, float], p: tuple[float, float]) -> float:
+    return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+
+
+def _segments_intersect(p1: tuple[float, float], p2: tuple[float, float], p3: tuple[float, float], p4: tuple[float, float]) -> bool:
+    d1, d2, d3, d4 = _cross(p3, p4, p1), _cross(p3, p4, p2), _cross(p1, p2, p3), _cross(p1, p2, p4)
+    return ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0))
+
+
+def polygon_self_intersects(pts: list[tuple[float, float]]) -> bool:
+    """非相鄰邊是否相交(C# Geo.Polygon2D.SelfIntersects;自交多邊形在載入時為錯誤)。"""
+    n = len(pts)
+    if n < 4:
+        return False
+    for i in range(n):
+        a1, a2 = pts[i], pts[(i + 1) % n]
+        for j in range(i + 1, n):
+            if j == i or (j + 1) % n == i or (i + 1) % n == j:
+                continue  # 相鄰邊共用頂點
+            if _segments_intersect(a1, a2, pts[j], pts[(j + 1) % n]):
+                return True
+    return False
+
+
 def _action_string(payload: Any) -> str | None:
     """動作的字串值(或物件的 name 欄位;C# TimelineAction.AsString)。"""
     if isinstance(payload, str):
@@ -189,16 +227,28 @@ def _check_condition(c: Any, path: str, error: Any, zone_ids: set[str], wp_names
         error(path, "since 需要 event")
 
 
+def _is_numeric_text(text: str) -> bool:
+    try:
+        f = float(text)
+    except ValueError:
+        return False
+    return f == f and f not in (float("inf"), float("-inf"))
+
+
 def _expect_leaves(e: Any) -> list[Any]:
     if isinstance(e, dict) and isinstance(e.get("any"), list):
         return [leaf for sub in e["any"] for leaf in _expect_leaves(sub)]
     return [e]
 
 
-def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
+def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None) -> list[tuple[str, str]]:
     """timeline / route / zones / assessment / briefing 的結構錯誤 ``[(路徑, 訊息)]``(不依賴初始狀態;情境引擎設計第 2.4 節 error 項)。
-    參數引用須已解析(未解析的 "${params:…}" 字串在此視為一般字串)。"""
+    參數引用須已解析(未解析的 "${params:…}" 字串在此視為一般字串)。``origin`` 未給時取 ``raw["origin"]``;航點重合與多邊形自交
+    的幾何檢查需要原點(``validate_scenario`` 會先以 initial.position 推導後傳入,與 C# Scenario.Validate 相同)。"""
     issues: list[tuple[str, str]] = []
+    if origin is None:
+        origin = raw.get("origin")
+    ltp = LocalTangentPlane(float(origin["lat"]), float(origin["lon"])) if isinstance(origin, dict) and _is_num(origin.get("lat")) and _is_num(origin.get("lon")) else None
 
     def error(path: str, msg: str) -> None:
         issues.append((path, msg))
@@ -224,10 +274,10 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
     if route and not isinstance(waypoints, list):
         error("route.waypoints", "waypoints 須為陣列")
         waypoints = []
-    zone_ids = {str(z.get("id")) for z in zones if isinstance(z, dict) and z.get("id") is not None}
-    wp_names = {str(w.get("name")) for w in waypoints if isinstance(w, dict) and w.get("name") is not None}
-    target_ids = {str(t.get("id")).upper() for t in targets if isinstance(t, dict) and t.get("id") is not None}
-    all_item_ids = {str(t.get("id")) for t in timeline if isinstance(t, dict) and t.get("id") is not None}
+    zone_ids = {s for z in zones if isinstance(z, dict) and (s := _lenient_str(z.get("id"))) is not None}
+    wp_names = {s for w in waypoints if isinstance(w, dict) and (s := _lenient_str(w.get("name"))) is not None}
+    target_ids = {s.upper() for t in targets if isinstance(t, dict) and (s := _lenient_str(t.get("id"))) is not None}
+    all_item_ids = {s for t in timeline if isinstance(t, dict) and (s := _lenient_str(t.get("id"))) is not None}
 
     # ---- timeline
     item_ids: set[str] = set()
@@ -236,8 +286,8 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
         if not isinstance(item, dict):
             error(path, "時間表項目須為物件")
             continue
-        iid = item.get("id")
-        if not isinstance(iid, str) or not iid.strip():
+        iid = _lenient_str(item.get("id"))
+        if iid is None or not iid.strip():
             error(path, "時間表項目缺少 id")
         elif iid in item_ids:
             error(path, f"時間表 id 重複:{iid}")
@@ -249,7 +299,7 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
         if isinstance(rep, dict):
             if not (_is_num(rep.get("every_s")) and rep["every_s"] > 0):
                 error(f"{path}.repeat", "every_s 必須為正")
-        elif rep not in ("once", "always"):
+        elif not (isinstance(rep, str) and rep.lower() in ("once", "always")):  # C# RepeatSpecConverter ToLowerInvariant
             error(f"{path}.repeat", f"repeat 須為 once | always | {{every_s, max}}:{rep!r}")
         actions = item.get("actions") or []
         if not isinstance(actions, list):
@@ -295,8 +345,8 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
             if not isinstance(w, dict):
                 error(wp, "航點須為物件")
                 continue
-            n = w.get("name")
-            if not isinstance(n, str) or not n.strip():
+            n = _lenient_str(w.get("name"))
+            if n is None or not n.strip():
                 error(wp, "航點缺少 name")
             elif n in names:
                 error(wp, f"航點名稱重複:{n}")
@@ -307,9 +357,7 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
         start_leg = route.get("startLeg", 0)
         if not isinstance(start_leg, int) or isinstance(start_leg, bool) or start_leg < 0 or (len(waypoints) >= 2 and start_leg >= len(waypoints) - 1):
             error("route.startLeg", "startLeg 超出航段範圍")
-        origin = raw.get("origin")
-        if isinstance(origin, dict) and _is_num(origin.get("lat")) and _is_num(origin.get("lon")):
-            ltp = LocalTangentPlane(float(origin["lat"]), float(origin["lon"]))
+        if ltp is not None:
             for i in range(len(waypoints) - 1):
                 a, b = waypoints[i], waypoints[i + 1]
                 if not (_has_position(a) and _has_position(b)):
@@ -325,8 +373,8 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
         if not isinstance(z, dict):
             error(path, "區域須為物件")
             continue
-        zid = z.get("id")
-        if not isinstance(zid, str) or not zid.strip():
+        zid = _lenient_str(z.get("id"))
+        if zid is None or not zid.strip():
             error(path, "區域缺少 id")
         elif zid in zids:
             error(path, f"區域 id 重複:{zid}")
@@ -341,6 +389,8 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
             error(f"{path}.polygon", "多邊形點數上限 64")
         elif not all(_has_position(p) for p in poly):
             error(f"{path}.polygon", "頂點需為 {lat, lon} 或 {x, y}")
+        elif ltp is not None and polygon_self_intersects([_resolve_xy(ltp, p) for p in poly]):
+            error(f"{path}.polygon", "多邊形自交")
         wd = z.get("waterDepth_m")
         if wd is not None and (not _is_num(wd) or wd <= 0):
             error(f"{path}.waterDepth_m", "區域水深必須為正")
@@ -386,10 +436,12 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
         if warn is None and fail is None:
             error(path, "容許帶需要 warn 或 fail")
         if fail is not None and not _is_num(fail):
-            if isinstance(fail, str) and _MULTIPLIER.match(fail.strip()):
+            # C# BandThresholdConverter:字串 Trim 後,"<n>x"(n 前後可有空白,如 "2 x")為倍數;否則須可解析為數值
+            text = fail.strip() if isinstance(fail, str) else ""
+            if text.endswith("x") and _MULTIPLIER.match(text[:-1].strip() + "x"):
                 if warn is None:
                     error(path, "fail 為倍數時需要 warn")
-            else:
+            elif not _is_numeric_text(text):
                 error(path, f"bands[].fail 須為數值或 \"<n>x\":{fail!r}")
         if warn is not None and not _is_num(warn):
             error(path, f"warn 須為數值:{warn!r}")
@@ -440,12 +492,7 @@ def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
                 for i, role in enumerate(roles):
                     if not isinstance(role, dict) or not str(role.get("role") or "").strip():
                         error(f"briefing.roles[{i}]", "角色需要 role")
-        mp = briefing.get("minParticipants")
-        if mp is not None and (not isinstance(mp, int) or isinstance(mp, bool) or mp < 1):
-            error("briefing.minParticipants", "minParticipants 須為正整數")
-        dur = briefing.get("duration_s")
-        if dur is not None and (not _is_num(dur) or dur <= 0):
-            error("briefing.duration_s", "duration_s 必須為正")
+        # minParticipants / duration_s 的數值範圍 C# 不檢查(只讀取),此處亦不檢查以免 C# 可載入的情境在此被拒
     return issues
 
 
@@ -457,9 +504,6 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         raise ValueError("情境內容必須為物件(YAML mapping)")
     if has_references(raw):
         raise ValueError("情境含未解析的 ${params:…} 引用;請先以 parameters.resolve_references 解析(load_scenario 會自動處理)")
-    issues = structural_issues(raw)
-    if issues:
-        raise ValueError(f"{issues[0][0]}:{issues[0][1]}")
     sid = str(raw.get("id") or default_id).strip()
     if not sid:
         raise ValueError("情境缺少 id")
@@ -497,6 +541,10 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         if o_lat is None or o_lon is None:
             raise ValueError("origin 需有 lat 與 lon")
         origin = {"lat": o_lat, "lon": o_lon}
+    # 結構檢查在 origin 推導之後(C# Scenario.Validate 相同):航點重合、多邊形自交等幾何檢查才一定會做
+    issues = structural_issues(raw, origin=origin)
+    if issues:
+        raise ValueError(f"{issues[0][0]}:{issues[0][1]}")
     heading = _num(init, "heading", where="initial")
     if heading is None:
         raise ValueError("情境缺少 initial.heading")

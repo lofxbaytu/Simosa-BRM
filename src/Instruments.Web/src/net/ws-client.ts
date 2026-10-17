@@ -2,6 +2,7 @@
 // 收 state.schema.json 的 JSON,送 command.schema.json 的 JSON;斷線自動重連(指數退避 1 → 5 秒)。
 
 import { parseState } from '../lib/state-parser.js';
+import { parseSteering } from '../lib/steering.js';
 import { serializeCommand } from '../lib/command.js';
 import type { SimCommand } from '../types/command.js';
 import type { OwnShipState } from '../types/state.js';
@@ -117,11 +118,20 @@ export class WsClient implements SimSource {
     ws.onmessage = (ev: MessageEvent) => {
       const data: unknown = ev.data;
       if (typeof data !== 'string') return;
-      const result = parseState(data, this.lastState);
-      if (!result) {
-        if (this.messageListeners.size > 0) this.dispatchMessage(data);
+      let obj: unknown;
+      try {
+        obj = JSON.parse(data);
+      } catch {
         return;
       }
+      const result = parseState(obj, this.lastState);
+      if (!result) {
+        if (this.messageListeners.size > 0) this.dispatchMessage(obj);
+        return;
+      }
+      // state.steering(C# SimCore):state-parser 不認得此欄位,另由原始框取出
+      const steering = parseSteering(obj);
+      if (steering) result.state.steering = steering;
       this.lastState = result.state;
       for (const l of this.stateListeners) l(result);
     };
@@ -136,13 +146,7 @@ export class WsClient implements SimSource {
     };
   }
 
-  private dispatchMessage(data: string): void {
-    let obj: unknown;
-    try {
-      obj = JSON.parse(data);
-    } catch {
-      return;
-    }
+  private dispatchMessage(obj: unknown): void {
     if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return;
     for (const l of this.messageListeners) l(obj as Record<string, unknown>);
   }

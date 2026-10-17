@@ -80,3 +80,42 @@ describe('OperationLogDeriver', () => {
     expect(log.length).toBe(0);
   });
 });
+
+describe('OperationLogDeriver 操舵模式', () => {
+  it('state.steering 的模式/泵變更各一筆;NFU 推桿推舵/放開亦記;首筆基準不記', () => {
+    const log = new OperationLogDeriver();
+    const s = seq();
+    expect(log.push(s.at(0, { steering: { mode: 'fu', pump: 'both' } }))).toEqual([]);
+    expect(log.push(s.at(1, { steering: { mode: 'fu', pump: 'both' } }))).toEqual([]);
+    const toNfu = log.push(s.at(2, { steering: { mode: 'nfu', pump: 'both', nfuActive: false } }));
+    expect(toNfu).toHaveLength(1);
+    expect(toNfu[0]).toMatchObject({ kind: 'steeringMode', t: 2, label: '操舵模式 FU 隨動 → NFU 非隨動(泵 both)', value: 'nfu/both' });
+    const push = log.push(s.at(3, { steering: { mode: 'nfu', pump: 'both', nfuActive: true }, rudderOrder: 35 }));
+    expect(push.map((e) => e.kind)).toEqual(['rudder', 'steeringMode']);
+    expect(push[1]!.label).toBe('NFU 推桿推舵');
+    const release = log.push(s.at(4, { steering: { mode: 'nfu', pump: 'both', nfuActive: false }, rudderOrder: 12 }));
+    expect(release.at(-1)!.label).toBe('NFU 推桿放開');
+    const pump = log.push(s.at(5, { steering: { mode: 'nfu', pump: '1', nfuActive: false }, rudderOrder: 12 }));
+    expect(pump[0]).toMatchObject({ kind: 'steeringMode', label: '舵機泵 both → 1', value: 'nfu/1' });
+    const emergency = log.push(s.at(6, { steering: { mode: 'emergency', pump: '1' }, rudderOrder: 12 }));
+    expect(emergency[0]!.label).toBe('操舵模式 NFU 非隨動 → 應急操舵(泵 1)');
+    expect(log.all().filter((e) => e.kind === 'steeringMode')).toHaveLength(5);
+  });
+
+  it('recordSteering(核心 steeringModeChanged 事件)與同一時刻的狀態推導不重複;時間相隔超過合併窗則各記', () => {
+    const log = new OperationLogDeriver({ coalesceWindow_s: 1 });
+    const s = seq();
+    log.push(s.at(0, { steering: { mode: 'fu', pump: 'both' } }));
+    const ev = log.recordSteering({ mode: 'autopilot', pump: 'both' }, 10, { mode: 'fu', pump: 'both' });
+    expect(ev).toMatchObject({ kind: 'steeringMode', t: 10, label: '操舵模式 FU 隨動 → 自動舵(泵 both)', value: 'autopilot/both' });
+    // 事件之後的狀態框帶同一模式 → 不重複
+    expect(log.push(s.at(10.04, { steering: { mode: 'autopilot', pump: 'both' } }))).toEqual([]);
+    expect(log.recordSteering({ mode: 'autopilot', pump: 'both' }, 10.5)).toBeNull();
+    // 狀態先到、事件後到也不重複
+    log.push(s.at(20, { steering: { mode: 'fu', pump: 'both' } }));
+    expect(log.recordSteering({ mode: 'fu', pump: 'both' }, 20, { mode: 'autopilot', pump: 'both' })).toBeNull();
+    // 同模式再切(例如 fu → nfu → fu)超過窗口則記
+    expect(log.recordSteering({ mode: 'fu', pump: 'both' }, 30, { mode: 'nfu', pump: 'both' })).not.toBeNull();
+    expect(log.all().map((e) => e.value)).toEqual(['autopilot/both', 'fu/both', 'fu/both']);
+  });
+});

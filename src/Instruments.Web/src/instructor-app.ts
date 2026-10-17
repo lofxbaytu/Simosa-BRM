@@ -1,7 +1,7 @@
 // <brm-instructor-app>:教官站(規劃書第 9.1 節)第一版,三種版面:
 //  - full(預設):訪船船長直連時用。連線狀態與自船摘要(共用 conning 條)、情境選擇與載入、時間表面板
 //    (手動觸發、確認鈕、必要事件倒數)、執行控制(凍結/恢復/重設/結束練習、時間倍率、快照/還原)、環境即時改變
-//    (含漸變)、故障注入、自船覆寫、鳥瞰航跡圖(疊航線/區域)、核心事件流、學員操作紀錄(由狀態推導)、
+//    (含漸變)、故障注入、自船覆寫、操舵模式(FU/NFU/自動舵/應急,送 steeringMode)、鳥瞰航跡圖(疊航線/區域)、核心事件流、學員操作紀錄(由狀態推導)、
 //    教官指令與核心回應、BRM 快速標記(第 8.2 節五大類)。
 //    核心推送的事件框 {"type":"event"} 與評估框 {"type":"assessment"}(設計文件 docs/design/scenario-engine.md 第 5.2 節)
 //    經 onMessage 收下;語音腳本事件由 VoiceScriptPlayer 播放(簡化模式自動、完整模式按「播放」)。
@@ -37,7 +37,8 @@ import { EventStore, eventFromFrame, eventLabel, voiceScriptData } from './lib/s
 import { assessmentFromFrame, type AssessmentSummary } from './lib/assessment.js';
 import { VoiceScriptPlayer, voiceLine, voiceRecordLabel } from './lib/voice-script.js';
 import { eventMarks, overlayFromScenario, type PlotOverlay } from './lib/plot-overlay.js';
-import { cpaAlarmTargets } from './lib/targets.js';
+import { CpaAlarmTracker } from './lib/targets.js';
+import { parseSteering } from './lib/steering.js';
 import { PLAYED_BY_LABEL } from './lib/timeline.js';
 import { ROLE_LABEL } from './lib/sim-event.js';
 import { instructorStyles } from './components/instructor/instructor-shared.js';
@@ -51,6 +52,7 @@ import './components/instructor/run-control-panel.js';
 import './components/instructor/environment-panel.js';
 import './components/instructor/fault-panel.js';
 import './components/instructor/ownship-panel.js';
+import './components/instructor/steering-panel.js';
 import './components/instructor/operation-log-view.js';
 import './components/instructor/command-log-view.js';
 import './components/instructor/brm-marker-bar.js';
@@ -240,7 +242,7 @@ export class InstructorApp extends LitElement {
       }
       .center .bottom {
         display: grid;
-        grid-template-columns: 1.2fr 1fr 0.9fr;
+        grid-template-columns: 1.2fr 1fr 0.9fr 0.9fr;
         gap: 6px;
         max-height: 36vh;
         overflow: auto;
@@ -381,6 +383,8 @@ export class InstructorApp extends LitElement {
   @state() private debriefSummary: DebriefSummary | null = null;
   @state() private confirmEnd = false;
   @state() private events: readonly SimEvent[] = [];
+  /** 處於 CPA 警報中的目標(CpaAlarmTracker 的快照;不由可能被截斷的事件流重算) */
+  @state() private alarmTargets: ReadonlySet<string> = new Set();
   @state() private coreSummary: AssessmentSummary | null = null;
   @state() private lastVoice: string = '';
   @state() private voicePlaying = false;
@@ -389,6 +393,9 @@ export class InstructorApp extends LitElement {
 
   private source: SimSource | null = null;
   private readonly eventStore = new EventStore(2000);
+  private readonly alarms = new CpaAlarmTracker();
+  /** 已送出 restore 指令、尚未收到倒帶後第一筆狀態時:要求回到的核心 tick(倒帶點;undefined 表示無待處理倒帶) */
+  private pendingRewindTick: number | undefined;
   private readonly voice = new VoiceScriptPlayer();
   private assessmentTimer: ReturnType<typeof setTimeout> | null = null;
   private voiceUnsub: (() => void) | null = null;
@@ -520,6 +527,7 @@ export class InstructorApp extends LitElement {
 
   private onState(state: OwnShipState, issues: string[]): void {
     this.lastStateAt = performance.now();
+    if (this.hasReceived && state.tick < this.shipState.tick) this.rewindEvents(state);
     this.hasReceived = true;
     this.shipState = state;
     this.issues = issues;
@@ -561,10 +569,29 @@ export class InstructorApp extends LitElement {
     this.commandLog = [...this.commandLog];
   }
 
-  /** 核心事件:存入事件流;語音事件在簡化教官模式自動播放;練習結束時請求 summary。 */
+  /**
+   * 即時模式倒帶(restore;D31):狀態 tick 倒退時比照 record-replay.pushState 丟棄 t > 倒帶點的舊分支事件,
+   * 倒帶點取 restore 指令要求的 tick(核心倒帶後第一筆廣播晚 BroadcastDivider 個 tick),無則取該狀態的 t;
+   * 並重算 CPA 警報集合(C# Restore 由快照還原交通狀態、不重發 cpaAlarm/cpaClear)。
+   */
+  private rewindEvents(state: OwnShipState): void {
+    const want = this.pendingRewindTick;
+    this.pendingRewindTick = undefined;
+    const dt = state.tick > 0 ? state.t / state.tick : 0.02;
+    const tMax = want !== undefined && want <= state.tick ? want * dt : state.t;
+    if (this.eventStore.dropAfter(tMax) > 0) this.events = [...this.eventStore.all()];
+    this.alarms.rebuild(this.eventStore.all());
+    this.alarmTargets = this.alarms.snapshot();
+  }
+
+  /** 核心事件:存入事件流;語音事件在簡化教官模式自動播放;練習結束時請求 summary;
+   *  steeringModeChanged 記入學員操作紀錄(與 state.steering 的推導去重);commandRejected 標記對應教官指令為核心拒絕。 */
   private onSimEvent(ev: SimEvent): void {
     this.eventStore.push(ev);
     this.events = [...this.eventStore.all()];
+    if (this.alarms.apply(ev)) this.alarmTargets = this.alarms.snapshot();
+    if (ev.kind === 'steeringModeChanged') this.recordSteeringEvent(ev);
+    else if (ev.kind === 'commandRejected') this.markRejected(ev);
     const v = voiceScriptData(ev);
     if (v) {
       this.lastVoice = voiceLine(v);
@@ -573,6 +600,24 @@ export class InstructorApp extends LitElement {
       this.lastVoice = eventLabel(ev);
     }
     if (ev.kind === 'exerciseEnded') this.requestAssessment();
+  }
+
+  private recordSteeringEvent(ev: SimEvent): void {
+    const to = parseSteering({ steering: { mode: ev.data?.['to'], pump: ev.data?.['pump'] ?? this.shipState.steering?.pump ?? 'both' } });
+    if (!to) return;
+    const from = parseSteering({ steering: { mode: ev.data?.['from'], pump: this.shipState.steering?.pump ?? to.pump } });
+    if (this.opLog.recordSteering(to, ev.t, from)) this.opEvents = [...this.opLog.all()];
+  }
+
+  /** commandRejected(D35):把最近一筆同類型且尚無回應的教官指令標為核心拒絕(C# 不回 ack 框,以事件代替)。 */
+  private markRejected(ev: SimEvent): void {
+    const cmdType = ev.data?.['command'];
+    if (typeof cmdType !== 'string') return;
+    const entry = [...this.commandLog].reverse().find((e) => !e.ack && e.command.type === cmdType);
+    if (!entry) return;
+    const reason = ev.data?.['reason'];
+    entry.ack = { ok: false, detail: reason === 'emergencySteering' ? '應急操舵中不可自動舵' : typeof reason === 'string' ? reason : eventLabel(ev), tick: ev.tick };
+    this.commandLog = [...this.commandLog];
   }
 
   private async playVoice(ev: SimEvent, auto: boolean): Promise<void> {
@@ -641,10 +686,11 @@ export class InstructorApp extends LitElement {
 
   // ------------------------------------------------------------ 指令
   private send(cmd: SimCommand, ack?: CommandLogEntry['ack']): CommandLogEntry {
-    this.source?.send(cmd);
     const entry: CommandLogEntry = { seq: ++this.commandSeq, t: this.shipState.t, wall: new Date().toISOString(), command: cmd };
     if (ack) entry.ack = ack;
+    // 先記入再送出:示範來源會同步推回事件(例如 commandRejected),需要找得到這筆指令
     this.commandLog = [...this.commandLog, entry];
+    this.source?.send(cmd);
     return entry;
   }
 
@@ -652,6 +698,10 @@ export class InstructorApp extends LitElement {
     const cmd = ev.detail;
     this.send(cmd);
     if (cmd.type === 'reset') this.restartExercise();
+    else if (cmd.type === 'restore') {
+      const tick = cmd.args?.['tick'];
+      this.pendingRewindTick = typeof tick === 'number' && Number.isFinite(tick) ? tick : undefined;
+    }
   };
 
   private onReset = (): void => {
@@ -667,6 +717,9 @@ export class InstructorApp extends LitElement {
     this.debriefSummary = null;
     this.eventStore.clear();
     this.events = [];
+    this.alarms.clear();
+    this.alarmTargets = new Set();
+    this.pendingRewindTick = undefined;
     this.coreSummary = null;
     this.lastVoice = '';
     this.voice.stop();
@@ -897,11 +950,12 @@ export class InstructorApp extends LitElement {
             <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale}></brm-run-control>
           </div>
           <div class="col center">
-            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${cpaAlarmTargets(this.events)} target-table></brm-track-plot>
+            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${this.alarmTargets} target-table></brm-track-plot>
             <div class="bottom">
               <brm-environment-panel .state=${this.hasReceived ? s : null}></brm-environment-panel>
               <brm-fault-panel .active=${s.faults ?? []}></brm-fault-panel>
               <brm-ownship-panel .state=${this.hasReceived ? s : null}></brm-ownship-panel>
+              <brm-steering-panel .state=${this.hasReceived ? s : null}></brm-steering-panel>
             </div>
           </div>
           <div class="col right">
@@ -966,7 +1020,7 @@ export class InstructorApp extends LitElement {
               ${s.scenario?.phase && s.scenario.phase !== 'normal' ? html`<span class="v warning">階段 ${s.scenario.phase}</span>` : nothing}
             </div>
             ${this.lastVoice ? html`<div class="voice-banner">${this.voicePlaying ? '▶ ' : ''}${this.lastVoice}</div>` : nothing}
-            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${cpaAlarmTargets(this.events)}></brm-track-plot>
+            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${this.alarmTargets}></brm-track-plot>
             <div class="side">
               <brm-marker-bar large .markers=${this.markers}></brm-marker-bar>
               <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>

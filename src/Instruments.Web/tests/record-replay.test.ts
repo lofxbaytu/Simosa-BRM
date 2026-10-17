@@ -8,6 +8,8 @@ import { detectRecordFormat, eventIndexAt, parseJsonLines, parseReplay, stateInd
 import { StateSampler, buildSessionRecord } from '../src/lib/session-record.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import { BrmMarkerStore } from '../src/lib/brm-markers.js';
+import { cpaAlarmTargets } from '../src/lib/targets.js';
+import { rewindTitle } from '../src/components/instructor/replay-view.js';
 import type { SimEvent } from '../src/types/event.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -197,8 +199,8 @@ describe('倒帶分段(restore/reset)', () => {
     const r = parseJsonLines(text);
     expect(r.errors).toEqual([]);
     expect(r.rewinds).toEqual([
-      { t: 2.04, from: 4, droppedStates: 2, droppedEvents: 1 },
-      { t: 0.04, from: 4, droppedStates: 5, droppedEvents: 2 },
+      { t: 2, tick: 100, from: 4, droppedStates: 2, droppedEvents: 1 }, // 倒帶點 = restore args.tick × dt,而非倒帶後第一筆 state 的 2.04
+      { t: 0.04, tick: 2, from: 4, droppedStates: 5, droppedEvents: 2 },
     ]);
     expect(r.states.map((s) => s.t)).toEqual([0.04, 1]);
     expect(r.states.every((s, i, a) => i === 0 || s.t > a[i - 1]!.t)).toBe(true);
@@ -208,6 +210,33 @@ describe('倒帶分段(restore/reset)', () => {
     expect(eventIndexAt(r.events, 0.7)).toBe(0);
     expect(eventIndexAt(r.events, 0.2)).toBe(-1);
     expect(r.inputs).toHaveLength(2); // 指令紀錄保留(教官做過的事)
+  });
+
+  it('倒帶點取 restore args.tick:BroadcastDivider 區間 (倒帶 tick, 第一筆新 state] 的舊分支事件也丟棄;rewindTitle 直接顯示該 tick', () => {
+    const cpa = (t: number, targetId: string, kind = 'cpaAlarm') => JSON.stringify({ kind: 'event', tick: Math.round(t / 0.02), event: { kind, tick: Math.round(t / 0.02), t, source: 'traffic', seq: 0, targetId } });
+    const text = [
+      header,
+      stateLine(2, 0, 20), // tick 100
+      cpa(2.02, 'T1'), // tick 101 的舊分支事件
+      stateLine(4, 0, 40),
+      '{"kind":"input","tick":200,"command":{"type":"restore","args":{"tick":100}}}',
+      stateLine(2.04, 0, 20.4), // C# Restore 後第一筆 state 行為 tick 102
+      stateLine(3, 5, 30),
+    ].join('\n');
+    const r = parseJsonLines(text);
+    expect(r.errors).toEqual([]);
+    expect(r.rewinds).toEqual([{ t: 2, tick: 100, from: 4, droppedStates: 1, droppedEvents: 1 }]);
+    expect(r.events).toEqual([]);
+    expect([...cpaAlarmTargets(r.events, 3)]).toEqual([]);
+    expect(r.states.map((s) => s.t)).toEqual([2, 2.04, 3]);
+    expect(rewindTitle(r.rewinds[0]!, r.header.dt)).toBe('倒帶至 00:02(tick 100)← 自 00:04;丟棄 1 筆狀態、1 筆事件');
+    // restore 無 args:取最近一筆 snapshot 行的 tick
+    const text2 = [header, stateLine(2, 0, 20), '{"kind":"snapshot","tick":100}', cpa(2.02, 'T1'), stateLine(4, 0, 40), '{"kind":"input","tick":200,"command":{"type":"restore"}}', stateLine(2.04, 0, 20.4)].join('\n');
+    const r2 = parseJsonLines(text2);
+    expect(r2.rewinds).toEqual([{ t: 2, tick: 100, from: 4, droppedStates: 1, droppedEvents: 1 }]);
+    // restore 被拒(無狀態倒退):待處理的倒帶 tick 不會套到之後的 reset 倒退
+    const text3 = [header, stateLine(2, 0, 20), stateLine(4, 0, 40), '{"kind":"input","tick":200,"command":{"type":"restore","args":{"tick":100}}}', stateLine(6, 0, 60), '{"kind":"input","tick":300,"command":{"type":"reset"}}', stateLine(0.04, 0, 0.4)].join('\n');
+    expect(parseJsonLines(text3).rewinds).toEqual([{ t: 0.04, tick: 2, from: 6, droppedStates: 3, droppedEvents: 0 }]);
   });
 
   it('只有一次倒帶:保留倒帶點之前的歷史與倒帶後的新分支;eventIndexAt 取得倒帶後的事件', () => {
@@ -220,7 +249,7 @@ describe('倒帶分段(restore/reset)', () => {
       [3, 7],
       [5, 9],
     ]);
-    expect(r.rewinds).toEqual([{ t: 2.04, from: 4, droppedStates: 2, droppedEvents: 1 }]);
+    expect(r.rewinds).toEqual([{ t: 2.04, tick: 102, from: 4, droppedStates: 2, droppedEvents: 1 }]); // 無 input 行:取倒帶後第一筆狀態
     expect(r.events.map((e) => [e.kind, e.t])).toEqual([
       ['frozen', 1],
       ['resumed', 2.5],
@@ -250,7 +279,7 @@ describe('倒帶分段(restore/reset)', () => {
     });
     const r = parseReplay(JSON.stringify(record));
     expect(r.errors).toEqual([]);
-    expect(r.rewinds).toEqual([{ t: 2, from: 4, droppedStates: 2, droppedEvents: 0 }]);
+    expect(r.rewinds).toEqual([{ t: 2, tick: 100, from: 4, droppedStates: 2, droppedEvents: 0 }]);
     expect(r.states.map((st) => [st.t, st.pos.x])).toEqual([
       [1, 1],
       [2, 2],

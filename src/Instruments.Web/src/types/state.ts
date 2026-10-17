@@ -117,6 +117,23 @@ export interface RouteStatus {
   complete?: boolean;
 }
 
+/** 操舵模式(state.schema.json steering;C# SimCore 產生,Python 參考伺服器不輸出)。 */
+export type SteeringModeValue = 'fu' | 'nfu' | 'autopilot' | 'emergency';
+
+export const STEERING_MODES: readonly SteeringModeValue[] = ['fu', 'nfu', 'autopilot', 'emergency'] as const;
+
+/** 使用中的舵機泵 */
+export type SteeringPump = '1' | '2' | 'both';
+
+export const STEERING_PUMPS: readonly SteeringPump[] = ['1', '2', 'both'] as const;
+
+export interface SteeringStatus {
+  mode: SteeringModeValue;
+  pump: SteeringPump;
+  /** nfu 模式時舵是否正被推動(direction port/starboard 中);其他模式省略 */
+  nfuActive?: boolean;
+}
+
 export interface OwnShipState {
   /** 模擬時間(秒,自練習開始) */
   t: number;
@@ -163,6 +180,8 @@ export interface OwnShipState {
   visibility_nm?: number;
   scenario?: ScenarioStatus;
   route?: RouteStatus;
+  /** 操舵模式(指令 steeringMode 切換;核心不支援時省略,lib/steering.ts 由原始框取出) */
+  steering?: SteeringStatus;
   /** 已出現的目標船(state.targets[];舊狀態或情境無目標船時為空陣列) */
   targets: TargetState[];
 }

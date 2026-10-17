@@ -5,7 +5,8 @@
 - YAML → 通用節點樹(dict / list / 純量);**純量型別推斷與 C# 相同**:加引號者為字串;純量 ``true``/``false``(不分大小寫)
   → 布林、十進位整數/小數(含指數)→ 數值、``null``/``~``/空 → None,其餘(含日期、``yes``/``no``、``0x1F``、``1_000``)為字串。
 - 參數集(``data/parameters/company-procedures.yaml``;schema ``src/Contracts/parameter-set.schema.json``)載入時做結構檢查:
-  版次格式 ``YYYY.M.n``、單位列舉、來源文件存在、鍵名單位後綴與 unit 一致、min/max。
+  版次格式 ``YYYY.M.n``、單位列舉、來源文件存在、鍵名單位後綴與 unit 一致、min/max(數值或數值字串,否則錯誤)、
+  ``external`` 須為布林。``ParameterSet.load`` 的 ``path`` 為相對專案根目錄(D34;不在專案內則原路徑)。
 - 情境節點樹中整個字串恰為 ``${params:<key>}`` 者以參數 ``value`` 取代(不支援內嵌/運算);未知鍵、單位後綴不符、
   引用於不允許的欄位(id、name、seed …)、來源文件缺漏皆為 ``ValueError``。
 - 解析清單 ``[{path, key, value, unit, source, revision, clause}]`` 與摘要 ``{id, version, path, sha256, resolved}``
@@ -54,8 +55,9 @@ class _TreeLoader(yaml.SafeLoader):
 
 # 清掉 SafeLoader 的 YAML 1.1 隱式解析(yes/no/on/off、timestamp、0x/0o/底線/60 進位、.inf/.nan、merge 等)
 _TreeLoader.yaml_implicit_resolvers = {}
-_TreeLoader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
-_TreeLoader.add_implicit_resolver("tag:yaml.org,2002:null", re.compile(r"^(?:~|null|Null|NULL|)$"), ["~", "n", "N", ""])
+# C# 以 OrdinalIgnoreCase 比對 true/false/null:TRue、NuLL 亦為布林/null
+_TreeLoader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|false)$", re.IGNORECASE), list("tTfF"))
+_TreeLoader.add_implicit_resolver("tag:yaml.org,2002:null", re.compile(r"^(?:~|null|)$", re.IGNORECASE), ["~", "n", "N", ""])
 _TreeLoader.add_implicit_resolver("tag:yaml.org,2002:int", re.compile(r"^[-+]?[0-9]+$"), list("-+0123456789"))
 _TreeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:float",
@@ -68,6 +70,11 @@ def _construct_scalar_str(loader: yaml.SafeLoader, node: yaml.ScalarNode) -> str
     return loader.construct_scalar(node)
 
 
+def _construct_int(loader: yaml.SafeLoader, node: yaml.ScalarNode) -> int:
+    # C# long.TryParse(十進位):010 → 10、-010 → -10、08 → 8;不用 PyYAML 的八進位/底線規則
+    return int(loader.construct_scalar(node), 10)
+
+
 def _construct_float(loader: yaml.SafeLoader, node: yaml.ScalarNode) -> float:
     v = float(loader.construct_scalar(node))
     if v != v or v in (float("inf"), float("-inf")):
@@ -75,6 +82,7 @@ def _construct_float(loader: yaml.SafeLoader, node: yaml.ScalarNode) -> float:
     return v
 
 
+_TreeLoader.add_constructor("tag:yaml.org,2002:int", _construct_int)
 _TreeLoader.add_constructor("tag:yaml.org,2002:float", _construct_float)
 _TreeLoader.add_constructor("tag:yaml.org,2002:timestamp", _construct_scalar_str)
 
@@ -95,6 +103,31 @@ def _stringify_keys(node: Any) -> Any:
 
 def _is_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _opt_number(v: Any, where: str) -> float | None:
+    """選填數值欄位:數值或可解析為十進位數值的字串(C# ContractJson NumberHandling.AllowReadingFromString);
+    其餘型別(布林、物件、非數值字串)為 ``ValueError``。"""
+    if v is None:
+        return None
+    if _is_number(v):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            f = float(v.strip())
+        except ValueError:
+            f = float("nan")
+        if f == f and f not in (float("inf"), float("-inf")):
+            return f
+    raise ValueError(f"{where} 須為數值:{v!r}")
+
+
+def _project_relative(p: Path) -> str:
+    """相對專案根目錄的路徑('/' 分隔;C# RepositoryPaths.ToProjectRelative,情境引擎設計 D34);不在專案內則原樣。"""
+    try:
+        return p.resolve().relative_to(paths.repo_root()).as_posix()
+    except ValueError:
+        return str(p)
 
 
 # ---------------------------------------------------------------- 參數集
@@ -150,11 +183,14 @@ class ParameterSet:
         for k, src in sources_raw.items():
             if not isinstance(src, dict):
                 raise ValueError(f"sources.{k} 須為物件")
+            external = src.get("external", False)
+            if not isinstance(external, bool):  # C# bool 欄位嚴格:"no"/"false" 字串為 JsonException
+                raise ValueError(f"sources.{k}.external 須為布林:{external!r}")
             sources[str(k)] = {"title": None if src.get("title") is None else str(src["title"]),
                                "revision": None if src.get("revision") is None else str(src["revision"]),
                                "approvedBy": None if src.get("approvedBy") is None else str(src["approvedBy"]),
                                "date": None if src.get("date") is None else str(src["date"]),
-                               "external": bool(src.get("external", False))}
+                               "external": external}
         params: dict[str, dict[str, Any]] = {}
         for k, p in params_raw.items():
             if not isinstance(p, dict):
@@ -163,7 +199,8 @@ class ParameterSet:
                      "source": "" if p.get("source") is None else str(p["source"]),
                      "clause": None if p.get("clause") is None else str(p["clause"]),
                      "description": None if p.get("description") is None else str(p["description"]),
-                     "min": p.get("min"), "max": p.get("max")}
+                     "min": _opt_number(p.get("min"), f"parameters.{k}.min"),
+                     "max": _opt_number(p.get("max"), f"parameters.{k}.max")}
             params[str(k)] = entry
         return cls(id=opt_str("id") or "", version=opt_str("version") or "", effective_from=opt_str("effectiveFrom"),
                    approved_by=opt_str("approvedBy"), approved_on=opt_str("approvedOn"), notes=opt_str("notes"),
@@ -183,7 +220,7 @@ class ParameterSet:
             raise FileNotFoundError(f"找不到參數集:{p}")
         data = p.read_bytes()
         pset = cls.from_tree(yaml_to_tree(data.decode("utf-8")))
-        pset.path = str(p)
+        pset.path = _project_relative(p)
         pset.sha256 = hashlib.sha256(data).hexdigest().upper()
         return pset
 
@@ -221,8 +258,11 @@ class ParameterSet:
 
 
 def find_parameter_set(declared: str | None, base_directory: str | os.PathLike[str] | None = None) -> Path | None:
-    """依 C# ScenarioLoader.TryAutoLoadParameterSet 的順序找參數集檔:絕對路徑;否則專案根目錄、情境檔目錄、工作目錄;無則 None。"""
-    text = (declared or DEFAULT_PARAMETER_SET_PATH).strip() or DEFAULT_PARAMETER_SET_PATH
+    """依 C# ScenarioLoader.TryAutoLoadParameterSet 的順序找參數集檔:絕對路徑;否則專案根目錄、情境檔目錄、工作目錄;無則 None。
+    ``declared`` 為 None 時用預設路徑;空字串與 C# 相同視為「已宣告但找不到」(回 None)。"""
+    text = DEFAULT_PARAMETER_SET_PATH if declared is None else declared
+    if not text.strip():
+        return None
     p = Path(text)
     candidates = [p] if p.is_absolute() else [paths.repo_root() / p] + ([Path(base_directory) / p] if base_directory else []) + [p]
     for c in candidates:

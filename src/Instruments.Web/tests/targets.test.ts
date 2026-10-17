@@ -3,7 +3,8 @@
 // @vitest-environment happy-dom
 import { beforeAll, describe, expect, it } from 'vitest';
 import { defaultState, parseState } from '../src/lib/state-parser.js';
-import { cpaAlarmTargets, targetTableRows } from '../src/lib/targets.js';
+import { CpaAlarmTracker, cpaAlarmTargets, targetTableRows } from '../src/lib/targets.js';
+import { EventStore } from '../src/lib/sim-event.js';
 import type { SimEvent } from '../src/types/event.js';
 import type { TargetState } from '../src/types/target.js';
 import type { TrackPlot } from '../src/components/track-plot.js';
@@ -83,6 +84,41 @@ describe('parseState targets[]', () => {
     expect(r.issues).toContain('targets[2].range_nm');
     expect(r.issues).toContain('targets[2].mmsi');
     expect(parseState(base({ targets: 'x' }))!.issues).toContain('targets');
+  });
+});
+
+describe('CpaAlarmTracker', () => {
+  it('逐事件維護警報集合;事件流超過 EventStore 上限擠掉 cpaAlarm 後仍保留警報(cpaAlarmTargets 由截斷的事件流重算則會漏報)', () => {
+    const tracker = new CpaAlarmTracker();
+    const store = new EventStore(3);
+    const push = (e: SimEvent) => {
+      store.push(e);
+      tracker.apply(e);
+    };
+    push(ev('cpaAlarm', 100, 'T1'));
+    expect([...tracker.snapshot()]).toEqual(['T1']);
+    for (let i = 0; i < 5; i++) push(ev('message', 101 + i));
+    expect(store.count('cpaAlarm')).toBe(0);
+    expect([...cpaAlarmTargets(store.all())]).toEqual([]); // 事件流已無 cpaAlarm
+    expect([...tracker.snapshot()]).toEqual(['T1']); // 追蹤器仍記得
+    expect(tracker.apply(ev('cpaAlarm', 110, 'T1'))).toBe(false); // 重複警報不變
+    expect(tracker.apply(ev('cpaClear', 120, 'T1'))).toBe(true);
+    expect(tracker.apply(ev('cpaClear', 121, 'T1'))).toBe(false);
+    expect(tracker.apply(ev('message', 122))).toBe(false);
+    expect(tracker.size).toBe(0);
+  });
+
+  it('rebuild 依過濾後的事件重算(倒帶);clear 清空;snapshot 為獨立副本', () => {
+    const tracker = new CpaAlarmTracker();
+    const events = [ev('cpaAlarm', 100, 'T1'), ev('cpaAlarm', 120, 'T2'), ev('cpaClear', 150, 'T1')];
+    tracker.rebuild(events);
+    expect([...tracker.snapshot()]).toEqual(['T2']);
+    tracker.rebuild(events, 130);
+    expect([...tracker.snapshot()].sort()).toEqual(['T1', 'T2']);
+    const snap = tracker.snapshot();
+    tracker.clear();
+    expect(tracker.size).toBe(0);
+    expect(snap.size).toBe(2);
   });
 });
 

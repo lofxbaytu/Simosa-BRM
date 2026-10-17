@@ -7,13 +7,17 @@
 // 係數以 FSB1 滿載試俥的迴旋圈與 Z 形概略對齊(K' ≈ 1.1、T' ≈ 1.5),僅供畫面預覽。
 // 情境引擎(設計文件 docs/design/scenario-engine.md)的離線預覽:產生幾個假事件(時間表訊息/語音、故障注入、確認、
 // 手動觸發、結束練習)、state.scenario/route/visibility_nm 欄位與假的 summary,讓教官站不連核心也能測試面板。
+// 操舵模式(D32/D35):state.steering 與 steeringMode 指令(fu/nfu/autopilot/emergency、泵、NFU 推桿;應急操舵下拒絕自動舵並發
+// commandRejected;模式/泵變更發 steeringModeChanged);兩艘假目標船(直線等速:一艘交叉相遇、CPA 小於門檻而處於 cpaAlarm,
+// 一艘錨泊)含 range/bearing/CPA/TCPA,讓航跡圖與 CPA/TCPA 小表離線可見。
 
 import { clamp, degToRad, knotsToMps, mpsToKnots, normalizeHeading, radToDeg, headingDifference } from '../lib/angles.js';
 import { getShipConfig, telegraphStep, type ShipDisplayConfig } from '../lib/ship-config.js';
 import { defaultState } from '../lib/state-parser.js';
 import type { SimCommand } from '../types/command.js';
 import type { SimEvent, SimEventSource } from '../types/event.js';
-import { TELEGRAPH_POSITIONS, type OwnShipState, type ShipId, type TelegraphPosition } from '../types/state.js';
+import type { TargetState } from '../types/target.js';
+import { STEERING_MODES, STEERING_PUMPS, TELEGRAPH_POSITIONS, type OwnShipState, type ShipId, type SteeringModeValue, type SteeringPump, type SteeringStatus, type TelegraphPosition } from '../types/state.js';
 
 export const DEMO_DT = 0.02; // 50 Hz
 
@@ -54,6 +58,22 @@ const DEMO_TIMELINE: ReadonlyArray<{ id: string; at_s: number; make: (t: number)
 
 export const DEMO_PARAMETER_SET_VERSION = '2026.10.1';
 const DEMO_ROUTE_WP_DISTANCE_M = 2 * 1852;
+const NM_M = 1852;
+/** 示範 CPA 警報門檻(nm;核心由情境 traffic.cpaAlarm_nm 給,示範固定) */
+export const DEMO_CPA_ALARM_NM = 0.5;
+/** 應急操舵的舵機速率比(設計文件第 10 節:無資料時取隨動速率一半) */
+const EMERGENCY_RUDDER_RATE_FACTOR = 0.5;
+
+/** 示範目標船(直線等速;位置相對自船初始位置與初始航向)。 */
+interface DemoTarget {
+  base: Omit<TargetState, 'pos' | 'range_nm' | 'bearing_deg' | 'relBearing_deg' | 'cpa_nm' | 'tcpa_min'>;
+  x: number;
+  y: number;
+  /** 速度 (m/s) 與航向 (度) */
+  speedMps: number;
+  course: number;
+  alarm: boolean;
+}
 
 export class DemoSim {
   readonly cfg: ShipDisplayConfig;
@@ -74,6 +94,11 @@ export class DemoSim {
   private ended = false;
   private acks: Array<{ kind: string; t: number; role?: string }> = [];
   private faultInjections: Array<{ fault: string; t: number }> = [];
+  private steering: SteeringStatus = { mode: 'fu', pump: 'both' };
+  private targets: DemoTarget[] = [];
+  /** 自船對地速度 ENU (m/s),供目標船 CPA 計算 */
+  private ownVe = 0;
+  private ownVn = 0;
 
   constructor(options: DemoOptions = {}) {
     const shipId = options.shipId ?? 'FSB1';
@@ -112,8 +137,103 @@ export class DemoSim {
     s.rpm = step.rpm;
     s.rpmOrder = step.rpm;
     s.visibility_nm = 10;
+    s.steering = { ...this.steering };
+    this.targets = this.makeTargets();
     this.updateDerived(s);
     return s;
+  }
+
+  // ------------------------------------------------------------ 假目標船(離線預覽用)
+
+  /** 兩艘假目標船:交叉相遇船在右艏 1.5 nm、朝自船艏前 0.15 nm 處駛來(CPA < 門檻 → cpaAlarm);錨泊船在左正橫 1.2 nm。 */
+  private makeTargets(): DemoTarget[] {
+    const psi = this.opts.initialHeading;
+    const place = (bearingRel: number, nm: number) => {
+      const b = degToRad(normalizeHeading(psi + bearingRel));
+      return { x: Math.sin(b) * nm * NM_M, y: Math.cos(b) * nm * NM_M };
+    };
+    const crossing = place(45, 1.5);
+    const aim = place(0, 0.15);
+    const course = normalizeHeading(radToDeg(Math.atan2(aim.x - crossing.x, aim.y - crossing.y)));
+    const anchored = place(270, 1.2);
+    return [
+      {
+        base: { id: 'DEMO-01', name: 'DEMO CROSSING', mmsi: 416000001, shipType: 'cargo', loa: 120, beam: 20, draft: 7, heading: course, cog: course, sog: 9, stw: 9, rot: 0, aisOn: true, lights: 'powerDriven', behaviour: 'hold', colreg: 'crossing/giveWay' },
+        x: crossing.x,
+        y: crossing.y,
+        speedMps: knotsToMps(9),
+        course,
+        alarm: false,
+      },
+      {
+        base: { id: 'DEMO-02', name: 'DEMO ANCHORED', mmsi: 416000002, shipType: 'tanker', loa: 90, beam: 16, draft: 6, heading: normalizeHeading(psi + 180), cog: 0, sog: 0, stw: 0, rot: 0, aisOn: false, lights: 'anchored', behaviour: 'anchored' },
+        x: anchored.x,
+        y: anchored.y,
+        speedMps: 0,
+        course: normalizeHeading(psi + 180),
+        alarm: false,
+      },
+    ];
+  }
+
+  /** 目標船直線等速前進、更新相對量;CPA 進入/離開門檻時發 cpaAlarm / cpaClear(每秒評估,與核心的 1 s 評估步一致)。 */
+  private stepTargets(s: OwnShipState, dt: number): void {
+    for (const tg of this.targets) {
+      const c = degToRad(tg.course);
+      tg.x += Math.sin(c) * tg.speedMps * dt;
+      tg.y += Math.cos(c) * tg.speedMps * dt;
+    }
+    this.updateTargets(s, s.tick % 50 === 0);
+  }
+
+  private updateTargets(s: OwnShipState, evaluate: boolean): void {
+    const latRad = degToRad(this.opts.originLat);
+    s.targets = this.targets.map((tg) => {
+      const dx = tg.x - s.pos.x;
+      const dy = tg.y - s.pos.y;
+      const c = degToRad(tg.course);
+      const rvx = Math.sin(c) * tg.speedMps - this.ownVe;
+      const rvy = Math.cos(c) * tg.speedMps - this.ownVn;
+      const v2 = rvx * rvx + rvy * rvy;
+      const tcpaS = v2 > 1e-6 ? -(dx * rvx + dy * rvy) / v2 : 0;
+      const cpaM = Math.hypot(dx + rvx * tcpaS, dy + rvy * tcpaS);
+      const range = Math.hypot(dx, dy);
+      const bearing = normalizeHeading(radToDeg(Math.atan2(dx, dy)));
+      const t: TargetState = {
+        ...tg.base,
+        pos: { x: Math.round(tg.x * 10) / 10, y: Math.round(tg.y * 10) / 10, lat: this.opts.originLat + tg.y / 111_320, lon: this.opts.originLon + tg.x / (111_320 * Math.cos(latRad)) },
+        range_nm: Math.round((range / NM_M) * 1000) / 1000,
+        bearing_deg: Math.round(bearing * 10) / 10,
+        relBearing_deg: Math.round(normalizeHeading(bearing - s.heading) * 10) / 10,
+        cpa_nm: Math.round((cpaM / NM_M) * 1000) / 1000,
+        tcpa_min: Math.round((tcpaS / 60) * 10) / 10,
+      };
+      if (tg.base.aisOn) t.ais = { mmsi: tg.base.mmsi, name: tg.base.name, shipType: 70, lat: t.pos.lat, lon: t.pos.lon, cog: tg.base.cog, sog: tg.base.sog, heading: tg.base.heading };
+      if (evaluate) {
+        const inAlarm = t.cpa_nm < DEMO_CPA_ALARM_NM && t.tcpa_min > 0 && tg.speedMps > 0;
+        if (inAlarm && !tg.alarm) this.emit('cpaAlarm', 'traffic', { targetId: t.id, range_nm: t.range_nm, cpa_nm: t.cpa_nm, tcpa_min: t.tcpa_min, visible: true }, s);
+        else if (!inAlarm && tg.alarm) this.emit('cpaClear', 'traffic', { targetId: t.id, range_nm: t.range_nm, cpa_nm: t.cpa_nm, tcpa_min: t.tcpa_min }, s);
+        tg.alarm = inAlarm;
+      }
+      return t;
+    });
+  }
+
+  // ------------------------------------------------------------ 操舵模式(離線預覽用)
+
+  /** 切換模式/泵:有變更才發 steeringModeChanged {from, to, pump};nfuActive 由呼叫者設定。 */
+  private setSteering(mode: SteeringModeValue, pump: SteeringPump | undefined, source: SimEventSource, nfuActive?: boolean): void {
+    const from = this.steering;
+    const next: SteeringStatus = { mode, pump: pump ?? from.pump };
+    if (mode === 'nfu') next.nfuActive = nfuActive ?? false;
+    const s = this.state;
+    // 進出 nfu 時舵令同步到目前舵角(D35);離開 autopilot 時維持目前舵令
+    if ((from.mode === 'nfu') !== (mode === 'nfu')) s.rudderOrder = s.rudder;
+    const changed = from.mode !== next.mode || from.pump !== next.pump;
+    this.steering = next;
+    s.steering = { ...next };
+    this.autopilot.enabled = mode === 'autopilot';
+    if (changed) this.emit('steeringModeChanged', source, { data: { from: from.mode, to: next.mode, pump: next.pump } });
   }
 
   // ------------------------------------------------------------ 假事件與情境狀態(離線預覽用)
@@ -234,6 +354,8 @@ export class DemoSim {
     switch (cmd.type) {
       case 'rudder': {
         if (typeof cmd.value === 'number' && Number.isFinite(cmd.value)) {
+          // 人工舵令把 autopilot/nfu 切回 fu(state.schema.json steering 說明)
+          if (this.steering.mode === 'autopilot' || this.steering.mode === 'nfu') this.setSteering('fu', undefined, 'instructor');
           s.rudderOrder = clamp(cmd.value, -this.cfg.rudderMax_deg, this.cfg.rudderMax_deg);
           this.autopilot.enabled = false;
         }
@@ -262,10 +384,43 @@ export class DemoSim {
       case 'autopilot': {
         const a = cmd.args ?? {};
         const enabled = a['enabled'] === true;
+        if (enabled && this.steering.mode === 'emergency') {
+          // 應急操舵接不到自動舵:整個指令拒絕、狀態不變(D35)
+          this.emit('commandRejected', 'instructor', { data: { command: 'autopilot', reason: 'emergencySteering', args: { ...a } } });
+          break;
+        }
         const heading = typeof a['heading'] === 'number' ? normalizeHeading(a['heading']) : this.autopilot.heading;
         const rotLimit = typeof a['rotLimit'] === 'number' ? clamp(a['rotLimit'], 1, 120) : this.autopilot.rotLimit;
         this.autopilot = { enabled, heading, rotLimit };
         if (!enabled) s.rudderOrder = 0;
+        if (enabled) this.setSteering('autopilot', undefined, 'instructor');
+        else if (this.steering.mode === 'autopilot') this.setSteering('fu', undefined, 'instructor');
+        break;
+      }
+      case 'steeringMode': {
+        const mode = cmd.value;
+        if (typeof mode !== 'string' || !(STEERING_MODES as readonly string[]).includes(mode)) break;
+        const a = cmd.args ?? {};
+        const pumpRaw = typeof a['pump'] === 'number' ? String(a['pump']) : a['pump'];
+        const pump = typeof pumpRaw === 'string' && (STEERING_PUMPS as readonly string[]).includes(pumpRaw) ? (pumpRaw as SteeringPump) : undefined;
+        if (mode === 'autopilot') {
+          if (this.steering.mode === 'emergency') {
+            this.emit('commandRejected', 'instructor', { data: { command: 'steeringMode', reason: 'emergencySteering', args: { ...a } } });
+            break;
+          }
+          const heading = typeof a['heading'] === 'number' ? normalizeHeading(a['heading']) : s.heading;
+          const rotLimit = typeof a['rotLimit'] === 'number' ? clamp(a['rotLimit'], 1, 120) : this.autopilot.rotLimit;
+          this.autopilot = { enabled: true, heading, rotLimit };
+          this.setSteering('autopilot', pump, 'instructor');
+        } else if (mode === 'nfu') {
+          // 推桿:port/starboard 推向滿舵、stop(或不明方向)舵停在目前舵角
+          const dir = a['direction'];
+          const pushing = dir === 'port' || dir === 'starboard';
+          this.setSteering('nfu', pump, 'instructor', pushing);
+          s.rudderOrder = dir === 'port' ? -this.cfg.rudderMax_deg : dir === 'starboard' ? this.cfg.rudderMax_deg : s.rudder;
+        } else {
+          this.setSteering(mode as SteeringModeValue, pump, 'instructor');
+        }
         break;
       }
       case 'freeze':
@@ -281,6 +436,7 @@ export class DemoSim {
         break;
       case 'reset':
         this.autopilot = { enabled: false, heading: 0, rotLimit: 15 };
+        this.steering = { mode: 'fu', pump: 'both' };
         this.rThruster = 0;
         this.frozen = false;
         this.freezes = 0;
@@ -399,8 +555,9 @@ export class DemoSim {
       s.rudderOrder = clamp(rudder, -cfg.rudderNormalMax_deg, cfg.rudderNormalMax_deg);
     }
 
-    // 舵機:速率限制
-    const rudderDelta = clamp(s.rudderOrder - s.rudder, -cfg.rudderRate_degPerS * dt, cfg.rudderRate_degPerS * dt);
+    // 舵機:速率限制(應急操舵時速率減半)
+    const rudderRate = cfg.rudderRate_degPerS * (this.steering.mode === 'emergency' ? EMERGENCY_RUDDER_RATE_FACTOR : 1);
+    const rudderDelta = clamp(s.rudderOrder - s.rudder, -rudderRate * dt, rudderRate * dt);
     s.rudder += rudderDelta;
 
     // 主機轉速:一階滯後(τ 12 s),通過零時有換向延遲的粗略效果
@@ -450,6 +607,7 @@ export class DemoSim {
     s.t += dt;
     s.tick += 1;
     this.updateDerived(s, ve, vn);
+    this.stepTargets(s, dt);
     return s;
   }
 
@@ -481,6 +639,8 @@ export class DemoSim {
       ve = s.u * Math.sin(psi) + s.v * Math.cos(psi) + curMps * Math.sin(curSet);
       vn = s.u * Math.cos(psi) - s.v * Math.sin(psi) + curMps * Math.cos(curSet);
     }
+    this.ownVe = ve;
+    this.ownVn = vn;
     s.stw = mpsToKnots(s.u);
     s.sog = mpsToKnots(Math.hypot(ve, vn));
     s.cog = s.sog > 0.05 ? normalizeHeading(radToDeg(Math.atan2(ve, vn))) : s.heading;
@@ -515,6 +675,12 @@ export class DemoSim {
     s.flags = { frozen: this.frozen, aground: s.depthBelowKeel <= 0, collision: false };
     if (s.flags.aground && !wasAground) this.emit('grounding', 'engine', {}, s);
     this.updateScenarioStatus(s);
+    this.updateTargets(s, s.tick === 0 && s.targets.length === 0);
+  }
+
+  /** 供測試:目前操舵模式。 */
+  get steeringState(): Readonly<SteeringStatus> {
+    return this.steering;
   }
 
   /** 供測試:直接讀自動舵狀態。 */

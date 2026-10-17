@@ -100,4 +100,17 @@ describe('EventStore', () => {
     store.clear();
     expect(store.length).toBe(0);
   });
+
+  it('dropAfter:倒帶時丟棄 t > tMax 的事件(等於 tMax 者保留),回傳丟棄筆數', () => {
+    const store = new EventStore(10);
+    store.push(ev('cpaAlarm', { t: 1, targetId: 'T1' }));
+    store.push(ev('frozen', { t: 2 }));
+    store.push(ev('cpaAlarm', { t: 2.02, targetId: 'T2' }));
+    store.push(ev('resumed', { t: 3 }));
+    expect(store.dropAfter(2)).toBe(2);
+    expect(store.all().map((e) => e.t)).toEqual([1, 2]);
+    expect(store.dropAfter(5)).toBe(0);
+    expect(store.dropAfter(0)).toBe(2);
+    expect(store.length).toBe(0);
+  });
 });
