@@ -24,6 +24,8 @@ import type { OperationEvent } from './operation-log.js';
 export interface ReplayHeader {
   version?: number;
   createdUtc?: string;
+  /** 練習開始時刻(教官站紀錄 startedUtc;核心紀錄無) */
+  startedUtc?: string;
   shipId?: string;
   shipName?: string;
   loading?: string;
@@ -289,6 +291,7 @@ export function parseSessionJson(text: string): ReplayData {
   const sc = obj.scenario;
   const h: ReplayHeader = { dt: DEFAULT_DT };
   h.createdUtc = obj.createdUtc;
+  if (typeof obj.startedUtc === 'string' && obj.startedUtc) h.startedUtc = obj.startedUtc;
   h.shipId = obj.shipId;
   if (sc) {
     h.scenarioId = sc.id;
@@ -309,8 +312,9 @@ export function parseSessionJson(text: string): ReplayData {
     prev = parsed.state;
     pushState(data, parsed.state);
   });
-  for (const c of obj.commands ?? []) {
-    if (!isValidCommand(c.command)) continue;
+  // 損壞的檔案:commands 不是陣列或元素不是物件時略過(不丟例外)
+  for (const c of Array.isArray(obj.commands) ? obj.commands : []) {
+    if (!isRecord(c) || !isValidCommand(c.command)) continue;
     const input: ReplayInput = { tick: typeof c.ack?.tick === 'number' ? c.ack.tick : Math.round(c.t / DEFAULT_DT), t: c.t, command: c.command };
     if (c.ack) {
       const ack: { ok: boolean; detail?: string } = { ok: c.ack.ok };

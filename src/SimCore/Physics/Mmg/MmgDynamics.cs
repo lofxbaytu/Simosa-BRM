@@ -1,5 +1,6 @@
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Environment;
+using SimosaBRM.SimCore.Physics.External;
 using SimosaBRM.SimCore.Ship;
 
 namespace SimosaBRM.SimCore.Physics.Mmg;
@@ -417,6 +418,23 @@ public sealed class MmgDynamics : IShipDynamics
         var (ugE, ugN) = EnvironmentMath.GroundVelocity(s.U, s.V, s.Psi, env.CurrentEastMps, env.CurrentNorthMps);
         var forces = Forces(s.U, s.V, s.R, c.RudderRad, c.Rpm / 60.0, c.Thruster, s.Psi, ugE, ugN, env.WindEastMps, env.WindNorthMps, f);
         var (du, dv, dr) = Accelerations(s.U, s.V, s.R, forces.X, forces.Y, forces.N, f);
+        var (dx, dy, dpsi) = IShipDynamics.Kinematics(s, env);
+        return new StateVector(du, dv, dr, dx, dy, dpsi);
+    }
+
+    /// <summary>MMG 接受外力(拖船、錨鏈、碰墊、繫纜):外力直接加到 X、Y、N(規劃書第 6.2 節 X_T + X_A + …)。</summary>
+    public bool SupportsExternalForces => true;
+
+    /// <summary>
+    /// 含外力的導數:與 <see cref="Derivative(double, in StateVector, in EnvironmentSample, in ControlInput)"/> 相同,
+    /// 但運動方程式右側為 X + X_ext、Y + Y_ext、N + N_ext(外力於船體座標、原點船舯;x_G 耦合由 <see cref="Accelerations"/> 處理)。
+    /// </summary>
+    public StateVector Derivative(double t, in StateVector s, in EnvironmentSample env, in ControlInput c, in BodyForce external)
+    {
+        var f = ShallowFactors(env.WaterDepthM);
+        var (ugE, ugN) = EnvironmentMath.GroundVelocity(s.U, s.V, s.Psi, env.CurrentEastMps, env.CurrentNorthMps);
+        var forces = Forces(s.U, s.V, s.R, c.RudderRad, c.Rpm / 60.0, c.Thruster, s.Psi, ugE, ugN, env.WindEastMps, env.WindNorthMps, f);
+        var (du, dv, dr) = Accelerations(s.U, s.V, s.R, forces.X + external.X, forces.Y + external.Y, forces.N + external.N, f);
         var (dx, dy, dpsi) = IShipDynamics.Kinematics(s, env);
         return new StateVector(du, dv, dr, dx, dy, dpsi);
     }

@@ -1,4 +1,5 @@
 using SimosaBRM.SimCore.Environment;
+using SimosaBRM.SimCore.Physics.External;
 
 namespace SimosaBRM.SimCore.Physics;
 
@@ -17,6 +18,20 @@ public interface IShipDynamics
 
     /// <summary>計算導數。<paramref name="t"/> 為模擬時間(秒),供時變模型使用。</summary>
     StateVector Derivative(double t, in StateVector state, in EnvironmentSample env, in ControlInput control);
+
+    /// <summary>
+    /// 是否接受外力(拖船 T、錨/纜 A、碰墊與碼頭接觸;設計文件 docs/design/physics-tugs-anchors-mooring.md)。
+    /// false 時引擎不呼叫 <see cref="Derivative(double, in StateVector, in EnvironmentSample, in ControlInput, in BodyForce)"/>,
+    /// 並以 commandRejected {reason: externalForcesUnsupported} 拒絕 tugControl / anchor / mooring 指令。
+    /// </summary>
+    bool SupportsExternalForces => false;
+
+    /// <summary>
+    /// 含外力的導數:<paramref name="external"/> 為船體座標外力(N、N·m),加入運動方程式右側(規劃書第 6.2 節 X_T + X_A 等)。
+    /// 只在 <see cref="SupportsExternalForces"/> 為 true 時由引擎呼叫;預設明確不支援。
+    /// </summary>
+    StateVector Derivative(double t, in StateVector state, in EnvironmentSample env, in ControlInput control, in BodyForce external)
+        => throw new NotSupportedException($"動力學模型 {ModelName} 不支援外力(拖船/錨/纜/碰墊)");
 
     /// <summary>
     /// 模型建議的致動器參數(舵機速率/上限、主機時間常數/速率限制/換向狀態機、側推延遲);

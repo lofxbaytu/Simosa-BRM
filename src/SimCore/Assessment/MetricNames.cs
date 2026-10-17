@@ -3,7 +3,8 @@ namespace SimosaBRM.SimCore.Assessment;
 /// <summary>容許帶可引用的指標名稱(summary 的 <c>段.欄位</c>;情境引擎設計第 4.2–4.5 節)。</summary>
 public static class MetricNames
 {
-    public static readonly string[] All =
+    // 靜態欄位依宣告順序初始化:BaseNames 須在 All 之前
+    private static readonly string[] BaseNames =
     {
         "track.meanAbsXtd_m", "track.maxXtd_m", "track.timeOutsideCorridor_s", "track.corridorExcursions", "track.fractionOutsideCorridor",
         "track.minDistanceToCorridorEdge_m", "track.minDistanceToNoGo_m", "track.meanHeadingDeviation_deg",
@@ -17,6 +18,10 @@ public static class MetricNames
         // 警報與 BNWAS(sensors-alerts.md 第 5 節;Python scenario.py METRIC_NAMES 尚未加入,情境 bands 暫勿引用)
         "alerts.meanAckTime_s", "alerts.maxAckTime_s", "alerts.unacknowledged", "alerts.escalations", "bnwas.stage2Count", "bnwas.stage3Count",
     };
+
+    // 操縱量測 manoeuvres.*(ManoeuvreTracker.MetricNameList;ship-familiarisation.md 第 2.6 節):同 id 最近一次 measured 的量測值;
+    // Python scenario.py METRIC_NAMES 尚未加入,情境 bands 暫勿引用(Python 結構檢查會判為未知指標)
+    public static readonly string[] All = BaseNames.Concat(ManoeuvreTracker.MetricNameList()).ToArray();
 
     private static readonly HashSet<string> Set = new(All, StringComparer.Ordinal);
 

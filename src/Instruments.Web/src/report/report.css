@@ -1,0 +1,748 @@
+/*
+ * 講評報告頁(report.html)樣式:螢幕為「左編輯、右列印預覽」;列印(@media print,A4)只印 .sheet。
+ * 文件本身固定白底黑字(紙本);工具列沿用 theme.css 的色票。@page 的頁首/頁尾由 report-app.ts 動態寫入。
+ */
+:root {
+  --rp-paper: #ffffff;
+  --rp-ink: #111111;
+  --rp-ink-2: #444444;
+  --rp-ink-3: #777777;
+  --rp-rule: #b8b8b8;
+  --rp-rule-soft: #e2e2e2;
+  --rp-head: #f0f2f4;
+  --rp-warn: #9a5b00;
+  --rp-alarm: #b00020;
+  --rp-ok: #1b6e2a;
+}
+
+/* theme.css 為儀器頁固定 100% 高度並關閉捲動與選取;報告是可捲動、可選取的文件,在此覆寫(否則列印只得一頁) */
+html,
+body {
+  margin: 0;
+  height: auto;
+  overflow: visible;
+  user-select: text;
+  -webkit-user-select: text;
+  background: var(--ob-bg-app);
+  color: var(--ob-text);
+  font-family: system-ui, 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', sans-serif;
+  font-size: 14px;
+}
+
+brm-report-app {
+  display: block;
+  min-height: 100vh;
+}
+
+/* ---------------------------------------------------------------- 工具列 */
+.rp-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--ob-bg-container);
+  border-bottom: 1px solid var(--ob-border);
+}
+.rp-title {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.rp-tabs {
+  display: flex;
+  gap: 2px;
+}
+.rp-tabs button,
+.rp-btn {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid var(--ob-border-strong);
+  background: var(--ob-bg-surface);
+  color: var(--ob-text);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.rp-tabs button.active {
+  background: var(--ob-accent);
+  color: var(--ob-text-on-accent);
+  border-color: var(--ob-accent);
+}
+.rp-btn.primary {
+  background: var(--ob-accent);
+  border-color: var(--ob-accent);
+  color: var(--ob-text-on-accent);
+}
+.rp-btn.danger {
+  border-color: var(--ob-alarm);
+  color: var(--ob-alarm);
+}
+.rp-btn.small {
+  padding: 1px 6px;
+  font-size: 12px;
+}
+.rp-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.file-btn {
+  position: relative;
+  overflow: hidden;
+  display: inline-block;
+}
+.file-btn input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.rp-spacer {
+  flex: 1;
+}
+.rp-notice {
+  font-size: 12px;
+  color: var(--ob-text-secondary);
+}
+.rp-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--ob-text-secondary);
+  border-bottom: 1px solid var(--ob-border);
+}
+.rp-status .ok,
+p.ok {
+  color: var(--ob-ok);
+}
+.rp-status .warn,
+.rp-status .msg.error {
+  color: var(--ob-warning);
+}
+.rp-status .msg.info {
+  color: var(--ob-text);
+}
+
+/* ---------------------------------------------------------------- 版面 */
+.rp-main {
+  display: grid;
+  grid-template-columns: minmax(380px, 560px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .rp-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.rp-editor {
+  background: var(--ob-bg-surface);
+  border: 1px solid var(--ob-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.rp-editor h2 {
+  font-size: 16px;
+  margin: 4px 0 8px;
+}
+.rp-editor h3 {
+  font-size: 14px;
+  margin: 12px 0 6px;
+}
+.rp-editor .fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 6px 10px;
+}
+.rp-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--ob-text-secondary);
+}
+.rp-editor label.block {
+  margin-top: 8px;
+}
+.rp-editor input,
+.rp-editor select,
+.rp-editor textarea {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ob-text);
+  background: var(--ob-bg-input);
+  border: 1px solid var(--ob-border);
+  border-radius: 3px;
+  padding: 3px 5px;
+  min-width: 0;
+}
+.rp-editor textarea {
+  resize: vertical;
+}
+.rp-editor .hint {
+  font-size: 11px;
+  color: var(--ob-text-muted);
+}
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+.edit-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.edit-tbl th,
+.edit-tbl td {
+  border-bottom: 1px solid var(--ob-border);
+  padding: 2px 3px;
+  text-align: left;
+}
+.edit-tbl input,
+.edit-tbl select {
+  width: 100%;
+  box-sizing: border-box;
+}
+.edit-tbl td.att {
+  text-align: center;
+  white-space: nowrap;
+}
+.edit-tbl td.att input {
+  width: auto;
+}
+.edit-tbl .ex-hours {
+  width: 64px;
+}
+ul.warn {
+  color: var(--ob-warning);
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+/* 評估表編輯 */
+.draft-badge {
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--ob-warning);
+  border: 1px solid var(--ob-warning);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+}
+.form-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.form-chip {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border: 1px solid var(--ob-border);
+  border-radius: 12px;
+  background: var(--ob-bg-surface-raised);
+  color: var(--ob-text);
+  cursor: pointer;
+}
+.form-chip.active {
+  border-color: var(--ob-accent);
+  background: var(--ob-accent-soft);
+}
+.form-chip.done {
+  border-color: var(--ob-ok);
+}
+.validation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.err-count,
+.issue.error {
+  color: var(--ob-alarm);
+}
+.warn-count,
+.issue.warning {
+  color: var(--ob-warning);
+}
+fieldset.cat {
+  border: 1px solid var(--ob-border);
+  border-radius: 4px;
+  margin: 8px 0;
+  padding: 4px 8px 8px;
+}
+fieldset.cat legend {
+  font-weight: 600;
+}
+fieldset.cat legend .en {
+  font-weight: normal;
+  font-size: 11px;
+  color: var(--ob-text-muted);
+}
+.quick-markers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.qm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-left: 3px solid var(--ob-border-strong);
+  padding-left: 4px;
+}
+.qm.plus {
+  border-left-color: var(--ob-ok);
+}
+.qm.delta {
+  border-left-color: var(--ob-warning);
+}
+.qm-t {
+  font-variant-numeric: tabular-nums;
+  color: var(--ob-text-secondary);
+}
+.el {
+  border-top: 1px solid var(--ob-border);
+  padding: 6px 0;
+}
+.el.low .el-label {
+  color: var(--ob-warning);
+}
+.el-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.el-label {
+  font-weight: 600;
+}
+.stcw-tag {
+  font-size: 10px;
+  border: 1px solid var(--ob-border);
+  border-radius: 3px;
+  padding: 0 3px;
+  color: var(--ob-text-secondary);
+  cursor: help;
+}
+.scores {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+}
+.score-btn {
+  font: inherit;
+  width: 28px;
+  height: 26px;
+  border: 1px solid var(--ob-border-strong);
+  background: var(--ob-bg-surface-raised);
+  color: var(--ob-text);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.score-btn.active {
+  background: var(--ob-accent);
+  color: var(--ob-text-on-accent);
+  border-color: var(--ob-accent);
+}
+.score-btn.s1.active,
+.score-btn.s2.active {
+  background: var(--ob-warning);
+  border-color: var(--ob-warning);
+}
+.anchors {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ob-text-secondary);
+  margin: 4px 0;
+}
+.anchors b {
+  color: var(--ob-text);
+}
+.obs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin: 2px 0;
+}
+.obs .obs-t {
+  width: 84px;
+  flex: none;
+}
+.obs .obs-text {
+  flex: 1;
+}
+.el-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-end;
+  margin-top: 4px;
+}
+.el-foot label {
+  flex-direction: row;
+  align-items: center;
+}
+.el-foot .el-comment {
+  flex: 1;
+  min-width: 120px;
+}
+.el-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  margin-top: 2px;
+}
+.agreement-box {
+  margin-top: 10px;
+}
+
+/* ---------------------------------------------------------------- 列印文件(紙本樣式;螢幕預覽也相同) */
+.rp-preview {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.sheet {
+  background: var(--rp-paper);
+  color: var(--rp-ink);
+  width: 100%;
+  max-width: 210mm;
+  box-sizing: border-box;
+  padding: 14mm 12mm;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  font-size: 10pt;
+  line-height: 1.45;
+  font-family: 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', 'Noto Sans TC', system-ui, sans-serif;
+}
+.sheet h2 {
+  font-size: 12.5pt;
+  margin: 14px 0 6px;
+  padding-bottom: 2px;
+  border-bottom: 1.5px solid var(--rp-ink);
+  break-after: avoid;
+}
+.sheet h3 {
+  font-size: 10.5pt;
+  margin: 10px 0 4px;
+  break-after: avoid;
+}
+.sheet h4 {
+  font-size: 10pt;
+  margin: 8px 0 2px;
+}
+.sheet p {
+  margin: 4px 0;
+}
+.doc-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: 'org right' 'title title' 'sub sub';
+  border-bottom: 2px solid var(--rp-ink);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+.doc-org {
+  grid-area: org;
+  font-size: 9pt;
+  letter-spacing: 0.1em;
+}
+.doc-right {
+  grid-area: right;
+  font-size: 9pt;
+  text-align: right;
+}
+.doc-title {
+  grid-area: title;
+  font-size: 17pt;
+  font-weight: 700;
+  margin-top: 4px;
+}
+.doc-sub {
+  grid-area: sub;
+  color: var(--rp-ink-2);
+}
+.advisory {
+  font-size: 8.5pt;
+  color: var(--rp-ink-2);
+}
+.statement {
+  border: 1.5px solid var(--rp-ink);
+  padding: 6px 8px;
+  font-weight: 700;
+  text-align: center;
+  margin: 8px 0;
+}
+dl.kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+  gap: 1px 10px;
+  margin: 4px 0;
+}
+dl.kv dt {
+  color: var(--rp-ink-2);
+  white-space: nowrap;
+}
+dl.kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.grid2 dl.kv {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+table.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4px 0;
+  font-size: 9pt;
+}
+table.tbl th,
+table.tbl td {
+  border: 0.5pt solid var(--rp-rule);
+  padding: 2px 4px;
+  text-align: left;
+  vertical-align: top;
+  /* 以字為單位換行(anywhere 會讓短欄位逐字斷行) */
+  overflow-wrap: break-word;
+}
+table.tbl thead th {
+  background: var(--rp-head);
+  font-weight: 600;
+  white-space: nowrap;
+}
+table.tbl thead {
+  display: table-header-group;
+}
+table.tbl tr {
+  break-inside: avoid;
+}
+table.tbl td.num,
+table.tbl th.num {
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+table.tbl td.t,
+table.tbl th.t {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  width: 1%;
+}
+table.tbl td.att,
+table.tbl th.att {
+  text-align: center;
+}
+table.tbl tr.sev-alarm td {
+  color: var(--rp-alarm);
+}
+table.tbl tr.sev-warning td {
+  color: var(--rp-warn);
+}
+table.tbl tr.low td {
+  background: #fff4e5;
+}
+.nw {
+  white-space: nowrap;
+}
+.mono {
+  font-family: ui-monospace, Consolas, monospace;
+}
+/* 長識別字(情境 id、報告編號、紀錄鍵)可在任意處換行,不撐寬表格(A4 列印不縮小) */
+.sheet .mono,
+.sheet .break-any {
+  overflow-wrap: anywhere;
+}
+.small {
+  font-size: 8pt;
+}
+.sheet .muted {
+  color: var(--rp-ink-3);
+}
+.sheet .warn {
+  color: var(--rp-warn);
+}
+.pre {
+  white-space: pre-wrap;
+}
+.score-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 4px 0 6px;
+}
+.score-line .score {
+  font-size: 20pt;
+  font-weight: 700;
+}
+.badge {
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 6px;
+  font-weight: 600;
+}
+.badge.ok {
+  color: var(--rp-ok);
+}
+.badge.fail {
+  color: var(--rp-alarm);
+}
+.score-cell {
+  display: inline-block;
+  min-width: 1.6em;
+  text-align: center;
+  font-weight: 700;
+  border: 1px solid var(--rp-rule);
+  border-radius: 2px;
+}
+.score-cell.s1,
+.score-cell.s2 {
+  color: var(--rp-alarm);
+  border-color: var(--rp-alarm);
+}
+.cat-means {
+  font-size: 9pt;
+}
+.behavioural,
+.manoeuvre {
+  break-inside: auto;
+}
+.agreement {
+  border: 0.5pt solid var(--rp-rule);
+  padding: 4px 8px;
+  margin: 6px 0;
+  break-inside: avoid;
+}
+.debrief-part {
+  break-inside: avoid;
+}
+.debrief-part .hint {
+  font-size: 8.5pt;
+}
+.write-lines {
+  height: 18mm;
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 5.5mm, var(--rp-rule-soft) 5.5mm, var(--rp-rule-soft) 6mm);
+}
+.form-el {
+  border-top: 0.5pt solid var(--rp-rule);
+  padding: 4px 0;
+  break-inside: avoid;
+}
+.form-el-head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+table.anchors-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8pt;
+  color: var(--rp-ink-2);
+  table-layout: fixed;
+}
+table.anchors-tbl td {
+  vertical-align: top;
+  padding: 1px 4px 1px 0;
+}
+.el-obs {
+  font-size: 9pt;
+  min-height: 4mm;
+}
+.el-meta {
+  font-size: 8pt;
+  color: var(--rp-ink-2);
+}
+.notes {
+  font-size: 8.5pt;
+  color: var(--rp-ink-2);
+  margin: 2px 0;
+  padding-left: 16px;
+}
+.signatures {
+  display: flex;
+  gap: 16px;
+  margin-top: 18mm;
+  break-inside: avoid;
+}
+.sig {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sig-line {
+  border-bottom: 0.75pt solid var(--rp-ink);
+  height: 10mm;
+}
+.sig-label {
+  font-size: 9pt;
+  color: var(--rp-ink-2);
+}
+.doc-foot {
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 0.5pt solid var(--rp-rule);
+  font-size: 8pt;
+  color: var(--rp-ink-3);
+}
+
+/* ---------------------------------------------------------------- 列印 */
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    color: #000;
+  }
+  .screen-only,
+  .rp-toolbar,
+  .rp-status,
+  .rp-editor {
+    display: none !important;
+  }
+  .rp-main {
+    display: block;
+    padding: 0;
+  }
+  .rp-preview {
+    display: block;
+  }
+  .sheet {
+    box-shadow: none;
+    padding: 0;
+    max-width: none;
+    width: auto;
+  }
+  .sheet + .sheet {
+    break-before: page;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
+
+/* 檔案選擇鈕在編輯區內也維持按鈕外觀 */
+.rp-editor label.rp-btn {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--ob-text);
+}

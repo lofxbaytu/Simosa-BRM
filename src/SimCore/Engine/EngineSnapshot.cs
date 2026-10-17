@@ -50,6 +50,11 @@ public sealed record EngineSnapshot
     public Alerts.AlertManagerState? Alerts { get; init; }
     /// <summary>BNWAS(Version 3)</summary>
     public Alerts.BnwasState? Bnwas { get; init; }
+    /// <summary>
+    /// 外力模組(拖船出力/方向、錨鏈長/錨位/走錨、碰墊接觸事件、繫纜;設計文件 physics-tugs-anchors-mooring.md)。選填:Version 不變(仍為 3),
+    /// 只在情境使用外力時寫入;缺此欄位時還原為情境初始外力狀態(拖船依 initial、錨收存或初始已錨泊、繫纜依 initial)。
+    /// </summary>
+    public Physics.External.ExternalForceSnapshot? External { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
     public required string StateHash { get; init; }
 

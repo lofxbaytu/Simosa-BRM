@@ -27,7 +27,13 @@ export interface SessionRecord {
   format: typeof SESSION_RECORD_FORMAT;
   /** 1:第一版;2:新增 events(核心事件)與 coreSummary(核心 summary) */
   version: 1 | 2;
+  /** 匯出時刻(每次下載或按「講評報告」都不同;不可作為練習識別) */
   createdUtc: string;
+  /**
+   * 練習開始時刻(教官站本機時鐘,ISO):載入情境/重設/簡化模式「開始練習」後收到第一筆狀態時記下,同一練習多次匯出不變。
+   * 講評報告的紀錄鍵用它對應評估表與報告欄位;舊紀錄沒有此欄時退回 createdUtc。
+   */
+  startedUtc?: string;
   mode: 'full' | 'simple';
   source: string;
   scenario: ScenarioSummary | null;
@@ -84,6 +90,8 @@ export interface SessionRecordInput {
   summary: DebriefSummary | null;
   events?: readonly SimEvent[];
   coreSummary?: AssessmentSummary | null;
+  /** 練習開始時刻(ISO;見 SessionRecord.startedUtc) */
+  startedUtc?: string;
 }
 
 export function buildSessionRecord(input: SessionRecordInput, now = new Date()): SessionRecord {
@@ -91,6 +99,7 @@ export function buildSessionRecord(input: SessionRecordInput, now = new Date()):
     format: SESSION_RECORD_FORMAT,
     version: 2,
     createdUtc: now.toISOString(),
+    ...(input.startedUtc ? { startedUtc: input.startedUtc } : {}),
     mode: input.mode,
     source: input.source,
     scenario: input.scenario,

@@ -31,6 +31,7 @@ import { OperationLogDeriver, type OperationEvent } from './lib/operation-log.js
 import { DebriefAccumulator, type DebriefSummary } from './lib/debrief.js';
 import { BRM_CATEGORIES, BrmMarkerStore, type BrmMarker } from './lib/brm-markers.js';
 import { StateSampler, buildSessionRecord, type CommandLogEntry } from './lib/session-record.js';
+import { saveHandoff } from './report/report-store.js';
 import { downloadText, fileStamp } from './lib/download.js';
 import { formatHeading, formatKnots, formatMeters, formatRot, formatRudder, formatSimTime } from './lib/format.js';
 import type { SimEvent } from './types/event.js';
@@ -427,6 +428,8 @@ export class InstructorApp extends LitElement {
   private readonly debrief = new DebriefAccumulator();
   private readonly markerStore = new BrmMarkerStore();
   private readonly sampler = new StateSampler(1);
+  /** 練習開始時刻(本機時鐘 ISO;新練習後第一筆抽樣時記下):紀錄的 startedUtc,講評報告以它識別同一練習(不隨匯出時間改變) */
+  private exerciseStartedUtc: string | null = null;
   private lastStateAt = 0;
   private staleTimer: ReturnType<typeof setInterval> | null = null;
   private commandSeq = 0;
@@ -559,7 +562,7 @@ export class InstructorApp extends LitElement {
       const added = this.opLog.push(state);
       if (added.length > 0) this.opEvents = [...this.opLog.all()];
       this.debrief.push(state);
-      this.sampler.push(state);
+      if (this.sampler.push(state) && this.exerciseStartedUtc === null) this.exerciseStartedUtc = new Date().toISOString();
     } else {
       this.opLog.restart();
     }
@@ -742,6 +745,7 @@ export class InstructorApp extends LitElement {
     this.opLog.restart();
     this.debrief.reset();
     this.sampler.clear();
+    this.exerciseStartedUtc = null;
     this.debriefSummary = null;
     this.eventStore.clear();
     this.events = [];
@@ -829,6 +833,18 @@ export class InstructorApp extends LitElement {
   }
 
   private downloadRecord(): void {
+    downloadText(`brm-record-${fileStamp()}-${this.activeScenario?.id ?? this.shipState.shipId}.json`, this.sessionRecordJson());
+  }
+
+  /** 講評報告頁(report.html):把目前的練習紀錄經 IndexedDB 交給新頁(重播檢視頁面沒有即時紀錄,只開新頁)。 */
+  private async openReport(): Promise<void> {
+    if (this.pageMode !== 'replay') await saveHandoff(this.sessionRecordJson());
+    window.open(this.pageMode === 'replay' ? './report.html' : './report.html?from=instructor', '_blank');
+  }
+
+  private sessionRecordJson(): string {
+    // 尚未收到狀態就匯出時也定下開始時刻,之後同一練習的匯出沿用
+    this.exerciseStartedUtc ??= new Date().toISOString();
     const record = buildSessionRecord({
       mode: this.pageMode === 'simple' ? 'simple' : 'full',
       source: this.sourceLabel(),
@@ -842,8 +858,9 @@ export class InstructorApp extends LitElement {
       summary: this.debrief.summary(),
       events: this.eventStore.all(),
       coreSummary: this.coreSummary,
+      startedUtc: this.exerciseStartedUtc,
     });
-    downloadText(`brm-record-${fileStamp()}-${this.activeScenario?.id ?? this.shipState.shipId}.json`, JSON.stringify(record));
+    return JSON.stringify(record);
   }
 
   // ------------------------------------------------------------ 簡化教官模式流程
@@ -952,6 +969,7 @@ export class InstructorApp extends LitElement {
             </span>`
           : nothing}
         ${this.pageMode === 'full' ? html`<button class="download-record" title="下載本站紀錄(狀態抽樣、操作、標記、指令、摘要)" @click=${this.downloadRecord}>下載紀錄 JSON</button>` : nothing}
+        ${this.pageMode !== 'simple' ? html`<button class="open-report" title="講評報告、行為標記評估表、個人訓練紀錄(新分頁;可列印 / 另存 PDF)" @click=${this.openReport}>講評報告</button>` : nothing}
         <span class="seg" role="group" aria-label="主題">
           ${THEMES.map((t) => html`<button class=${this.theme === t.id ? 'active' : ''} @click=${() => this.setTheme(t.id)}>${t.label}</button>`)}
         </span>
@@ -1081,6 +1099,7 @@ export class InstructorApp extends LitElement {
             <brm-marker-bar .markers=${this.markers}></brm-marker-bar>
             <div class="actions">
               <button class="primary download" @click=${this.downloadRecord}>下載紀錄 JSON</button>
+              <button class="open-report" @click=${this.openReport}>講評報告</button>
               <button @click=${this.simpleNew}>新練習</button>
               <span class="sum-note">紀錄含狀態抽樣(每 ${this.sampler.interval_s} s)、學員操作、BRM 標記、指令與摘要;可在教官站的重播檢視開啟</span>
             </div>

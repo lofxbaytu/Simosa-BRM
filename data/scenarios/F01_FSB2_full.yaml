@@ -1,0 +1,549 @@
+# F01 船舶熟悉:操縱特性體驗 — FS Bitumen No.2 滿載(規劃書第 8.1 節 F01、第 3.5 節;設計 docs/design/ship-familiarisation.md;schema src/Contracts/scenario.schema.json)
+# 開闊深水(台灣西南外海,水深 1,000 m)、無風無流;滿載與壓載各一輪(壓載見 F01_FSB2_ballast.yaml)。No.2 為普通舵(最大 35°),無 Schilling 段。不適用交接班開場與三步升級(第 8.1 節說明)。
+# 流程(時間表引導;每段先以 acknowledge{kind: prediction, itemId: predict…} 記下依駕駛台海報/引水卡的預測,再執行;學員逾時未下令、操作未被辨識
+#   或量測中止時,系統先回正舵、恢復車令並以自動舵回 000° 穩定直航後再示範;量測完成只認本段的 manoeuvreMeasured;
+#   執行提示後 2,400 s(含倒俥後恢復航速的時間)仍未完成則略過此段,流程不停住;ship-familiarisation.md 第 3 節):
+#   35° 左迴旋 → 35° 右迴旋 → 10/10 Z 形(左舷先)→ 全速倒俥緊急停船(FAS,No.2 無 EFAS 車令)→ 停俥慣性停船(12.8 kn → 5 kn)。
+# 操縱量測(ManoeuvreTracker)自動辨識開始條件(MSC.137(76):30 s 穩定直航後的舵令/車令)並與 data/ships/FSB2/trial_targets.json 比較
+# (No.2 為 IMO 駕駛台海報 2019-08 圖面讀值,資料品質 poster,公差為 No.1 的 1.5 倍;無 Z 形資料);量測完成後系統以自動舵回 000° 並恢復進入速度(恢復不是學習重點)。
+# 評估不設硬性失敗:必要事件只記錄預測與量測完成時刻(扣分 0),講評以操縱特性為主(第 8.1 節說明)。
+id: F01_FSB2_full
+name: 船舶熟悉 F01 — No.2 操縱特性(滿載)
+description: >-
+  依駕駛台海報/引水卡預測後,親自執行 35° 左右迴旋、10/10 Z 形、緊急停船與慣性停船,由系統自動量測並與海報讀值比較;
+  講評討論 No.2 與 No.1 的差異(船長 104 m、吃水 7.20 m、普通舵、單泵舵機 28 s)。
+seed: 20261019
+startTimeUtc: "2026-10-20T01:00:00Z"
+timeScale: 1
+ship:
+  id: FSB2
+  loading: full
+origin: { lat: 22.3000, lon: 120.0000 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 0
+  speed: 12.8                                    # 海報 full sea 進入速度;未指定車鐘/轉速 → 引擎取直航平衡轉速(約 133.8 rpm)
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 1000                               # h/T ≈ 139:深水(MMG 淺水修正為 1)
+  visibility_nm: 10
+briefing:
+  text: |
+    船舶熟悉 F01(No.2,滿載 7.20 m):開闊深水、無風流。請攜帶駕駛台海報(2019-08)與引水卡。
+    每段開始前系統提示「預測」:依海報/引水卡寫下預測值後按確認(預測)。接著保持 000° 定速直航至少 30 秒再下令;
+    量測自動開始與結束,完成後系統以自動舵回到 000° 並恢復進入速度,再進入下一段。目標值為海報圖面讀值(約 ±5%)。
+    1. 35° 左迴旋、35° 右迴旋(保持到 450°):前進距離、橫距、戰術直徑、90°/180° 時間、定常迴旋直徑與航速。
+    2. 10/10 Z 形(左舷先,三次反舵):第一/第二超越角。
+    3. 全速進 12.8 kn → 全速退(FAS),舵正中:停船時間、航跡距離、艏向偏轉。
+    4. 12.8 kn 停俥滑行至 5 kn:時間與距離。
+    講評:預測與量測差異;海報左迴旋前進距離 313 m / 戰術直徑 208 m、右 300 / 245 m;緊急停船 3.4 分約 5 鏈(第 3.5 節);與 No.1 比較。
+  roles:
+    - { role: master, playedBy: leader, required: true }
+    - { role: officer, required: true }
+    - { role: helmsman }
+  minParticipants: 1
+  duration_s: 6000
+timeline:
+  - id: intro
+    name: 流程說明
+    visibility: all
+    when: { type: time, atLeast: 5 }
+    actions:
+      - phase: familiarisation
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }   # 以自動舵保持 000°(δ = 0 時單俥船會緩慢偏轉);學員/示範下舵令即解除
+      - message: { to: all, text: "F01 船舶熟悉(No.2 滿載):共 4 段量測;每段先預測再執行。系統自動量測並與駕駛台海報讀值比較。", severity: info }
+
+  # ---------------------------------------------------------------- 1a. 35° 左迴旋
+  - id: predictTurnPort
+    name: 預測 — 35° 左迴旋
+    visibility: all
+    when: { type: time, atLeast: 30 }
+    actions:
+      - message: { to: all, text: "預測(35° 左迴旋,12.8 kn):依海報寫下前進距離、橫距、戰術直徑、90°/180° 時間與迴旋中航速,記錄後按確認(預測)。", severity: info }
+  - id: executeTurnPort
+    name: 執行 — 35° 左迴旋
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictTurnPort }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictTurnPort } }
+    actions:
+      - message: { to: all, text: "保持 000° 定速直航至少 30 秒,下令『左滿舵 35°』並保持到迴轉 450°。", severity: info }
+  - id: startedTurnPort
+    name: 已辨識量測開始 — 35° 左迴旋
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictTurnPort }
+        - { type: event, kind: manoeuvreStarted, itemId: turning35.port }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: turning35.port } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:35° 左迴旋(turning35.port)。", severity: info }
+  - id: demoPrepTurnPort
+    name: 示範準備 — 回到穩定直航(35° 左迴旋;學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeTurnPort }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurnPort }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurnPort }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeTurnPort } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedTurnPort }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedTurnPort }
+                - { type: event, kind: manoeuvreAborted, itemId: turning35.port }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: turning35.port } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「35° 左迴旋」(或量測中止):系統接手示範 — 回正舵、恢復車令並以自動舵回 000°,穩定直航後再示範。", severity: info }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: demoTurnPort
+    name: 示範 — 35° 左迴旋(學員未下令)
+    holdFor_s: 30                                 # 示範準備後回到穩定直航(MSC.137:30 s 定速直航)才下示範指令
+    when:
+      all:
+        - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: demoPrepTurnPort } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurnPort }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurnPort }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: turning35.port }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: turning35.port } } } ] }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: instructor, text: "學員未下令:系統示範左滿舵 35°", severity: info }
+      - ownShip: { rudder: -35 }
+  - id: recoverTurnPort
+    name: 量測完成 — 回 000° 恢復全速
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictTurnPort }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurnPort }
+        - { type: event, kind: manoeuvreMeasured, itemId: turning35.port }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: turning35.port } }   # 本段的量測完成(邊緣觸發;其他段同 id 的舊紀錄不算)
+    actions:
+      - message: { to: all, text: "35° 左迴旋量測完成,請與預測比較。系統以自動舵回 000° 並恢復 12.8 kn。", severity: info }
+      - ownShip: { rudder: 0 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: skipTurnPort
+    name: 逾時略過 — 35° 左迴旋
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeTurnPort } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurnPort }
+    actions:
+      - message: { to: all, text: "「35° 左迴旋」未完成量測(未辨識到標準操作或量測中止),略過此段。系統回正舵、恢復車令並以自動舵回 000°。", severity: warning }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+
+  # ---------------------------------------------------------------- 1b. 35° 右迴旋
+  - id: predictTurnStbd
+    name: 預測 — 35° 右迴旋
+    visibility: all
+    holdFor_s: 30                                 # 自動舵穩定在 000° 且航速恢復後持續 30 s(MSC.137 穩定直航)
+    when:
+      all:
+        - any:
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: recoverTurnPort } }
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: skipTurnPort } }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: all, text: "預測(35° 右迴旋):右旋單俥,右迴旋與左迴旋的戰術直徑何者較大?寫下數值後按確認(預測)。", severity: info }
+  - id: executeTurnStbd
+    name: 執行 — 35° 右迴旋
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictTurnStbd }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictTurnStbd } }
+    actions:
+      - message: { to: all, text: "解除自動舵,保持 000° 定速直航至少 30 秒,下令『右滿舵 35°』並保持到迴轉 450°。", severity: info }
+  - id: startedTurnStbd
+    name: 已辨識量測開始 — 35° 右迴旋
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictTurnStbd }
+        - { type: event, kind: manoeuvreStarted, itemId: turning35.starboard }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: turning35.starboard } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:35° 右迴旋(turning35.starboard)。", severity: info }
+  - id: demoPrepTurnStbd
+    name: 示範準備 — 回到穩定直航(35° 右迴旋;學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeTurnStbd }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurnStbd }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurnStbd }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeTurnStbd } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedTurnStbd }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedTurnStbd }
+                - { type: event, kind: manoeuvreAborted, itemId: turning35.starboard }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: turning35.starboard } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「35° 右迴旋」(或量測中止):系統接手示範 — 回正舵、恢復車令並以自動舵回 000°,穩定直航後再示範。", severity: info }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: demoTurnStbd
+    name: 示範 — 35° 右迴旋(學員未下令)
+    holdFor_s: 30                                 # 示範準備後回到穩定直航(MSC.137:30 s 定速直航)才下示範指令
+    when:
+      all:
+        - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: demoPrepTurnStbd } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurnStbd }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurnStbd }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: turning35.starboard }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: turning35.starboard } } } ] }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: instructor, text: "學員未下令:系統示範右滿舵 35°", severity: info }
+      - ownShip: { rudder: 35 }
+  - id: recoverTurnStbd
+    name: 量測完成 — 回 000° 恢復全速
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictTurnStbd }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurnStbd }
+        - { type: event, kind: manoeuvreMeasured, itemId: turning35.starboard }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: turning35.starboard } }   # 本段的量測完成(邊緣觸發;其他段同 id 的舊紀錄不算)
+    actions:
+      - message: { to: all, text: "35° 右迴旋量測完成;比較左右戰術直徑(海報 208 / 245 m)。系統回 000° 並恢復 12.8 kn。", severity: info }
+      - ownShip: { rudder: 0 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: skipTurnStbd
+    name: 逾時略過 — 35° 右迴旋
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeTurnStbd } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurnStbd }
+    actions:
+      - message: { to: all, text: "「35° 右迴旋」未完成量測(未辨識到標準操作或量測中止),略過此段。系統回正舵、恢復車令並以自動舵回 000°。", severity: warning }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+
+  # ---------------------------------------------------------------- 2. 10/10 Z 形(左舷先)
+  - id: predictZigzag
+    name: 預測 — 10/10 Z 形
+    visibility: all
+    holdFor_s: 30                                 # 自動舵穩定在 000° 且航速恢復後持續 30 s(MSC.137 穩定直航)
+    when:
+      all:
+        - any:
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: recoverTurnStbd } }
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: skipTurnStbd } }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: all, text: "預測(10/10 Z 形,左舷先):第一與第二超越角約幾度?按確認(預測)。", severity: info }
+  - id: executeZigzag
+    name: 執行 — 10/10 Z 形
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictZigzag }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictZigzag } }
+    actions:
+      - message: { to: all, text: "解除自動舵、000° 直航 30 秒後下令左舵 10°;航向偏 10°(350°)時右舵 10°,偏到右 10°(010°)時左舵 10°,共三次反舵。", severity: info }
+  - id: startedZigzag
+    name: 已辨識量測開始 — 10/10 Z 形
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictZigzag }
+        - { type: event, kind: manoeuvreStarted, itemId: zigzag10.portFirst }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: zigzag10.portFirst } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:10/10 Z 形(zigzag10.portFirst)。", severity: info }
+  - id: demoPrepZigzag
+    name: 示範準備 — 回到穩定直航(10/10 Z 形;學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeZigzag }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverZigzag }
+        - not: { type: event, kind: timelineTriggered, itemId: skipZigzag }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeZigzag } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedZigzag }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedZigzag }
+                - { type: event, kind: manoeuvreAborted, itemId: zigzag10.portFirst }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: zigzag10.portFirst } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「10/10 Z 形」(或量測中止):系統接手示範 — 回正舵、恢復車令並以自動舵回 000°,穩定直航後再示範。", severity: info }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: demoZigzag
+    name: 示範 — 10/10 Z 形起舵
+    holdFor_s: 30                                 # 示範準備後回到穩定直航(MSC.137:30 s 定速直航)才下示範指令
+    when:
+      all:
+        - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: demoPrepZigzag } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverZigzag }
+        - not: { type: event, kind: timelineTriggered, itemId: skipZigzag }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: zigzag10.portFirst }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: zigzag10.portFirst } } } ] }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: instructor, text: "學員未下令:系統示範 10/10 Z 形", severity: info }
+      - ownShip: { rudder: -10 }
+  - id: demoZigzagRev1
+    name: 示範 — 第 1 次反舵(350°)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: demoZigzag }
+        - { type: ownHeading, greaterThan: 300, lessThan: 350.7 }   # 每秒評估:門檻依示範起始航向並提前約半個樣本的航向變化,反舵時航向變化 ≈ 10°(|reversalLate| ≤ 1°)
+    actions:
+      - ownShip: { rudder: 10 }
+  - id: demoZigzagRev2
+    name: 示範 — 第 2 次反舵(010°)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: demoZigzagRev1 }
+        - { type: ownHeading, greaterThan: 9.8, lessThan: 60 }   # 每秒評估:門檻依示範起始航向並提前約半個樣本的航向變化,反舵時航向變化 ≈ 10°(|reversalLate| ≤ 1°)
+    actions:
+      - ownShip: { rudder: -10 }
+  - id: demoZigzagRev3
+    name: 示範 — 第 3 次反舵(350°)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: demoZigzagRev2 }
+        - { type: ownHeading, greaterThan: 300, lessThan: 350.7 }   # 每秒評估:門檻依示範起始航向並提前約半個樣本的航向變化,反舵時航向變化 ≈ 10°(|reversalLate| ≤ 1°)
+    actions:
+      - ownShip: { rudder: 10 }
+  - id: recoverZigzag
+    name: 量測完成 — 回 000°
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictZigzag }
+        - not: { type: event, kind: timelineTriggered, itemId: skipZigzag }
+        - { type: event, kind: manoeuvreMeasured, itemId: zigzag10.portFirst }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: zigzag10.portFirst } }   # 本段的量測完成(邊緣觸發;其他段同 id 的舊紀錄不算)
+    actions:
+      - message: { to: all, text: "10/10 Z 形量測完成(No.2 無 Z 形資料,與 No.1 比較)。系統回 000°。", severity: info }
+      - ownShip: { rudder: 0 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: skipZigzag
+    name: 逾時略過 — 10/10 Z 形
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeZigzag } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverZigzag }
+    actions:
+      - message: { to: all, text: "「10/10 Z 形」未完成量測(未辨識到標準操作或量測中止),略過此段。系統回正舵、恢復車令並以自動舵回 000°。", severity: warning }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+
+  # ---------------------------------------------------------------- 3. 緊急停船(全速進 → 緊急全速退)
+  - id: predictCrashStop
+    name: 預測 — 緊急停船
+    visibility: all
+    holdFor_s: 30                                 # 自動舵穩定在 000° 且航速恢復後持續 30 s(MSC.137 穩定直航)
+    when:
+      all:
+        - any:
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: recoverZigzag } }
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: skipZigzag } }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: all, text: "預測(緊急停船 12.8 kn → FAS):停船時間、航跡距離(幾倍船長)、艏向往哪一舷偏?按確認(預測)。", severity: info }
+  - id: executeCrashStop
+    name: 執行 — 緊急停船
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictCrashStop }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictCrashStop } }
+    actions:
+      - message: { to: all, text: "解除自動舵、舵正中,000° 直航 30 秒後下令『全速退(FAS)』,直到船停止。", severity: info }
+  - id: startedCrashStop
+    name: 已辨識量測開始 — 緊急停船
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictCrashStop }
+        - { type: event, kind: manoeuvreStarted, itemId: crashStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: crashStop } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:緊急停船(crashStop)。", severity: info }
+  - id: demoPrepCrashStop
+    name: 示範準備 — 回到穩定直航(緊急停船;學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeCrashStop }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverCrashStop }
+        - not: { type: event, kind: timelineTriggered, itemId: skipCrashStop }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeCrashStop } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedCrashStop }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedCrashStop }
+                - { type: event, kind: manoeuvreAborted, itemId: crashStop }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: crashStop } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「緊急停船」(或量測中止):系統接手示範 — 回正舵、恢復車令並以自動舵回 000°,穩定直航後再示範。", severity: info }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: demoCrashStop
+    name: 示範 — 緊急停船
+    holdFor_s: 30                                 # 示範準備後回到穩定直航(MSC.137:30 s 定速直航)才下示範指令
+    when:
+      all:
+        - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: demoPrepCrashStop } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverCrashStop }
+        - not: { type: event, kind: timelineTriggered, itemId: skipCrashStop }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: crashStop }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: crashStop } } } ] }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: instructor, text: "學員未下令:系統示範緊急全速退", severity: info }
+      - ownShip: { rudder: 0, telegraph: FAS }
+  - id: recoverCrashStop
+    name: 量測完成 — 進俥恢復 12.8 kn
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictCrashStop }
+        - not: { type: event, kind: timelineTriggered, itemId: skipCrashStop }
+        - { type: event, kind: manoeuvreMeasured, itemId: crashStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: crashStop } }   # 本段的量測完成(邊緣觸發;其他段同 id 的舊紀錄不算)
+    actions:
+      - message: { to: all, text: "緊急停船量測完成(海報 3.4 分、約 5 鏈)。系統全速進、自動舵 000°,恢復 12.8 kn(帶領者可加速時間)。", severity: info }
+      - ownShip: { rudder: 0, telegraph: NAVF }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: skipCrashStop
+    name: 逾時略過 — 緊急停船
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeCrashStop } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverCrashStop }
+    actions:
+      - message: { to: all, text: "「緊急停船」未完成量測(未辨識到標準操作或量測中止),略過此段。系統回正舵、恢復車令並以自動舵回 000°。", severity: warning }
+      - ownShip: { rudder: 0, telegraph: NAVF, rpm: 133.8 }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+
+  # ---------------------------------------------------------------- 4. 停俥慣性停船
+  - id: predictInertiaStop
+    name: 預測 — 慣性停船
+    visibility: all
+    holdFor_s: 30                                 # 自動舵穩定在 000° 且航速恢復後持續 30 s(MSC.137 穩定直航)
+    when:
+      all:
+        - any:
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: recoverCrashStop } }
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: skipCrashStop } }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: all, text: "預測(12.8 kn 停俥滑行):減到 5 kn 需要幾分鐘、行進多遠?按確認(預測)。", severity: info }
+  - id: executeInertiaStop
+    name: 執行 — 慣性停船
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictInertiaStop }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictInertiaStop } }
+    actions:
+      - message: { to: all, text: "解除自動舵、舵正中,直航 30 秒後下令『停俥(STOP)』,觀察減速至 5 kn。", severity: info }
+  - id: startedInertiaStop
+    name: 已辨識量測開始 — 慣性停船
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictInertiaStop }
+        - { type: event, kind: manoeuvreStarted, itemId: inertiaStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: inertiaStop } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:慣性停船(inertiaStop)。", severity: info }
+  - id: demoPrepInertiaStop
+    name: 示範準備 — 回到穩定直航(慣性停船;學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeInertiaStop }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverInertiaStop }
+        - not: { type: event, kind: timelineTriggered, itemId: skipInertiaStop }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeInertiaStop } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedInertiaStop }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedInertiaStop }
+                - { type: event, kind: manoeuvreAborted, itemId: inertiaStop }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: inertiaStop } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「慣性停船」(或量測中止):系統接手示範 — 回正舵、恢復車令並以自動舵回 000°,穩定直航後再示範。", severity: info }
+      - ownShip: { rudder: 0, telegraph: NAVF }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: demoInertiaStop
+    name: 示範 — 慣性停船
+    holdFor_s: 30                                 # 示範準備後回到穩定直航(MSC.137:30 s 定速直航)才下示範指令
+    when:
+      all:
+        - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: demoPrepInertiaStop } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverInertiaStop }
+        - not: { type: event, kind: timelineTriggered, itemId: skipInertiaStop }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: inertiaStop }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: inertiaStop } } } ] }
+        - { type: ownSpeed, metric: stw, greaterThan: 12.4 }
+        - { type: ownHeading, greaterThan: 358, lessThan: 2 }
+    actions:
+      - message: { to: instructor, text: "學員未下令:系統示範停俥滑行", severity: info }
+      - ownShip: { rudder: 0, telegraph: STOP }
+  - id: recoverInertiaStop
+    name: 量測完成 — 慢速進
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictInertiaStop }
+        - not: { type: event, kind: timelineTriggered, itemId: skipInertiaStop }
+        - { type: event, kind: manoeuvreMeasured, itemId: inertiaStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: inertiaStop } }   # 本段的量測完成(邊緣觸發;其他段同 id 的舊紀錄不算)
+    actions:
+      - message: { to: all, text: "慣性停船量測完成(海報 full sea 起 8 分後仍 4.0 kn,初速 16.6 kn 與車鐘表不一致,不可比)。系統慢速進、自動舵 000°。", severity: info }
+      - ownShip: { rudder: 0, telegraph: SAH }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: skipInertiaStop
+    name: 逾時略過 — 慣性停船
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeInertiaStop } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverInertiaStop }
+    actions:
+      - message: { to: all, text: "「慣性停船」未完成量測(未辨識到標準操作或量測中止),略過此段。系統回正舵、恢復車令並以自動舵回 000°。", severity: warning }
+      - ownShip: { rudder: 0, telegraph: NAVF }
+      - autopilot: { enabled: true, heading: 0, rotLimit: 40 }
+  - id: end
+    name: 結束與講評
+    visibility: all
+    delay_s: 30
+    when:
+      any:
+        - { type: event, kind: timelineTriggered, itemId: recoverInertiaStop }
+        - { type: event, kind: timelineTriggered, itemId: skipInertiaStop }
+    actions:
+      - message: { to: all, text: "F01 完成。講評:各段預測與量測差異、左右不對稱、停船距離;結果見講評摘要 manoeuvres。", severity: info }
+      - endExercise: { reason: F01 流程完成 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail: []                                    # 船舶熟悉不設硬性失敗(第 8.1 節說明)
+  required:                                       # 只記錄時刻(扣分 0):預測是否在執行前記錄、量測是否完成(recover… 於該量測 manoeuvreMeasured 時觸發)
+    - { id: predictionTurnPort, after: { event: timelineTriggered, itemId: predictTurnPort }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredTurnPort, after: { event: timelineTriggered, itemId: executeTurnPort }, expect: { event: { kind: timelineTriggered, itemId: recoverTurnPort } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+    - { id: predictionTurnStbd, after: { event: timelineTriggered, itemId: predictTurnStbd }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredTurnStbd, after: { event: timelineTriggered, itemId: executeTurnStbd }, expect: { event: { kind: timelineTriggered, itemId: recoverTurnStbd } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+    - { id: predictionZigzag, after: { event: timelineTriggered, itemId: predictZigzag }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredZigzag, after: { event: timelineTriggered, itemId: executeZigzag }, expect: { event: { kind: timelineTriggered, itemId: recoverZigzag } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+    - { id: predictionCrashStop, after: { event: timelineTriggered, itemId: predictCrashStop }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredCrashStop, after: { event: timelineTriggered, itemId: executeCrashStop }, expect: { event: { kind: timelineTriggered, itemId: recoverCrashStop } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+    - { id: predictionInertiaStop, after: { event: timelineTriggered, itemId: predictInertiaStop }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredInertiaStop, after: { event: timelineTriggered, itemId: executeInertiaStop }, expect: { event: { kind: timelineTriggered, itemId: recoverInertiaStop } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+  scoring: { start: 100, passMark: 0 }            # 不評分:講評以操縱特性為主

@@ -37,10 +37,14 @@ public static class FaultNames
     /// <summary>自動舵失效:自動舵脫開(fu、舵停在原處)且不能再啟用;警報 alarm</summary>
     public const string AutopilotFailure = "autopilotFailure";
 
+    /// <summary>拖纜斷裂:args.id 指定拖船(省略 = 第一艘拉中/待命中者);拉中者失去出力(tugLineParted 事件),推頂者續推但不能再拉;清除後可重新帶纜</summary>
+    public const string TugLineBreak = "tugLineBreak";
+
     /// <summary>引擎會改變行為的故障(fault-catalogue.json modelled = true)。</summary>
     public static readonly string[] Modelled =
     {
         SteeringGear, MainEngine, BowThruster, SteeringFuOnly, SteeringPumpFailure,
         GyroDrift, GyroFreeze, GyroFailure, GpsJump, GpsOffset, GpsFailure, EchoSounderFailure, LogFailure, AutopilotFailure,
+        TugLineBreak,
     };
 }

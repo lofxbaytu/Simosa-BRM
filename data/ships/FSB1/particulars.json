@@ -104,7 +104,15 @@
     "reversalTime_s": 264,
     "note": "海報記 315 kW;規格書 325 kW"
   },
-  "anchors": { "type": "AC-14", "mass_kg": 2140, "chainDiameter_mm": 42, "shacklesPort": 9, "shacklesStbd": 9, "heavingRate_mPerMin": 21.7 },
+  "anchors": {
+    "type": "AC-14", "mass_kg": 2140, "chainDiameter_mm": 42, "shacklesPort": 9, "shacklesStbd": 9, "heavingRate_mPerMin": 21.7,
+    "shackleLength_m": 27.5,
+    "holdingClass": "hhp",
+    "holdingClassSource": "估計:AC-14 為高抓力錨(HHP),抓著係數表見 docs/design/physics-tugs-anchors-mooring.md 第 3.3 節",
+    "chain": { "grade": "U2", "mass_kgPerM": 38.6, "breakingLoad_kN": 1405, "source": "估計:有檔錨鏈單位質量 0.0219·d² kg/m;U2 斷裂負荷 0.0196·d²·(44 − 0.08·d) kN(d = 42 mm;等級待依錨鏈證書核對)" },
+    "windlass": { "pull_kN": 75.0, "brakeHolding_kN": 632, "source": "估計:IACS UR A3 U2 連續拉力 42.5·d² N(過載 1.5 倍);剎車握持力取鏈斷裂負荷 45 %" },
+    "hawsePipe": { "x_m": 46.5, "y_m": 2.7, "heightAboveKeel_m": 7.5, "source": "估計:交船文件無錨鏈孔位置;船舯原點 x = 0.5 L − 0.03 L(艏柱後方)、半寬 0.15 B、船殼側鏈孔約在型深下 0.5 m(甲板高度)" }
+  },
   "windage": { "note": "風壓側面積曲線見復原性資料 GH-1040 10-5,待數位化", "lateralArea_m2": null, "frontalArea_m2": null },
   "bridge": {
     "eyeHeightAboveBase_m": null,

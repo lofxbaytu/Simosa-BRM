@@ -6,6 +6,7 @@
 |---|---|
 | `index.html` | 駕駛台儀器與操船台(規劃書第 7 章第一版 conning 顯示與操船台);船上筆電以瀏覽器全螢幕顯示,之後包進 WebView2 殼(`src/Instruments.Shell`) |
 | `instructor.html` | 教官站(第 9.1 節;訪船船長直連時用)、船上簡化教官模式(`?mode=simple`)與重播檢視(`?mode=replay`,第 9.2 節講評站雛型),見下方「教官站」一節 |
+| `report.html` | 講評報告、行為標記評估表、個人訓練紀錄與課程班次紀錄(第 8.2、8.4、9.1、9.2 節;列印 / 另存 PDF、JSON/CSV 匯出),見下方「講評報告頁」一節 |
 
 技術:Vite + TypeScript(strict)+ Lit 3;pnpm;Node.js 22。**不使用** `@oicl/openbridge-webcomponents`(授權待核,規劃書附錄 C),所有元件與 CSS 自寫,配色參考 OpenBridge 設計指南的日/黃昏/夜三種主題;紅色只用於警報。字型只用系統字型(船上離線)。
 
@@ -142,7 +143,7 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 - **教官指令**:本站送出的每筆指令與核心回應(Python 參考伺服器的 ack;C# 不回應)。
 - **參數集版次**:標題列顯示 `state.scenario.parameterSetVersion`(例如「參數集 2026.10.1」)與情境階段(`degraded` 橙、`emergency` 紅)、硬性失敗、練習已結束;以下情形標「參數集不一致」(滑鼠停留看原因):核心載入的情境 id 與所選不同、情境檔有參數引用但核心未回報版次、核心 summary 的版次與狀態不同。
 - **BRM 快速標記**:第 8.2 節五大類(領導、狀況覺知、溝通、團隊合作、決策)各一鈕,可先填一句備註與 ＋(做得好)/ Δ(待改進)再按類別;鍵盤 1–5 亦可(焦點不在輸入欄時)。標記含模擬時間、tick、本地時鐘、情境 id,不經核心;「匯出 JSON / CSV」下載(`src/lib/brm-markers.ts`;CSV 含 UTF-8 BOM 供 Excel)。
-- **下載紀錄 JSON**:本站自己的練習紀錄(`src/lib/session-record.ts`,`format: simosa-brm-instructor-record`,版本 2):狀態每 1 s 抽樣、學員操作、BRM 標記、指令與回應、本地講評摘要、核心事件(`events`)與核心 summary 原始物件(`coreSummary`,無則 null);可在重播檢視開啟(版本 1 的舊紀錄仍可讀)。這不是核心的 JSON Lines 紀錄(那份在核心主機的 `build/records/`),也尚未簽章(第 5.5 節紀錄包待做)。
+- **下載紀錄 JSON**:本站自己的練習紀錄(`src/lib/session-record.ts`,`format: simosa-brm-instructor-record`,版本 2):`createdUtc`(匯出時刻)、`startedUtc`(練習開始時刻:載入情境/重設/簡化模式「開始練習」後第一筆抽樣時記下,同一練習多次匯出不變;舊紀錄無此欄)、狀態每 1 s 抽樣、學員操作、BRM 標記、指令與回應、本地講評摘要、核心事件(`events`)與核心 summary 原始物件(`coreSummary`,無則 null);可在重播檢視開啟(版本 1 的舊紀錄仍可讀)。這不是核心的 JSON Lines 紀錄(那份在核心主機的 `build/records/`),也尚未簽章(第 5.5 節紀錄包待做)。
 
 ### 簡化教官模式(`?mode=simple`)
 
@@ -167,6 +168,37 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 ### 真實連線測試結果(Python 參考伺服器,2026-10)
 
 以 `uv run simosa-brm serve --ship FSB1 --loading full --port 8765` 測試,結果見上方指令表:`setEnvironment`(風/流/水深)、`injectFault`/`clearFault`(只記錄)、`timeScale`、`snapshot`/`restore`、`freeze`/`resume`、`reset` 附 `args`(位置/航向/速度)皆有作用;`loadScenario` 回 `ok=false`「情境載入尚未實作」;`gustiness`、`visibility_nm`、`loading`、`tugs` 照收無作用。教官站畫面會把 ack 的 `ok`/`detail` 顯示在「教官指令」面板。
+
+## 講評報告頁(`report.html`)
+
+規劃書第 8.2 節(行為標記)、第 8.4 節(講評結構)、第 9.1 節「多站與管理」(個人訓練紀錄、課程班次紀錄)、第 9.2 節(講評報告匯出)與第 14 章評估列的第一版。四個分頁共用一份練習紀錄與本機工作資料;左邊編輯、右邊是 A4 列印預覽。**不連網、不經核心**:資料存在瀏覽器 IndexedDB(資料庫 `simosa-brm-report`;不可用時退回記憶體並在狀態列標示,請以 JSON 匯出)與匯出檔。
+
+**開啟紀錄**:「開啟檔案…」可一次選多個檔案,依內容自動判斷 —— 核心 JSON Lines 紀錄(`build/records/*.jsonl`)或教官站「下載紀錄 JSON」(`record-replay.parseReplay`)、BRM 快速標記 JSON(`simosa-brm-markers`)、評估表 JSON、學員名冊 JSON、課程班次 JSON。教官站(完整/重播檢視)標題列與簡化教官模式結束畫面的「**講評報告**」按鈕會把目前的教官站紀錄寫入 IndexedDB 再開 `report.html?from=instructor`(新分頁讀取後刪除交接資料)。重新整理後還原最近的紀錄與工作資料。`?tab=report|form|individual|session` 選起始分頁;報告是紙本文件,預設日間主題(`?theme=` 可覆寫,不影響其他頁記住的主題)。
+
+| 分頁 | 內容 |
+|---|---|
+| 講評報告 | 頁首「中塑海運內部訓練」+ 課程名稱與版本 + 報告編號;**一、練習資訊**(練習編號/情境、船、裝載、日期、情境時刻、時長、種子、動力學模型、紀錄來源、狀態雜湊/紀錄 SHA-256、倒帶次數、教官、參與者與角色);**二、自動量測與評分**(核心 summary:分數/及格線/通過或硬性失敗、硬性失敗、必要事件、容許帶、故障應變與警報確認時間、警報/BNWAS、會遇、航跡、UKC、操縱;無 summary 時本地推導);**三、操縱量測與試俥目標比較**(summary 有 `manoeuvres[]` 時,F01–F03:量測/目標(範圍目標顯示上下限)/偏差/公差/判定(公差內、超出公差、條件不可比)/資料品質(實測、海報讀值、估計值));**事件時間軸**(核心事件 + BRM 快速標記,依時間;最多 400 列);**行為標記評估**(每位受評者主要評估員的表、類別平均、缺失分類統計、雙評一致率,以及 STCW 準則 → 要素對應表);**講評紀錄**(第 8.4 節五段 + 教官總評;空白段落印書寫格線);**參數集版次與來源文件**(參數集 id/版次/路徑/SHA-256、來源程序文件編號與版次/條款、引用參數);簽名欄。「加入課程班次紀錄」把本練習寫進班次(出席 = 參與者中有學員 ID 者;完成 = 核心 summary 已定稿 `final` 或該學員主要評估員的評估表完整且合規;未完成的評估表在按鈕上標示份數,加入後不計入行為標記分數、標「評估表未完成」) |
+| 行為標記評估表 | 每位受評者一份(或「團隊」);十五要素各顯示 **1/3/5 分行為錨定描述**與對應 STCW 準則(滑鼠停留看條文),1–5 分按鈕(再按一次取消);觀察(時刻 `HH:MM:SS` / `MM:SS` / 秒 + 描述)、SIRE 2.0 缺失(硬體/程序/人員,人員再分熟悉度、任務設計、設備、緊張/語言、疲勞)、評語;「新增觀察」的時刻預設空白,須填實際觀察時刻或由 BRM 快速標記帶入;須先載入練習紀錄才能新增評估表;沒有紀錄鍵的評估表(舊版未載入紀錄時建立、或匯入的表缺 `record.key`)不列入任何報告或班次,載入紀錄後評估表分頁提示「綁定到目前紀錄」。**表單驗證**即時顯示:≤ 2 分缺時間戳或觀察描述、人員缺失缺子類、分數不是 1–5 整數、評估員未填為錯誤;未評分、≤ 2 分未標缺失類型、觀察時間超出練習時長為提醒。各類別上方列出該類 BRM 快速標記,選要素按「帶入」成為觀察證據(同一標記不重複帶入)。雙評:新增或匯入同一受評者的「第二評估員」表即顯示一致率(±1 分內比例,目標 ≥ 80%;兩表都評完十五項才判定「達成/未達成」,否則顯示「未完成(缺 n 項)」)、完全一致數、需協調的要素與提醒(不同紀錄、同一評估員、錨定版本不同)。列印版每要素含錨定描述 |
+| 個人訓練紀錄 | 課程班次欄位(班次編號、課程名稱/版本、第 8.0 節訓練形式、船、日期、教官、評估員、設備配置、課後評估)、學員名冊(ID、姓名、職級、法定證書到期日;匯出/匯入名冊 JSON)、練習與出席(日期、時數、各學員出席/完成勾選)。列印**每位學員一份**(選「全部」時每人分頁):紀錄編號 `<班次編號>-<學員 ID>`、課程名稱與版本、日期與時數(出席/本期)、出席與完成之練習編號、教官與評估員、評估結果摘要(自動評分(輔助,團隊層級)、行為標記平均/最低(評估表未完成時印「評估表未完成」)、**評估員判定**(通過/未通過)與**備註**、報告編號;判定與備註在本分頁「評估員判定與備註」表輸入,R9),並固定載明「**中塑海運公司內部訓練紀錄,非依《船員訓練檢覈及申請核發證書辦法》核發之專業訓練證書**」(第 9.1 節原文;`INTERNAL_TRAINING_STATEMENT`) |
+| 課程班次紀錄 | 開課日期與時數、參訓學員與職級、授課教官、使用之情境與設備配置、出席矩陣(每列一位學員、每欄一個練習,完成/出席/—;每張表最多 10 個練習,不隨學員數加寬 A4)、課後評估;匯出 **CSV**(UTF-8 BOM)與 **JSON**,可匯入 JSON;匯出前檢查(缺班次編號、課程版本、無學員、重複 ID、練習無出席或時數) |
+
+**列印 / 另存 PDF**:按「列印 / 另存 PDF」→ 瀏覽器列印對話框選「另存為 PDF」即離線產生 PDF(檔名預設為「講評報告-<報告編號>」等)。`@media print` 只印目前分頁的 `.sheet`(工具列與編輯區不印),A4、邊界 16/13 mm;`@page` 邊界方塊每頁印頁首「中塑海運內部訓練」與課程版本、頁尾分頁名稱與「頁碼 / 總頁數」(Chromium 131 以上;WebView2 相同);表頭每頁重複、表列不跨頁切斷。以 Playwright(Chromium,`page.emulateMedia({media:'print'})`)截圖並以 `page.pdf` 輸出檢查:E07 講評報告 5 頁、評估表 3 頁、3 位學員的個人訓練紀錄各 1 頁、班次紀錄 1 頁,1366×768 無水平捲動,console 無錯誤。
+
+**錨定描述**(`src/report/behavioural-anchors.json`,版本 `0.1.0-draft`,`status: draft`,「**草案,待訓練負責人核准**」):五大類 × 三要素(類別 id 與 BRM 快速標記相同)、每要素 1/3/5 分描述與 STCW 對應(`BRM1`–`BRM5` = A-II/1 BRM 五項評量準則,`LT1`–`LT8` = A-II/1、A-II/2 領導與團隊合作八項準則;條文為規劃書第 2.1 節中文整理,原文待核對)、SIRE 2.0 缺失分類、`lowScoreThreshold: 2`、`agreement: {tolerance: 1, target: 0.8}`。核准後改 `version`(例如 `1.0.0`)、`status: approved`、`approvedBy` / `approvedDate`;評估表記下所用版本(`anchorsVersion`),雙評時版本不同會提醒。第 8.2 節要求錨定描述或評估表改版時重做校準。
+
+**檔案格式**(皆為 JSON;`src/report/*.ts`):
+
+| format | 內容 | 例 |
+|---|---|---|
+| `simosa-brm-marker-form`(單張)/ `simosa-brm-marker-forms`(整包 `{forms: [...]}`) | 評估表 | `{"format":"simosa-brm-marker-form","version":1,"anchorsVersion":"0.1.0-draft","formId":"F…","record":{"key":"sha256:502CC5…","scenarioId":"E07_steering_failure","shipId":"FSB1"},"trainee":{"id":"T001","name":"王大明","rank":"船長","role":"master"},"assessor":{"name":"陳船長","role":"primary"},"assessedUtc":"…","ratings":[{"elementId":"communication.closedLoop","score":2,"observations":[{"t_s":181,"text":"右舵 10 未複誦","markerId":5,"polarity":"delta"}],"deficiency":{"type":"human","humanFactor":"stressLanguage"},"comment":""},…],"overallComment":""}` |
+| `simosa-brm-roster` | 學員名冊 | `{"format":"simosa-brm-roster","version":1,"trainees":[{"id":"T001","name":"王大明","rank":"船長","certificateExpiry":"2029-03-31"}],"staff":[{"name":"陳船長","role":"instructor"},{"name":"林船長","role":"assessor"}]}` |
+| `simosa-brm-course-session` | 課程班次紀錄(匯出時另附 `exportedUtc`、`statement`、`totalHours`) | `{"format":"simosa-brm-course-session","version":1,"sessionId":"BRM-FSB1-2026-01","courseName":"中塑海運 BRM 內部訓練課程","courseVersion":"1.0","trainingForm":"full","shipId":"FSB1","startDate":"2026-10-17","endDate":"2026-10-17","instructors":["陳船長"],"assessors":["林船長"],"equipment":"…","trainees":[…],"exercises":[{"exerciseNo":"E07","scenarioId":"E07_steering_failure","date":"2026-10-17","hours":1,"recordKey":"sha256:502CC5…","reportNo":"RPT-20261017-E07-502CC5","instructor":"陳船長","assessors":["林船長"],"equipment":"…","attended":["T001","T002"],"completed":["T001","T002"],"results":{"T001":{"score":85,"passed":true,"hardFailed":false,"markerMean":3.53,"markerMin":3,"formId":"F…","verdict":"pass","remark":"…"},"T002":{"score":85,"passed":true,"hardFailed":false,"formId":"F…","formIncomplete":true}}}],"evaluation":"問卷平均 4.5/5"}` |
+
+班次 CSV 欄位(一列 = 一位學員 × 一個練習;學員無練習時一列,練習欄空白):`sessionId, courseName, courseVersion, trainingForm, shipId, startDate, endDate, sessionHours, instructors, assessors, traineeId, traineeName, rank, exerciseNo, scenarioId, exerciseDate, exerciseHours, exerciseInstructor, exerciseAssessors, equipment, attended, completed, score, passed, hardFailed, markerMean, markerMin, markerFormComplete, verdict, remark, reportNo, individualRecordNo, evaluation`(`attended`/`completed`/`passed`/`hardFailed` 為 Y/N;`markerFormComplete` 有主要評估員評估表時 Y/N;`verdict` 為 `pass`/`fail`(評估員判定,空白 = 未判定);多值以「; 」分隔)。文字欄位以 `=`、`+`、`-`、`@`、Tab、CR 開頭時前加單引號 `'`(防 Excel 公式注入;BRM 標記 CSV 的備註同);匯入班次 JSON 時單行欄位的控制字元換成空白,頁首 `@page` 字串另做 CSS 跳脫。
+
+**識別與預設值**:紀錄鍵 `recordKey` = 核心紀錄 `sha256:<footer.sha256>`,教官站紀錄 `<情境 id>@<startedUtc>`(舊紀錄無 `startedUtc` 時 `<情境 id>@<createdUtc>`;評估表、報告欄位、班次練習依此對應,同一練習再按「講評報告」或另外下載的紀錄都對得上);報告編號預設 `RPT-<本地日期>-<練習編號>-<6 碼>`(核心紀錄取 SHA-256 前 6 碼,教官站紀錄取紀錄鍵 FNV-1a 雜湊前 6 碼;日期與班次練習日期同為本地日期,依 `startedUtc ?? createdUtc`);練習編號由情境 id 前綴取得(`E07_steering_failure` → `E07`);練習預設時數 = 執行時間 + 0.75 h(簡報 + 講評,第 8.1 節標準流程)進位到 0.25 h,可在出席表修改。自動評分為團隊層級並僅作輔助(第 8.3 節);個人判定由評估員填「通過/未通過」與備註(R9);未通過者的補訓與複查流程未定(D20),個人紀錄不顯示「補訓中…」等狀態。
+
+**限制**:不含錄音錄影與語音轉文字;報告與紀錄未簽章(第 5.5 節紀錄包待做);教官資格紀錄、證書效期雙軌追蹤與訓練排程、xAPI/SCORM 未實作;IndexedDB 只在該瀏覽器,換機請匯出 JSON。
 
 ## 警報管理(BAM)與 BNWAS(`docs/design/sensors-alerts.md`)
 
@@ -218,13 +250,17 @@ C# SimCore 的感測器故障層、警報管理(MSC.302(87))與 BNWAS(MSC.128(75
 src/Instruments.Web/
 ├─ index.html                 儀器頁入口(載入 theme.css 與 main.ts)
 ├─ instructor.html            教官站入口(載入 theme.css 與 instructor-main.ts)
-├─ vite.config.ts             兩個進入點;輸出到 build\web\instruments、快取到 .cache\vite、@data 別名指到 data\
+├─ report.html                講評報告頁入口(載入 theme.css 與 report-main.ts)
+├─ vite.config.ts             進入點 index / instructor / radar / report;輸出到 build\web\instruments、快取到 .cache\vite、@data 別名指到 data\
 ├─ tsconfig.json              strict、Lit 裝飾器設定
 ├─ .npmrc                     pnpm 套件庫指到專案 .cache\pnpm
 ├─ src/
 │  ├─ main.ts, app.ts         <brm-app>:儀器頁版面、資料來源、主題、指令路由
 │  ├─ instructor-main.ts, instructor-app.ts
 │  │                          <brm-instructor-app>:教官站 / 簡化教官模式 / 重播檢視的版面與流程
+│  ├─ report-main.ts, report/ <brm-report-app>(report-app.ts,light DOM)與 report.css(A4 列印);behavioural-anchors.json + anchors.ts(錨定描述)、
+│  │                          marker-form.ts(評估表、驗證、帶入標記、一致率)、debrief-report.ts(報告模型、manoeuvres[]、參數集來源)、
+│  │                          training-record.ts(名冊、班次、個人訓練紀錄、CSV)、report-views.ts(列印樣板)、report-store.ts(IndexedDB、教官站交接)
 │  ├─ styles/theme.css        日/黃昏/夜 CSS 變數(穿透 shadow DOM)
 │  ├─ types/                  state.ts(含 scenario/route/visibility_nm/steering/targets/truth/sensors/autopilot/alerts/bnwas)、alerts.ts(警報/BNWAS/真值型別)、
 │  │                          target.ts(TargetState、AIS 報告)、command.ts、event.ts(SimEvent、kind 列舉、
@@ -265,6 +301,10 @@ src/Instruments.Web/
                               fixtures/:E07_steering_failure.yaml、summary-E07.json(取自設計文件第 8.2、4.8 節);
                               record-E07-core.jsonl、record-E01-core.jsonl(`dotnet run --project src/SimCore.Host -- --scenario … --record … --duration 300 --timescale 10` 的縮短版:
                               header、每 5/10 s 一筆 state、全部 event、3 筆 snapshot、summary、footer;footer 的 lines/sha256 為原檔值)
+                              report-marker-form(錨定描述檔、表單驗證、時間輸入、標記帶入、一致率、匯出入)、report-debrief(E07 夾具產生報告、
+                              manoeuvres 比較表、參數集來源、列印樣板)、report-training-record(聲明文字、加入班次、個人紀錄、CSV 欄位、JSON)、
+                              report-app(報告頁元件、交接、教官站入口)、report-review-fixes(2026-10-17 審查發現:穩定紀錄鍵 startedUtc、
+                              一致率需評完、未完成評估表不計分、未綁定評估表、評估員判定/備註、觀察時刻、損壞檔、CSS/CSV 注入、出席矩陣、本地日期)
 ```
 
 船舶參數(LPP、船寬、舵角上限、舵機速率、MCR 轉速、車鐘各段轉速與速度、側推參數、吃水)直接由 `data/ships/FSB1|FSB2/particulars.json` 在建置時匯入(`src/lib/ship-config.ts`),與核心共用同一份資料。

@@ -41,6 +41,12 @@ public enum SimCommandType
     BnwasMode,
     /// <summary>BNWAS 重設鍵</summary>
     BnwasReset,
+    /// <summary>拖船命令(args:id、mode push|pull|standby|free、direction_deg(力方向相對船艏)、power_pct;設計文件 physics-tugs-anchors-mooring.md 第 2 節)</summary>
+    TugControl,
+    /// <summary>錨(args:side port|starboard、action letGo|veer|heave|brake|release、targetLength_shackles 或 length_m;第 3 節)</summary>
+    Anchor,
+    /// <summary>繫纜(args:lineId、action makeFast|heave|slack|letGo、bollard、tension_t(預張力/絞纜目標)、length_m(slack 長度);第 4 節)</summary>
+    Mooring,
 }
 
 /// <summary>
@@ -95,6 +101,16 @@ public sealed record SimCommand
     public static SimCommand BnwasMode(Scenario.BnwasMode mode, double? dormantS = null)
         => new() { Type = SimCommandType.BnwasMode, Value = Str(ContractJson.EnumName(mode)), Args = dormantS is null ? null : Obj(new { dormant_s = dormantS }) };
     public static SimCommand BnwasReset() => new() { Type = SimCommandType.BnwasReset };
+
+    /// <summary>拖船命令:<paramref name="mode"/> push|pull|standby|free;<paramref name="directionDeg"/> 力方向(相對船艏,度);<paramref name="powerPct"/> 0–100。</summary>
+    public static SimCommand TugControl(string id, string? mode = null, double? directionDeg = null, double? powerPct = null)
+        => new() { Type = SimCommandType.TugControl, Args = Obj(new { id, mode, direction_deg = directionDeg, power_pct = powerPct }) };
+    /// <summary>錨指令:<paramref name="side"/> port|starboard;<paramref name="action"/> letGo|veer|heave|brake|release;鏈長目標以節或 m 給定。</summary>
+    public static SimCommand Anchor(string side, string action, double? targetShackles = null, double? lengthM = null)
+        => new() { Type = SimCommandType.Anchor, Args = Obj(new { side, action, targetLength_shackles = targetShackles, length_m = lengthM }) };
+    /// <summary>繫纜指令:<paramref name="action"/> makeFast|heave|slack|letGo。</summary>
+    public static SimCommand Mooring(string lineId, string action, string? bollard = null, double? tensionT = null, double? lengthM = null)
+        => new() { Type = SimCommandType.Mooring, Args = Obj(new { lineId, action, bollard, tension_t = tensionT, length_m = lengthM }) };
 
     /// <summary>目標船控制:<paramref name="args"/> 為匿名物件或字典,鍵名見 README「targetControl」。</summary>
     public static SimCommand TargetControl(object args) => new() { Type = SimCommandType.TargetControl, Args = Obj(args) };

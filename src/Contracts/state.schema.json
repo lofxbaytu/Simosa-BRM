@@ -640,6 +640,90 @@
           "maximum": 720
         }
       }
+    },
+    "tugs": {
+      "type": "array",
+      "description": "拖船(情境 tugs[];無拖船時省略;C# 產生,Python 不輸出;docs/design/physics-tugs-anchors-mooring.md 第 2、5 節)。力以噸力(t)、方向相對船艏順時針(度)",
+      "items": {
+        "type": "object",
+        "required": ["id", "mode", "status", "force_t", "direction_deg"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "mode": { "type": "string", "enum": ["push", "pull", "standby", "free"] },
+          "status": { "type": "string", "enum": ["standby", "connecting", "repositioning", "working", "free", "parted"] },
+          "force_t": { "type": "number", "minimum": 0, "description": "實際出力(t)" },
+          "direction_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "實際力方向(相對船艏;0 向前、90 向右舷)" },
+          "directionOrder_deg": { "type": "number", "minimum": 0, "maximum": 360 },
+          "power_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+          "efficiency": { "type": "number", "minimum": 0, "maximum": 1, "description": "自船對水速度造成的效能" },
+          "bollardPull_t": { "type": "number" },
+          "lineParted": { "type": "boolean" },
+          "pos": { "type": "object", "description": "示意位置(lat, lon, x, y;顯示用,非物理)" }
+        }
+      }
+    },
+    "anchors": {
+      "type": "array",
+      "description": "左右錨(particulars 有 anchors 資料時一律輸出;C# 產生,Python 不輸出;第 3、5 節)",
+      "items": {
+        "type": "object",
+        "required": ["side", "status", "length_m", "tension_t", "onBottom_m"],
+        "properties": {
+          "side": { "type": "string", "enum": ["port", "starboard"] },
+          "status": { "type": "string", "enum": ["stowed", "running", "holding", "dragging", "heaving", "aweigh"] },
+          "length_m": { "type": "number", "minimum": 0, "description": "送出鏈長(m)" },
+          "length_shackles": { "type": "number", "minimum": 0 },
+          "maxLength_m": { "type": "number" },
+          "tension_t": { "type": "number", "minimum": 0, "description": "錨鏈孔處張力(t)" },
+          "horizontalTension_t": { "type": "number", "minimum": 0 },
+          "onBottom_m": { "type": "number", "minimum": 0, "description": "躺底鏈長(m)" },
+          "holding_t": { "type": "number", "minimum": 0, "description": "目前抓地力(錨 + 躺底鏈摩擦,t)" },
+          "brake": { "type": "boolean" },
+          "fullyOut": { "type": "boolean", "description": "已到鏈端" },
+          "position": { "type": "object", "description": "錨位 {lat, lon, x, y}(收存時省略)" }
+        }
+      }
+    },
+    "berth": {
+      "type": "object",
+      "description": "泊位(情境 berth;無時省略;第 4、5 節)",
+      "required": ["id", "contacts", "lines"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "quayContact": { "type": "boolean", "description": "船體與碼頭面硬接觸中" },
+        "contacts": {
+          "type": "array",
+          "description": "目前受壓的碰墊",
+          "items": {
+            "type": "object",
+            "required": ["fenderId", "deflection_m", "reaction_kN"],
+            "properties": {
+              "fenderId": { "type": "string" },
+              "deflection_m": { "type": "number", "minimum": 0 },
+              "deflection_pct": { "type": "number", "minimum": 0 },
+              "reaction_kN": { "type": "number", "minimum": 0 },
+              "overload": { "type": "boolean", "description": "壓縮超過額定" }
+            }
+          }
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "status", "tension_t"],
+            "properties": {
+              "id": { "type": "string" },
+              "status": { "type": "string", "enum": ["stowed", "fast", "heaving", "slacking", "letGo", "parted"] },
+              "tension_t": { "type": "number", "minimum": 0 },
+              "mbl_t": { "type": "number" },
+              "bollardId": { "type": "string" },
+              "length_m": { "type": "number", "description": "未受力纜長(未繫時省略)" }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {

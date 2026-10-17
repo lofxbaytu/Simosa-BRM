@@ -45,6 +45,8 @@ public static class ScenarioLoader
         LastResolvedParameters = resolved;
         var scenario = ContractJson.Deserialize<Scenario>(root.ToJsonString()) ?? throw new InvalidDataException("無法解析情境");
         if (set is not null && resolved.Count > 0) scenario.ParameterSetInfo = set.ToInfo(resolved);
+        // 泊位參照(berth.file + id)內嵌為 definition,紀錄 header 因此含完整泊位定義(設計文件 physics-tugs-anchors-mooring.md 第 4.1 節)
+        ScenarioExternalForces.ResolveBerth(scenario, baseDirectory);
         return scenario;
     }
 

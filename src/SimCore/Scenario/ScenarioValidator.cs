@@ -21,7 +21,7 @@ public static class ScenarioValidator
         "steeringGear", "steeringFuOnly", "steeringPumpFailure", "mainEngine", "engineStartFailure", "bowThruster",
         "gyroDrift", "gyroFreeze", "gyroFailure", "autopilotFailure", "gpsJump", "gpsOffset", "gpsFailure",
         "radarFailure", "radarDegraded", "aisFailure", "ecdisFreeze", "ecdisAlarmFlood", "echoSounderFailure", "logFailure",
-        "vhfFailure", "ecrPhoneFailure", "blackout", "fireAlarmEngineRoom", "cargoHeatingFailure",
+        "vhfFailure", "ecrPhoneFailure", "blackout", "fireAlarmEngineRoom", "cargoHeatingFailure", "tugLineBreak",
     };
 
     public const double DefaultDurationS = 7200.0;

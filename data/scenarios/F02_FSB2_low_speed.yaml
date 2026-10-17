@@ -1,0 +1,479 @@
+# F02 船舶熟悉:低速、側推與壓載風壓 — FS Bitumen No.2(規劃書第 8.1 節 F02、第 3.2 節;設計 docs/design/ship-familiarisation.md;schema src/Contracts/scenario.schema.json)
+# 麥寮港內(座標示意,水深一律 14 m,待港方資料校正)、東北風 15 kn 於 15 分鐘內漸增至 25 kn(陣風 0.2,種子化)、壓載(艏 4.4 / 艉 6.5 m,2026-09 實際航次)。
+# 注意:No.2 壓載 MMG 係數(data/ships/FSB2/coefficients.ballast.json)尚未產生,主控程序需以 --dynamics placeholder 執行(暫代模型無側推航速衰減,
+# 結果只供流程演練);係數產生後免改本情境。
+# 只用現有物理(MMG 側推隨航速衰減、右旋單俥倒俥艉偏、Blendermann 風力;不需拖船/碼頭)。不適用交接班開場與三步升級。
+# 流程(每段先 acknowledge{kind: prediction} 預測;學員逾時未下令、操作未被辨識或量測中止時系統先回到示範起始狀態再示範,逾時略過;
+# 量測由 ManoeuvreTracker 自動辨識;ship-familiarisation.md 第 4 節):
+#   A. 側推效能 @ 7 kn(No.2 海報:5 kn 以上無效):艏側推右滿推 60 s(thrusterTurn.starboard,60 s 航向變化與最大 ROT)
+#   B. 單俥倒俥艉偏:7 kn 舵正中下令半速退(crashStop,停船時航向變化 headingChange_deg:右旋槳 → 艏向右)
+#   C. 側推效能 @ 近零速:停俥後艏側推右滿推 120 s(與 A 比較;海報全推力延遲 30 s)
+#   D. 壓載 bow blow-off:微速進 020°(東北風在右舷艏約 25°;正頂風時風力左右對稱不會偏轉)約 3 kn 後停俥、舵正中,觀察艏被吹偏
+#      (inertiaStop 停俥漂移 mode drift:300 s 或減至 0.5 kn,每分鐘航向變化 headingChangeAt{n}min_deg、maxHeadingChange_deg)
+#   E. 舵機速率:左滿舵 35° → 右滿舵 35°(rudderSwing.toStarboard),單泵(28 s)後學員以 steeringMode {pump: both} 改雙泵(14 s)重做;
+#      時間表無法切換泵(只能由學員指令),學員未切換時 300 s 後結束。
+# 評估不設硬性失敗;必要事件只記錄預測與量測完成時刻(扣分 0)。
+id: F02_FSB2_low_speed
+name: 船舶熟悉 F02 — No.2 低速、側推與壓載風壓
+description: >-
+  麥寮港內壓載低速操船:體驗艏側推效能隨航速衰減、單俥倒俥艉偏、壓載艏吃水淺的 bow blow-off 與單泵/雙泵舵機速率差異;
+  講評討論低速操船計畫、舵令與車令時機。
+seed: 20261022
+startTimeUtc: "2026-11-05T00:30:00Z"
+timeScale: 1
+ship:
+  id: FSB2
+  loading: ballast
+origin: { lat: 23.8000, lon: 120.1500 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 90
+  speed: 7.0                                     # 慢速進(SAH 70 rpm,壓載 7.0 kn)
+  telegraph: SAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 15, trueDir: 45, gustiness: 0.2 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 14                                 # 港內水深(示意);壓載最大吃水 6.5 m,h/T ≈ 2.2
+  visibility_nm: 5
+briefing:
+  text: |
+    船舶熟悉 F02(No.2,壓載 艏 4.4 / 艉 6.5 m):麥寮港內,東北風 15 kn 漸增至 25 kn。
+    壓載時艏吃水淺、受風面積大,低速時艏易被東北季風吹偏(bow blow-off)。每段先預測,再執行;系統自動量測。
+    A. 7 kn 時艏側推右滿推 60 秒:艏向轉多少?(海報:5 kn 以上無效)   B. 7 kn 舵正中下令半速退:艏向哪一舷偏?
+    C. 近零速艏側推右滿推:與 A 比較(海報:全推力延遲 30 s、反向 0.5 分)。
+    D. 微速進 020°(風在右舷艏約 25°)約 3 kn 後停俥:艏向被吹往哪邊、每分鐘多少?   E. 左滿舵 35° → 右滿舵 35°:單泵 28 s;以操舵模式改雙泵(pump both)後重做:14 s。
+    講評:低速操船計畫、側推與車舵的時機、風壓下的保向極限。
+  roles:
+    - { role: master, playedBy: leader, required: true }
+    - { role: officer, required: true }
+    - { role: helmsman }
+  minParticipants: 1
+  duration_s: 3600
+timeline:
+  - id: intro
+    name: 流程說明與風漸增
+    visibility: all
+    when: { type: time, atLeast: 5 }
+    actions:
+      - phase: familiarisation
+      - autopilot: { enabled: true, heading: 90, rotLimit: 30 }
+      - setEnvironment: { wind: { trueSpeed: 25, trueDir: 45, gustiness: 0.2 }, ramp_s: 900 }
+      - message: { to: all, text: "F02(No.2 壓載):東北風 15 kn 將於 15 分鐘內增至 25 kn。共 5 段:側推 @7 kn、倒俥艉偏、側推 @近零速、bow blow-off、舵機速率。", severity: info }
+
+  # ---------------------------------------------------------------- A. 側推 @ 7 kn
+  - id: predictThrusterSpeed
+    name: 預測 — 7 kn 側推
+    visibility: all
+    when: { type: time, atLeast: 30 }
+    actions:
+      - message: { to: all, text: "預測:約 7 kn 時艏側推右滿推 60 秒,艏向會向右轉幾度?(海報:5 kn 以上無效)按確認(預測)。", severity: info }
+  - id: executeThrusterSpeed
+    name: 執行 — 7 kn 側推
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictThrusterSpeed }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictThrusterSpeed } }
+    actions:
+      - message: { to: all, text: "解除自動舵、舵正中,艏側推右滿推;60 秒後系統將側推歸零。", severity: info }
+  - id: startedThrusterSpeed
+    name: 已辨識量測開始 — 7 kn 側推
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictThrusterSpeed }
+        - { type: event, kind: manoeuvreStarted, itemId: thrusterTurn.starboard }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: thrusterTurn.starboard } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:7 kn 側推(thrusterTurn.starboard)。", severity: info }
+  - id: demoPrepThrusterSpeed
+    name: 示範準備 — 7 kn 側推(學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeThrusterSpeed }
+        - not: { type: event, kind: timelineTriggered, itemId: stopThrusterSpeed }
+        - not: { type: event, kind: timelineTriggered, itemId: skipThrusterSpeed }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeThrusterSpeed } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedThrusterSpeed }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedThrusterSpeed }
+                - { type: event, kind: manoeuvreAborted, itemId: thrusterTurn.starboard }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: thrusterTurn.starboard } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「7 kn 側推」(或量測中止):系統接手示範 — 側推歸零、舵正中、慢速進、自動舵 090°,航向穩定後再示範。", severity: info }
+      - ownShip: { rudder: 0, thruster: 0, telegraph: SAH }
+      - autopilot: { enabled: true, heading: 90, rotLimit: 30 }
+  - id: demoThrusterSpeed
+    name: 示範 — 7 kn 側推
+    holdFor_s: 30
+    when:
+      all:
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: demoPrepThrusterSpeed } }
+        - not: { type: event, kind: timelineTriggered, itemId: stopThrusterSpeed }
+        - not: { type: event, kind: timelineTriggered, itemId: skipThrusterSpeed }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: thrusterTurn.starboard }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: thrusterTurn.starboard } } } ] }
+        - { type: ownHeading, greaterThan: 85, lessThan: 95 }
+    actions:
+      - ownShip: { rudder: 0, thruster: 1 }
+  - id: stopThrusterSpeed
+    name: 側推 60 s — 歸零
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: startedThrusterSpeed }
+        - not: { type: event, kind: timelineTriggered, itemId: skipThrusterSpeed }
+        - { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: thrusterTurn.starboard } }
+    actions:
+      - ownShip: { thruster: 0 }
+      - autopilot: { enabled: true, heading: 90, rotLimit: 30 }
+      - message: { to: all, text: "側推歸零,自動舵回 090°。比較預測與實際的航向變化(見量測)。", severity: info }
+  - id: skipThrusterSpeed
+    name: 逾時略過 — 7 kn 側推
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeThrusterSpeed } }
+        - not: { type: event, kind: timelineTriggered, itemId: stopThrusterSpeed }
+    actions:
+      - message: { to: all, text: "「7 kn 側推」未完成量測,略過此段。系統側推歸零、慢速進、自動舵 090°。", severity: warning }
+      - ownShip: { rudder: 0, thruster: 0, telegraph: SAH }
+      - autopilot: { enabled: true, heading: 90, rotLimit: 30 }
+
+  # ---------------------------------------------------------------- B. 單俥倒俥艉偏
+  - id: predictAstern
+    name: 預測 — 倒俥艉偏
+    visibility: all
+    holdFor_s: 30
+    when:
+      all:
+        - any:
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: stopThrusterSpeed } }
+            - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: skipThrusterSpeed } }
+        - { type: ownHeading, greaterThan: 85, lessThan: 95 }
+    actions:
+      - message: { to: all, text: "預測:約 7 kn、舵正中下令半速退(HAS)至船停,艏向會偏向哪一舷?偏多少?按確認(預測)。", severity: info }
+  - id: executeAstern
+    name: 執行 — 半速退
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictAstern }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictAstern } }
+    actions:
+      - message: { to: all, text: "解除自動舵、舵正中,下令半速退(HAS),觀察到船停止。", severity: info }
+  - id: startedAstern
+    name: 已辨識量測開始 — 半速退
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictAstern }
+        - { type: event, kind: manoeuvreStarted, itemId: crashStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: crashStop } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:半速退(crashStop)。", severity: info }
+  - id: demoPrepAstern
+    name: 示範準備 — 半速退(學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeAstern }
+        - not: { type: event, kind: timelineTriggered, itemId: stopAstern }
+        - not: { type: event, kind: timelineTriggered, itemId: skipAstern }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeAstern } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedAstern }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedAstern }
+                - { type: event, kind: manoeuvreAborted, itemId: crashStop }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: crashStop } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「半速退」(或量測中止):系統接手示範 — 舵正中、慢速進、自動舵 090°,航向與航速恢復後再示範。", severity: info }
+      - ownShip: { rudder: 0, thruster: 0, telegraph: SAH }
+      - autopilot: { enabled: true, heading: 90, rotLimit: 30 }
+  - id: demoAstern
+    name: 示範 — 半速退
+    holdFor_s: 30
+    when:
+      all:
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: demoPrepAstern } }
+        - not: { type: event, kind: timelineTriggered, itemId: stopAstern }
+        - not: { type: event, kind: timelineTriggered, itemId: skipAstern }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: crashStop }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: crashStop } } } ] }
+        - { type: ownHeading, greaterThan: 85, lessThan: 95 }
+        - { type: ownSpeed, metric: stw, greaterThan: 4.0 }
+    actions:
+      - ownShip: { rudder: 0, telegraph: HAS }
+  - id: stopAstern
+    name: 船停 — 停俥
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictAstern }
+        - not: { type: event, kind: timelineTriggered, itemId: skipAstern }
+        - { type: event, kind: manoeuvreMeasured, itemId: crashStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: crashStop } }   # 本段的量測完成(邊緣觸發;其他段同 id 的紀錄不算)
+    actions:
+      - ownShip: { rudder: 0, telegraph: STOP }
+      - message: { to: all, text: "船已停,停俥。右旋單俥倒俥時艉通常向左、艏向右;本次另受東北風影響,見量測 headingChange_deg(+ 為向右)。", severity: info }
+  - id: skipAstern
+    name: 逾時略過 — 半速退
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeAstern } }
+        - not: { type: event, kind: timelineTriggered, itemId: stopAstern }
+    actions:
+      - message: { to: all, text: "「半速退」未完成量測,略過此段。系統停俥。", severity: warning }
+      - ownShip: { rudder: 0, thruster: 0, telegraph: STOP }
+
+  # ---------------------------------------------------------------- C. 側推 @ 近零速
+  - id: predictThrusterZero
+    name: 預測 — 近零速側推
+    visibility: all
+    when:
+      all:
+        - any:
+            - { type: time, atLeast: 60, since: { event: timelineTriggered, itemId: stopAstern } }
+            - { type: time, atLeast: 60, since: { event: timelineTriggered, itemId: skipAstern } }
+        - { type: ownSpeed, metric: sog, lessThan: 1.5 }        # 壓載受 25 kn 風壓,停俥後仍可能以約 1 kn 漂移
+    actions:
+      - message: { to: all, text: "預測:近零速時艏側推右滿推,60 秒與 120 秒後艏向各轉幾度?與 7 kn 時比較。按確認(預測)。", severity: info }
+  - id: executeThrusterZero
+    name: 執行 — 近零速側推
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictThrusterZero }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictThrusterZero } }
+    actions:
+      - message: { to: all, text: "舵正中,艏側推右滿推;120 秒後系統將側推歸零。", severity: info }
+  - id: startedThrusterZero
+    name: 已辨識量測開始 — 近零速側推
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictThrusterZero }
+        - { type: event, kind: manoeuvreStarted, itemId: thrusterTurn.starboard }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: thrusterTurn.starboard } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:近零速側推(thrusterTurn.starboard)。", severity: info }
+  - id: demoPrepThrusterZero
+    name: 示範準備 — 近零速側推(學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeThrusterZero }
+        - not: { type: event, kind: timelineTriggered, itemId: stopThrusterZero }
+        - not: { type: event, kind: timelineTriggered, itemId: skipThrusterZero }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeThrusterZero } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedThrusterZero }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedThrusterZero }
+                - { type: event, kind: manoeuvreAborted, itemId: thrusterTurn.starboard }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: thrusterTurn.starboard } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「近零速側推」(或量測中止):系統接手示範 — 側推歸零、舵正中、停俥,再示範。", severity: info }
+      - ownShip: { rudder: 0, thruster: 0, telegraph: STOP }
+  - id: demoThrusterZero
+    name: 示範 — 近零速側推
+    when:
+      all:
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: demoPrepThrusterZero } }
+        - not: { type: event, kind: timelineTriggered, itemId: stopThrusterZero }
+        - not: { type: event, kind: timelineTriggered, itemId: skipThrusterZero }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: thrusterTurn.starboard }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: thrusterTurn.starboard } } } ] }
+    actions:
+      - ownShip: { rudder: 0, thruster: 1 }
+  - id: stopThrusterZero
+    name: 側推 120 s — 歸零
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: startedThrusterZero }
+        - not: { type: event, kind: timelineTriggered, itemId: skipThrusterZero }
+        - { type: time, atLeast: 120, since: { event: manoeuvreStarted, itemId: thrusterTurn.starboard } }
+    actions:
+      - ownShip: { thruster: 0 }
+      - message: { to: all, text: "側推歸零。比較 7 kn 與近零速的側推效果(No.2 海報:5 kn 以上無效)。", severity: info }
+  - id: skipThrusterZero
+    name: 逾時略過 — 近零速側推
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeThrusterZero } }
+        - not: { type: event, kind: timelineTriggered, itemId: stopThrusterZero }
+    actions:
+      - message: { to: all, text: "「近零速側推」未完成量測,略過此段。系統側推歸零。", severity: warning }
+      - ownShip: { rudder: 0, thruster: 0 }
+
+  # ---------------------------------------------------------------- D. 壓載 bow blow-off(停俥漂移)
+  # 風來自 045°:自動舵 020°,風在右舷艏約 25°(正頂風時左右對稱,不會產生偏轉力矩);進入約 3–4 kn(< 7 kn)的停俥由追蹤器以「停俥漂移」量測
+  # (inertiaStop,mode drift:觀察 300 s 或減至 0.5 kn,每分鐘航向變化 headingChangeAt{n}min_deg、最大艏偏 maxHeadingChange_deg)。
+  - id: headToWind
+    name: 微速進 020°(風在右舷艏約 25°)
+    visibility: all
+    when:
+      any:
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: stopThrusterZero } }
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: skipThrusterZero } }
+    actions:
+      - ownShip: { rudder: 0, thruster: 0, telegraph: DSAH }
+      - autopilot: { enabled: true, heading: 20, rotLimit: 30 }
+      - message: { to: all, text: "微速進,自動舵 020°(東北風在右舷艏約 25°)。航速約 3 kn 後進行 bow blow-off 觀察。", severity: info }
+  - id: predictBlowOff
+    name: 預測 — bow blow-off
+    visibility: all
+    holdFor_s: 30
+    when:
+      all:
+        - { type: time, atLeast: "${params:familiarisation.settle_s}", since: { event: timelineTriggered, itemId: headToWind } }
+        - { type: ownSpeed, metric: stw, greaterThan: 3.0 }
+        - { type: ownHeading, greaterThan: 10, lessThan: 30 }
+    actions:
+      - message: { to: all, text: "預測:風在右舷艏約 25°、約 3 kn 時停俥、舵正中,艏向會被吹向哪一舷?每分鐘偏多少?按確認(預測)。", severity: info }
+  - id: executeBlowOff
+    name: 執行 — 停俥觀察
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictBlowOff }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictBlowOff } }
+    actions:
+      - message: { to: all, text: "解除自動舵、舵正中、停俥,觀察艏向變化 5 分鐘(系統量測每分鐘艏向變化);必要時以側推/車舵保向。", severity: info }
+  - id: startedBlowOff
+    name: 已辨識量測開始 — 停俥漂移
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictBlowOff }
+        - { type: event, kind: manoeuvreStarted, itemId: inertiaStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: inertiaStop } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:停俥漂移(inertiaStop)。", severity: info }
+  - id: demoPrepBlowOff
+    name: 示範準備 — 停俥漂移(學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeBlowOff }
+        - not: { type: event, kind: timelineTriggered, itemId: measuredBlowOff }
+        - not: { type: event, kind: timelineTriggered, itemId: skipBlowOff }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeBlowOff } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedBlowOff }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedBlowOff }
+                - { type: event, kind: manoeuvreAborted, itemId: inertiaStop }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: inertiaStop } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「停俥漂移」(或量測中止):系統接手示範 — 舵正中、微速進、自動舵 020°,航向與航速穩定後再示範停俥。", severity: info }
+      - ownShip: { rudder: 0, thruster: 0, telegraph: DSAH }
+      - autopilot: { enabled: true, heading: 20, rotLimit: 30 }
+  - id: demoBlowOff
+    name: 示範 — 停俥
+    holdFor_s: 30
+    when:
+      all:
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: demoPrepBlowOff } }
+        - not: { type: event, kind: timelineTriggered, itemId: measuredBlowOff }
+        - not: { type: event, kind: timelineTriggered, itemId: skipBlowOff }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: inertiaStop }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: inertiaStop } } } ] }
+        - { type: ownSpeed, metric: stw, greaterThan: 3.0 }
+        - { type: ownHeading, greaterThan: 10, lessThan: 30 }
+    actions:
+      - ownShip: { rudder: 0, telegraph: STOP }
+  - id: measuredBlowOff
+    name: 量測完成 — 停俥漂移
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictBlowOff }
+        - not: { type: event, kind: timelineTriggered, itemId: skipBlowOff }
+        - { type: event, kind: manoeuvreMeasured, itemId: inertiaStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: inertiaStop } }   # 本段的量測完成(邊緣觸發;其他段同 id 的紀錄不算)
+    actions:
+      - message: { to: all, text: "停俥漂移量測完成:比較預測與每分鐘艏向變化(見量測 headingChangeAt{n}min_deg、maxHeadingChange_deg;+ 為向右)。", severity: info }
+  - id: skipBlowOff
+    name: 逾時略過 — 停俥漂移
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeBlowOff } }
+        - not: { type: event, kind: timelineTriggered, itemId: measuredBlowOff }
+    actions:
+      - message: { to: all, text: "「停俥漂移」未完成量測,略過此段。系統停俥。", severity: warning }
+      - ownShip: { rudder: 0, thruster: 0, telegraph: STOP }
+
+  # ---------------------------------------------------------------- E. 舵機速率
+  - id: predictSwing
+    name: 預測 — 舵機速率
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: timelineTriggered, itemId: measuredBlowOff }
+        - { type: event, kind: timelineTriggered, itemId: skipBlowOff }
+    actions:
+      - message: { to: all, text: "預測:單泵與雙泵時,左滿舵 35° 換到右滿舵 35° 各需幾秒?(Mitsubishi SFC-20:單泵 28 s / 雙泵 14 s)按確認(預測)。", severity: info }
+  - id: executeSwing
+    name: 執行 — 左滿舵 → 右滿舵
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictSwing }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictSwing } }
+    actions:
+      - message: { to: all, text: "單泵:下令左滿舵 35°,舵到位後下令右滿舵 35°,看舵角指示計時;完成後以操舵模式改雙泵(pump both)再做一次。", severity: info }
+  - id: demoSwingPort
+    name: 示範 — 左滿舵
+    when:
+      all:
+        - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeSwing } }
+        - not: { type: event, kind: manoeuvreStarted, itemId: rudderSwing.toStarboard }
+    actions:
+      - ownShip: { rudder: -35 }
+  - id: demoSwingStbd
+    name: 示範 — 右滿舵
+    when: { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: demoSwingPort } }
+    actions:
+      - ownShip: { rudder: 35 }
+  - id: skipSwing
+    name: 逾時略過 — 舵機速率
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeSwing } }
+        - not: { type: event, kind: manoeuvreMeasured, itemId: rudderSwing.toStarboard }
+    actions:
+      - message: { to: all, text: "「舵機速率」未完成量測,略過並結束。", severity: warning }
+  - id: promptBothPumps
+    name: 提示 — 改雙泵重做
+    visibility: all
+    when: { type: event, kind: manoeuvreMeasured, itemId: rudderSwing.toStarboard }
+    actions:
+      - message: { to: all, text: "單泵量測完成。請以操舵模式選雙泵(steeringMode,pump both),回左滿舵 35° 後再換右滿舵 35°,比較時間。", severity: info }
+  - id: end
+    name: 結束與講評
+    visibility: all
+    delay_s: 20
+    when:
+      any:
+        - { type: event, kind: manoeuvreMeasured, itemId: rudderSwing.toStarboard, count: { atLeast: 2 } }
+        - { type: time, atLeast: 300, since: { event: timelineTriggered, itemId: promptBothPumps } }
+        - { type: event, kind: timelineTriggered, itemId: skipSwing }
+    actions:
+      - ownShip: { rudder: 0 }
+      - message: { to: all, text: "F02 完成。講評:側推效能與航速、倒俥艉偏方向、壓載風壓下保向極限、單泵/雙泵舵機速率;結果見講評摘要 manoeuvres。", severity: info }
+      - endExercise: { reason: F02 流程完成 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail:
+    - { id: grounding, rule: grounding }
+  required:                                       # 只記錄(扣分 0)
+    - { id: predictionThrusterSpeed, after: { event: timelineTriggered, itemId: predictThrusterSpeed }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: predictionAstern, after: { event: timelineTriggered, itemId: predictAstern }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredAstern, after: { event: timelineTriggered, itemId: executeAstern }, expect: { event: { kind: timelineTriggered, itemId: stopAstern } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+    - { id: predictionThrusterZero, after: { event: timelineTriggered, itemId: predictThrusterZero }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredBlowOff, after: { event: timelineTriggered, itemId: executeBlowOff }, expect: { event: { kind: timelineTriggered, itemId: measuredBlowOff } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+    - { id: predictionBlowOff, after: { event: timelineTriggered, itemId: predictBlowOff }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: predictionSwing, after: { event: timelineTriggered, itemId: predictSwing }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+  scoring: { start: 100, passMark: 0 }

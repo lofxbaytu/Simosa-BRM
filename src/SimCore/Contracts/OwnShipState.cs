@@ -75,6 +75,12 @@ public sealed record OwnShipState
     [JsonPropertyName("alerts")] public IReadOnlyList<AlertStatus>? Alerts { get; init; }
     /// <summary>BNWAS(MSC.128(75))狀態</summary>
     [JsonPropertyName("bnwas")] public BnwasStatus? Bnwas { get; init; }
+    /// <summary>拖船(情境無拖船時省略;設計文件 physics-tugs-anchors-mooring.md)</summary>
+    [JsonPropertyName("tugs")] public IReadOnlyList<TugStatusState>? Tugs { get; init; }
+    /// <summary>左右錨(particulars 無錨資料時省略)</summary>
+    [JsonPropertyName("anchors")] public IReadOnlyList<AnchorStatusState>? Anchors { get; init; }
+    /// <summary>泊位碰墊接觸與繫纜(情境無 berth 時省略)</summary>
+    [JsonPropertyName("berth")] public BerthStatusState? Berth { get; init; }
 }
 
 /// <summary>真值區塊(state.schema.json <c>truth</c>)。</summary>

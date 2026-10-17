@@ -1,0 +1,157 @@
+# E11 人員落水 — 開闊海、中等海況、日間版(規劃書第 8.1 節 E11;設計 docs/design/ship-familiarisation.md 第 6 節;schema src/Contracts/scenario.schema.json)
+# FSB1 滿載於台灣海峽南部開闊海以 12 kn、200° 航行(自動舵),東北風 18 kn、流 0.8 kn 向 200°。T+120 s 左舷人員落水:
+# 落水者以目標船 MOB 表示(hold 模式、航速 0、隨流漂移、AIS 關;id 以 MOB 開頭 → 操縱量測 manOverboard 自動量測)。
+# 第二個複雜因素:北上貨船 T1(12 kn、020°)原本約 0.4 nm 左舷對左舷通過,自船 Williamson 迴旋回到對向航向時正好與其在落水者附近會遇。
+# 量測:落水到首次舵令、旋迴段與方式(Williamson / Anderson / Scharnow)、回到對向航向時偏離原航跡、最接近落水者的距離與時間、回到 2 倍船長內的時間。
+# 夜間版:將 startTimeUtc 改為 12:00Z(台灣 20:00)、visibility_nm 改 2,落水者以救生衣燈表示(視景端);其餘相同。
+# 硬性失敗:碰撞(含輾過落水者)。CPA 容許帶不適用(落水者也是目標,minCpa 會含它);T1 的通過距離由講評逐目標檢視(summary.collisionAvoidance.targets[])。
+id: E11_man_overboard
+name: 開闊海人員落水(日間)
+description: >-
+  左舷人員落水,團隊需立即滿舵朝落水舷、發出警報、拋救生圈並指派瞭望、通知船長與 GMDSS/海巡,
+  以 Williamson(或 Anderson)迴旋回到落水者,同時處理北上貨船的會遇;評估回到落水位置的時間、距離與旋迴方式。
+seed: 20261026
+startTimeUtc: "2026-11-12T02:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 23.2000, lon: 119.8000 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 200
+  speed: 12.0
+  rudder: 0
+environment:
+  wind: { trueSpeed: 18, trueDir: 30, gustiness: 0.15 }
+  current: { set: 200, drift: 0.8 }
+  waterDepth: 80
+  visibility_nm: 8
+briefing:
+  text: |
+    No.1 滿載,台灣海峽南部開闊海,12 kn 航向 200°(自動舵),東北風 18 kn、中等海況,白天。
+    當值:船副與舵工;船長在房間。前方有北上貨船(左舷對左舷通過)。
+    人員落水時依公司緊急程序:立即滿舵朝落水舷(使艉離開落水者)、警報與廣播、拋救生圈(含標示浮燈)、指派瞭望持續指向、
+    GPS MOB 標記、通知船長與機控室、GMDSS(DSC / VHF 16)與海巡通報;選擇 Williamson 或 Anderson 迴旋回到落水者。
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: helmsman, required: true }
+    - { role: lookout }
+    - { role: ecr, playedBy: voiceScript }
+  minParticipants: 2
+  duration_s: 2700
+targets:
+  - id: MOB
+    name: 落水者
+    shipType: other
+    loa: 1
+    beam: 1
+    draft: 0
+    aisOn: false
+    initial:
+      position: { x: -234, y: -724 }             # T+120 s 時自船(約 (-272, -742))左舷外 28 m、船中後 30 m(船艉左舷外側,不與船體重疊)
+      heading: 0
+      speed: 0
+    behaviour: { mode: hold }                    # 航速 0,隨流漂移(與自船同一流場)
+    trigger: { type: time, time: 120 }           # 落水時刻(目標船段不引用參數:Python 參考實作不保留 targets 的參數代入路徑)
+  - id: T1
+    name: HAI XIN 6
+    mmsi: 413700611
+    shipType: cargo
+    loa: 120
+    beam: 20
+    draft: 7
+    initial:
+      position: { x: -1331, y: -5822 }           # 自船正前方 3.2 nm、左舷側 0.4 nm,北上
+      heading: 20
+      speed: 12
+    behaviour:
+      mode: waypoints
+      waypoints:
+        - { x: 5003, y: 11581, speed: 12 }
+      stopAtEnd: false
+timeline:
+  - id: autopilotOn
+    name: 自動舵 200°
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 200 }
+  - id: mob
+    name: 人員落水(左舷)
+    phase: emergency
+    visibility: all
+    when: { type: event, kind: targetActivated, targetId: MOB }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "人員落水!左舷!人員落水!", lang: zh-TW }
+      - message: { to: instructor, text: "已注入人員落水(左舷);觀察:滿舵朝左、警報/廣播、救生圈與浮燈、瞭望指向、MOB 標記、通知船長、GMDSS", severity: warning }
+  - id: lookoutReport
+    name: 瞭望回報方位
+    visibility: all
+    when: { type: time, atLeast: 90, since: { event: timelineTriggered, itemId: mob } }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "落水者在左舷船艉方向,看得到救生圈浮燈!", lang: zh-TW }
+  - id: trafficCall
+    name: 北上貨船 VHF 呼叫
+    when: { type: time, atLeast: 240, since: { event: timelineTriggered, itemId: mob } }
+    actions:
+      - voiceScript: { role: other, channel: vhf16, text: "Southbound tanker, this is HAI XIN 6 on your port bow, what are your intentions?", lang: en }
+  - id: mobClose
+    name: 接近落水者
+    visibility: all
+    when:
+      all:
+        - { type: ownDistance, target: MOB, lessThan: 0.1 }
+        - { type: time, atLeast: 180, since: { event: timelineTriggered, itemId: mob } }
+    actions:
+      - message: { to: all, text: "落水者在 0.1 nm 內:減速、救生艇/救援艇或下風舷接近準備。", severity: info }
+  - id: mobReturned
+    name: 回到落水者(量測完成)
+    when: { type: event, kind: manoeuvreMeasured, itemId: manOverboard }
+    actions:
+      - message: { to: instructor, text: "人員落水回航量測完成:見講評摘要 manoeuvres(manOverboard)的旋迴方式、最接近距離與時間。", severity: info }
+  - id: recovered
+    name: 救起落水者(教官確認)
+    manual: true
+    actions:
+      - message: { to: all, text: "落水者已救起。", severity: info }
+      - endExercise: { reason: 落水者救起 }
+  - id: timeout
+    name: 時間到
+    when: { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: mob } }
+    actions:
+      - endExercise: { reason: 時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  hardFail:
+    - { id: collision, rule: collision }
+  required:
+    - id: immediateAction
+      after: { event: targetActivated, targetId: MOB }
+      expect: rudderOrder
+      within_s: "${params:emergency.manOverboard.immediateAction_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.5
+    - id: alarm
+      after: { event: targetActivated, targetId: MOB }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:emergency.manOverboard.alarm_s}"
+      penalty: 10
+    - id: callMaster
+      after: { event: targetActivated, targetId: MOB }
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:emergency.manOverboard.callMaster_s}"
+      penalty: 5
+    - id: notifySar
+      after: { event: targetActivated, targetId: MOB }
+      expect: { acknowledge: { kind: notifySar } }
+      within_s: "${params:emergency.manOverboard.notifySar_s}"
+      penalty: 10
+    - id: returnToMob
+      after: { event: targetActivated, targetId: MOB }
+      expect: { event: { kind: timelineTriggered, itemId: mobReturned } }   # mobReturned 於 manoeuvreMeasured(manOverboard)時觸發
+      within_s: "${params:emergency.manOverboard.return_s}"
+      penalty: 20
+      latePenaltyPer_s: 0.05
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

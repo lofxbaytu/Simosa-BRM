@@ -132,6 +132,39 @@ public static class SimEventKinds
     // instructor
     public const string Acknowledge = "acknowledge";
     public const string TimelineManual = "timelineManual";
+    // 外力:拖船、錨、碰墊、繫纜(設計文件 docs/design/physics-tugs-anchors-mooring.md 第 6 節;itemId = 拖船 id / 錨側 / 碰墊 id / 纜 id)
+    /// <summary>拖船命令被接受(data {id, mode, from, status, direction_deg, power_pct};source 同指令)</summary>
+    public const string TugCommand = "tugCommand";
+    /// <summary>拖纜斷裂(data {id, force_t, mode, reason: fault, stillPushing})</summary>
+    public const string TugLineParted = "tugLineParted";
+    /// <summary>拋錨(letGo 指令;data {side, action, targetLength_m, targetLength_shackles, length_m, status})</summary>
+    public const string AnchorLetGo = "anchorLetGo";
+    /// <summary>其他錨指令 veer/heave/brake/release(data 同上)</summary>
+    public const string AnchorCommand = "anchorCommand";
+    /// <summary>錨已帶上:letGo 後剎車握持、錨抓住、對地速度 &lt; 0.15 m/s(data {side, length_m, tension_t})</summary>
+    public const string AnchorBroughtUp = "anchorBroughtUp";
+    /// <summary>走錨開始(水平張力 &gt; 抓地力;data {side, tension_t, holding_t, length_m})</summary>
+    public const string AnchorDragging = "anchorDragging";
+    /// <summary>走錨停止(水平張力 ≤ 0.95 × 抓地力)</summary>
+    public const string AnchorHolding = "anchorHolding";
+    /// <summary>錨離底(起錨時鏈長 ≤ 錨鏈孔至海床高度)</summary>
+    public const string AnchorAweigh = "anchorAweigh";
+    /// <summary>錨收妥(鏈長 0)</summary>
+    public const string AnchorHoused = "anchorHoused";
+    /// <summary>錨鏈全部送出(到鏈端;data {side, length_m, shackles})</summary>
+    public const string AnchorChainFullyOut = "anchorChainFullyOut";
+    /// <summary>錨鏈孔張力超過剎車握持力,鏈被拉出(data {side, tension_t, brakeHolding_t, length_m})</summary>
+    public const string AnchorBrakeSlipping = "anchorBrakeSlipping";
+    /// <summary>起錨時錨鏈孔張力超過絞盤過載拉力,停轉(data {side, tension_t, windlassLimit_t})</summary>
+    public const string AnchorWindlassStalled = "anchorWindlassStalled";
+    /// <summary>碰墊接觸峰值(壓縮由增轉減時,或接觸結束;data {fenderId, normalSpeed_mps, energy_kNm, maxReaction_kN, maxDeflection_m, deflection_pct, ratedEnergy_kNm, ratedReaction_kN, overload})</summary>
+    public const string FenderContact = "fenderContact";
+    /// <summary>船體與碼頭面硬接觸開始(data {berthId, penetration_m, normalSpeed_mps})</summary>
+    public const string QuayContact = "quayContact";
+    /// <summary>繫纜指令被接受(data {lineId, action, status, bollardId, tension_t, length_m, restLength_m})</summary>
+    public const string MooringCommand = "mooringCommand";
+    /// <summary>繫纜斷裂(張力 &gt; MBL;data {lineId, tension_t, mbl_t, bollardId})</summary>
+    public const string MooringLineParted = "mooringLineParted";
 }
 
 /// <summary><see cref="SimEventKinds.CommandRejected"/> 的 data.reason 值。</summary>
@@ -143,4 +176,27 @@ public static class CommandRejectReasons
     public const string AutopilotUnavailable = "autopilotUnavailable";
     /// <summary>alertAcknowledge / alertSilence 的 id 不在警報目錄</summary>
     public const string UnknownAlert = "unknownAlert";
+    // 外力指令(tugControl / anchor / mooring;設計文件 physics-tugs-anchors-mooring.md 第 6.2 節)
+    /// <summary>動力學模型不支援外力(IShipDynamics.SupportsExternalForces = false)</summary>
+    public const string ExternalForcesUnsupported = "externalForcesUnsupported";
+    public const string UnknownTug = "unknownTug";
+    public const string UnknownTugMode = "unknownTugMode";
+    /// <summary>拖船不具此模式(情境 tugs[].modes)</summary>
+    public const string TugModeUnavailable = "tugModeUnavailable";
+    /// <summary>拖纜已斷(tugLineBreak 未清除),不能拉</summary>
+    public const string TugLineParted = "tugLineParted";
+    public const string InvalidPower = "invalidPower";
+    public const string NoAnchorData = "noAnchorData";
+    public const string UnknownAnchor = "unknownAnchor";
+    public const string AnchorAlreadyOut = "anchorAlreadyOut";
+    public const string AnchorStowed = "anchorStowed";
+    public const string ChainFullyOut = "chainFullyOut";
+    public const string InvalidTarget = "invalidTarget";
+    public const string UnknownAction = "unknownAction";
+    public const string NoBerth = "noBerth";
+    public const string UnknownMooringLine = "unknownMooringLine";
+    public const string UnknownBollard = "unknownBollard";
+    public const string BollardOutOfReach = "bollardOutOfReach";
+    public const string MooringLineNotFast = "mooringLineNotFast";
+    public const string MooringLineParted = "mooringLineParted";
 }

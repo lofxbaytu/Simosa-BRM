@@ -219,6 +219,17 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "能見度(nm;未給 = 無限制);核心只保存、漸變、廣播與記錄,無物理效果"
+        },
+        "seabed": {
+          "type": "string",
+          "enum": [
+            "mud",
+            "sand",
+            "clay",
+            "rock"
+          ],
+          "default": "sand",
+          "description": "海床底質:錨抓著係數與躺底鏈摩擦(docs/design/physics-tugs-anchors-mooring.md 第 3.3 節);Python 參考實作忽略"
         }
       }
     },
@@ -231,7 +242,7 @@
     },
     "assessment": {
       "type": "object",
-      "description": "評估參數與規則(規劃書第 8.3 節;情境引擎設計第 1.3 節);數值欄位可引用參數集",
+      "description": "評估參數與規則(規劃書第 8.3 節;情境引擎設計第 1.3 節);數值欄位可引用參數集。操縱量測(docs/design/ship-familiarisation.md 第 2 節:事件 manoeuvreStarted / manoeuvreMeasured / manoeuvreAborted,itemId = 量測 id 如 turning35.port;逐步下舵/STOP → 倒俥的改判會以 data.supersedes 重發 manoeuvreStarted;summary.manoeuvres[];bands 指標 manoeuvres.*)不另設欄位,於 bands 引用 manoeuvres.* 指標、hardFail/required/時間表條件引用 manoeuvre* 事件,或 targets 有 id 以 MOB 開頭的目標船時自動啟用",
       "properties": {
         "parameterSet": {
           "type": "string",
@@ -421,6 +432,60 @@
         }
       },
       "additionalProperties": false
+    },
+    "tugs": {
+      "type": "array",
+      "description": "拖船(規劃書第 6.2 節 T 項;docs/design/physics-tugs-anchors-mooring.md 第 2 節;指令 tugControl、故障 tugLineBreak;Python 參考實作忽略)",
+      "items": {
+        "$ref": "#/$defs/tug"
+      }
+    },
+    "anchors": {
+      "type": "object",
+      "description": "錨的初始狀態與抓地力調整(錨/鏈規格取自 particulars anchors;未給 = 兩錨收存;第 3 節)",
+      "properties": {
+        "port": {
+          "$ref": "#/$defs/anchorInitial"
+        },
+        "starboard": {
+          "$ref": "#/$defs/anchorInitial"
+        },
+        "holdingFactor": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1,
+          "description": "抓地力倍率(底質品質/錨著底狀況)"
+        },
+        "dragSpeed_mps": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 0.5,
+          "description": "走錨速率上限(m/s)"
+        }
+      }
+    },
+    "berth": {
+      "type": "object",
+      "description": "泊位:file(data/areas/*.json)+ id 於載入時解析並內嵌為 definition(紀錄 header 含完整定義),或直接給 definition;lines 為自船繫纜(第 4 節)",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "泊位檔(相對專案根目錄或情境檔目錄),例如 data/areas/mailiao-berth.json"
+        },
+        "id": {
+          "type": "string",
+          "description": "泊位檔 berths[].id(省略 = 第一個)"
+        },
+        "definition": {
+          "$ref": "#/$defs/berthDefinition"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mooringLine"
+          }
+        }
+      }
     }
   },
   "examples": [
@@ -634,6 +699,120 @@
     }
   ],
   "$defs": {
+    "bodyPoint": {
+      "description": "船體座標點:具名 fwd|aft|bow|stern|fwdPort|fwdStbd|midPort|midStbd|aftPort|aftStbd(以 L = 垂標間長、B = 型寬估計,見設計文件第 2.1 節)或 {x, y}(m,x 向艏、y 向右舷、原點船舯)",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["fwd", "aft", "bow", "stern", "fwdPort", "fwdStbd", "midPort", "midStbd", "aftPort", "aftStbd"]
+        },
+        {
+          "type": "object",
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "tug": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "bollardPull_t": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "繫柱拖力(t)" },
+        "attach": { "$ref": "#/$defs/bodyPoint", "description": "連接點(預設 fwd)" },
+        "lineLength_m": { "type": "number", "exclusiveMinimum": 0, "default": 40 },
+        "modes": { "type": "array", "items": { "type": "string", "enum": ["push", "pull"] }, "description": "可用模式(預設兩者)" },
+        "riseTime_s": { "type": "number", "exclusiveMinimum": 0, "default": 30, "description": "出力一階上升時間常數(20–40 s)" },
+        "turnRate_degPerSec": { "type": "number", "exclusiveMinimum": 0, "description": "方向變更速率;未給 = repositionSpeed_kn / lineLength_m" },
+        "repositionSpeed_kn": { "type": "number", "exclusiveMinimum": 0, "default": 5 },
+        "pushFullUpTo_kn": { "type": "number", "default": 3, "description": "推頂效能 100 % 的自船對水速度上限" },
+        "pushHalfAt_kn": { "type": "number", "default": 5, "description": "推頂效能 50 % 的速度(e = 1/(1+((V−V_full)/(V_half−V_full))²))" },
+        "pullFullUpTo_kn": { "type": "number", "default": 4 },
+        "pullHalfAt_kn": { "type": "number", "default": 7 },
+        "modeChange_s": { "type": "number", "minimum": 0, "default": 60, "description": "推 ↔ 拉換位時間(無出力);依拖船就位的工作側判定,中間插入 standby 仍需換位" },
+        "connect_s": { "type": "number", "minimum": 0, "default": 90, "description": "free → push/pull 帶纜/靠上時間" },
+        "initial": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["standby", "free", "push", "pull"], "default": "standby", "description": "push/pull 須包含在 modes 內(modes 省略 = 兩者皆可),否則情境驗證錯誤" },
+            "direction_deg": { "type": "number", "default": 90 },
+            "power_pct": { "type": "number", "minimum": 0, "maximum": 100, "default": 0 }
+          }
+        }
+      }
+    },
+    "anchorInitial": {
+      "type": "object",
+      "description": "初始已錨泊:鏈長 > 0 時錨在錨鏈孔 bearing_deg 方向、水平張力約 0.25 × 錨抓力處,剎車握持",
+      "properties": {
+        "length_m": { "type": "number", "minimum": 0 },
+        "length_shackles": { "type": "number", "minimum": 0 },
+        "bearing_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "錨相對錨鏈孔的真方位(預設初始航向)" }
+      }
+    },
+    "fenderType": {
+      "type": "object",
+      "properties": {
+        "height_m": { "type": "number", "exclusiveMinimum": 0, "default": 1.0 },
+        "width_m": { "type": "number", "exclusiveMinimum": 0, "default": 2.0, "description": "沿碼頭方向接觸寬度" },
+        "ratedReaction_kN": { "type": "number", "exclusiveMinimum": 0 },
+        "ratedDeflection_pct": { "type": "number", "exclusiveMinimum": 0, "default": 72 },
+        "ratedEnergy_kNm": { "type": "number", "description": "未給 = 曲線積分到額定壓縮" },
+        "curve": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "[壓縮 %, 反力 %] 自 [0, 0] 起遞增;超過最後一點以觸底剛度 20·R/H 外插" },
+        "damping_kNs_per_m": { "type": "number", "minimum": 0, "default": 0 },
+        "friction": { "type": "number", "minimum": 0, "default": 0.2 }
+      }
+    },
+    "berthDefinition": {
+      "type": "object",
+      "required": ["id", "quay"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "source": { "type": "string" },
+        "quay": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/position" }, "description": "碼頭面折線" },
+        "waterSide": { "type": "string", "enum": ["left", "right"], "default": "right", "description": "沿折線方向看水域在哪側" },
+        "quayStiffness_kNpm": { "type": "number", "exclusiveMinimum": 0, "default": 20000, "description": "船體–碼頭硬接觸懲罰剛度" },
+        "fenderTypes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/fenderType" } },
+        "fenders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "type", "chainage_m"],
+            "properties": { "id": { "type": "string" }, "type": { "type": "string" }, "chainage_m": { "type": "number", "minimum": 0 } }
+          }
+        },
+        "bollards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "chainage_m"],
+            "properties": { "id": { "type": "string" }, "chainage_m": { "type": "number", "minimum": 0 }, "setback_m": { "type": "number", "default": 2 }, "swl_t": { "type": "number" } }
+          }
+        }
+      }
+    },
+    "mooringLine": {
+      "type": "object",
+      "required": ["id", "fairlead"],
+      "properties": {
+        "id": { "type": "string" },
+        "fairlead": { "$ref": "#/$defs/bodyPoint" },
+        "bollard": { "type": "string", "description": "預設繫船柱 id" },
+        "mbl_t": { "type": "number", "exclusiveMinimum": 0, "default": 50 },
+        "breakStrain": { "type": "number", "exclusiveMinimum": 0, "default": 0.18 },
+        "exponent": { "type": "number", "exclusiveMinimum": 0, "default": 1.5, "description": "T = MBL·(ε/ε_b)^n" },
+        "length_m": { "type": "number", "exclusiveMinimum": 0, "default": 150 },
+        "heaveRate_mPerMin": { "type": "number", "exclusiveMinimum": 0, "default": 15 },
+        "winchPull_t": { "type": "number", "exclusiveMinimum": 0, "default": 10 },
+        "pretension_t": { "type": "number", "minimum": 0, "default": 2 },
+        "initial": { "type": "string", "enum": ["stowed", "fast"], "default": "stowed" }
+      }
+    },
     "position": {
       "type": "object",
       "description": "經緯度或本地 ENU(m),二擇一",
@@ -1576,7 +1755,7 @@
         "id",
         "metric"
       ],
-      "description": "指標(summary 的 段.欄位,例如 track.maxXtd_m、collisionAvoidance.minCpa_nm、manoeuvring.timeRotOverLimit_s)超過 warn/fail 門檻時扣分;fail 可寫 \"2x\" = warn × 2;direction above(預設,值越大越差)| below",
+      "description": "指標(summary 的 段.欄位,例如 track.maxXtd_m、collisionAvoidance.minCpa_nm、manoeuvring.timeRotOverLimit_s)超過 warn/fail 門檻時扣分;fail 可寫 \"2x\" = warn × 2;direction above(預設,值越大越差)| below。操縱量測指標 manoeuvres.<量測 id>.<鍵>(同 id 多筆時取最近一次完整且有可比比較的 measured,其次最近一次完整者,再其次最近一次 measured 的 values,例如 manoeuvres.turning35.port.tacticalDiameter_m、manoeuvres.crashStop.trackReach_m、manoeuvres.manOverboard.returnTime_s)與彙總 manoeuvres.count / compared / outsideTolerance / maxAbsDeviation_pct(C# MetricNames;Python 結構檢查尚未加入)",
       "properties": {
         "id": {
           "type": "string"
@@ -1659,8 +1838,14 @@
                     "steeringMode",
                     "anchorReady",
                     "gyroCheck",
+                    "prediction",
+                    "driftCalculation",
+                    "anchorDecision",
+                    "notifyCompany",
+                    "notifySar",
                     "other"
-                  ]
+                  ],
+                  "description": "prediction:船舶熟悉 F01–F03 執行前記下的預測(itemId = 預測提示項目,note = 預測值);driftCalculation:漂流計算(E10);anchorDecision:緊急下錨決策(E10,錨物理另行實作前以此代表);notifyCompany:通報公司 DPA/海務;notifySar:通報海巡/搜救中心或 GMDSS 遇險/緊急呼叫(E10、E11)"
                 }
               }
             },

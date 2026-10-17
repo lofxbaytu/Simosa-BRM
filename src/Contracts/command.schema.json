@@ -35,7 +35,10 @@
         "alertAcknowledge",
         "alertSilence",
         "bnwasMode",
-        "bnwasReset"
+        "bnwasReset",
+        "tugControl",
+        "anchor",
+        "mooring"
       ]
     },
     "value": {},
@@ -235,6 +238,90 @@
     },
     {
       "type": "bnwasReset"
+    },
+    {
+      "type": "tugControl",
+      "args": {
+        "id": "TG1",
+        "mode": "push",
+        "direction_deg": 270,
+        "power_pct": 50
+      }
+    },
+    {
+      "type": "tugControl",
+      "args": {
+        "id": "TG2",
+        "mode": "standby"
+      }
+    },
+    {
+      "type": "anchor",
+      "args": {
+        "side": "starboard",
+        "action": "letGo",
+        "targetLength_shackles": 4
+      }
+    },
+    {
+      "type": "anchor",
+      "args": {
+        "side": "starboard",
+        "action": "heave"
+      }
+    },
+    {
+      "type": "mooring",
+      "args": {
+        "lineId": "HEAD",
+        "action": "makeFast",
+        "bollard": "B6",
+        "tension_t": 2
+      }
+    },
+    {
+      "type": "mooring",
+      "args": {
+        "lineId": "HEAD",
+        "action": "heave",
+        "tension_t": 8
+      }
     }
-  ]
+  ],
+  "$defs": {
+    "tugControlArgs": {
+      "type": "object",
+      "description": "tugControl 的 args(docs/design/physics-tugs-anchors-mooring.md 第 2 節)。接受時發事件 tugCommand {id, mode, from, status, direction_deg, power_pct};拒絕時 commandRejected {reason: unknownTug|unknownTugMode|tugModeUnavailable|tugLineParted|invalidPower|externalForcesUnsupported}。push↔pull 換位需 modeChange_s(依拖船就位的工作側判定:推 → standby → 拉 仍需換位;換位/帶纜中下 standby 計時照走)、free → push/pull 需 connect_s(期間無出力);status parted 的拖船只調方向/出力或下 free 時保持 parted(故障清除才轉 free);出力一階上升(riseTime_s)、方向以 turnRate_degPerSec 迴轉;自船對水速度高於 fullUpTo_kn 時效能遞減。拖纜斷裂以 injectFault {name: tugLineBreak, args: {id}} 注入(id 未定義時 commandRejected {command: injectFault, reason: unknownTug}、動力學不支援外力時 reason externalForcesUnsupported,皆不加入 faults[])。",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "description": "情境 tugs[].id" },
+        "mode": { "type": "string", "enum": ["push", "pull", "standby", "free"], "description": "省略 = 不變" },
+        "direction_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "作用於自船的力方向,相對船艏順時針(0 向前、90 向右舷、180 向後、270 向左舷);省略 = 不變" },
+        "power_pct": { "type": "number", "minimum": 0, "maximum": 100, "description": "出力(繫柱拖力的百分比);省略 = 不變" }
+      }
+    },
+    "anchorArgs": {
+      "type": "object",
+      "description": "anchor 的 args(第 3 節)。letGo 發 anchorLetGo,其餘發 anchorCommand {side, action, targetLength_m, targetLength_shackles, length_m, status};拒絕 reason: unknownAnchor|unknownAction|anchorAlreadyOut|anchorStowed|chainFullyOut|invalidTarget|noAnchorData|externalForcesUnsupported。物理事件(source engine):anchorBroughtUp、anchorDragging、anchorHolding、anchorAweigh、anchorHoused、anchorChainFullyOut、anchorBrakeSlipping、anchorWindlassStalled。",
+      "required": ["side", "action"],
+      "properties": {
+        "side": { "type": "string", "enum": ["port", "starboard"] },
+        "action": { "type": "string", "enum": ["letGo", "veer", "heave", "brake", "release"], "description": "letGo 拋錨(自由送出 2 m/s 至目標後剎車;錨已著底或仍在送出/鬆鏈中時拒絕 anchorAlreadyOut,懸吊中再拋時目標短於目前鏈長拒絕 invalidTarget)、veer 鬆鏈(0.5 m/s 至目標)、heave 起錨(particulars 起錨速率;超過絞盤過載拉力停轉,停轉中張力超過剎車握持力時鏈與剎車同樣被拉出 anchorBrakeSlipping;目標省略 = 收妥)、brake 剎車、release 放開剎車自由送出" },
+        "targetLength_shackles": { "type": "number", "minimum": 0, "description": "目標鏈長(節;一節 = particulars anchors.shackleLength_m,預設 27.5 m)" },
+        "length_m": { "type": "number", "minimum": 0, "description": "目標鏈長(m;優先於 targetLength_shackles)" }
+      }
+    },
+    "mooringArgs": {
+      "type": "object",
+      "description": "mooring 的 args(第 4 節;情境 berth.lines[])。接受時發 mooringCommand {lineId, action, status, bollardId, tension_t, length_m, restLength_m};拒絕 reason: noBerth|unknownMooringLine|unknownBollard|bollardOutOfReach|mooringLineNotFast|mooringLineParted|unknownAction|externalForcesUnsupported。斷裂(張力 > MBL)發 mooringLineParted。",
+      "required": ["lineId", "action"],
+      "properties": {
+        "lineId": { "type": "string" },
+        "action": { "type": "string", "enum": ["makeFast", "heave", "slack", "letGo"], "description": "makeFast 帶纜(以預張力定未受力纜長)、heave 絞纜至 tension_t(上限 winchPull_t)、slack 鬆 length_m(預設 2 m)、letGo 解纜" },
+        "bollard": { "type": "string", "description": "繫船柱 id(省略 = 纜的預設繫船柱;makeFast 用)" },
+        "tension_t": { "type": "number", "minimum": 0, "description": "makeFast 預張力 / heave 目標張力(t)" },
+        "length_m": { "type": "number", "exclusiveMinimum": 0, "description": "slack 放出長度(m)" }
+      }
+    }
+  }
 }

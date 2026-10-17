@@ -9,6 +9,7 @@ using SimosaBRM.SimCore.Environment;
 using SimosaBRM.SimCore.Geo;
 using SimosaBRM.SimCore.Parameters;
 using SimosaBRM.SimCore.Physics;
+using SimosaBRM.SimCore.Physics.External;
 using SimosaBRM.SimCore.Scenario;
 using SimosaBRM.SimCore.Sensors;
 using SimosaBRM.SimCore.Ship;
@@ -75,6 +76,10 @@ public sealed class SimulationEngine
     private Bnwas _bnwas = null!;
     /// <summary>BNWAS 事件的 source(指令觸發的重設/模式變更沿用指令來源;階段變更為 engine)</summary>
     private string _bnwasSource = SimEventSources.Engine;
+    // 外力模組(拖船、錨、碰墊、繫纜;設計文件 docs/design/physics-tugs-anchors-mooring.md);Initialize 時依情境重建
+    private ExternalForceModel _external = null!;
+    private StateVector _initialMotion;
+    private readonly List<ExternalEvent> _externalEvents = new();
 
     public EngineOptions Options { get; }
     public ShipParticulars Ship { get; private set; }
@@ -138,6 +143,8 @@ public sealed class SimulationEngine
     public AlertManager Alerts => _alerts;
     /// <summary>BNWAS(MSC.128(75))</summary>
     public Bnwas Bnwas => _bnwas;
+    /// <summary>外力模組(拖船/錨/泊位;<see cref="ExternalForceModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
+    public ExternalForceModel External => _external;
     /// <summary>自動舵可啟用:無 autopilotFailure,且電羅經未失效(指示航向有效)</summary>
     public bool AutopilotAvailable => !_faults.Contains(FaultNames.AutopilotFailure) && !_faults.Contains(FaultNames.GyroFailure);
 
@@ -273,6 +280,9 @@ public sealed class SimulationEngine
         _alerts = new AlertManager(sc.Alerts, Options.Dt, _stepsPerSecond, RaiseAlert);
         _bnwas = new Bnwas(sc.Bnwas, Options.Dt, _stepsPerSecond, RaiseBnwas);
         _bnwasSource = SimEventSources.Engine;
+        _initialMotion = Motion;
+        _external = CreateExternal();
+        _externalEvents.Clear();
         _startsRemaining = Ship.Engine.MaxConsecutiveStarts;
         AttachTraffic(TrafficManager.FromScenario(sc, _projection, Options.Dt));
 
@@ -294,6 +304,10 @@ public sealed class SimulationEngine
         var depthZones = _assessment.Zones.DepthZones();
         if (depthZones.Count > 0) Environment.Depth = new ZoneDepth((ConstantDepth)Environment.Depth, depthZones);
     }
+
+    /// <summary>依目前情境、船舶與裝載建立外力模組(初始狀態:拖船 initial、錨收存或情境初始已錨泊、繫纜 initial)。</summary>
+    private ExternalForceModel CreateExternal()
+        => new(Ship, Loading, Scenario, _projection, Options.Dt, Dynamics.SupportsExternalForces, _initialMotion);
 
     // ------------------------------------------------------------------ 事件
 
@@ -637,12 +651,21 @@ public sealed class SimulationEngine
             case SimCommandType.InjectFault:
                 if (cmd.FaultName() is { } f && f.Length > 0)
                 {
+                    // tugLineBreak 指定 args.id 時須為已定義的拖船(且動力學支援外力);否則拒絕、不加入 faults[](避免故障亮起卻沒有作用)
+                    if (f == FaultNames.TugLineBreak && FaultArgString(cmd, "id") is { } tugId)
+                    {
+                        if (!_external.Supported) { RejectCommand(cmd, source, itemId, CommandRejectReasons.ExternalForcesUnsupported); break; }
+                        if (_external.Tug(tugId) is null) { RejectCommand(cmd, source, itemId, CommandRejectReasons.UnknownTug); break; }
+                    }
                     var already = _faults.Contains(f);
                     // 感測器層先記下注入時的指示值(凍結/保持值、漂移起點),再把名稱加入 faults[]
                     if (FaultNames.Modelled.Contains(f)) _sensors.OnFaultInjected(f, cmd.Arg("args"), Tick, TruthSample(), already);
                     if (!already) _faults.Add(f);
                     Raise(NewEvent(SimEventKinds.FaultInjected, source, itemId, null, f, new { fault = f, args = cmd.Arg("args"), alreadyActive = already }));
                     if (Autopilot.Enabled && !AutopilotAvailable) TripAutopilot(f);
+                    // 拖纜斷裂(args.id 指定拖船;重複注入可斷另一艘)
+                    if (f == FaultNames.TugLineBreak && _external.PartTugLine(FaultArgString(cmd, "id")) is { } parted)
+                        Raise(NewEvent(parted.Kind, SimEventSources.Engine, parted.ItemId, null, parted.Message, parted.Data, visible: true));
                 }
                 break;
 
@@ -654,6 +677,7 @@ public sealed class SimulationEngine
                     if (_faults.Remove(cf))
                     {
                         _sensors.OnFaultCleared(cf);
+                        if (cf == FaultNames.TugLineBreak) _external.RestoreTugLines();
                         Raise(NewEvent(SimEventKinds.FaultCleared, source, itemId, null, cf, new { fault = cf }));
                     }
                 }
@@ -662,6 +686,7 @@ public sealed class SimulationEngine
                     var all = _faults.ToArray();
                     _faults.Clear();
                     foreach (var name in all) _sensors.OnFaultCleared(name);
+                    if (all.Contains(FaultNames.TugLineBreak)) _external.RestoreTugLines();
                     foreach (var name in all) Raise(NewEvent(SimEventKinds.FaultCleared, source, itemId, null, name, new { fault = name }));
                 }
                 break;
@@ -731,8 +756,38 @@ public sealed class SimulationEngine
             case SimCommandType.BnwasReset:
                 ResetBnwas("bnwasReset", source, explicitReset: true);
                 break;
+
+            // 外力指令(設計文件 physics-tugs-anchors-mooring.md 第 6 節):接受時發 tugCommand / anchorLetGo / anchorCommand / mooringCommand,否則 commandRejected
+            case SimCommandType.TugControl:
+                ApplyExternalOutcome(cmd, source, itemId, _external.TugControl(
+                    cmd.ArgAsString("id") ?? cmd.ValueAsString(), cmd.ArgAsString("mode"),
+                    cmd.ArgAsDouble("direction_deg") ?? cmd.ArgAsDouble("direction"), cmd.ArgAsDouble("power_pct") ?? cmd.ArgAsDouble("power")));
+                break;
+
+            case SimCommandType.Anchor:
+                ApplyExternalOutcome(cmd, source, itemId, _external.AnchorCommand(
+                    cmd.ArgAsString("side") ?? cmd.ValueAsString(), cmd.ArgAsString("action"), cmd.ArgAsDouble("targetLength_shackles"), cmd.ArgAsDouble("length_m"),
+                    Motion, Environment.SampleAt(Motion.X, Motion.Y).WaterDepthM));
+                break;
+
+            case SimCommandType.Mooring:
+                ApplyExternalOutcome(cmd, source, itemId, _external.MooringCommand(
+                    cmd.ArgAsString("lineId") ?? cmd.ArgAsString("id"), cmd.ArgAsString("action"), cmd.ArgAsString("bollard"), cmd.ArgAsDouble("tension_t"), cmd.ArgAsDouble("length_m"),
+                    Motion, Environment.SampleAt(Motion.X, Motion.Y)));
+                break;
         }
     }
+
+    /// <summary>外力指令結果:拒絕 → commandRejected;接受 → 對應事件(itemId = 拖船 id / 錨側 / 纜 id,source 同指令)。</summary>
+    private void ApplyExternalOutcome(SimCommand cmd, string source, string? itemId, ExternalCommandOutcome r)
+    {
+        if (r.Reject is { } reason) RejectCommand(cmd, source, itemId, reason);
+        else if (r.Kind is { } kind) Raise(NewEvent(kind, source, r.ItemId ?? itemId, null, r.Message, r.Data));
+    }
+
+    /// <summary>injectFault {name, args} 的 args 字串欄位。</summary>
+    private static string? FaultArgString(SimCommand cmd, string name)
+        => cmd.Arg("args") is { ValueKind: JsonValueKind.Object } a && a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     /// <summary>警報指令的 id(value 字串或 args.id;省略 = 全部)。</summary>
     private static string? AlertIdOf(SimCommand cmd)
@@ -1057,8 +1112,22 @@ public sealed class SimulationEngine
             rudderRateDegPerSec: RudderRateForStep());
 
         var sample = Environment.SampleAt(Motion.X, Motion.Y);
-        Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
+        // 外力(拖船/錨/碰墊/繫纜):只在情境使用時走含外力的積分(未使用時位元與舊版相同)
+        var external = _external.Active;
+        if (external)
+        {
+            _external.PreStep(Motion, Options.Dt);
+            Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt, _external);
+        }
+        else Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
         Tick++;
+        if (external)
+        {
+            _externalEvents.Clear();
+            _external.PostStep(Motion, sample, Options.Dt, _externalEvents);
+            foreach (var ev in _externalEvents)
+                Raise(NewEvent(ev.Kind, SimEventSources.Engine, ev.ItemId, null, ev.Message, ev.Data, visible: true));
+        }
 
         if (!Aground && UnderKeelClearance() <= 0.0)
         {
@@ -1108,6 +1177,9 @@ public sealed class SimulationEngine
         // 感測器/警報/BNWAS 只在非預設時追加(無感測器故障、無警報、BNWAS off 的情境雜湊與舊版相同)
         var hashBridge = !_sensors.State.IsNominal || !_alerts.State.IsEmpty || !_bnwas.IsDefault;
         if (hashBridge) size += 8 + SensorModel.HashLongs * 8 + _alerts.HashSize + Bnwas.HashLongs * 8;
+        // 外力模組只在使用時追加(情境無拖船/泊位且錨未用過者雜湊與舊版相同)
+        var hashExternal = _external.Active;
+        if (hashExternal) size += _external.HashLongs * 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
@@ -1152,6 +1224,7 @@ public sealed class SimulationEngine
             o += _alerts.WriteHash(buf[o..]);
             o += _bnwas.WriteHash(buf[o..]);
         }
+        if (hashExternal) o += _external.WriteHash(buf[o..]);
         SHA256.HashData(buf[..o], _hash);
     }
 
@@ -1190,6 +1263,7 @@ public sealed class SimulationEngine
         Sensors = _sensors.CreateSnapshot(),
         Alerts = _alerts.CreateSnapshot(),
         Bnwas = _bnwas.CreateSnapshot(),
+        External = _external.Active ? _external.CreateSnapshot() : null,
         Phase = Phase,
         VisibilityNm = Environment.VisibilityNm,
         StateHash = StateHash,
@@ -1238,6 +1312,9 @@ public sealed class SimulationEngine
             Loading = s.Loading;
             Dynamics = _dynamicsFactory(Ship, Loading);
         }
+        // 外力模組:重建為初始狀態再套用快照(舊快照或未使用外力者即為初始狀態)
+        _external = CreateExternal();
+        if (s.External is { } ext) _external.Restore(ext);
 
         Tick = s.Tick;
         Motion = new StateVector(s.Motion.U, s.Motion.V, s.Motion.R, s.Motion.X, s.Motion.Y, s.Motion.Psi);
@@ -1466,6 +1543,9 @@ public sealed class SimulationEngine
             },
             Alerts = _alerts.BuildStates(),
             Bnwas = _bnwas.BuildStatus(Tick, Autopilot.Enabled),
+            Tugs = _external.TugStates(m, _projection),
+            Anchors = _external.AnchorStates(_projection),
+            Berth = _external.BerthState(),
         };
     }
 }

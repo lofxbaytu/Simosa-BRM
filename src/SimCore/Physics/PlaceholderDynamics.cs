@@ -1,5 +1,6 @@
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Environment;
+using SimosaBRM.SimCore.Physics.External;
 using SimosaBRM.SimCore.Ship;
 
 namespace SimosaBRM.SimCore.Physics;
@@ -26,6 +27,7 @@ public sealed class PlaceholderDynamics : IShipDynamics
     private readonly double _thrusterRot0RadPerSec;
     private readonly double _thrusterCutoffMps;
     private readonly double _rudderMaxRad;
+    private readonly double _massSurge, _massSway, _inertiaYaw;
 
     /// <summary>無因次 Nomoto 增益 K'(由 FSB1 35° 迴旋圈戰術直徑約 2.8 L 反推)。</summary>
     public double KPrime { get; init; } = 1.3;
@@ -56,6 +58,25 @@ public sealed class PlaceholderDynamics : IShipDynamics
         var bt = ship.BowThruster;
         _thrusterRot0RadPerSec = bt is null ? 0.0 : Units.DegPerMinToRadPerSec(bt.TurningRateAtZeroSpeed_degPerMin ?? 20.0);
         _thrusterCutoffMps = bt?.NotEffectiveAbove_kn is { } cut ? Units.KnToMps(cut) : double.PositiveInfinity;
+        // 外力用的概略質量(暫代模型沒有質量):排水量(缺資料時 ρ·L·B·T·Cb)+ 附加質量 m_x ≈ 0.05 m、m_y ≈ 0.8 m、J_zz ≈ 0.5 I_zz,I_zz = m (0.25 L)²
+        var lc = ship.GetLoading(loading);
+        var mass = lc.Displacement_t is { } disp && disp > 0 ? disp * 1000.0
+            : 1025.0 * _lpp * ship.Hull.Breadth_m * _draft * (lc.BlockCoefficient ?? 0.75);
+        _massSurge = 1.05 * mass;
+        _massSway = 1.8 * mass;
+        _inertiaYaw = 1.5 * mass * Math.Pow(0.25 * _lpp, 2);
+    }
+
+    /// <summary>
+    /// 暫代模型以概略質量接受外力:u̇、v̇、ṙ 另加 X/(m+m_x)、Y/(m+m_y)、N/(I_zz+J_zz)。Nomoto 一階回復項仍作用(會把外力造成的速度拉回目標),
+    /// 只供管線測試;靠泊/錨泊的定量結果以 MMG 為準(設計文件 physics-tugs-anchors-mooring.md 第 7 節)。
+    /// </summary>
+    public bool SupportsExternalForces => true;
+
+    public StateVector Derivative(double t, in StateVector s, in EnvironmentSample env, in ControlInput c, in BodyForce external)
+    {
+        var d = Derivative(t, s, env, c);
+        return d with { U = d.U + external.X / _massSurge, V = d.V + external.Y / _massSway, R = d.R + external.N / _inertiaYaw };
     }
 
     /// <summary>轉速 → 穩態對水航速(m/s),由車鐘表線性內插;超出表尾依最後一段外插。</summary>

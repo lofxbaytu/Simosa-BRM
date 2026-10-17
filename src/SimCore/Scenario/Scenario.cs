@@ -44,6 +44,12 @@ public sealed class Scenario
     public ScenarioAlerts Alerts { get; set; } = new();
     /// <summary>BNWAS(MSC.128(75))設定:模式、休眠期、第二/三階段延遲(預設 off)</summary>
     public ScenarioBnwas Bnwas { get; set; } = new();
+    /// <summary>拖船(規劃書第 6.2 節 T 項;設計文件 physics-tugs-anchors-mooring.md;未給 = 無拖船,雜湊與舊版相同)</summary>
+    public List<ScenarioTug>? Tugs { get; set; }
+    /// <summary>錨的初始狀態與抓地力調整(錨/鏈規格在 particulars anchors;未給 = 兩錨收存)</summary>
+    public ScenarioAnchors? Anchors { get; set; }
+    /// <summary>泊位(碼頭線、碰墊、繫船柱;data/areas/*.json 參照)與自船繫纜</summary>
+    public ScenarioBerth? Berth { get; set; }
 
     /// <summary>載入時解析的參數集摘要(無引用時 null;不序列化,紀錄標頭另有 parameterSet 欄位)</summary>
     [JsonIgnore] public ParameterSetInfo? ParameterSetInfo { get; set; }
@@ -182,6 +188,9 @@ public sealed class Scenario
             Error("bnwas.dormant_s", $"dormant_s 須在 {ScenarioBnwas.MinDormantS}–{ScenarioBnwas.MaxDormantS} s(MSC.128(75):3–12 分鐘)");
         if (Bnwas.Stage2S <= 0) Error("bnwas.stage2_s", "stage2_s 必須為正");
         if (Bnwas.Stage3S <= 0) Error("bnwas.stage3_s", "stage3_s 必須為正");
+
+        // 拖船、錨、泊位(設計文件 physics-tugs-anchors-mooring.md)
+        ScenarioExternalForces.CheckStructure(this, Error);
 
         var ruleIds = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < Assessment.HardFail.Count; i++)
@@ -375,6 +384,8 @@ public sealed class ScenarioEnvironment
     public double WaterDepth { get; set; } = 50.0;
     /// <summary>能見度(nm;未給 = 無限制;無物理效果)</summary>
     [JsonPropertyName("visibility_nm")] public double? VisibilityNm { get; set; }
+    /// <summary>海床底質(mud | sand | clay | rock;錨抓著係數與鏈摩擦;未給 = sand)</summary>
+    public string? Seabed { get; set; }
 }
 
 public enum ScenarioIssueSeverity

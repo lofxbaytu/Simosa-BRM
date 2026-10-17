@@ -45,6 +45,8 @@ public sealed record AssessmentSnapshot
     public required EncounterState Encounters { get; init; }
     public required FaultResponseState Faults { get; init; }
     public required RuleState Rules { get; init; }
+    /// <summary>操縱量測(情境未使用時 null;舊快照無此欄位時還原為初始狀態)</summary>
+    public ManoeuvreState? Manoeuvres { get; init; }
 }
 
 /// <summary>
@@ -66,6 +68,8 @@ public sealed class AssessmentEngine
     public MetricsCollector Metrics { get; private set; }
     public EncounterTracker Encounters { get; private set; }
     public FaultResponseTracker Faults { get; private set; }
+    /// <summary>操縱量測(迴旋、Z 形、停船、側推、舵機擺動、人員落水;情境引用 manoeuvre 事件/指標或有 MOB 目標時啟用)</summary>
+    public ManoeuvreTracker Manoeuvres { get; private set; }
     public RuleState Rules { get; private set; } = new();
     public AssessmentSummary? LatestSummary { get; private set; }
     public bool Ended => Rules.Ended;
@@ -88,6 +92,7 @@ public sealed class AssessmentEngine
         Metrics = new MetricsCollector(_a.Manoeuvring?.HardOverDeg ?? engine.Actuators.Parameters.RudderMaxDeg, _a.Manoeuvring?.RotLimitDegPerMin, dt, engine.Telegraph);
         Encounters = new EncounterTracker(_a.Encounter, _a.MinCpaNm);
         Faults = new FaultResponseTracker(_a, dt);
+        Manoeuvres = new ManoeuvreTracker(engine, ship, scenario.Ship.Loading, dt, ManoeuvreTracker.IsReferenced(scenario), raise);
         foreach (var b in _a.Bands) Rules.Bands[b.Id] = new BandState();
         foreach (var q in _a.Required) Rules.Required[q.Id] = new RequiredState();
     }
@@ -98,6 +103,7 @@ public sealed class AssessmentEngine
 
     public void OnEvent(SimEvent e)
     {
+        Manoeuvres.OnEvent(e);
         Faults.OnEvent(e);
         if (e.Kind == TrafficEventKinds.Collision) Encounters.OnCollision();
         if (e.Kind == SimEventKinds.Grounding) Metrics.OnGrounding();
@@ -125,6 +131,7 @@ public sealed class AssessmentEngine
 
     public void OnAction(ObservedAction a)
     {
+        Manoeuvres.OnAction(a);
         Metrics.OnAction(a);
         Encounters.OnAction(a, a.Tick * _dt, Raise);
         Faults.OnAction(a);
@@ -252,6 +259,7 @@ public sealed class AssessmentEngine
         Zones.Update(sit, Raise);
         Metrics.Sample(sit, SpeedLimit(), UkcLimit(), Raise);
         Encounters.Update(sit, _engine.Traffic, Raise);
+        Manoeuvres.Update(sit);
     }
 
     /// <summary>硬性失敗、容許帶、必要事件逾時;更新 LatestSummary。定稿後(endExercise)不再評估也不重建 summary(Finalize 的物件即唯一的 final summary)。</summary>
@@ -378,7 +386,7 @@ public sealed class AssessmentEngine
             case "general.distance_nm": return m.DistanceM / Units.MetresPerNauticalMile;
             case "general.avgSog_kn": return m.Samples > 0 ? m.SumSogKn / m.Samples : null;
             case "general.maxSog_kn": return m.MaxSogKn;
-            default: return null;
+            default: return name.StartsWith("manoeuvres.", StringComparison.Ordinal) ? Manoeuvres.Metric(name) : null;
         }
     }
 
@@ -445,6 +453,7 @@ public sealed class AssessmentEngine
             Manoeuvring = Metrics.Manoeuvring(tick),
             FaultResponses = Faults.State.Records.ToArray(),
             Alerts = Metrics.AlertSummary(),
+            Manoeuvres = Manoeuvres.Enabled ? Clone(Manoeuvres.Summary().ToList()) : null,
             Events = new SummaryEvents { Total = byKind.Values.Sum(), ByKind = byKind },
             Assessment = new SummaryAssessment
             {
@@ -466,6 +475,7 @@ public sealed class AssessmentEngine
         Encounters = Clone(Encounters.State),
         Faults = Clone(Faults.State),
         Rules = Clone(Rules),
+        Manoeuvres = Manoeuvres.Enabled ? Clone(Manoeuvres.State) : null,
     };
 
     public void Restore(AssessmentSnapshot s)
@@ -476,6 +486,7 @@ public sealed class AssessmentEngine
         Encounters.Restore(Clone(s.Encounters));
         Faults.Restore(Clone(s.Faults));
         Rules = Clone(s.Rules);
+        if (Manoeuvres.Enabled) Manoeuvres.Restore(s.Manoeuvres is { } ms ? Clone(ms) : new ManoeuvreState());
         foreach (var b in _a.Bands) Rules.Bands.TryAdd(b.Id, new BandState());
         foreach (var q in _a.Required) Rules.Required.TryAdd(q.Id, new RequiredState());
     }

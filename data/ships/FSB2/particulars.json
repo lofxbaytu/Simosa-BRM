@@ -104,7 +104,19 @@
     "notEffectiveAbove_kn": 5,
     "note": "海報 335 kW;完工圖為影像檔待讀"
   },
-  "anchors": { "type": "Spek", "mass_kg": null, "chainDiameter_mm": 58, "shacklesPort": 10, "shacklesStbd": 10 },
+  "anchors": {
+    "type": "Spek", "mass_kg": null, "chainDiameter_mm": 58, "shacklesPort": 10, "shacklesStbd": 10,
+    "massEstimate_kg": 3300,
+    "massSource": "估計:錨重待依錨證書核對;IACS UR A1 舾裝數表中 Φ58 mm U2 鏈對應舾裝數 1000–1070、錨重 3,300 kg",
+    "heavingRateEstimate_mPerMin": 21.7,
+    "heavingRateSource": "估計:沿用 No.1 海報起錨速率(1.27–1.28 min/節);No.2 起錨機完工資料待讀",
+    "shackleLength_m": 27.5,
+    "holdingClass": "stockless",
+    "holdingClassSource": "估計:Spek 為無桿錨(stockless),抓著係數表見 docs/design/physics-tugs-anchors-mooring.md 第 3.3 節",
+    "chain": { "grade": "U2", "mass_kgPerM": 73.7, "breakingLoad_kN": 2595, "source": "估計:有檔錨鏈單位質量 0.0219·d² kg/m;U2 斷裂負荷 0.0196·d²·(44 − 0.08·d) kN(d = 58 mm;等級待依錨鏈證書核對)" },
+    "windlass": { "pull_kN": 143.0, "brakeHolding_kN": 1168, "source": "估計:IACS UR A3 U2 連續拉力 42.5·d² N(過載 1.5 倍);剎車握持力取鏈斷裂負荷 45 %" },
+    "hawsePipe": { "x_m": 48.9, "y_m": 3.0, "heightAboveKeel_m": 10.6, "source": "估計:錨泊佈置圖待讀;船舯原點 x = 0.5 L − 0.03 L(艏柱後方)、半寬 0.15 B、船殼側鏈孔約在型深下 0.5 m(甲板高度)" }
+  },
   "windage": { "note": "風壓曲線見裝載手冊 7.4(p.187),待數位化", "lateralArea_m2": null, "frontalArea_m2": null },
   "bridge": {
     "blindDistanceAheadLoaded_m": 87.334,

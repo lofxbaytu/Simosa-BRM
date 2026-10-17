@@ -1,0 +1,254 @@
+{
+  "format": "simosa-brm-behavioural-anchors",
+  "version": "0.1.0-draft",
+  "status": "draft",
+  "statusLabel": "草案,待訓練負責人核准",
+  "approvedBy": null,
+  "approvedDate": null,
+  "basis": "規劃書第 8.2 節:五大類 × 三要素,1 至 5 分,2 分以下必須附時間戳與觀察描述;每要素附 1、3、5 分行為錨定描述,評估表與講評站同時顯示,與評估表一併版本化。STCW 準則條文為規劃書第 2.1 節的中文整理,原文待依 STCW 章程核對(附錄 C)。",
+  "changeLog": [
+    { "version": "0.1.0-draft", "date": "2026-10-17", "note": "初稿(開發團隊依第 8.2 節範例擬定),待訓練負責人(訪船船長)核准後改為 1.0.0" }
+  ],
+  "scale": [
+    { "score": 1, "label": "不可接受", "en": "Unacceptable" },
+    { "score": 2, "label": "待改進", "en": "Poor" },
+    { "score": 3, "label": "可接受", "en": "Acceptable" },
+    { "score": 4, "label": "良好", "en": "Good" },
+    { "score": 5, "label": "優秀", "en": "Very good" }
+  ],
+  "lowScoreThreshold": 2,
+  "agreement": { "tolerance": 1, "target": 0.8 },
+  "stcwCriteria": [
+    { "id": "BRM1", "group": "brm", "text": "資源依正確優先順序分配與指派以執行必要任務" },
+    { "id": "BRM2", "group": "brm", "text": "溝通清楚、明確地傳達與接收" },
+    { "id": "BRM3", "group": "brm", "text": "可疑的決定或行動獲得適當的質疑與回應(challenge and response)" },
+    { "id": "BRM4", "group": "brm", "text": "辨識出有效的領導行為" },
+    { "id": "BRM5", "group": "brm", "text": "必要的團隊成員對船舶當前與預測狀態、航行路徑與外部環境有一致且正確的理解(共享心智模型)" },
+    { "id": "LT1", "group": "leadership", "text": "船員被分派職責並以適合個人的方式被告知工作與行為的預期標準" },
+    { "id": "LT2", "group": "leadership", "text": "訓練目標與活動基於對現有能力與作業需求的評估" },
+    { "id": "LT3", "group": "leadership", "text": "作業依適用規則執行" },
+    { "id": "LT4", "group": "leadership", "text": "作業經規劃且資源依正確優先順序分配" },
+    { "id": "LT5", "group": "leadership", "text": "溝通清楚、明確地傳達與接收" },
+    { "id": "LT6", "group": "leadership", "text": "展現有效的領導行為" },
+    { "id": "LT7", "group": "leadership", "text": "必要的團隊成員對船舶與作業的現況與預測狀態及外部環境有一致正確的理解" },
+    { "id": "LT8", "group": "leadership", "text": "決策對當時情況最為有效" }
+  ],
+  "criteriaGroups": [
+    { "id": "brm", "label": "STCW A-II/1 BRM 評量準則" },
+    { "id": "leadership", "label": "STCW A-II/1、A-II/2 領導與團隊合作八項準則" }
+  ],
+  "deficiencyTypes": [
+    { "id": "hardware", "label": "硬體", "en": "Hardware" },
+    { "id": "procedure", "label": "程序", "en": "Process" },
+    { "id": "human", "label": "人員", "en": "Human" }
+  ],
+  "humanFactors": [
+    { "id": "familiarity", "label": "熟悉度", "en": "Familiarity" },
+    { "id": "taskDesign", "label": "任務設計", "en": "Task design" },
+    { "id": "equipment", "label": "設備", "en": "Equipment" },
+    { "id": "stressLanguage", "label": "緊張/語言", "en": "Stress / language" },
+    { "id": "fatigue", "label": "疲勞", "en": "Fatigue" }
+  ],
+  "categories": [
+    {
+      "id": "leadership",
+      "label": "領導",
+      "en": "Leadership",
+      "elements": [
+        {
+          "id": "leadership.standards",
+          "label": "設定標準與優先順序",
+          "en": "Setting standards and priorities",
+          "stcw": ["BRM1", "BRM4", "LT1", "LT4", "LT6"],
+          "anchors": {
+            "1": "未說明任務目標與優先順序;成員各做各的,關鍵任務(定位、瞭望、UKC 監控)無人負責且無人察覺",
+            "3": "簡報中說明主要目標與分工,但狀況改變(故障、交通增加)後未重新排定優先順序,經他人提醒才調整",
+            "5": "簡報即明確定出目標、分工與程序標準;狀況改變時主動重排優先順序並向全員宣告,全程維持標準"
+          }
+        },
+        {
+          "id": "leadership.assertiveness",
+          "label": "果斷與權威的運用",
+          "en": "Use of authority and assertiveness",
+          "stcw": ["BRM3", "BRM4", "LT6", "LT8"],
+          "anchors": {
+            "1": "關鍵時刻猶豫不決或放任引水人/資深者的明顯錯誤;或以權威壓制成員意見,導致錯誤延續",
+            "3": "必要時能下達決定,但時機偏晚或語氣含糊;對成員的質疑有回應但未完整說明理由",
+            "5": "適時、清楚地下達決定並說明理由;歡迎質疑、權威梯度適當,必要時接管(含對引水人)"
+          }
+        },
+        {
+          "id": "leadership.workload",
+          "label": "工作負荷管理與授權",
+          "en": "Workload management and delegation",
+          "stcw": ["BRM1", "LT1", "LT4"],
+          "anchors": {
+            "1": "負責人獨攬多項任務而過載,遺漏關鍵事件;干擾(電話、VHF)未被隔離",
+            "3": "大致有授權,但高負荷時段仍出現任務重疊或遺漏,事後才補正",
+            "5": "預見高負荷時段並事先分派任務、隔離干擾(無干擾駕駛台);持續監看分派後的執行情形"
+          }
+        }
+      ]
+    },
+    {
+      "id": "situationalAwareness",
+      "label": "狀況覺知",
+      "en": "Situational awareness",
+      "elements": [
+        {
+          "id": "situationalAwareness.ownship",
+          "label": "監控船舶狀態與位置",
+          "en": "Monitoring ship status and position",
+          "stcw": ["BRM5", "LT7"],
+          "anchors": {
+            "1": "未察覺航跡偏差、舵角與舵令不符、UKC 下降或設備故障,直到警報或教官提示",
+            "3": "能定期確認位置與船舶狀態,但定位間隔不穩定或只依賴單一來源(例如只看 GPS)",
+            "5": "以多種方法交叉確認位置與航向(雷達、目視疊標、磁羅經),及早發現偏差與異常並報告"
+          }
+        },
+        {
+          "id": "situationalAwareness.environment",
+          "label": "監控環境與交通",
+          "en": "Monitoring environment and traffic",
+          "stcw": ["BRM5", "LT7"],
+          "anchors": {
+            "1": "漏看接近中的目標或未注意風流與能見度變化;瞭望報告缺失",
+            "3": "主要目標與環境變化有注意到,但較晚,或未評估其對本船的影響",
+            "5": "持續掌握交通(CPA/TCPA)、風流與能見度,並主動評估對航行計畫的影響"
+          }
+        },
+        {
+          "id": "situationalAwareness.anticipation",
+          "label": "預判與前瞻",
+          "en": "Anticipation and planning ahead",
+          "stcw": ["BRM5", "LT7", "LT8"],
+          "anchors": {
+            "1": "只對已發生的事件反應;未預先考慮轉向點、流壓、速限或應變方案",
+            "3": "對下一個轉向點與主要風險有預判,但未及於可能的故障或緊急情況",
+            "5": "預先說出接下來的關鍵點、可能的故障與備案(例如備錨、減速時機),並據以預作準備"
+          }
+        }
+      ]
+    },
+    {
+      "id": "communication",
+      "label": "溝通",
+      "en": "Communication",
+      "elements": [
+        {
+          "id": "communication.closedLoop",
+          "label": "閉環溝通/複誦",
+          "en": "Closed-loop communication / read-back",
+          "stcw": ["BRM2", "LT5"],
+          "anchors": {
+            "1": "舵令/車令多次未複誦且無人糾正",
+            "3": "多數複誦但偶有遺漏,經他人提醒補正",
+            "5": "全程複誦並回報執行"
+          }
+        },
+        {
+          "id": "communication.briefing",
+          "label": "清楚的簡報",
+          "en": "Clear briefing",
+          "stcw": ["BRM2", "BRM5", "LT1", "LT5"],
+          "anchors": {
+            "1": "未做簡報或交接,或簡報內容錯誤、遺漏關鍵資訊(航程計畫、限制、角色)",
+            "3": "有簡報且涵蓋主要內容,但結構鬆散,未確認成員理解或未邀請提問",
+            "5": "簡報結構清楚(目標、計畫、限制、角色、應變),確認全員理解並回答提問;交接完整"
+          }
+        },
+        {
+          "id": "communication.intentions",
+          "label": "分享意圖與計畫",
+          "en": "Sharing intentions and plans",
+          "stcw": ["BRM2", "BRM5", "LT5", "LT7"],
+          "anchors": {
+            "1": "改變計畫或採取行動前未告知團隊,成員對下一步不知情",
+            "3": "主要決定會告知團隊,但未說明理由或時機偏晚",
+            "5": "持續以出聲思考分享意圖、理由與預期結果,團隊對下一步有一致的理解"
+          }
+        }
+      ]
+    },
+    {
+      "id": "teamwork",
+      "label": "團隊合作",
+      "en": "Teamwork",
+      "elements": [
+        {
+          "id": "teamwork.crossCheck",
+          "label": "交叉核對與質疑",
+          "en": "Cross-checking and challenge",
+          "stcw": ["BRM3", "LT3", "LT7"],
+          "anchors": {
+            "1": "成員看到明顯錯誤(含引水人或船長)卻不提出;或提出後被忽略且無人追問",
+            "3": "會提出疑慮,但措辭含糊或只提一次;交叉核對只在被要求時進行",
+            "5": "主動交叉核對關鍵資訊,以清楚、有理由的方式質疑並堅持到獲得回應(質疑與回應)"
+          }
+        },
+        {
+          "id": "teamwork.support",
+          "label": "支援他人",
+          "en": "Supporting others",
+          "stcw": ["BRM1", "LT4", "LT6"],
+          "anchors": {
+            "1": "未察覺或不理會他人過載、出錯;各自為政",
+            "3": "被要求時會協助,但很少主動察覺他人的需要",
+            "5": "主動察覺他人過載或疏漏並及時接手或提醒,不影響自身任務"
+          }
+        },
+        {
+          "id": "teamwork.conflict",
+          "label": "衝突解決",
+          "en": "Conflict resolution",
+          "stcw": ["BRM3", "BRM4", "LT6"],
+          "anchors": {
+            "1": "意見分歧時爭執不下或一方沉默退讓,未處理即繼續,影響安全",
+            "3": "分歧能被提出並處理,但過程拖延或未以事實與程序為依據",
+            "5": "以事實、程序與安全為準迅速處理分歧,保持團隊合作,結論清楚並為全員接受"
+          }
+        }
+      ]
+    },
+    {
+      "id": "decisionMaking",
+      "label": "決策",
+      "en": "Decision making",
+      "elements": [
+        {
+          "id": "decisionMaking.define",
+          "label": "定義問題",
+          "en": "Defining the problem",
+          "stcw": ["BRM5", "LT8"],
+          "anchors": {
+            "1": "未辨識問題或辨識錯誤(例如把舵機失效當成流壓),延誤處置",
+            "3": "能辨識問題,但花費時間較長或未確認原因即行動",
+            "5": "迅速、正確辨識問題並以交叉核對確認,清楚向團隊說明問題所在"
+          }
+        },
+        {
+          "id": "decisionMaking.options",
+          "label": "產生與比較選項及風險",
+          "en": "Considering options and risks",
+          "stcw": ["BRM1", "LT4", "LT8"],
+          "anchors": {
+            "1": "只考慮單一做法,未評估風險;或在時間允許下仍倉促決定",
+            "3": "考慮兩個以上選項,但風險評估不完整或未徵詢團隊意見",
+            "5": "在可用時間內產生並比較選項與風險(含徵詢團隊、引水人、機控室),選擇最安全有效的做法"
+          }
+        },
+        {
+          "id": "decisionMaking.review",
+          "label": "檢討結果",
+          "en": "Reviewing outcomes",
+          "stcw": ["LT2", "LT8"],
+          "anchors": {
+            "1": "決定後未追蹤結果,情況惡化也未修正",
+            "3": "有追蹤結果,但修正較慢或未告知團隊",
+            "5": "持續監看決策結果、及時修正並向團隊回報,事後能說明學到的教訓"
+          }
+        }
+      ]
+    }
+  ]
+}

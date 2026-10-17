@@ -17,6 +17,9 @@ sources:                              # 程序文件索引;parameters[].source �
   BRM-TRN-001: { title: BRM 訓練程序(評估準則), revision: "draft", date: 2026-10-01 }
   ASSUMED-E09: { title: "假設值,待公司程序(E09 全船失電;數值依規劃書第 3.4 節高雄港速限與第 8.1 節 E09,待公司 SMS-EMG-005 核對)", revision: "0", date: 2026-10-17 }
   ASSUMED-E08: { title: "假設值,待公司程序(E08 電羅經失效與 BNWAS;數值依規劃書第 8.1 節 E08、MSC.128(75)、MSC.302(87),待公司航行/緊急程序核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-FAM: { title: "假設值,待公司程序(船舶熟悉 F01–F03 流程時間;規劃書第 8.0、8.1 節,待 BRM-TRN-001 熟悉訓練章節核定)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E10: { title: "假設值,待公司程序(E10 主機失效向岸漂流;規劃書第 8.1 節 E10,待公司緊急程序與搜救通報程序核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E11: { title: "假設值,待公司程序(E11 人員落水;規劃書第 8.1 節 E11、IAMSAR 第 III 卷,待公司緊急程序核對)", revision: "0", date: 2026-10-17 }
 parameters:
   navigation.cpa.openSea_nm:      { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.2", description: 開闊海最小 CPA }
   navigation.cpa.coastal_nm:      { value: 0.5,  unit: nm,  source: DWO-007, clause: "4.2", description: 沿岸/港外最小 CPA }
@@ -59,4 +62,26 @@ parameters:
   emergency.gyroFailure.alarmAck_s:  { value: 30,  unit: s, source: ASSUMED-E08, clause: "", description: 電羅經失效警報到確認(BAM) }
   emergency.gyroFailure.manualSteering_s: { value: 60, unit: s, source: ASSUMED-E08, clause: "", description: 電羅經失效到手操舵(舵令或操舵模式切換) }
   emergency.gyroFailure.callMaster_s: { value: 180, unit: s, source: ASSUMED-E08, clause: "", description: 電羅經失效到通知船長 }
+  # 船舶熟悉 F01–F03(ship-familiarisation.md 第 3 節;流程時間,非評分門檻)
+  familiarisation.predictionTime_s: { value: 120, unit: s, source: ASSUMED-FAM, clause: "", description: 預測提示後記錄預測的時間(逾時流程照常進行;必要事件只記錄不扣分) }
+  familiarisation.demoAfter_s:      { value: 90,  unit: s, source: ASSUMED-FAM, clause: "", description: 執行提示後學員未下令時由系統示範的等待時間(船長自行執行時亦可觀察) }
+  familiarisation.settle_s:         { value: 120, unit: s, source: ASSUMED-FAM, clause: "", description: 量測完成、自動舵回復直航後至下一段預測提示的最短時間 }
+  familiarisation.manoeuvreComplete_s: { value: 1800, unit: s, source: ASSUMED-FAM, clause: "", description: 執行提示到量測完成的期限(必要事件只記錄不扣分) }
+  # E10 主機失效 / 下風岸漂流
+  emergency.engineFailure.injectAt_s:        { value: 60,   unit: s, source: ASSUMED-E10, clause: "", description: E10 主機失效注入時刻(自情境開始) }
+  emergency.engineFailure.repairEstimate_s:  { value: 1800, unit: s, source: ASSUMED-E10, clause: "", description: 機控室首次估計修復時間(規劃書 E10 30 分鐘) }
+  emergency.engineFailure.tugEta_s:          { value: 7200, unit: s, source: ASSUMED-E10, clause: "", description: 拖船預計到達(規劃書 E10 2 小時;以語音/訊息代表) }
+  emergency.engineFailure.firstAction_s:     { value: 60,   unit: s, source: ASSUMED-E10, clause: "", description: 主機失效到首個相關動作(車鐘歸零/確認/通知機控室) }
+  emergency.engineFailure.callMaster_s:      { value: 120,  unit: s, source: ASSUMED-E10, clause: "", description: 主機失效到通知船長 }
+  emergency.engineFailure.driftCalculation_s: { value: 600, unit: s, source: ASSUMED-E10, clause: "", description: 主機失效到完成漂流計算(漂向、漂速、到危險水深時間) }
+  emergency.engineFailure.notifyCompany_s:   { value: 900,  unit: s, source: ASSUMED-E10, clause: "", description: 主機失效到通報公司(DPA/海務) }
+  emergency.engineFailure.notifySar_s:       { value: 900,  unit: s, source: ASSUMED-E10, clause: "", description: 主機失效到通報海巡/搜救中心(MRCC Taiwan)與航行警告 }
+  emergency.engineFailure.anchorReady_s:     { value: 600,  unit: s, source: ASSUMED-E10, clause: "", description: 主機失效到錨備便(艏樓人員就位、錨鏈解除固定) }
+  emergency.engineFailure.anchorDecision_s:  { value: 1200, unit: s, source: ASSUMED-E10, clause: "", description: 主機失效到緊急下錨決策(錨備便、下錨水深與時機) }
+  # E11 人員落水
+  emergency.manOverboard.immediateAction_s: { value: 30, unit: s, source: ASSUMED-E11, clause: "", description: 落水到首個舵令(滿舵朝落水舷;IAMSAR 立即行動) }
+  emergency.manOverboard.alarm_s:          { value: 30,  unit: s, source: ASSUMED-E11, clause: "", description: 落水到發出「人員落水」警報/廣播與拋救生圈 }
+  emergency.manOverboard.callMaster_s:     { value: 60,  unit: s, source: ASSUMED-E11, clause: "", description: 落水到通知船長 }
+  emergency.manOverboard.notifySar_s:      { value: 300, unit: s, source: ASSUMED-E11, clause: "", description: 落水到 GMDSS(DSC/VHF 16 PAN PAN 或 MAYDAY RELAY)與海巡通報 }
+  emergency.manOverboard.return_s:         { value: 1200, unit: s, source: ASSUMED-E11, clause: "", description: 落水到回到落水者附近(2 倍船長內)的期限 }
 overrides: {}                         # 保留:依船舶 ID 覆寫(第一版不解析)

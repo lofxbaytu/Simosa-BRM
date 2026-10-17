@@ -22,3 +22,11 @@
 情境新增 `sensors{magneticCompassError_deg}`、`alerts{escalate_s, silence_s, offHeading_deg, offHeadingDelay_s, headingMonitor_deg, shallowWater_m}`、`bnwas{mode, dormant_s, stage2_s, stage3_s}`;`summary.alerts{…, bnwas{stage1, stage2, stage3, resets}}`、`faultResponses[].alertAckAt_s/alertAckDt_s`。NMEA 以指示值輸出,無效時 HDT/DPT 停送、GGA 品質 0、RMC V,警報 `$IIALR`。
 
 慣例:角度用度、航向 0 至 360、舵角右正左負、ROT 右轉正(度/分);核心內部以弧度與 SI 計算。
+
+拖船、錨與錨鏈、碰墊與繫纜(`docs/design/physics-tugs-anchors-mooring.md`;C# 產生,Python 參考實作忽略/不輸出):指令 `tugControl {id, mode: push|pull|standby|free, direction_deg, power_pct}`、
+`anchor {side: port|starboard, action: letGo|veer|heave|brake|release, targetLength_shackles | length_m}`、`mooring {lineId, action: makeFast|heave|slack|letGo, bollard?, tension_t?, length_m?}`
+(`command.schema.json` `$defs.tugControlArgs/anchorArgs/mooringArgs`);狀態 `state.tugs[]{id, mode, status, force_t, direction_deg, …}`、`state.anchors[]{side, status: stowed|running|holding|dragging|heaving|aweigh, length_m, tension_t, onBottom_m, position, …}`、
+`state.berth{id, contacts[]{fenderId, deflection_m, reaction_kN, overload}, quayContact, lines[]{id, status, tension_t, …}}`;情境 `tugs[]`、`anchors{port|starboard, holdingFactor, dragSpeed_mps}`、`berth{file, id, definition, lines[]}`、`environment.seabed`
+(`scenario.schema.json` `$defs.tug/anchorInitial/berthDefinition/fenderType/mooringLine/bodyPoint`;泊位檔 `data/areas/*.json` 同 `berthDefinition`,另可有共用 `fenderTypes`);
+故障 `tugLineBreak {id}`(fault-catalogue);事件 `tugCommand/tugLineParted/anchorLetGo/anchorCommand/anchorBroughtUp/anchorDragging/anchorHolding/anchorAweigh/anchorHoused/anchorChainFullyOut/anchorBrakeSlipping/anchorWindlassStalled/fenderContact/quayContact/mooringCommand/mooringLineParted`;
+指令被拒時 `commandRejected {reason}`(原因列表見設計文件第 6.2 節)。力以噸力(t)、碰墊反力 kN、能量 kN·m、方向相對船艏順時針(度)。

@@ -1,0 +1,172 @@
+# E10 主機失效/失去推進 — 花蓮外海下風岸(規劃書第 8.1 節 E10、第 3.4 節;設計 docs/design/ship-familiarisation.md 第 5 節;schema src/Contracts/scenario.schema.json)
+# FSB1 壓載沿東岸北上返航(8 kn、010°,與岸線平行),離岸約 0.8 nm;東風 30 kn(陣風 0.25,種子化)把壓載船(受風面積大)壓向岸,黑潮 1.8 kn 沿岸北流。
+# T+60 s 主機失效(mainEngine,階段 emergency)→ 機控室估修 30 分鐘 → 公司:拖船 2 小時後到 → 30 分鐘時機控室回報修復延後(不確定性)。
+# 海岸以示意多邊形表示(待 ENC 校正):岸線 0.12 nm 內為淺灘禁區(水深 3 m,進入即擱淺),0.45 nm 內為可錨泊水深帶(60 m),其外 300 m。
+# 錨的物理(錨泊、走錨)另行實作中,本情境不依賴:緊急下錨以 acknowledge{kind: anchorDecision}(決策)/ anchorReady(錨備便)代表,
+# 教官確認錨已抓住時觸發手動項目 anchorHolding 結束練習。拖船以語音/訊息代表(第 8.1 節)。
+# 評估:首個相關動作、通知船長、漂流計算(acknowledge driftCalculation,note 記漂向/漂速/到危險水深時間)、公司與搜救(MRCC)通報、
+#       錨備便與下錨決策時間、離淺灘最小距離;硬性失敗:擱淺、進入淺灘禁區。
+id: E10_engine_failure_lee_shore
+name: 花蓮外海下風岸主機失效
+description: >-
+  東岸花蓮外海壓載北上,主機失效後船被東風壓向岸;機控室估修 30 分鐘、拖船 2 小時後到。團隊需計算漂流、
+  通報公司與海巡搜救中心、備錨並在可錨泊水深內及時決定緊急下錨。
+seed: 20261025
+startTimeUtc: "2026-12-02T03:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: ballast
+origin: { lat: 24.0500, lon: 121.6500 }
+initial:
+  position: { lat: 24.0476, lon: 121.6563 }     # 岸線(示意)東南東 0.8 nm
+  heading: 10
+  speed: 8.0
+  rudder: 0
+environment:
+  wind: { trueSpeed: 30, trueDir: 90, gustiness: 0.25 }
+  current: { set: 10, drift: 1.8 }              # 黑潮沿岸北流
+  waterDepth: 300                                # 東岸陡深(示意);近岸由 zones 覆寫
+  visibility_nm: 6
+briefing:
+  text: |
+    No.1 壓載(艏 2.03 / 艉 5.41 m)自花蓮港外北上蘇澳,8 kn、離岸約 0.8 nm;東風 30 kn、黑潮北流約 1.8 kn,能見度 6 nm。
+    東岸水深陡增:岸線外約 0.45 nm 內才有可錨泊水深(約 60 m),0.12 nm 內為淺灘。
+    錨與錨鏈:AC-14 2,140 kg × 2,Φ42 mm 各 9 節(約 247 m);錨泊物理另行實作,下錨以「確認 → 下錨決策」代表,教官判定錨是否抓住。
+    依公司緊急程序:通知船長、機控室、公司(DPA/海務)與海巡/搜救中心(MRCC Taiwan),發布航行警告,備錨。
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: company, playedBy: voiceScript }
+    - { role: mrcc, playedBy: leader }
+  minParticipants: 2
+  duration_s: 7200
+zones:
+  - id: shelf
+    name: 可錨泊水深帶(約 60 m,示意)
+    type: reporting
+    waterDepth_m: 60
+    polygon:
+      - { lat: 23.981621, lon: 121.618324 }
+      - { lat: 24.201621, lon: 121.662324 }
+      - { lat: 24.198649, lon: 121.680060 }
+      - { lat: 23.978649, lon: 121.636060 }
+  - id: shoal
+    name: 岸邊淺灘(禁區,示意)
+    type: noGo
+    waterDepth_m: 3
+    polygon:
+      - { lat: 23.981621, lon: 121.618324 }
+      - { lat: 24.201621, lon: 121.662324 }
+      - { lat: 24.199640, lon: 121.674148 }
+      - { lat: 23.979640, lon: 121.630148 }
+timeline:
+  - id: autopilotOn
+    name: 自動舵 010°
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 10 }
+  - id: engineFailure
+    name: 主機失效
+    phase: emergency
+    when: { type: time, atLeast: "${params:emergency.engineFailure.injectAt_s}" }
+    actions:
+      - injectFault: mainEngine
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室!主機燃油高壓泵故障,主機停了!", lang: zh-TW }
+      - message: { to: instructor, text: "已注入主機失效;觀察:車鐘歸零、通知船長/機控室、漂流計算、通報、備錨與下錨決策", severity: warning }
+  - id: ecrEstimate
+    name: 機控室估修 30 分鐘
+    delay_s: 30
+    when: { type: event, kind: timelineTriggered, itemId: engineFailure }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "機控室報告:高壓油泵要換,估計修復 30 分鐘。", lang: zh-TW }
+  - id: tugInfo
+    name: 公司 — 拖船 2 小時後到
+    when: { type: time, atLeast: 240, since: { event: timelineTriggered, itemId: engineFailure } }
+    actions:
+      - voiceScript: { role: company, channel: phone, text: "公司海務:花蓮港拖船已派出,預計 2 小時後到達。請隨時回報船位與漂流。", lang: zh-TW }
+      - message: { to: all, text: "拖船預計 2 小時後到(以訊息代表)。", severity: info }
+  - id: shelfEntered
+    name: 進入可錨泊水深
+    visibility: all
+    when: { type: zone, id: shelf, inside: true }
+    actions:
+      - message: { to: all, text: "測深儀:水深約 60 m(可錨泊水深帶);離淺灘不到 0.35 nm。", severity: warning }
+  - id: repairDelay
+    name: 機控室 — 修復延後
+    when: { type: time, atLeast: "${params:emergency.engineFailure.repairEstimate_s}", since: { event: timelineTriggered, itemId: engineFailure } }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "機控室:新油泵密封不良,還要再 30 分鐘,無法保證。", lang: zh-TW }
+  - id: engineRepaired
+    name: 主機修復(教官)
+    manual: true
+    actions:
+      - clearFault: mainEngine
+      - voiceScript: { role: ecr, channel: phone, text: "機控室:主機修好了,可以起動。", lang: zh-TW }
+      - phase: degraded
+  - id: anchorHolding
+    name: 錨已抓住(教官確認)
+    manual: true
+    actions:
+      - message: { to: all, text: "錨已抓住,船停止漂流;等待拖船。", severity: info }
+      - endExercise: { reason: 緊急下錨成功 }
+  - id: tugArrived
+    name: 拖船到達
+    when: { type: time, atLeast: "${params:emergency.engineFailure.tugEta_s}", since: { event: timelineTriggered, itemId: engineFailure } }
+    actions:
+      - voiceScript: { role: company, channel: vhf16, text: "FS Bitumen No.1,拖船已到,請準備接拖纜。", lang: zh-TW }
+      - endExercise: { reason: 拖船到達 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2                                   # 先讓同一評估步記錄硬性失敗(endExercise 定稿後不再評估規則)
+    when: { type: event, kind: grounding }
+    actions:
+      - message: { to: all, text: "船已擱淺。", severity: alarm }
+      - endExercise: { reason: 擱淺 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: shoal, rule: zoneEntered, zoneId: shoal }
+  bands:
+    - { id: shoalDistance, metric: track.minDistanceToNoGo_m, direction: below, warn: 370, fail: 185, penalty: 10, failPenalty: 25 }   # 離淺灘 < 0.2 nm 警告、< 0.1 nm 失敗
+  required:
+    - id: firstAction
+      after: { event: faultInjected, itemId: engineFailure }
+      expect: { any: [ telegraphChange, { acknowledge: { kind: notifyEcr } }, { acknowledge: { kind: verbal } } ] }
+      within_s: "${params:emergency.engineFailure.firstAction_s}"
+      penalty: 10
+    - id: callMaster
+      after: { event: faultInjected, itemId: engineFailure }
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:emergency.engineFailure.callMaster_s}"
+      penalty: 10
+    - id: driftCalculation
+      after: { event: faultInjected, itemId: engineFailure }
+      expect: { acknowledge: { kind: driftCalculation } }
+      within_s: "${params:emergency.engineFailure.driftCalculation_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.05
+    - id: notifyCompany
+      after: { event: faultInjected, itemId: engineFailure }
+      expect: { acknowledge: { kind: notifyCompany } }
+      within_s: "${params:emergency.engineFailure.notifyCompany_s}"
+      penalty: 10
+    - id: notifySar
+      after: { event: faultInjected, itemId: engineFailure }
+      expect: { acknowledge: { kind: notifySar } }
+      within_s: "${params:emergency.engineFailure.notifySar_s}"
+      penalty: 10
+    - id: anchorReady
+      after: { event: faultInjected, itemId: engineFailure }
+      expect: { acknowledge: { kind: anchorReady } }
+      within_s: "${params:emergency.engineFailure.anchorReady_s}"
+      penalty: 10
+    - id: anchorDecision
+      after: { event: faultInjected, itemId: engineFailure }
+      expect: { acknowledge: { kind: anchorDecision } }
+      within_s: "${params:emergency.engineFailure.anchorDecision_s}"
+      penalty: 20
+      latePenaltyPer_s: 0.1
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

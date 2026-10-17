@@ -25,6 +25,8 @@ public sealed record AssessmentSummary
     [JsonPropertyName("faultResponses")] public required IReadOnlyList<FaultResponseRecord> FaultResponses { get; init; }
     /// <summary>警報確認時間與 BNWAS 階段次數(規劃書第 8.3 節第 5、7 類;sensors-alerts.md 第 5 節)</summary>
     [JsonPropertyName("alerts")] public required SummaryAlerts Alerts { get; init; }
+    /// <summary>操縱量測(規劃書第 8.1 節 F01–F03、E11;ship-familiarisation.md 第 2 節):情境未使用操縱量測時 null(省略,舊紀錄 summary 不變)</summary>
+    [JsonPropertyName("manoeuvres")] public IReadOnlyList<ManoeuvreRecord>? Manoeuvres { get; init; }
     [JsonPropertyName("events")] public required SummaryEvents Events { get; init; }
     [JsonPropertyName("assessment")] public required SummaryAssessment Assessment { get; init; }
 

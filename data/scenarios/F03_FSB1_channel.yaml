@@ -1,0 +1,314 @@
+# F03 船舶熟悉:兩船差異與淺水 — FS Bitumen No.1 滿載(規劃書第 8.1 節 F03;設計 docs/design/ship-familiarisation.md;schema src/Contracts/scenario.schema.json)
+# 調船人員必修:同一麥寮進港航道以 No.1(本檔)與 No.2(F03_FSB2_channel.yaml)各跑一次,講評比較兩份紀錄的
+#   (1) 淺水迴旋圈(航道外水深 14 m,7.5 kn 右滿舵 35° 迴轉 360°;manoeuvres turning35.starboard)、
+#   (2) 航道內(12.5 m)約 7.5 kn 的 squat 與 UKC(summary.ukc.min_m / minSquat_m;UKC 政策引用參數集 navigation.ukc.*)、
+#   (3) 航道內全速退的停船距離(manoeuvres crashStop;於 WP2–WP3 航段執行,速限 8 kn,不在 5 kn 的內港航段以 7.5 kn 全速退)。
+# 航線/航道多邊形與 E07 相同(座標示意,待麥寮港 ENC 校正);無交通、無風流(只比較船的差異)。不適用交接班開場與三步升級。
+# 時間表:每段先 acknowledge{kind: prediction} 預測;學員逾時未下令、操作未被辨識或量測中止時系統先回正舵/自動舵直航再示範,逾時略過(ship-familiarisation.md 第 4 節)。自動舵開啟時系統於 WP2/WP3 依航段轉向(學員手操舵時不介入)。
+id: F03_FSB1_channel
+name: 船舶熟悉 F03 — 麥寮航道兩船差異(No.1)
+description: >-
+  麥寮進港航道:淺水迴旋圈、航道內 squat/UKC 監控、航道內全速退停船距離;與 No.2 同一航道的紀錄比較,
+  更新調船人員的心智模型(No.2 船長 104 m、吃水 7.20 m、普通舵、單泵舵機較慢)。
+seed: 20261023
+startTimeUtc: "2026-11-06T02:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 23.7800, lon: 120.1000 }
+initial:
+  position: { lat: 23.7657, lon: 120.0776 }     # WP1 西南 1.5 nm、航段 0 延長線左側 150 m:右滿舵迴轉一圈後(迴旋向右偏移約 150 m)回到航線上
+  heading: 52
+  speed: 7.5                                     # 兩船同航速(未指定車鐘 → 引擎取該水深的直航平衡轉速),比較才有意義
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 14                                 # 航道外;航道內由 zones channel 覆寫 12.5 m
+  visibility_nm: 8
+briefing:
+  text: |
+    F03(調船人員必修):同一麥寮航道分別以 No.1 與 No.2 各跑一次,比較迴旋圈、squat 與停船距離。本次 No.1 滿載 5.70 m。
+    1. 航道外(水深 14 m,h/T 約 2.5)7.5 kn 右滿舵 35° 迴轉一圈:淺水迴旋圈與 F01 深水比較。
+    2. 航道內(12.5 m)保持 8 kn 以下(港規):監控 squat 與 UKC(公司 UKC 政策:航道內 ≥ 10% 吃水,最少 1.0 m)。
+    3. WP2–WP3 航段(速限 8 kn)舵正中下令緊急全速退:航道內停船距離(淺水)與深水比較;之後微速進過 WP3(內港速限 5 kn)結束。
+    講評:同航速所需轉速/車令的差異、淺水對迴旋圈與停船距離的影響、squat 隨航速與 h/T 的變化。
+  roles:
+    - { role: master, playedBy: leader, required: true }
+    - { role: officer, required: true }
+    - { role: helmsman }
+  minParticipants: 1
+  duration_s: 4000
+route:
+  name: 麥寮進港航道
+  xtdLimit_m: "${params:navigation.xtd.channel_m}"
+  waypoints:
+    - { name: WP1, lat: 23.7800, lon: 120.1000 }
+    - { name: WP2, lat: 23.7960, lon: 120.1220, checkpoint: true, speedLimit_kn: "${params:port.mailiao.speedLimit_kn}" }
+    - { name: WP3, lat: 23.8050, lon: 120.1490, checkpoint: true, speedLimit_kn: "${params:port.mailiao.speedLimit_kn}" }
+    - { name: BERTH, lat: 23.8075, lon: 120.1700, arrivalRadius_m: 120, speedLimit_kn: "${params:port.mailiao.innerSpeedLimit_kn}" }
+zones:
+  - id: channel
+    name: 進港航道(UKC 政策區)
+    type: ukcPolicy
+    waterDepth_m: 12.5
+    ukcMin: { fractionOfDraft: "${params:navigation.ukc.channel_fraction}" }
+    polygon:
+      - { lat: 23.7780, lon: 120.0980 }
+      - { lat: 23.7990, lon: 120.1200 }
+      - { lat: 23.8080, lon: 120.1500 }
+      - { lat: 23.8100, lon: 120.1720 }
+      - { lat: 23.8050, lon: 120.1730 }
+      - { lat: 23.8020, lon: 120.1490 }
+      - { lat: 23.7930, lon: 120.1230 }
+      - { lat: 23.7750, lon: 120.1010 }
+timeline:
+  - id: intro
+    name: 流程說明
+    visibility: all
+    when: { type: time, atLeast: 5 }
+    actions:
+      - phase: familiarisation
+      - autopilot: { enabled: true, heading: 51.5, rotLimit: 30 }
+      - message: { to: all, text: "F03(No.1 滿載):航道外淺水迴旋 → 航道內 squat/UKC → 航道內(WP2–WP3,速限 8 kn)全速退。完成後與 No.2 的紀錄比較。", severity: info }
+
+  # ---------------------------------------------------------------- 1. 淺水迴旋圈
+  - id: predictTurn
+    name: 預測 — 淺水迴旋圈
+    visibility: all
+    when: { type: time, atLeast: 30 }
+    actions:
+      - message: { to: all, text: "預測:水深 14 m(h/T 約 2.5)、7.5 kn,右滿舵 35° 的戰術直徑比 F01 深水大或小?大多少?按確認(預測)。", severity: info }
+  - id: executeTurn
+    name: 執行 — 右滿舵 35°
+    visibility: all
+    when:
+      any:
+        - { type: event, kind: acknowledge, itemId: predictTurn }
+        - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictTurn } }
+    actions:
+      - message: { to: all, text: "解除自動舵,052° 直航 30 秒後右滿舵 35°,迴轉一圈(360°)回到 052° 時回正舵。", severity: info }
+  - id: startedTurn
+    name: 已辨識量測開始 — 淺水迴旋
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictTurn }
+        - { type: event, kind: manoeuvreStarted, itemId: turning35.starboard }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: turning35.starboard } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:35° 右迴旋(turning35.starboard)。", severity: info }
+  - id: demoPrepTurn
+    name: 示範準備 — 回到穩定直航(淺水迴旋;學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeTurn }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurn }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurn }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeTurn } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedTurn }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedTurn }
+                - { type: event, kind: manoeuvreAborted, itemId: turning35.starboard }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: turning35.starboard } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「淺水迴旋」(或量測中止):系統接手示範 — 回正舵、以自動舵回 051.5° 穩定直航後再示範。", severity: info }
+      - ownShip: { rudder: 0 }
+      - autopilot: { enabled: true, heading: 51.5, rotLimit: 30 }
+  - id: demoTurn
+    name: 示範 — 右滿舵 35°
+    holdFor_s: 30                                 # 示範準備後回到穩定直航(MSC.137:30 s 定速直航)才下示範指令
+    when:
+      all:
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: demoPrepTurn } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurn }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurn }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: turning35.starboard }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: turning35.starboard } } } ] }
+        - { type: ownHeading, greaterThan: 49.5, lessThan: 53.5 }
+    actions:
+      - ownShip: { rudder: 35 }
+  - id: endTurn
+    name: 迴轉 360° 回到 052° — 回正舵
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: startedTurn }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurn }
+        - { type: time, atLeast: 120, since: { event: manoeuvreStarted, itemId: turning35.starboard } }
+        - { type: ownHeading, greaterThan: 52, lessThan: 62 }
+    actions:
+      - ownShip: { rudder: 0 }
+      - autopilot: { enabled: true, heading: 51.5, rotLimit: 30 }
+  - id: recoverTurn
+    name: 量測完成 — 回 052° 進航道
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictTurn }
+        - not: { type: event, kind: timelineTriggered, itemId: skipTurn }
+        - { type: event, kind: manoeuvreMeasured, itemId: turning35.starboard }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: turning35.starboard } }   # 本段的量測完成(邊緣觸發)
+    actions:
+      - message: { to: all, text: "淺水迴旋量測完成(與 F01 深水比較)。回 052° 朝 WP1 進航道。", severity: info }
+  - id: skipTurn
+    name: 逾時略過 — 淺水迴旋
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeTurn } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverTurn }
+    actions:
+      - message: { to: all, text: "「淺水迴旋」未完成量測,略過此段。系統回正舵並以自動舵 051.5° 朝 WP1 進航道。", severity: warning }
+      - ownShip: { rudder: 0 }
+      - autopilot: { enabled: true, heading: 51.5, rotLimit: 30 }
+
+  # ---------------------------------------------------------------- 2. 航道內 squat / UKC
+  - id: predictSquat
+    name: 預測 — 航道內 squat
+    visibility: all
+    when: { type: ownDistance, waypoint: WP1, lessThan: 0.5 }
+    actions:
+      - message: { to: all, text: "預測:航道水深 12.5 m、7.5 kn 時的 squat 與 UKC?公司 UKC 政策航道內 ≥ 10% 吃水。按確認(預測)並以 report 回報 UKC 計算。", severity: info }
+  - id: courseWp2
+    name: WP2 轉向 070°(自動舵中)
+    when:
+      all:
+        - { type: routeLeg, atLeast: 1 }
+        - { type: autopilot, enabled: true }
+    actions:
+      - autopilot: { enabled: true, heading: 70, rotLimit: 20 }
+  - id: courseWp3
+    name: WP3 轉向 085°(自動舵中)
+    when:
+      all:
+        - { type: routeLeg, atLeast: 2 }
+        - { type: autopilot, enabled: true }
+    actions:
+      - autopilot: { enabled: true, heading: 85, rotLimit: 20 }
+  - id: speedCoach
+    name: 超速提示
+    repeat: { every_s: 60, max: 3 }
+    when: { type: event, kind: speedLimitExceeded }
+    actions:
+      - message: { to: all, text: "超過航段速限(航道 8 kn、內港 5 kn):兩船同車令航速不同,請以轉速/車令控制。", severity: warning }
+
+  # ---------------------------------------------------------------- 3. 航道內全速退(WP2–WP3 航段,速限 8 kn;WP3 後內港速限 5 kn,不在內港做 7.5 kn 的全速退)
+  - id: predictCrash
+    name: 預測 — 航道內停船距離
+    visibility: all
+    when:
+      all:
+        - { type: routeLeg, atLeast: 1 }
+        - { type: time, atLeast: 60, since: { event: routeLegChanged, legIndex: 1 } }
+    actions:
+      - message: { to: all, text: "預測:WP2–WP3 航段(速限 8 kn)約 7.5 kn 舵正中緊急全速退,航道內(淺水)停船距離與 F01 深水相比如何?按確認(預測)。", severity: info }
+  - id: executeCrash
+    name: 執行 — 航道內全速退
+    visibility: all
+    holdFor_s: 30
+    when:
+      all:
+        - any:
+            - { type: event, kind: acknowledge, itemId: predictCrash }
+            - { type: time, atLeast: "${params:familiarisation.predictionTime_s}", since: { event: timelineTriggered, itemId: predictCrash } }
+        - { type: routeLeg, equals: 1 }
+        - { type: ownHeading, greaterThan: 65, lessThan: 75 }
+    actions:
+      - message: { to: all, text: "WP3 前(WP2–WP3 航段):解除自動舵、舵正中,下令緊急全速退至船停。", severity: info }
+  - id: startedCrash
+    name: 已辨識量測開始 — 航道內全速退
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictCrash }
+        - { type: event, kind: manoeuvreStarted, itemId: crashStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreStarted, itemId: crashStop } }
+    actions:
+      - message: { to: instructor, text: "已辨識量測開始:緊急停船(crashStop)。", severity: info }
+  - id: demoPrepCrash
+    name: 示範準備 — 回到直航(航道內全速退;學員未下令、操作未被辨識或量測中止)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: executeCrash }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverCrash }
+        - not: { type: event, kind: timelineTriggered, itemId: skipCrash }
+        - any:
+            - all:
+                - { type: time, atLeast: "${params:familiarisation.demoAfter_s}", since: { event: timelineTriggered, itemId: executeCrash } }
+                - not: { type: event, kind: timelineTriggered, itemId: startedCrash }
+            - all:
+                - { type: event, kind: timelineTriggered, itemId: startedCrash }
+                - { type: event, kind: manoeuvreAborted, itemId: crashStop }
+                - not: { type: time, atLeast: 3, since: { event: manoeuvreAborted, itemId: crashStop } }
+    actions:
+      - message: { to: instructor, text: "未辨識到「航道內全速退」(或量測中止):系統接手示範 — 回正舵、以自動舵 070° 直航後再示範。", severity: info }
+      - ownShip: { rudder: 0 }
+      - autopilot: { enabled: true, heading: 70, rotLimit: 20 }
+  - id: demoCrash
+    name: 示範 — 緊急全速退
+    holdFor_s: 30
+    when:
+      all:
+        - { type: time, atLeast: 30, since: { event: timelineTriggered, itemId: demoPrepCrash } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverCrash }
+        - not: { type: event, kind: timelineTriggered, itemId: skipCrash }
+        - not: { all: [ { type: event, kind: manoeuvreStarted, itemId: crashStop }, { not: { type: time, atLeast: 60, since: { event: manoeuvreStarted, itemId: crashStop } } } ] }
+        - { type: routeLeg, equals: 1 }
+        - { type: ownHeading, greaterThan: 65, lessThan: 75 }
+        - { type: ownSpeed, metric: stw, greaterThan: 6.5 }
+    actions:
+      - ownShip: { rudder: 0, telegraph: EFAS }
+  - id: recoverCrash
+    name: 量測完成 — 微速進續航至 WP3
+    visibility: all
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: predictCrash }
+        - not: { type: event, kind: timelineTriggered, itemId: skipCrash }
+        - { type: event, kind: manoeuvreMeasured, itemId: crashStop }
+        - not: { type: time, atLeast: 3, since: { event: manoeuvreMeasured, itemId: crashStop } }   # 本段的量測完成(邊緣觸發)
+    actions:
+      - message: { to: all, text: "航道內全速退量測完成(與 F01 深水比較)。系統以 60 rpm 微速進、自動舵 070° 續航;WP3 後內港速限 5 kn。", severity: info }
+      - ownShip: { rudder: 0, telegraph: DSAH, rpm: 60 }
+      - autopilot: { enabled: true, heading: 70, rotLimit: 20 }
+  - id: skipCrash
+    name: 逾時略過 — 航道內全速退
+    visibility: all
+    when:
+      all:
+        - { type: time, atLeast: 2400, since: { event: timelineTriggered, itemId: executeCrash } }
+        - not: { type: event, kind: timelineTriggered, itemId: recoverCrash }
+    actions:
+      - message: { to: all, text: "「航道內全速退」未完成量測,略過此段並結束。", severity: warning }
+      - ownShip: { rudder: 0, telegraph: STOP }
+  - id: end
+    name: 結束與講評
+    visibility: all
+    delay_s: 30
+    when:
+      any:
+        - all:
+            - { type: event, kind: timelineTriggered, itemId: recoverCrash }
+            - { type: routeLeg, atLeast: 2 }
+        - { type: time, atLeast: 1200, since: { event: timelineTriggered, itemId: recoverCrash } }
+        - { type: event, kind: timelineTriggered, itemId: skipCrash }
+    actions:
+      - message: { to: all, text: "F03(No.1)完成。講評時與 F03_FSB2_channel 的紀錄比較:迴旋圈、squat/最小 UKC、停船距離。", severity: info }
+      - endExercise: { reason: F03 流程完成 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  ukc:
+    min: { metres: "${params:navigation.ukc.minimum_m}" }
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: ukcHard, rule: ukc, lessThan: { fractionOfDraft: "${params:navigation.ukc.hardFail_fraction}" } }
+  bands:                                          # UKC 監控(F03 不評分,扣分 0,只記錄超限)
+    - { id: ukcTime, metric: ukc.timeBelowLimit_s, warn: 0, fail: 30, penalty: 0, failPenalty: 0 }
+    - { id: speed, metric: manoeuvring.timeOverSpeedLimit_s, warn: 0, fail: 120, penalty: 0, failPenalty: 0 }
+  required:                                       # 只記錄(扣分 0)
+    - { id: predictionTurn, after: { event: timelineTriggered, itemId: predictTurn }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredTurn, after: { event: timelineTriggered, itemId: executeTurn }, expect: { event: { kind: timelineTriggered, itemId: recoverTurn } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+    - { id: ukcReport, after: { event: timelineTriggered, itemId: predictSquat }, expect: { any: [ { acknowledge: { kind: report } }, { acknowledge: { kind: prediction } } ] }, within_s: 300, penalty: 0 }
+    - { id: predictionCrash, after: { event: timelineTriggered, itemId: predictCrash }, expect: { acknowledge: { kind: prediction } }, within_s: "${params:familiarisation.predictionTime_s}", penalty: 0 }
+    - { id: measuredCrash, after: { event: timelineTriggered, itemId: executeCrash }, expect: { event: { kind: timelineTriggered, itemId: recoverCrash } }, within_s: "${params:familiarisation.manoeuvreComplete_s}", penalty: 0 }
+  scoring: { start: 100, passMark: 0 }

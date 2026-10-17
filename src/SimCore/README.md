@@ -307,3 +307,24 @@ targets:
 - **E08**(`data/scenarios/E08_gyro_failure.yaml`):`dotnet run --project src/SimCore.Host -c Release -- --scenario E08_gyro_failure --record build/records/e08.jsonl --duration 600 --timescale 10 --no-ws --no-udp --no-nmea`
   (31 事件,固定於 `GyroFailureScenarioTests`),`--replay build/records/e08.jsonl` 雜湊/事件/summary 一致。
 
+
+## 10. 拖船、錨與錨鏈、碰墊與繫纜(`Physics/External/`;設計文件 `docs/design/physics-tugs-anchors-mooring.md`)
+
+規劃書第 6.2 節 T、A 項與第 459–460 行、第 3 章錨/鏈規格、R2;E12(錨泊/走錨)、E13(拖船協助靠泊、拖纜斷裂)。
+
+- **外力介面**:`IShipDynamics.SupportsExternalForces` + `Derivative(..., BodyForce external)`;MMG 把外力加到 X/Y/N,暫代模型以概略質量接受,其他模型明確不支援(指令被拒 `externalForcesUnsupported`)。
+  `Rk4Integrator.Step(..., IExternalForceField)` 每個 RK4 階段以該階段狀態重算錨鏈/碰墊/纜繩力。
+- **拖船**:情境 `tugs[]{id, name, bollardPull_t, attach fwd|aft|…|{x,y}, lineLength_m, modes, riseTime_s, turnRate_degPerSec, push/pull 效能速度, modeChange_s, connect_s, initial}`;
+  指令 `tugControl {id, mode push|pull|standby|free, direction_deg(力方向相對船艏), power_pct}`;出力一階上升、方向限速迴轉、自船速度高於門檻效能遞減(推頂 5 kn 約 50 %);
+  故障 `tugLineBreak {id}`(id 未定義 → `commandRejected unknownTug`,不加入 faults[]);`state.tugs[]`;事件 `tugCommand`、`tugLineParted`。
+  push ↔ pull 換位依就位工作側(`LastWorkingMode`,快照/雜湊)判定,插入 standby 不能略過 modeChange_s;parted 的拖船只調出力/方向時保持 parted;情境 initial.mode 須在 modes 內。
+- **錨**:particulars `anchors`(FSB1 實測 + 估計欄位;FSB2 錨重、起錨速率為估計)、情境 `environment.seabed mud|sand|clay|rock`(預設 sand)、`anchors{port|starboard{length_m|length_shackles, bearing_deg}, holdingFactor, dragSpeed_mps}`;
+  指令 `anchor {side, action letGo|veer|heave|brake|release, targetLength_shackles | length_m}`;準靜態懸鏈線(躺底/全懸空/拉直)、抓地力 = 錨重 × 抓著係數 × 上拔折減 + 躺底鏈摩擦、走錨、剎車滑出、絞盤速率與停轉(停轉握持上限 = 剎車握持力,超過時同樣滑出)、鏈端;letGo 只在收存或懸吊且未送出時接受(鏈長只增不減);
+  `state.anchors[]{side, status stowed|running|holding|dragging|heaving|aweigh, length_m, tension_t, onBottom_m, holding_t, position…}`;
+  事件 `anchorLetGo/anchorCommand/anchorBroughtUp/anchorDragging/anchorHolding/anchorAweigh/anchorHoused/anchorChainFullyOut/anchorBrakeSlipping/anchorWindlassStalled`。
+- **泊位**:`data/areas/*.json`(碼頭線、碰墊型式與非線性曲線、碰墊/繫船柱里程;`mailiao-berth.json` 為示意值)、情境 `berth{file, id | definition, lines[]}`(載入時內嵌 definition,紀錄 header 自足);
+  碰墊只推不拉(曲線 + 阻尼 + 摩擦)、碼頭硬接觸懲罰彈簧、繫纜非線性彈性 + 預張力 + MBL 斷裂;指令 `mooring {lineId, action makeFast|heave|slack|letGo, bollard, tension_t, length_m}`;
+  `state.berth{id, contacts[], quayContact, lines[]{id, status, tension_t, …}}`;事件 `fenderContact{fenderId, normalSpeed_mps, energy_kNm, maxReaction_kN, overload, …}`、`quayContact`、`mooringCommand`、`mooringLineParted`。
+- **確定性**:無亂數;外力模組只在使用時(有拖船/泊位,或錨曾被使用)走含外力積分並追加雜湊位元組,舊情境雜湊不變;`EngineSnapshot.External`(選填,Version 仍 3);
+  三個新指令寫一般 `input` 行,重播一致(`ExternalForceEngineTests`)。
+- **限制**:Python 參考實作尚未實作這些力項;3 自由度(垂直分量、鏈彈性不計);拖船無自身運動學與俥流;評估指標(接近速度、接觸能量)尚未接到評估模組(事件已記錄)。

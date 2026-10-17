@@ -149,8 +149,8 @@ export class BrmMarkerStore {
       m.category,
       brmCategory(m.category).label,
       m.polarity ?? '',
-      m.scenarioId ?? '',
-      m.note,
+      csvSafeText(m.scenarioId ?? ''),
+      csvSafeText(m.note),
     ]);
     return '﻿' + [header, ...rows].map((r) => r.map(csvEscape).join(',')).join('\r\n') + '\r\n';
   }
@@ -158,6 +158,14 @@ export class BrmMarkerStore {
 
 export function csvEscape(v: string): string {
   return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+/**
+ * CSV 防公式注入(OWASP CSV Injection):使用者輸入的文字欄位以 = + - @ Tab CR 開頭時前加單引號,
+ * Excel 開啟時當文字而非公式(HYPERLINK、DDE)。只用於文字欄位;程式產生的數值欄位(可能為負數)不要經過此函式。
+ */
+export function csvSafeText(v: string): string {
+  return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
 }
 
 /** 秒 → "HH:MM:SS"(與 format.formatSimTime 相同,但避免循環相依於此另寫)。 */
