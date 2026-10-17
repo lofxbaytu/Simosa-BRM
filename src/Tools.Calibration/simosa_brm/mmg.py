@@ -6,8 +6,12 @@
 - 確定性:純 Python 浮點運算;唯一的亂數是陣風係數,由情境種子的 ``random.Random(seed)`` 每秒抽一次
   (與 C# SimulationEngine.Advance 相同;gustiness = 0 時係數恆為 1 但仍抽號,使快照的亂數計數一致)。
   相同輸入序列 → 相同狀態雜湊(``state_hash``)。
-- 故障(與 src/SimCore/Engine/FaultNames.cs 相同):``steeringGear`` 舵角停在目前位置、``mainEngine`` 轉速衰減到 0 且
-  engine.state = failed、``bowThruster`` 側推令視為 0;其餘名稱只記錄並廣播。
+- 故障(與 src/SimCore/Engine/FaultNames.cs 相同):``steeringGear`` 舵角停在目前位置(emergency 操舵除外)、``mainEngine`` 轉速衰減到 0 且
+  engine.state = failed、``bowThruster`` 側推令視為 0、``steeringFuOnly`` 隨動迴路失效(fu / autopilot 動不了舵,nfu / emergency 可動)、
+  ``steeringPumpFailure`` 舵機速率減半;其餘名稱只記錄並廣播。
+- 操舵模式(規劃書第 7.2 節;情境引擎設計 D32、D35;語意與 C# ``SimulationEngine`` 相同):fu(隨動,預設)/ nfu(推桿 port/starboard/stop,
+  舵以舵機速率走向滿舵或停在原處)/ autopilot(⇔ 自動舵啟用)/ emergency(應急操舵:速率降低、舵機故障時仍可動、不可接自動舵);
+  舵機泵 "1" / "2" / "both" 依 particulars 單/雙泵轉舵時間換算速率。非預設模式/泵才加入狀態雜湊(舊情境雜湊不變)。
 - 對外狀態欄位依 src/Contracts/state.schema.json(度、節、航向 0–360、舵右正、ROT 度/分)。
 """
 
@@ -33,7 +37,46 @@ TELEGRAPH_ORDERS = ("EFAS", "FAS", "HAS", "SAS", "DSAS", "STOP", "DSAH", "SAH", 
 FAULT_STEERING_GEAR = "steeringGear"  # 舵機故障:舵角停在目前位置
 FAULT_MAIN_ENGINE = "mainEngine"  # 主機故障:轉速衰減至 0,engine.state = failed
 FAULT_BOW_THRUSTER = "bowThruster"  # 艏側推不可用
-MODELLED_FAULTS = (FAULT_STEERING_GEAR, FAULT_MAIN_ENGINE, FAULT_BOW_THRUSTER)
+FAULT_STEERING_FU_ONLY = "steeringFuOnly"  # FU 失效只剩 NFU:隨動迴路(fu 與自動舵)動不了舵,nfu 與 emergency 可動
+FAULT_STEERING_PUMP = "steeringPumpFailure"  # 舵機泵失效:所有模式舵機速率減半
+MODELLED_FAULTS = (FAULT_STEERING_GEAR, FAULT_MAIN_ENGINE, FAULT_BOW_THRUSTER, FAULT_STEERING_FU_ONLY, FAULT_STEERING_PUMP)
+
+# 操舵模式(state.schema.json steering.mode;順序與 C# SteeringMode 列舉相同,雜湊用索引)與舵機泵(steering.pump)
+STEERING_MODES = ("fu", "nfu", "autopilot", "emergency")
+STEERING_PUMPS = ("1", "2", "both")
+NFU_DIRECTIONS = {"port": -1, "starboard": 1, "stop": 0}
+REJECT_EMERGENCY_STEERING = "emergencySteering"  # C# CommandRejectReasons.EmergencySteering
+REJECT_AUTOPILOT_UNAVAILABLE = "autopilotUnavailable"  # C# CommandRejectReasons.AutopilotUnavailable
+# 使自動舵不可用的故障(C# SimulationEngine.AutopilotAvailable;sensors-alerts.md 第 2.3 節):行為只限啟用被拒與跳脫,
+# 感測器層(電羅經指示值)Python 不模擬
+FAULT_AUTOPILOT = "autopilotFailure"
+FAULT_GYRO = "gyroFailure"
+AUTOPILOT_BLOCKING_FAULTS = (FAULT_AUTOPILOT, FAULT_GYRO)
+
+
+class CommandRejected(ValueError):
+    """指令被拒絕、狀態不變(C# commandRejected 事件;``reason`` 同 C# CommandRejectReasons)。"""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def normalize_pump(value: Any) -> str | None:
+    """舵機泵正規化(與 C# SteeringPumps.Normalize 相同):數值 1/2、字串 "1"/"2"/"both"/"all"/"1+2";其他 → None(不變)。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+        value = str(int(f)) if f.is_integer() else repr(f)
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if v in ("1", "2"):
+        return v
+    if v in ("both", "all", "1+2"):
+        return "both"
+    return None
 
 # WGS-84(與 C# Geo/LocalTangentPlane.cs 相同常數)
 WGS84_A = 6378137.0
@@ -135,6 +178,10 @@ class Controls:
     autopilot_rot_limit: float = 15.0 * DEG / 60.0  # rad/s
     autopilot_rudder_limit: float = 20.0 * DEG
     frozen: bool = False
+    # 操舵模式(D32):autopilot 模式 ⇔ autopilot 為 True;nfu_direction −1 左、0 停、+1 右(非 nfu 為 0)
+    steering_mode: str = "fu"
+    steering_pump: str = "1"
+    nfu_direction: int = 0
 
 
 @dataclass
@@ -247,6 +294,18 @@ class MMGShip:
         self.delta_rate = float(rd["rate_degps"]) * DEG
         self.delta_neutral = float(rd.get("neutralAngle_deg", 0.0)) * DEG
         self.swirl_angle = float(rd.get("swirlAngle_deg", 0.0)) * DEG
+        # 操舵模式的舵機速率(C# SimulationEngine.RudderRateNominal / EmergencyRudderRateDegPerSec,particulars rudder.steeringGear):
+        # 泵 both 用雙泵轉舵時間、"1"/"2" 用單泵,相對 hardOverTime35_s(無則雙泵、單泵、28 s)換算;無泵資料時不換算。
+        # emergency:emergencyHardOverTime35_s 有值時 35°/t,否則為係數檔速率的一半(不依泵換算)。
+        sg = (self.sp.rudder or {}).get("steeringGear") or {}
+        def _pos(v: Any) -> float | None:
+            return float(v) if v is not None and float(v) > 0 else None
+        self._sg_nominal_s = _pos(sg.get("hardOverTime35_s")) or _pos(sg.get("hardOverTime35_twoPumps_s")) \
+            or _pos(sg.get("hardOverTime35_onePump_s")) or 28.0
+        self._sg_one_pump_s = _pos(sg.get("hardOverTime35_onePump_s"))
+        self._sg_two_pumps_s = _pos(sg.get("hardOverTime35_twoPumps_s"))
+        t_em = _pos(sg.get("emergencyHardOverTime35_s"))
+        self.delta_rate_emergency = 35.0 / t_em * DEG if t_em else 0.5 * self.delta_rate
         self.tR = float(rd["tR"])
         self.aH = float(rd["aH"])
         self.xH = float(rd["xH"]) * L
@@ -367,7 +426,10 @@ class MMGShip:
         return best
 
     def set_rudder(self, angle_deg: float) -> None:
+        """隨動舵令(使用舵輪):解除自動舵;autopilot / nfu 模式回到 fu(emergency 保持,電話下令仍以舵令表示;C# 相同)。"""
         self.ctl.autopilot = False
+        if self.ctl.steering_mode in ("autopilot", "nfu"):
+            self._set_steering_mode("fu", None)
         self.ctl.rudder_order = max(-self.delta_max, min(self.delta_max, angle_deg * DEG))
 
     def set_telegraph(self, order: str) -> None:
@@ -389,24 +451,143 @@ class MMGShip:
     def set_thruster(self, order: float) -> None:
         self.ctl.thruster_order = max(-1.0, min(1.0, float(order))) if self.thr_installed else 0.0
 
-    def set_autopilot(self, enabled: bool, heading_deg: float | None = None, rot_limit_degpm: float | None = None,
+    def set_autopilot(self, enabled: bool | None, heading_deg: float | None = None, rot_limit_degpm: float | None = None,
                       rudder_limit_deg: float | None = None) -> None:
-        self.ctl.autopilot = bool(enabled)
+        """自動舵設定;``enabled`` 為 None 時不改啟用狀態(只更新航向等設定)。操舵模式同步:啟用 → autopilot,解除 → fu(原為 autopilot 時)。
+        啟用要求在下列情況整個拒絕(``CommandRejected``,狀態不變;順序與 C# SimulationEngine 相同):
+        emergency 模式(應急操舵接不到自動舵,需先 fu;D35)→ ``emergencySteering``;
+        autopilotFailure / gyroFailure(自動舵不可用)→ ``autopilotUnavailable``。
+        ``rot_limit_degpm`` 取 max(1, |值|) 度/分(與 steeringMode autopilot、C# 相同)。"""
+        if enabled is True and self.ctl.steering_mode == "emergency":
+            raise CommandRejected(REJECT_EMERGENCY_STEERING, "應急操舵(emergency)中不可啟用自動舵,需先 steeringMode fu")
+        if enabled is True and not self.autopilot_available:
+            raise CommandRejected(REJECT_AUTOPILOT_UNAVAILABLE, self._autopilot_unavailable_message())
+        if enabled is not None:
+            self.ctl.autopilot = bool(enabled)
         if heading_deg is not None:
             self.ctl.autopilot_heading = heading_deg * DEG
         if rot_limit_degpm is not None:
-            self.ctl.autopilot_rot_limit = rot_limit_degpm * DEG / 60.0
+            self.ctl.autopilot_rot_limit = max(1.0, abs(float(rot_limit_degpm))) * DEG / 60.0
         if rudder_limit_deg is not None:
             self.ctl.autopilot_rudder_limit = rudder_limit_deg * DEG
+        if self.ctl.autopilot:
+            self._set_steering_mode("autopilot", None)
+        elif self.ctl.steering_mode == "autopilot":
+            self._set_steering_mode("fu", None)
+
+    # ------------------------------------------------------------------
+    # 操舵模式(D32、D35;C# SimulationEngine SteeringMode 指令)
+    # ------------------------------------------------------------------
+    def set_steering_mode(self, mode: str, pump: Any = None, direction: Any = None, heading_deg: float | None = None,
+                          rot_limit_degpm: float | None = None) -> dict[str, Any]:
+        """``steeringMode`` 指令:``mode`` fu / nfu / autopilot / emergency(不分大小寫),``pump`` 1 / 2 / both(其他值不變),
+        ``direction`` port / starboard / stop(僅 nfu;不明方向視同 stop、省略則維持),``heading_deg`` / ``rot_limit_degpm``(僅 autopilot)。
+
+        - emergency → autopilot 拒絕(``CommandRejected`` emergencySteering,狀態不變)。
+        - autopilotFailure / gyroFailure 時切到 autopilot 拒絕(``CommandRejected`` autopilotUnavailable,狀態不變;C# 相同)。
+        - autopilot:給 heading 時設定航向;未給且原本未啟用時保持目前航向;rotLimit 取 max(1, |值|) 度/分。
+        - 進出 nfu 時舵令先同步到目前舵角(舵停在原處);離開 nfu 時推動方向歸零。
+        回傳 {from, to, pump, pumpFrom, changed}(changed:模式或泵有變;C# 此時發 steeringModeChanged)。
+        """
+        m = str(mode).strip().lower() if mode is not None else ""
+        if m not in STEERING_MODES:
+            raise ValueError(f"未知操舵模式 {mode!r}(fu / nfu / autopilot / emergency)")
+        if m == "autopilot" and self.ctl.steering_mode == "emergency":
+            raise CommandRejected(REJECT_EMERGENCY_STEERING, "應急操舵(emergency)中不可切到自動舵,需先 steeringMode fu")
+        if m == "autopilot" and not self.autopilot_available:
+            raise CommandRejected(REJECT_AUTOPILOT_UNAVAILABLE, self._autopilot_unavailable_message())
+        p = normalize_pump(pump)
+        if m == "autopilot":
+            if heading_deg is not None:
+                self.ctl.autopilot_heading = (float(heading_deg) % 360.0) * DEG
+            elif not self.ctl.autopilot:
+                self.ctl.autopilot_heading = self.state.psi  # 保持目前航向(Python 無感測器層,指示值 = 真值)
+            if rot_limit_degpm is not None:
+                self.ctl.autopilot_rot_limit = max(1.0, abs(float(rot_limit_degpm))) * DEG / 60.0
+        info = self._set_steering_mode(m, p)
+        if m == "nfu":
+            self.apply_nfu(direction)
+        return info
+
+    @property
+    def autopilot_available(self) -> bool:
+        """自動舵可用:faults 不含 autopilotFailure 與 gyroFailure(C# SimulationEngine.AutopilotAvailable)。"""
+        return not any(f in self.faults for f in AUTOPILOT_BLOCKING_FAULTS)
+
+    def _autopilot_unavailable_message(self) -> str:
+        names = "、".join(f for f in AUTOPILOT_BLOCKING_FAULTS if f in self.faults)
+        return f"自動舵不可用({names}),不可啟用自動舵"
+
+    def _set_steering_mode(self, to: str, pump: str | None) -> dict[str, Any]:
+        c = self.ctl
+        frm, pump_from = c.steering_mode, c.steering_pump
+        if pump is not None:
+            c.steering_pump = pump
+        c.steering_mode = to
+        if frm != to and "nfu" in (frm, to):
+            self._hold_rudder()
+        if to != "nfu":
+            c.nfu_direction = 0
+        c.autopilot = to == "autopilot"
+        return {"from": frm, "to": to, "pump": c.steering_pump, "pumpFrom": pump_from,
+                "changed": frm != to or pump_from != c.steering_pump}
+
+    def _hold_rudder(self) -> None:
+        """舵令同步到目前舵角(夾在滿舵範圍內):舵停在原處。"""
+        self.ctl.rudder_order = max(-self.delta_max, min(self.delta_max, self.state.delta))
+
+    def apply_nfu(self, direction: Any) -> int:
+        """NFU 推桿:port / starboard → 舵令為該側滿舵(舵以舵機速率移動);stop → 舵令為目前舵角;
+        None → 維持目前推動方向;不明方向視同 stop(D35)。回傳推動方向 −1 / 0 / +1。"""
+        c = self.ctl
+        if direction is None:
+            d = c.nfu_direction
+        else:
+            d = NFU_DIRECTIONS.get(str(direction).strip().lower(), 0)
+        c.nfu_direction = d
+        if d == 0:
+            self._hold_rudder()
+        else:
+            c.rudder_order = d * self.delta_max
+        return d
+
+    def rudder_rate_for_step(self) -> float:
+        """本步舵機速率(rad/s;C# RudderRateForStep):emergency 為應急速率,其他模式依泵換算;steeringPumpFailure 再減半。"""
+        factor = 0.5 if FAULT_STEERING_PUMP in self.faults else 1.0
+        if self.ctl.steering_mode == "emergency":
+            return factor * self.delta_rate_emergency
+        pump_t = self._sg_two_pumps_s if self.ctl.steering_pump == "both" else self._sg_one_pump_s
+        scale = self._sg_nominal_s / pump_t if pump_t else 1.0
+        return factor * self.delta_rate * scale
+
+    def rudder_jammed(self) -> bool:
+        """舵動不了:steeringGear(emergency 除外)或 steeringFuOnly 時的 fu / autopilot(C# rudderJammed)。"""
+        mode = self.ctl.steering_mode
+        return (FAULT_STEERING_GEAR in self.faults and mode != "emergency") or \
+            (FAULT_STEERING_FU_ONLY in self.faults and mode in ("fu", "autopilot"))
+
+    def steering_json(self) -> dict[str, Any]:
+        """state.steering(state.schema.json):mode、pump;nfuActive 只在 nfu 模式輸出。"""
+        c = self.ctl
+        out: dict[str, Any] = {"mode": c.steering_mode, "pump": c.steering_pump}
+        if c.steering_mode == "nfu":
+            out["nfuActive"] = c.nfu_direction != 0
+        return out
 
     # ------------------------------------------------------------------
     # 故障、快照
     # ------------------------------------------------------------------
     def inject_fault(self, name: str) -> bool:
-        """加入故障(同名不重複,與 C# InjectFault 相同);回傳該名稱是否會改變模型行為(``MODELLED_FAULTS``)。"""
+        """加入故障(同名不重複,與 C# InjectFault 相同);回傳該名稱是否會改變模型行為(``MODELLED_FAULTS``)。
+
+        自動舵啟用中注入使自動舵不可用的故障(autopilotFailure / gyroFailure)時自動舵跳脫:舵令同步到目前舵角、
+        模式回 fu(C# TripAutopilot;是否跳脫可由呼叫前後的 ``ctl.autopilot`` 判斷)。"""
         name = str(name)
         if name not in self.faults:
             self.faults.append(name)
+        if self.ctl.autopilot and not self.autopilot_available:
+            self._hold_rudder()
+            self._set_steering_mode("fu", None)
         return name in MODELLED_FAULTS
 
     def clear_fault(self, name: str | None = None) -> int:
@@ -761,7 +942,7 @@ class MMGShip:
         # 陣風:每秒以種子亂數更新一次(即使 gustiness = 0 也抽號,使亂數序列與快照的計數一致;C# Advance 同)
         if s.tick % self._steps_per_second == 0:
             self.gust_factor = 1.0 + self.env.gustiness * (2.0 * self.rng.random() - 1.0)
-        rudder_jammed = FAULT_STEERING_GEAR in self.faults
+        rudder_jammed = self.rudder_jammed()
         engine_failed = FAULT_MAIN_ENGINE in self.faults
         thruster_failed = FAULT_BOW_THRUSTER in self.faults
         self._autopilot()
@@ -775,7 +956,7 @@ class MMGShip:
         y0 = s.as_tuple()
         dcmd, nt, ntau = self.ctl.rudder_order, self._n_target, self._n_tau
         tcmd = 0.0 if thruster_failed else self.ctl.thruster_order  # 側推故障:令視為 0,實際推力依延遲衰減
-        rate = 0.0 if rudder_jammed else self.delta_rate  # 舵機故障:速率 0,舵角停在目前位置(舵令照記)
+        rate = 0.0 if rudder_jammed else self.rudder_rate_for_step()  # 舵機故障:速率 0,舵角停在目前位置(舵令照記)
         k1 = self._derivs(y0, dcmd, nt, ntau, tcmd, rate)
         y1 = tuple(a + 0.5 * dt * b for a, b in zip(y0, k1))
         k2 = self._derivs(y1, dcmd, nt, ntau, tcmd, rate)
@@ -836,6 +1017,11 @@ class MMGShip:
         """狀態雜湊(sha256 over 全部浮點狀態的 IEEE-754 位元,含本秒陣風係數)。"""
         s = self.state
         payload = struct.pack("<d10dq", s.t, s.x, s.y, s.psi, s.u, s.v, s.r, s.delta, s.n, s.thr, self.gust_factor, s.tick)
+        # 操舵模式只在非預設(nfu / emergency / 泵非 "1")時追加 3 個 int64(模式索引、泵索引、NFU 方向;與 C# 相同的配置規則):
+        # fu 與 autopilot(與既有自動舵同義,其舵令已在狀態內)維持舊版雜湊
+        c = self.ctl
+        if c.steering_mode in ("nfu", "emergency") or c.steering_pump != "1":
+            payload += struct.pack("<3q", STEERING_MODES.index(c.steering_mode), STEERING_PUMPS.index(c.steering_pump), c.nfu_direction)
         return hashlib.sha256(payload).hexdigest()
 
     def state_json(self) -> dict[str, Any]:
@@ -888,6 +1074,7 @@ class MMGShip:
             "engine": {"state": eng_state, "startsRemaining": int(self.sp.engine.get("maxConsecutiveStarts") or 0), "load_pct": load_pct},
             "faults": list(self.faults),
             "flags": {"frozen": self.ctl.frozen, "aground": self.aground, "collision": False},
+            "steering": self.steering_json(),
         }
 
 

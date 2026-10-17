@@ -39,6 +39,25 @@ public sealed record RecordHeader
     [JsonPropertyName("scenario")] public required Scenario.Scenario Scenario { get; init; }
     /// <summary>參數集摘要與解析清單(無參數引用時省略;重播不需參數集檔案)</summary>
     [JsonPropertyName("parameterSet")] public ParameterSetInfo? ParameterSet { get; init; }
+    /// <summary>
+    /// 操縱量測比較用的試俥/海報目標值(data/ships/&lt;ID&gt;/trial_targets.json 全文;只在情境使用操縱量測時寫入)。重播優先使用此內容,
+    /// <c>--rescore</c> 才讀目前檔案(與參數集重新評分一致);舊紀錄無此欄位時重播退回讀目前檔案並警告。
+    /// </summary>
+    [JsonPropertyName("manoeuvreTargets")] public RecordManoeuvreTargets? ManoeuvreTargets { get; init; }
+}
+
+/// <summary>紀錄標頭的試俥目標值(<see cref="RecordHeader.ManoeuvreTargets"/>)。</summary>
+public sealed record RecordManoeuvreTargets
+{
+    [JsonPropertyName("shipId")] public required string ShipId { get; init; }
+    /// <summary>情境裝載(目標值只與同船同裝載的量測比較)</summary>
+    [JsonPropertyName("loading")] public required LoadingCondition Loading { get; init; }
+    /// <summary>相對專案根目錄的路徑(例如 data/ships/FSB1/trial_targets.json)</summary>
+    [JsonPropertyName("path")] public required string Path { get; init; }
+    /// <summary>檔案原始位元組的 SHA-256(小寫 hex;= summary.manoeuvres[].targetsSha256)</summary>
+    [JsonPropertyName("sha256")] public required string Sha256 { get; init; }
+    /// <summary>檔案內容(JSON)</summary>
+    [JsonPropertyName("content")] public required System.Text.Json.JsonElement Content { get; init; }
 }
 
 public sealed record RecordInput

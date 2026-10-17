@@ -1,7 +1,7 @@
 # F02 船舶熟悉:低速、側推與壓載風壓 — FS Bitumen No.2(規劃書第 8.1 節 F02、第 3.2 節;設計 docs/design/ship-familiarisation.md;schema src/Contracts/scenario.schema.json)
 # 麥寮港內(座標示意,水深一律 14 m,待港方資料校正)、東北風 15 kn 於 15 分鐘內漸增至 25 kn(陣風 0.2,種子化)、壓載(艏 4.4 / 艉 6.5 m,2026-09 實際航次)。
-# 注意:No.2 壓載 MMG 係數(data/ships/FSB2/coefficients.ballast.json)尚未產生,主控程序需以 --dynamics placeholder 執行(暫代模型無側推航速衰減,
-# 結果只供流程演練);係數產生後免改本情境。
+# 注意:No.2 壓載 MMG 係數 data/ships/FSB2/coefficients.ballast.json 為估計、未識別(2026-10-17,Tools.Calibration estimate --transfer-from full),
+# 主控程序預設即以 MMG 執行(側推隨航速衰減、受風面積為乾舷估計 967 m²);低速/風壓結果為趨勢,待船長評價或實船紀錄校準。
 # 只用現有物理(MMG 側推隨航速衰減、右旋單俥倒俥艉偏、Blendermann 風力;不需拖船/碼頭)。不適用交接班開場與三步升級。
 # 流程(每段先 acknowledge{kind: prediction} 預測;學員逾時未下令、操作未被辨識或量測中止時系統先回到示範起始狀態再示範,逾時略過;
 # 量測由 ManoeuvreTracker 自動辨識;ship-familiarisation.md 第 4 節):

@@ -3,6 +3,8 @@
 // 疊圖(overlay,設計文件第 6 節 W8):情境航線(航點、走廊半寬)、區域多邊形(禁區/速限/UKC/報告)、事件標記。
 // 目標船(state.targets[],規劃書第 5.2 節):三角形依航向、船名/ID 標籤、COG/SOG 短向量;AIS 關閉者空心虛線,
 // 處於 cpaAlarm 的目標紅色(alarmTargets 由事件流推得);targetTable 開啟時左上角列 CPA/TCPA 小表(教官站完整模式)。
+// 拖船/錨/泊位(docs/design/physics-tugs-anchors-mooring.md):碼頭線(硬接觸時紅)、碰墊(依壓縮比例著色:綠 < 60 % 額定、黃、紅 = 過載)、
+// 繫船柱、纜繩線段(導纜孔 → 繫船柱,依張力/MBL 著色)、拖船示意位置與作用於連接點的力向量(長度 ∝ 出力)、錨位與錨鏈(錨鏈孔 → 錨)。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, query, state } from 'lit/decorators.js';
@@ -16,6 +18,7 @@ import { targetTableRows } from '../lib/targets.js';
 import { bodyToEnu, chooseGridSpacing, hullOutline, superstructureOutline } from '../lib/ship-geometry.js';
 import { degToRad, knotsToMps } from '../lib/angles.js';
 import { formatHeading, formatKnots } from '../lib/format.js';
+import { ANCHOR_SIDE_LABEL, anchorLevel, fenderLoadLevel, hawsePoint, lineLoadLevel, resolveBodyPoint, tugName, type LoadLevel } from '../lib/external-forces.js';
 
 const VECTOR_MINUTES = 6;
 const ZOOM_MIN = 0.02; // px/m(約 5 km 寬)
@@ -204,7 +207,7 @@ export class TrackPlot extends LitElement {
           @pointercancel=${this.onPointerUp}
         ></canvas>
         <div class="legend">
-          鳥瞰航跡圖(北上,本地 ENU)· 實線 = 航向向量 ${VECTOR_MINUTES} min · 虛線 = COG/SOG${this.targets.length > 0 ? ' · 三角 = 目標船(虛線 = AIS 關)' : ''}
+          鳥瞰航跡圖(北上,本地 ENU)· 實線 = 航向向量 ${VECTOR_MINUTES} min · 虛線 = COG/SOG${this.targets.length > 0 ? ' · 三角 = 目標船(虛線 = AIS 關)' : ''}${this.hasExternal() ? ' · ◆ = 拖船(箭頭 = 力) · ⚓ = 錨' : ''}
         </div>
         ${this.targetTable && this.targets.length > 0 ? this.renderTargetTable() : null}
         <div class="toolbar">
@@ -331,6 +334,8 @@ export class TrackPlot extends LitElement {
 
     // 疊圖:區域、航線走廊(在航跡之下)
     if (this.overlay) this.drawOverlay(ctx, toPx, z);
+    // 泊位:碼頭線、碰墊、繫船柱(在航跡之下)
+    if (this.overlay?.berth) this.drawBerth(ctx, toPx, z);
 
     // 航跡
     const pts = this.history?.all() ?? [];
@@ -430,6 +435,9 @@ export class TrackPlot extends LitElement {
     ctx.stroke();
     ctx.fillText('N', w - 24, 58);
 
+    // 纜繩、錨鏈、拖船(在自船之上)
+    if (this.hasExternal()) this.drawExternal(ctx, toPx, z);
+
     // 目標船(在自船之上、事件標記之下)
     if (this.targets.length > 0) this.drawTargets(ctx, toPx, z);
 
@@ -488,6 +496,187 @@ export class TrackPlot extends LitElement {
       // 標籤:船名(無則 id);AIS 關以「(AIS 關)」標示
       ctx.fillStyle = color;
       ctx.fillText(`${t.name || t.id}${t.aisOn ? '' : '(AIS 關)'}`, px + half + 3, py + 4);
+    }
+    ctx.restore();
+  }
+
+  private hasExternal(): boolean {
+    const s = this.state;
+    return (s?.tugs?.length ?? 0) > 0 || (s?.anchors ?? []).some((a) => a.position !== undefined) || (s?.berth?.lines.length ?? 0) > 0;
+  }
+
+  private levelColor(level: LoadLevel): string {
+    return level === 'alarm' ? this.cssVar('--ob-alarm') : level === 'caution' ? this.cssVar('--ob-caution') : this.cssVar('--ob-ok');
+  }
+
+  /** 碼頭線(硬接觸時紅)、碰墊(依壓縮比例著色)、繫船柱。 */
+  private drawBerth(ctx: CanvasRenderingContext2D, toPx: (x: number, y: number) => [number, number], z: number): void {
+    const geo = this.overlay!.berth!;
+    const contact = this.state?.berth;
+    ctx.save();
+    ctx.font = '11px system-ui, sans-serif';
+    // 碼頭線
+    ctx.strokeStyle = contact?.quayContact ? this.cssVar('--ob-alarm') : this.cssVar('--ob-text-secondary');
+    ctx.lineWidth = contact?.quayContact ? 4 : 3;
+    ctx.beginPath();
+    geo.quay.forEach((p, i) => {
+      const [px, py] = toPx(p.x, p.y);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    if (geo.quay.length > 0) {
+      const [lx, ly] = toPx(geo.quay[0]!.x, geo.quay[0]!.y);
+      ctx.fillStyle = this.cssVar('--ob-text-secondary');
+      ctx.fillText(geo.name ?? geo.id, lx + 4, ly - 6);
+    }
+    // 碰墊:碼頭面向水域突出 height_m、沿線寬 width_m 的矩形(太小時以 4 px 方塊代替)
+    const contacts = new Map((contact?.contacts ?? []).map((c) => [c.fenderId, c]));
+    for (const f of geo.fenders) {
+      const c = contacts.get(f.id);
+      const hw = Math.max(f.width_m / 2, 2 / z);
+      const h = Math.max(f.height_m, 4 / z);
+      const corners = [
+        [f.x - f.tx * hw, f.y - f.ty * hw],
+        [f.x + f.tx * hw, f.y + f.ty * hw],
+        [f.x + f.tx * hw + f.nx * h, f.y + f.ty * hw + f.ny * h],
+        [f.x - f.tx * hw + f.nx * h, f.y - f.ty * hw + f.ny * h],
+      ] as const;
+      ctx.beginPath();
+      corners.forEach(([x, y], i) => {
+        const [px, py] = toPx(x, y);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      if (c) {
+        ctx.fillStyle = this.levelColor(fenderLoadLevel(c, f.ratedDeflection_pct));
+        ctx.fill();
+      }
+      ctx.strokeStyle = c ? ctx.fillStyle : this.cssVar('--ob-text-muted');
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      if (c && z > 0.6) {
+        const [px, py] = toPx(f.x + f.nx * (h + 3 / z), f.y + f.ny * (h + 3 / z));
+        ctx.fillStyle = ctx.strokeStyle as string;
+        ctx.fillText(`${f.id} ${Math.round(c.deflection_pct ?? 0)}%`, px + 3, py);
+      }
+    }
+    // 繫船柱
+    ctx.fillStyle = this.cssVar('--ob-text');
+    for (const b of geo.bollards) {
+      const [px, py] = toPx(b.x, b.y);
+      ctx.beginPath();
+      ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      if (z > 1.2) ctx.fillText(b.id, px + 4, py + 10);
+    }
+    ctx.restore();
+  }
+
+  /** 纜繩線段、錨鏈與錨位、拖船示意位置與力向量。 */
+  private drawExternal(ctx: CanvasRenderingContext2D, toPx: (x: number, y: number) => [number, number], z: number): void {
+    const s = this.state;
+    const cfg = this.config;
+    const origin = { x: s.pos.x, y: s.pos.y };
+    const toEnu = (p: { x: number; y: number }) => bodyToEnu(p, s.heading, origin);
+    ctx.save();
+    ctx.font = '11px system-ui, sans-serif';
+    // 纜繩:導纜孔 → 繫船柱(繫著、絞/鬆中),依張力/MBL 著色
+    const geo = this.overlay?.berth;
+    const lineDefs = new Map((this.overlay?.mooringLines ?? []).map((l) => [l.id, l]));
+    for (const l of s.berth?.lines ?? []) {
+      if (!(l.status === 'fast' || l.status === 'heaving' || l.status === 'slacking') || !l.bollardId || !geo) continue;
+      const bollard = geo.bollards.find((b) => b.id === l.bollardId);
+      const fl = resolveBodyPoint(lineDefs.get(l.id)?.fairlead, cfg.lpp_m, cfg.breadth_m);
+      if (!bollard || !fl) continue;
+      const a = toEnu(fl);
+      const [ax, ay] = toPx(a.x, a.y);
+      const [bx, by] = toPx(bollard.x, bollard.y);
+      ctx.strokeStyle = this.levelColor(lineLoadLevel(l));
+      ctx.lineWidth = 2;
+      ctx.setLineDash(l.status === 'fast' ? [] : [5, 3]);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (z > 0.8) {
+        ctx.fillStyle = ctx.strokeStyle as string;
+        ctx.fillText(`${l.id} ${l.tension_t.toFixed(1)} t`, (ax + bx) / 2 + 4, (ay + by) / 2 - 4);
+      }
+    }
+    // 錨鏈與錨位
+    for (const an of s.anchors ?? []) {
+      if (!an.position) continue;
+      const h = toEnu(hawsePoint(an.side, cfg.lpp_m, cfg.breadth_m, cfg.anchors));
+      const [hx, hy] = toPx(h.x, h.y);
+      const [px, py] = toPx(an.position.x, an.position.y);
+      const color = an.status === 'dragging' ? this.cssVar('--ob-alarm') : an.status === 'holding' ? this.cssVar('--ob-ok') : this.cssVar('--ob-text-secondary');
+      ctx.strokeStyle = color;
+      ctx.lineWidth = anchorLevel(an) === 'ok' ? 1.5 : 2.5;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+      ctx.font = '15px system-ui, sans-serif';
+      ctx.fillText('⚓', px, py + 5);
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(`${ANCHOR_SIDE_LABEL[an.side]} ${(an.length_shackles ?? 0).toFixed(1)} 節`, px, py + 18);
+      ctx.textAlign = 'left';
+    }
+    // 拖船:示意位置(◆)、連接點的力向量(長度 ∝ 出力)、拉時畫拖纜
+    const tugDefs = new Map((this.overlay?.tugDefs ?? []).map((t) => [t.id, t]));
+    for (const t of s.tugs ?? []) {
+      const parted = t.status === 'parted' || t.lineParted === true;
+      const color = parted ? this.cssVar('--ob-alarm') : t.status === 'working' ? this.cssVar('--ob-accent') : this.cssVar('--ob-text-secondary');
+      const attach = resolveBodyPoint(tugDefs.get(t.id)?.attach ?? 'fwd', cfg.lpp_m, cfg.breadth_m) ?? { x: 0.45 * cfg.lpp_m, y: 0 };
+      const a = toEnu(attach);
+      const [ax, ay] = toPx(a.x, a.y);
+      if (t.pos) {
+        const [tx, ty] = toPx(t.pos.x, t.pos.y);
+        if (t.mode === 'pull' && !parted && t.status !== 'free') {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+        }
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(tx, ty - 6);
+        ctx.lineTo(tx + 5, ty);
+        ctx.lineTo(tx, ty + 6);
+        ctx.lineTo(tx - 5, ty);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillText(`${tugName(t)}${parted ? ' 斷纜' : ''}`, tx + 8, ty - 6);
+      }
+      if (t.force_t > 0.2) {
+        const dir = degToRad(s.heading + t.direction_deg);
+        const len = Math.min(90, 12 + t.force_t * 1.5);
+        const ex = ax + Math.sin(dir) * len;
+        const ey = ay - Math.cos(dir) * len;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.sin(dir - 0.4) * 9, ey + Math.cos(dir - 0.4) * 9);
+        ctx.lineTo(ex - Math.sin(dir + 0.4) * 9, ey + Math.cos(dir + 0.4) * 9);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillText(`${t.force_t.toFixed(0)} t`, ex + 4, ey);
+      }
     }
     ctx.restore();
   }

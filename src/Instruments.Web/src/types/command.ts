@@ -27,7 +27,10 @@ export type CommandType =
   | 'alertAcknowledge'
   | 'alertSilence'
   | 'bnwasMode'
-  | 'bnwasReset';
+  | 'bnwasReset'
+  | 'tugControl'
+  | 'anchor'
+  | 'mooring';
 
 export const COMMAND_TYPES: readonly CommandType[] = [
   'rudder',
@@ -55,6 +58,9 @@ export const COMMAND_TYPES: readonly CommandType[] = [
   'alertSilence',
   'bnwasMode',
   'bnwasReset',
+  'tugControl',
+  'anchor',
+  'mooring',
 ] as const;
 
 /** 舵令來源:FU 隨動(舵輪)或 NFU 非隨動(舵柄按鈕),僅作提示,核心可忽略。 */
@@ -132,4 +138,23 @@ export interface BnwasModeCommand extends SimCommand {
   type: 'bnwasMode';
   value: 'off' | 'auto' | 'on';
   args?: { dormant_s?: number; stage3_s?: number } & Record<string, unknown>;
+}
+
+/** tugControl:拖船令(docs/design/physics-tugs-anchors-mooring.md 第 2 節);mode/direction_deg/power_pct 省略 = 不變。
+ *  direction_deg 為作用於自船的力方向,相對船艏順時針(0 向前、90 向右舷、180 向後、270 向左舷)。 */
+export interface TugControlCommand extends SimCommand {
+  type: 'tugControl';
+  args: { id: string; mode?: 'push' | 'pull' | 'standby' | 'free'; direction_deg?: number; power_pct?: number } & Record<string, unknown>;
+}
+
+/** anchor:錨令(第 3 節);length_m 優先於 targetLength_shackles;letGo/heave 目標省略 = 鏈端/收妥。 */
+export interface AnchorCommand extends SimCommand {
+  type: 'anchor';
+  args: { side: 'port' | 'starboard'; action: 'letGo' | 'veer' | 'heave' | 'brake' | 'release'; targetLength_shackles?: number; length_m?: number } & Record<string, unknown>;
+}
+
+/** mooring:繫纜令(第 4 節;情境 berth.lines[])。 */
+export interface MooringCommand extends SimCommand {
+  type: 'mooring';
+  args: { lineId: string; action: 'makeFast' | 'heave' | 'slack' | 'letGo'; bollard?: string; tension_t?: number; length_m?: number } & Record<string, unknown>;
 }

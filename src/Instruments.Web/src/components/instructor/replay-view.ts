@@ -16,7 +16,7 @@ import { summarize, type DebriefSummary } from '../../lib/debrief.js';
 import { brmCategory } from '../../lib/brm-markers.js';
 import { defaultState } from '../../lib/state-parser.js';
 import { eventLabel, eventSeverity } from '../../lib/sim-event.js';
-import { eventMarks, overlayFromHeaderScenario, type PlotOverlay } from '../../lib/plot-overlay.js';
+import { eventMarks, overlayFromHeaderScenario, overlayHasContent, type PlotOverlay } from '../../lib/plot-overlay.js';
 import { cpaAlarmTargets } from '../../lib/targets.js';
 import type { SimEvent } from '../../types/event.js';
 import '../conning-bar.js';
@@ -209,7 +209,7 @@ export class ReplayView extends LitElement {
     this.points = trackPoints(data.states, 1);
     this.summary = data.states.length > 0 ? summarize(data.states) : null;
     const base = overlayFromHeaderScenario(data.header.scenario);
-    this.overlay = base.route || base.zones.length > 0 || data.events.length > 0 ? base : null;
+    this.overlay = overlayHasContent(base) || data.events.length > 0 ? base : null;
     this.stopPlay();
     this.seek(data.tStart);
     return data;

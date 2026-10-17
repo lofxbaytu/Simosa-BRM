@@ -2,7 +2,7 @@
 //  - 航向:一階 Nomoto 響應 T·ṙ + r = K·δ,K、T 隨瞬時船速換算(K = K'·U/L,T = T'·L/U);
 //  - 速度:一階滯後趨向車鐘對應的參考速度,迴轉時依舵角打折;
 //  - 舵機、主機轉速、側推各以速率限制或一階滯後模擬;
-//  - 位置以本地 ENU 積分,加上均勻流;COG/SOG 由對地速度求得;
+//  - 位置以本地 ENU 積分(自 initialX/initialY 起算,教官站以情境 origin 座標系的 initial.position 帶入),加上均勻流;COG/SOG 由對地速度求得;
 //  - 固定步長 50 Hz(與核心相同),輸出 25 Hz。
 // 係數以 FSB1 滿載試俥的迴旋圈與 Z 形概略對齊(K' ≈ 1.1、T' ≈ 1.5),僅供畫面預覽。
 // 情境引擎(設計文件 docs/design/scenario-engine.md)的離線預覽:產生幾個假事件(時間表訊息/語音、故障注入、確認、
@@ -13,6 +13,8 @@
 // 感測器故障/警報/BNWAS(docs/design/sensors-alerts.md;demo-alerts.ts):output() 的頂層 heading/pos/cog/sog/stw/depthBelowKeel
 // 為指示值、另附 truth/sensors/autopilot/alerts/bnwas;自動舵以指示航向操舵;示範假警報與 BNWAS 循環(見 demo-alerts.ts)。
 // current 仍為真值(運動學內部狀態)。
+// 拖船/錨/繫纜(demo-external.ts):兩艘假拖船(出力一階上升、方向迴轉)、左右錨(送出/起錨/著底/走錨)、示意泊位與三條纜,
+// 接受 tugControl / anchor / mooring 指令與 tugLineBreak 故障;不影響示範運動學。
 
 import { clamp, degToRad, knotsToMps, mpsToKnots, normalizeHeading, radToDeg, headingDifference } from '../lib/angles.js';
 import { getShipConfig, telegraphStep, type ShipDisplayConfig } from '../lib/ship-config.js';
@@ -21,6 +23,8 @@ import type { SimCommand } from '../types/command.js';
 import type { SimEvent, SimEventSource } from '../types/event.js';
 import type { TargetState } from '../types/target.js';
 import { STEERING_MODES, STEERING_PUMPS, TELEGRAPH_POSITIONS, type OwnShipState, type ShipId, type SteeringModeValue, type SteeringPump, type SteeringStatus, type TelegraphPosition } from '../types/state.js';
+import { DEMO_TUGS, DemoExternal, demoBerth, type DemoBerthOptions, type DemoTugDef } from './demo-external.js';
+import type { BerthGeometry } from '../lib/external-forces.js';
 import { BNWAS_RESET_COMMANDS, DemoAlerts, DemoBnwas, DemoSensors, demoAlertConditions, demoLatLon, type DemoEmit } from './demo-alerts.js';
 
 export const DEMO_DT = 0.02; // 50 Hz
@@ -42,11 +46,18 @@ export interface DemoOptions {
   originLon?: number;
   initialHeading?: number;
   initialSpeed_kn?: number;
+  /** 自船初始位置(本地 ENU,相對原點;m;預設 (0, 0)。教官站以情境 initial.position 帶入,與航跡圖疊圖同座標系) */
+  initialX?: number;
+  initialY?: number;
   waterDepth_m?: number;
   wind?: { trueSpeed: number; trueDir: number };
   current?: { set: number; drift: number };
   /** 示範警報管理與 BNWAS(假警報、BNWAS 循環、故障類警報;預設關,DemoSource 預設開) */
   alerts?: boolean;
+  /** 示範拖船(省略 = DEMO_TUGS 兩艘;[] = 無拖船;教官站以情境 tugs[] 帶入) */
+  tugs?: readonly DemoTugDef[];
+  /** 示範泊位(省略 = 初始位置右舷的示意泊位;null = 無泊位;教官站以情境 berth 帶入,纜繩 initial: fast 開始即帶纜) */
+  berth?: DemoBerthOptions | null;
 }
 
 interface AutopilotState {
@@ -111,6 +122,7 @@ export class DemoSim {
   private sensors = new DemoSensors();
   private alerts = new DemoAlerts(this.emitFn);
   private bnwas = new DemoBnwas(this.emitFn);
+  private external!: DemoExternal;
 
   constructor(options: DemoOptions = {}) {
     const shipId = options.shipId ?? 'FSB1';
@@ -121,16 +133,48 @@ export class DemoSim {
       originLon: options.originLon ?? 120.12,
       initialHeading: options.initialHeading ?? 0,
       initialSpeed_kn: options.initialSpeed_kn ?? 0,
+      initialX: options.initialX ?? 0,
+      initialY: options.initialY ?? 0,
       waterDepth_m: options.waterDepth_m ?? 20,
       wind: options.wind ?? { trueSpeed: 12, trueDir: 40 },
       current: options.current ?? { set: 200, drift: 0.8 },
       alerts: options.alerts ?? false,
+      tugs: options.tugs ?? DEMO_TUGS,
+      berth: options.berth === undefined ? demoBerth(options.initialHeading ?? 0, options.initialX ?? 0, options.initialY ?? 0) : options.berth,
     };
+    this.external = this.makeExternal();
     this.state = this.initialState();
+    this.initialiseExternal();
+  }
+
+  /** 情境初始狀態(纜繩 initial: fast 帶纜)後重寫 state.berth 等欄位。 */
+  private initialiseExternal(): void {
+    this.external.initialise(this.state);
+    this.external.write(this.state, { lat: this.opts.originLat, lon: this.opts.originLon });
+  }
+
+  private makeExternal(): DemoExternal {
+    return new DemoExternal(this.cfg, (kind, source, extra) => this.emit(kind, source, extra), this.opts.tugs, this.opts.berth, { lat: this.opts.originLat, lon: this.opts.originLon });
+  }
+
+  /** 示範拖船定義(教官站航跡圖的連接點)。 */
+  get demoTugs(): readonly DemoTugDef[] {
+    return this.opts.tugs;
+  }
+
+  /** 示範泊位定義(教官站航跡圖疊圖用;無泊位為 null)。 */
+  get demoBerth(): DemoBerthOptions | null {
+    return this.opts.berth;
+  }
+
+  /** 示範運算實際使用的泊位幾何(本地 ENU;與教官站航跡圖疊圖同座標系;無泊位為 null)。 */
+  get berthGeometry(): BerthGeometry | null {
+    return this.external.geometry;
   }
 
   private initialState(): OwnShipState {
     const s = defaultState(this.opts.shipId);
+    s.pos = { ...s.pos, x: this.opts.initialX, y: this.opts.initialY };
     s.heading = normalizeHeading(this.opts.initialHeading);
     s.cog = s.heading;
     s.stw = this.opts.initialSpeed_kn;
@@ -158,12 +202,12 @@ export class DemoSim {
 
   // ------------------------------------------------------------ 假目標船(離線預覽用)
 
-  /** 兩艘假目標船:交叉相遇船在右艏 1.5 nm、朝自船艏前 0.15 nm 處駛來(CPA < 門檻 → cpaAlarm);錨泊船在左正橫 1.2 nm。 */
+  /** 兩艘假目標船(相對自船初始位置):交叉相遇船在右艏 1.5 nm、朝自船艏前 0.15 nm 處駛來(CPA < 門檻 → cpaAlarm);錨泊船在左正橫 1.2 nm。 */
   private makeTargets(): DemoTarget[] {
     const psi = this.opts.initialHeading;
     const place = (bearingRel: number, nm: number) => {
       const b = degToRad(normalizeHeading(psi + bearingRel));
-      return { x: Math.sin(b) * nm * NM_M, y: Math.cos(b) * nm * NM_M };
+      return { x: this.opts.initialX + Math.sin(b) * nm * NM_M, y: this.opts.initialY + Math.cos(b) * nm * NM_M };
     };
     const crossing = place(45, 1.5);
     const aim = place(0, 0.15);
@@ -285,7 +329,7 @@ export class DemoSim {
       loading: s.loading,
       parameterSet: { id: 'simosa-company-procedures', version: DEMO_PARAMETER_SET_VERSION, sha256: 'demo' },
       phases: [{ phase: this.phase, from_s: 0, to_s: duration }],
-      general: { duration_s: duration, freezes: this.freezes, distance_nm: Math.round((Math.hypot(s.pos.x, s.pos.y) / 1852) * 100) / 100, avgSog_kn: Math.round(s.sog * 10) / 10, maxSog_kn: Math.round(s.sog * 10) / 10 },
+      general: { duration_s: duration, freezes: this.freezes, distance_nm: Math.round((Math.hypot(s.pos.x - this.opts.initialX, s.pos.y - this.opts.initialY) / 1852) * 100) / 100, avgSog_kn: Math.round(s.sog * 10) / 10, maxSog_kn: Math.round(s.sog * 10) / 10 },
       collisionAvoidance: { minCpa_nm: 9.9, encounters: 0, collisions: 0, targets: [] },
       track: { meanAbsXtd_m: Math.round(Math.abs(s.route?.xtd_m ?? 0)), maxXtd_m: Math.round(Math.abs(s.route?.xtd_m ?? 0)), timeOutsideCorridor_s: 0, corridorExcursions: 0, waypoints: [] },
       ukc: { min_m: s.depthBelowKeel, minAt_s: duration, timeBelowLimit_s: 0, excursions: 0, groundings: s.flags?.aground ? 1 : 0, limit_m: 1.0, limitSource: 'navigation.ukc.minimum_m' },
@@ -335,10 +379,12 @@ export class DemoSim {
     const psi = degToRad(this.opts.initialHeading);
     const ux = Math.sin(psi);
     const uy = Math.cos(psi);
-    const along = s.pos.x * ux + s.pos.y * uy;
-    const xtd = s.pos.x * uy - s.pos.y * ux;
-    const wpX = ux * DEMO_ROUTE_WP_DISTANCE_M;
-    const wpY = uy * DEMO_ROUTE_WP_DISTANCE_M;
+    const rx = s.pos.x - this.opts.initialX;
+    const ry = s.pos.y - this.opts.initialY;
+    const along = rx * ux + ry * uy;
+    const xtd = rx * uy - ry * ux;
+    const wpX = this.opts.initialX + ux * DEMO_ROUTE_WP_DISTANCE_M;
+    const wpY = this.opts.initialY + uy * DEMO_ROUTE_WP_DISTANCE_M;
     const dist = Math.hypot(wpX - s.pos.x, wpY - s.pos.y);
     s.route = {
       legIndex: 0,
@@ -522,7 +568,9 @@ export class DemoSim {
         this.ended = false;
         this.acks = [];
         this.faultInjections = [];
+        this.external = this.makeExternal();
         this.state = this.initialState();
+        this.initialiseExternal();
         break;
       case 'setEnvironment': {
         const a = cmd.args ?? {};
@@ -549,6 +597,14 @@ export class DemoSim {
         const name = typeof cmd.value === 'string' ? cmd.value : typeof cmd.args?.['name'] === 'string' ? (cmd.args['name'] as string) : '';
         const fargsRaw = cmd.args?.['args'];
         const fargs = typeof fargsRaw === 'object' && fargsRaw !== null && !Array.isArray(fargsRaw) ? (fargsRaw as Record<string, unknown>) : {};
+        if (name === 'tugLineBreak') {
+          // 拖纜斷裂(physics-tugs-anchors-mooring.md 第 2.3 節):未定義的拖船 id 拒絕、不加入 faults[]
+          const id = typeof fargs['id'] === 'string' ? fargs['id'] : undefined;
+          if (!this.external.hasTugs || (id !== undefined && !(this.state.tugs ?? []).some((t) => t.id === id))) {
+            this.emit('commandRejected', 'instructor', { data: { command: 'injectFault', reason: 'unknownTug', args: { name, args: { ...fargs } } } });
+            break;
+          }
+        }
         if (name.trim()) {
           const faults = s.faults ?? [];
           const already = faults.includes(name);
@@ -563,6 +619,7 @@ export class DemoSim {
               this.phase = 'degraded';
             }
           }
+          if (name === 'tugLineBreak') this.external.partTugLine(typeof fargs['id'] === 'string' ? fargs['id'] : undefined);
           if (name === 'gyroFailure') this.tripAutopilot('headingInvalid', name);
           else if (name === 'autopilotFailure') this.tripAutopilot('autopilotFailure', name);
         }
@@ -575,6 +632,7 @@ export class DemoSim {
         for (const f of before) {
           if ((s.faults ?? []).includes(f)) continue;
           this.sensors.clear(f);
+          if (f === 'tugLineBreak') this.external.restoreTugLines();
           this.emit('faultCleared', 'instructor', { data: { fault: f } });
         }
         break;
@@ -627,6 +685,11 @@ export class DemoSim {
       }
       case 'getAssessment':
         // 查詢由 DemoSource 直接回覆 assessment 框
+        break;
+      case 'tugControl':
+      case 'anchor':
+      case 'mooring':
+        this.external.apply(cmd, s);
         break;
       default:
         // 其他指令(情境載入、時間倍率、快照等)示範模式不支援,忽略;情境載入由教官站重建示範來源
@@ -704,6 +767,7 @@ export class DemoSim {
 
     s.t += dt;
     s.tick += 1;
+    this.external.step(s, dt);
     this.updateDerived(s, ve, vn);
     this.stepTargets(s, dt);
     // BNWAS 與警報(核心順序:BNWAS.Update → AlertManager.Update)
@@ -780,6 +844,7 @@ export class DemoSim {
     if (s.flags.aground && !wasAground) this.emit('grounding', 'engine', {}, s);
     this.updateScenarioStatus(s);
     this.updateTargets(s, s.tick === 0 && s.targets.length === 0);
+    this.external.write(s, { lat: this.opts.originLat, lon: this.opts.originLon });
   }
 
   /** 供測試:目前操舵模式。 */

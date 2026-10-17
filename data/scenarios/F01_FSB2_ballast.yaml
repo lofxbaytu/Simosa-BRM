@@ -1,7 +1,8 @@
 # F01 船舶熟悉:操縱特性體驗 — FS Bitumen No.2 壓載(規劃書第 8.1 節 F01、第 3.5 節;設計 docs/design/ship-familiarisation.md;schema src/Contracts/scenario.schema.json)
 # 開闊深水(台灣西南外海,水深 1,000 m)、無風無流;滿載與壓載各一輪(滿載見 F01_FSB2_full.yaml)。No.2 為普通舵(最大 35°),無 Schilling 段。
-# 注意:No.2 壓載 MMG 係數(data/ships/FSB2/coefficients.ballast.json)尚未產生,主控程序需以 --dynamics placeholder 執行(結果只供流程演練,
-# 比較一律不可比);係數以 src/Tools.Calibration estimate 產生後免改本情境。海報壓載欄空白,無目標值。不適用交接班開場與三步升級(第 8.1 節說明)。
+# 注意:No.2 壓載 MMG 係數 data/ships/FSB2/coefficients.ballast.json 為估計、未識別(2026-10-17,Tools.Calibration estimate --transfer-from full:
+# 經驗式 + 滿載識別修正轉移;阻力由海報壓載航速擬合),主控程序預設即以 MMG 執行;迴旋/停船結果只供趨勢參考(壓載迴旋圈約為滿載 0.86–0.87 倍、
+# 停船較短)。海報壓載欄空白,無目標值(量測 dataQuality none,不比較)。不適用交接班開場與三步升級(第 8.1 節說明)。
 # 流程(時間表引導;每段先以 acknowledge{kind: prediction, itemId: predict…} 記下依駕駛台海報/引水卡的預測,再執行;學員逾時未下令、操作未被辨識
 #   或量測中止時,系統先回正舵、恢復車令並以自動舵回 000° 穩定直航後再示範;量測完成只認本段的 manoeuvreMeasured;
 #   執行提示後 2,400 s(含倒俥後恢復航速的時間)仍未完成則略過此段,流程不停住;ship-familiarisation.md 第 3 節):
@@ -24,7 +25,7 @@ origin: { lat: 22.3000, lon: 120.0000 }
 initial:
   position: { x: 0, y: 0 }
   heading: 0
-  speed: 13.3                                    # 海報壓載 full sea 13.3 kn;未指定車鐘/轉速 → 引擎取直航平衡轉速(暫代模型取最接近的車鐘)
+  speed: 13.3                                    # 海報壓載 full sea 13.3 kn;未指定車鐘/轉速 → 引擎取直航平衡轉速(MMG 為 133.6 rpm 附近;暫代模型取最接近的車鐘)
   rudder: 0
 environment:
   wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }

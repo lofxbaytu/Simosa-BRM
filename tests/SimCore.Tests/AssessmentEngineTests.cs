@@ -246,7 +246,15 @@ public class AssessmentEngineTests
         Assert.Same(final1, e.LatestSummary);
     }
 
-    /// <summary>黃金案例:E07 600 s 合成腳本(固定舵令/車令/確認序列)→ summary JSON 與 Golden/assessment-E07-600s.json 相等(數值公差 1e-9)。更新黃金檔需說明。</summary>
+    /// <summary>
+    /// 黃金案例:E07 600 s 合成腳本(固定舵令/車令/確認序列)→ summary JSON 與 Golden/assessment-E07-600s.json 相等(數值公差 1e-9)。更新黃金檔需說明。
+    /// <para>
+    /// 比對時忽略 <c>$.parameterSet.sha256</c>:它是整個參數集檔案的雜湊,其他情境(E12–E14 等)新增參數鍵就會改變,
+    /// 但 E07 的評分只取決於它實際引用的參數。E07 引用的參數仍逐一比對 —— <c>assessment.parameters[]</c>(解析清單:鍵、值、單位、來源、版次、條款)、
+    /// bands/required 的 paramKey/source/revision 與門檻值,以及 <c>parameterSet.id/version</c>(版次改變代表訓練負責人核定了新版,黃金檔須重新確認)。
+    /// 因此新增未被 E07 引用的鍵不會讓本測試失敗,改動 E07 引用的任何數值、單位或來源則會失敗。
+    /// </para>
+    /// </summary>
     [Fact]
     public void GoldenE07SummaryMatches()
     {
@@ -260,10 +268,18 @@ public class AssessmentEngineTests
         using var expected = JsonDocument.Parse(File.ReadAllText(goldenPath));
         using var actual = JsonDocument.Parse(json);
         AssertJsonEqual(expected.RootElement, actual.RootElement, "$");
+        // 參數集身分:id 與 version 仍須相同(sha256 見上方說明;以目前檔案確認 sha256 確實為參數集檔案雜湊)
+        Assert.Equal(expected.RootElement.GetProperty("parameterSet").GetProperty("id").GetString(), summary.ParameterSet!.Id);
+        Assert.Equal(expected.RootElement.GetProperty("parameterSet").GetProperty("version").GetString(), summary.ParameterSet.Version);
+        Assert.Equal(64, summary.ParameterSet.Sha256.Length);
     }
+
+    /// <summary>黃金比對忽略的路徑(理由見 <see cref="GoldenE07SummaryMatches"/>)。</summary>
+    private static readonly HashSet<string> GoldenIgnoredPaths = new(StringComparer.Ordinal) { "$.parameterSet.sha256" };
 
     private static void AssertJsonEqual(JsonElement a, JsonElement b, string path)
     {
+        if (GoldenIgnoredPaths.Contains(path)) return;
         Assert.True(a.ValueKind == b.ValueKind, $"{path}:型別 {a.ValueKind} vs {b.ValueKind}");
         switch (a.ValueKind)
         {

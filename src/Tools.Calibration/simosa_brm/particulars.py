@@ -148,11 +148,23 @@ class ShipParticulars:
 
     @property
     def rudder_area(self) -> float:
-        """舵面積;``null`` 時以 L×T/55(一般商船 1/50 至 1/60)估計並標註。"""
+        """舵面積;``null`` 時以 L×T/55(一般商船 1/50 至 1/60)估計並標註。
+
+        舵是固定幾何,T 一律取滿載(設計)平均吃水,不隨裝載狀態縮放(壓載時舵仍全浸:No.2 壓載艉吃水 6.5 m);
+        滿載時與舊式相同。"""
         a = self.rudder.get("area_m2")
         if a is not None:
             return float(a)
-        return self.lpp * self.draft / 55.0
+        return self.lpp * self.design_draft / 55.0
+
+    @property
+    def design_draft(self) -> float:
+        """滿載(設計)平均吃水;particulars 無 full 時用目前裝載的平均吃水。"""
+        full = (self.raw.get("loadingConditions") or {}).get("full") or {}
+        t = full.get("draftMean_m")
+        if t is None and full.get("draftFore_m") is not None and full.get("draftAft_m") is not None:
+            t = 0.5 * (float(full["draftFore_m"]) + float(full["draftAft_m"]))
+        return float(t) if t is not None else self.draft
 
     @property
     def rudder_max_angle(self) -> float:
@@ -266,7 +278,10 @@ def load_particulars(ship_id: str, loading: str = "full", path: Path | None = No
     sp = ShipParticulars(ship_id=ship_id, name=str(raw.get("name", ship_id)), raw=raw, loading=cond)
     sp.estimated.extend(cond.estimated)
     if raw["rudder"].get("area_m2") is None:
-        sp.estimated.append(f"rudder.area_m2 以 L·T/55 估計 = {sp.rudder_area:.2f} m^2")
+        if loading == "full" or sp.design_draft == sp.draft:
+            sp.estimated.append(f"rudder.area_m2 以 L·T/55 估計 = {sp.rudder_area:.2f} m^2")
+        else:
+            sp.estimated.append(f"rudder.area_m2 以 L·T_滿載/55 估計 = {sp.rudder_area:.2f} m^2(舵為固定幾何,不隨裝載吃水縮放)")
     return sp
 
 

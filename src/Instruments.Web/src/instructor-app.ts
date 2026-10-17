@@ -3,7 +3,8 @@
 //    (手動觸發、確認鈕、必要事件倒數)、執行控制(凍結/恢復/重設/結束練習、時間倍率、快照/還原)、環境即時改變
 //    (含漸變)、故障注入、自船覆寫、操舵模式(FU/NFU/自動舵/應急,送 steeringMode)、鳥瞰航跡圖(疊航線/區域)、核心事件流、學員操作紀錄(由狀態推導)、
 //    教官指令與核心回應、BRM 快速標記(第 8.2 節五大類)、警報與 BNWAS 監看(代為確認、BNWAS 模式)、真值 vs 指示值比較
-//    (docs/design/sensors-alerts.md)。
+//    (docs/design/sensors-alerts.md)、拖船/錨/繫纜面板與航跡圖的泊位/拖船/錨鏈疊圖(docs/design/physics-tugs-anchors-mooring.md;
+//    state.tugs / anchors / berth 有欄位才顯示;簡化模式另有精簡拖船令面板)。
 //    核心推送的事件框 {"type":"event"} 與評估框 {"type":"assessment"}(設計文件 docs/design/scenario-engine.md 第 5.2 節)
 //    經 onMessage 收下;語音腳本事件由 VoiceScriptPlayer 播放(簡化模式自動、完整模式按「播放」)。
 //  - simple(?mode=simple):船上簡化教官模式(第 9.1 節 R13):選擇練習 → 簡報 → 開始(含精簡版操舵面板)→ 凍結/結束 →
@@ -19,6 +20,7 @@ import type { ConnectionStatus, SimSource } from './net/sim-source.js';
 import { DEFAULT_WS_URL, WsClient } from './net/ws-client.js';
 import { DemoSource } from './demo/demo-source.js';
 import type { DemoOptions } from './demo/demo-sim.js';
+import { demoOptionsFromScenario } from './demo/demo-scenario.js';
 import { defaultState } from './lib/state-parser.js';
 import { getShipConfig, isShipId, type ShipDisplayConfig } from './lib/ship-config.js';
 import { TrackHistory } from './lib/track-history.js';
@@ -38,7 +40,8 @@ import type { SimEvent } from './types/event.js';
 import { EventStore, eventFromFrame, eventLabel, voiceScriptData } from './lib/sim-event.js';
 import { assessmentFromFrame, type AssessmentSummary } from './lib/assessment.js';
 import { VoiceScriptPlayer, voiceLine, voiceRecordLabel } from './lib/voice-script.js';
-import { eventMarks, overlayFromScenario, type PlotOverlay } from './lib/plot-overlay.js';
+import { eventMarks, overlayFromScenario, overlayHasContent, type PlotOverlay } from './lib/plot-overlay.js';
+import { berthGeometry, type ScenarioMooringLineDef, type ScenarioTugDef } from './lib/external-forces.js';
 import { CpaAlarmTracker } from './lib/targets.js';
 import { parseSteering } from './lib/steering.js';
 import { PLAYED_BY_LABEL } from './lib/timeline.js';
@@ -64,6 +67,9 @@ import './components/instructor/replay-view.js';
 import './components/instructor/event-stream.js';
 import './components/instructor/alert-monitor.js';
 import './components/instructor/sensor-truth-panel.js';
+import './components/instructor/tug-panel.js';
+import './components/instructor/anchor-panel.js';
+import './components/instructor/mooring-panel.js';
 import { requiredCountdowns } from './components/instructor/timeline-panel.js';
 
 export type PageMode = 'full' | 'simple' | 'replay';
@@ -361,6 +367,11 @@ export class InstructorApp extends LitElement {
       .simple .stage.running .actions {
         grid-column: 1 / -1;
       }
+      .simple .ctl-stack {
+        display: grid;
+        gap: 10px;
+        grid-auto-rows: max-content;
+      }
       .simple .stage.ended {
         grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
         grid-template-rows: auto minmax(0, 1fr) auto;
@@ -394,6 +405,8 @@ export class InstructorApp extends LitElement {
   @state() private stale = false;
   @state() private hasReceived = false;
   @state() private demoShip: ShipId = 'FSB1';
+  /** 練習世代:重設、載入情境、覆寫、切換來源時遞增(拖船面板據此清除未回報的方向/出力草稿) */
+  @state() private exerciseEpoch = 0;
   @state() private wsUrl = DEFAULT_WS_URL;
   @state() private scenarios: ScenarioSummary[] = [];
   @state() private activeScenario: ScenarioSummary | null = null;
@@ -498,25 +511,14 @@ export class InstructorApp extends LitElement {
   }
 
   // ------------------------------------------------------------ 資料來源
+  /** 示範模式選項(demo/demo-scenario.ts:座標系與航跡圖疊圖相同、情境拖船/泊位/纜繩初始帶纜)。 */
   private demoOptionsFor(s: ScenarioSummary | null): DemoOptions {
-    const o: DemoOptions = { shipId: s?.shipId ?? this.demoShip, initialHeading: s?.initial.heading ?? 45, initialSpeed_kn: s?.initial.speed ?? 8 };
-    if (s) {
-      const p = s.initial.position;
-      if (p?.lat !== undefined && p.lon !== undefined) {
-        o.originLat = p.lat;
-        o.originLon = p.lon;
-      }
-      if (s.environment.waterDepth !== undefined) o.waterDepth_m = s.environment.waterDepth;
-      const w = s.environment.wind;
-      if (w && w.trueSpeed !== undefined && w.trueDir !== undefined) o.wind = { trueSpeed: w.trueSpeed, trueDir: w.trueDir };
-      const c = s.environment.current;
-      if (c && c.set !== undefined && c.drift !== undefined) o.current = { set: c.set, drift: c.drift };
-    }
-    return o;
+    return demoOptionsFromScenario(s, this.demoShip);
   }
 
   private startSource(scenario: ScenarioSummary | null = null): void {
     this.stopSource();
+    this.exerciseEpoch += 1;
     this.history.clear();
     this.hasReceived = false;
     const source: SimSource = this.sourceMode === 'demo' ? new DemoSource(this.demoOptionsFor(scenario)) : new WsClient({ url: this.wsUrl });
@@ -602,6 +604,8 @@ export class InstructorApp extends LitElement {
   private rewindEvents(state: OwnShipState): void {
     const want = this.pendingRewindTick;
     this.pendingRewindTick = undefined;
+    // 倒帶(含核心端重設造成的 tick 倒退):拖船面板草稿以還原後的 state 為準
+    this.exerciseEpoch += 1;
     const dt = state.tick > 0 ? state.t / state.tick : 0.02;
     const tMax = want !== undefined && want <= state.tick ? want * dt : state.t;
     if (this.eventStore.dropAfter(tMax) > 0) this.events = [...this.eventStore.all()];
@@ -709,10 +713,23 @@ export class InstructorApp extends LitElement {
   }
 
   private liveOverlay(): PlotOverlay | null {
-    const base = overlayFromScenario(this.activeScenario);
-    const marks = eventMarks(this.events, this.sampler.all());
-    if (!base.route && base.zones.length === 0 && marks.length === 0) return null;
-    return { ...base, events: marks };
+    const base = { ...overlayFromScenario(this.activeScenario), events: eventMarks(this.events, this.sampler.all()) };
+    // 示範模式且情境沒有泊位/拖船:用示範來源的示意泊位與內建拖船(連接點)
+    if (this.sourceMode === 'demo' && this.source instanceof DemoSource) {
+      const demo = this.source.simulator.demoBerth;
+      if (!base.berth && demo) {
+        const geo = berthGeometry(demo.definition, this.activeScenario?.origin ?? null);
+        if (geo) base.berth = geo;
+        base.mooringLines = demo.lines;
+      }
+      if (!base.tugDefs && (this.shipState.tugs?.length ?? 0) > 0) base.tugDefs = this.source.simulator.demoTugs.map((t): ScenarioTugDef => ({ id: t.id, attach: t.attach }));
+    }
+    return overlayHasContent(base) ? base : null;
+  }
+
+  /** 繫纜面板用的纜繩定義與泊位幾何(由疊圖取,與航跡圖一致)。 */
+  private mooringContext(overlay: PlotOverlay | null): { lines: ScenarioMooringLineDef[]; geometry: PlotOverlay['berth'] } {
+    return { lines: overlay?.mooringLines ?? this.activeScenario?.berth?.lines ?? [], geometry: overlay?.berth ?? null };
   }
 
   // ------------------------------------------------------------ 指令
@@ -741,6 +758,7 @@ export class InstructorApp extends LitElement {
 
   /** 新練習(載入情境、重設、覆寫):清航跡、操作紀錄、講評累計與抽樣;標記保留(教官可匯出或刪除)。 */
   private restartExercise(): void {
+    this.exerciseEpoch += 1;
     this.history.clear();
     this.opLog.restart();
     this.debrief.reset();
@@ -982,6 +1000,10 @@ export class InstructorApp extends LitElement {
   private renderFull() {
     const s = this.shipState;
     const cfg = this.config;
+    const overlay = this.liveOverlay();
+    const moor = this.mooringContext(overlay);
+    // 核心有錨資料時一律輸出 anchors:錨使用中、情境初始已錨泊或情境有泊位/拖船時錨面板排前面,否則放在最後(不擠下警報監看)
+    const anchorsFirst = (s.anchors ?? []).some((a) => a.status !== 'stowed') || this.activeScenario?.anchorsInitial === true || s.berth !== undefined || (s.tugs?.length ?? 0) > 0;
     return html`
       <div class="full" ?hidden=${this.view !== 'live'}>
         <brm-conning-bar .state=${s} .config=${cfg} .issues=${this.issues} .noData=${!this.hasReceived}></brm-conning-bar>
@@ -999,14 +1021,18 @@ export class InstructorApp extends LitElement {
             <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale}></brm-run-control>
           </div>
           <div class="col center">
-            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${this.alarmTargets} target-table></brm-track-plot>
+            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${overlay} .targets=${s.targets} .alarmTargets=${this.alarmTargets} target-table></brm-track-plot>
             <div class="bottom">
+              ${s.tugs ? html`<brm-tug-panel .tugs=${s.tugs} .defs=${overlay?.tugDefs ?? this.activeScenario?.tugs ?? []} .epoch=${this.exerciseEpoch}></brm-tug-panel>` : nothing}
+              ${s.anchors && anchorsFirst ? html`<brm-anchor-panel .anchors=${s.anchors}></brm-anchor-panel>` : nothing}
+              ${s.berth ? html`<brm-mooring-panel .berth=${s.berth} .geometry=${moor.geometry ?? null} .lineDefs=${moor.lines}></brm-mooring-panel>` : nothing}
               <brm-alert-monitor .alerts=${s.alerts ?? []} .bnwas=${s.bnwas} .events=${this.events} .simTime=${s.t} .unsupported=${this.alertsUnsupported}></brm-alert-monitor>
               <brm-sensor-truth .state=${this.hasReceived ? s : null}></brm-sensor-truth>
               <brm-environment-panel .state=${this.hasReceived ? s : null}></brm-environment-panel>
               <brm-fault-panel .active=${s.faults ?? []}></brm-fault-panel>
               <brm-ownship-panel .state=${this.hasReceived ? s : null}></brm-ownship-panel>
               <brm-steering-panel .state=${this.hasReceived ? s : null}></brm-steering-panel>
+              ${s.anchors && !anchorsFirst ? html`<brm-anchor-panel .anchors=${s.anchors}></brm-anchor-panel>` : nothing}
             </div>
           </div>
           <div class="col right">
@@ -1054,7 +1080,8 @@ export class InstructorApp extends LitElement {
             </div>
           </div>
         </div>`;
-      case 'running':
+      case 'running': {
+        const simpleOverlay = this.liveOverlay();
         return html`<div class="simple">
           <div class="stage running">
             <div class="strip">
@@ -1073,10 +1100,13 @@ export class InstructorApp extends LitElement {
               ${s.bnwas && s.bnwas.stage >= 1 ? html`<span class="v ${s.bnwas.stage >= 2 ? 'alarm' : 'caution'}">BNWAS ${s.bnwas.stage}</span>` : nothing}
             </div>
             ${this.lastVoice ? html`<div class="voice-banner">${this.voicePlaying ? '▶ ' : ''}${this.lastVoice}</div>` : nothing}
-            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${this.alarmTargets}></brm-track-plot>
+            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${simpleOverlay} .targets=${s.targets} .alarmTargets=${this.alarmTargets}></brm-track-plot>
             <div class="side">
               <brm-marker-bar large .markers=${this.markers}></brm-marker-bar>
-              <brm-steering-panel compact .state=${this.hasReceived ? s : null}></brm-steering-panel>
+              <div class="ctl-stack">
+                ${s.tugs && s.tugs.length > 0 ? html`<brm-tug-panel compact .tugs=${s.tugs} .defs=${simpleOverlay?.tugDefs ?? sc?.tugs ?? []} .epoch=${this.exerciseEpoch}></brm-tug-panel>` : nothing}
+                <brm-steering-panel compact .state=${this.hasReceived ? s : null}></brm-steering-panel>
+              </div>
               <brm-alert-monitor compact .alerts=${s.alerts ?? []} .bnwas=${s.bnwas} .events=${this.events} .simTime=${s.t} .unsupported=${this.alertsUnsupported}></brm-alert-monitor>
               <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>
               <brm-operation-log .events=${this.opEvents} .max=${50}></brm-operation-log>
@@ -1088,6 +1118,7 @@ export class InstructorApp extends LitElement {
             </div>
           </div>
         </div>`;
+      }
       case 'ended':
         return html`<div class="simple">
           <div class="stage ended">

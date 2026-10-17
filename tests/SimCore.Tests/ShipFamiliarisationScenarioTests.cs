@@ -14,7 +14,8 @@ namespace SimosaBRM.SimCore.Tests;
 /// <summary>
 /// 船舶熟悉 F01–F03 與 E10、E11 情境(規劃書第 8.1 節;docs/design/ship-familiarisation.md):載入/驗證無錯誤、操縱量測啟用條件、
 /// 無人操作時時間表示範流程的關鍵事件(量測 id 與順序、結束)、有人操作時必要事件 met、E11 Williamson 迴旋的量測與分類、
-/// 紀錄 → 重播的雜湊/事件序列/summary 一致。No.2 壓載的 MMG 係數尚未產生,F01_FSB2_ballast / F02_FSB2 以暫代模型執行(主控程序 --dynamics placeholder)。
+/// 紀錄 → 重播的雜湊/事件序列/summary 一致。No.2 壓載的 MMG 係數(data/ships/FSB2/coefficients.ballast.json,估計、未識別;2026-10-17)已產生,
+/// F01_FSB2_ballast / F02_FSB2 與其他情境一樣以 MMG 執行(係數檔不存在時才退回暫代模型)。
 /// </summary>
 public class ShipFamiliarisationScenarioTests
 {
@@ -183,8 +184,11 @@ public class ShipFamiliarisationScenarioTests
                 Assert.Contains(recs[2].Notes, n => n.Contains("不列入數值驗收"));
                 break;
             case "F01_FSB2_ballast":
-                Assert.StartsWith("placeholder", recs[0].Dynamics);
+                // 壓載係數為估計(MMG);海報壓載欄空白 → 無目標值、不比較(dataQuality none)
+                Assert.StartsWith("mmg", recs[0].Dynamics);
                 Assert.Empty(recs[0].Comparisons);
+                // 壓載迴旋圈小於滿載(估計係數的趨勢;Tools.Calibration README「壓載係數」)
+                Assert.InRange(recs[0].Values["tacticalDiameter_m"], 200.0, 280.0);
                 break;
         }
     }

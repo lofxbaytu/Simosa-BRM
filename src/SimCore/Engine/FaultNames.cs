@@ -10,6 +10,12 @@ public static class FaultNames
     public const string SteeringGear = "steeringGear";
     /// <summary>主機故障:轉速衰減至 0,engine.state = failed</summary>
     public const string MainEngine = "mainEngine";
+    /// <summary>
+    /// 主機起動失敗/延遲:由 STOP 轉進/倒車(停俥起動或換向後反向點火)時,args.delay_s 每次點火延後秒數、args.attempts 先失敗的起動次數
+    /// (之後一次成功);兩者皆省略 = 每次都失敗直到清除。失敗後遙控系統於起動時間後自動再試、每次消耗一次起動空氣,連續 3 次失敗起動封鎖
+    /// (須車令回 STOP);事件 engineStartFailed / engineStartBlocked / engineStarted
+    /// </summary>
+    public const string EngineStartFailure = "engineStartFailure";
     /// <summary>艏側推不可用</summary>
     public const string BowThruster = "bowThruster";
 
@@ -43,7 +49,7 @@ public static class FaultNames
     /// <summary>引擎會改變行為的故障(fault-catalogue.json modelled = true)。</summary>
     public static readonly string[] Modelled =
     {
-        SteeringGear, MainEngine, BowThruster, SteeringFuOnly, SteeringPumpFailure,
+        SteeringGear, MainEngine, EngineStartFailure, BowThruster, SteeringFuOnly, SteeringPumpFailure,
         GyroDrift, GyroFreeze, GyroFailure, GpsJump, GpsOffset, GpsFailure, EchoSounderFailure, LogFailure, AutopilotFailure,
         TugLineBreak,
     };

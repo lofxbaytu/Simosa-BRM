@@ -1,0 +1,163 @@
+# E12 錨泊/緊急下錨 — 高雄外錨地(規劃書第 8.1 節 E12、第 8.3 節第 4 類;設計 docs/design/physics-tugs-anchors-mooring.md 第 3、7 節;schema src/Contracts/scenario.schema.json)
+# FSB1 滿載候泊,VTS 指派外錨地 A12 錨位(data/areas/kaohsiung-anchorage.json,示意);自 A12 南方約 0.35 nm、3 kn 接近。
+# 錨地擁擠:3 艘錨泊船(A11 西北、A13 東方、A10 位於 A12 下風 210° 約 0.35 nm)。東北季風 22 kn(陣風 0.25)、水深 30 m、軟泥(抓著力略差,holdingFactor 0.9)。
+# T+anchoring.e12.monsoonSurgeAt_s 東北季風增強(5 分鐘內增至 40 kn、陣風 0.35)→ 走錨;VTS 於走錨後 2 分鐘呼叫(若學員未先回報)。
+# 教官手動項目 engineFailure:接近途中注入主機失效 → 緊急下錨(接續 E07/E09 航道緊急下錨的練習方式)。
+# 評估(summary.anchoring:放錨時對地速度、帶上時鏈長/水深(scope)、走錨次數與累計時間、錨鏈最大張力、走錨反應時間):
+#   必要事件:錨備便、放錨後帶上或錨妥回報、走錨後首個反應(車令/鬆鏈/拋第二錨)與回報;硬性失敗:擱淺、碰撞;容許帶:與錨泊船最小距離。
+#   broughtUp:物理的 anchorBroughtUp 需錨鏈受力(H > 0)且對地速度 < 0.15 m/s;鏈長較長(例如 7、9 節)而放錨時仍有前進速度者,
+#   錨鏈在季風增強前可能一直鬆躺海床而不發出 anchorBroughtUp。鏈長倍數是下限,不應因多放鏈被扣分,故當值依 VTS 指示「錨妥後回報」
+#   (acknowledge report)亦完成本項;逾時以 latePenaltyPer_s 漸進扣分(約 750 s 扣滿),不一次扣滿。
+# 容許帶 anchoring.*(放錨速度、鏈長倍數)待 Python scenario.py METRIC_NAMES 同步後啟用(MetricNames.cs 註解;C# 已支援,見本檔末段註解)。
+id: E12_anchoring_kaohsiung
+name: 高雄外錨地錨泊與走錨
+description: >-
+  東北季風下於擁擠的高雄外錨地依 VTS 指派錨位下錨:規劃接近、鏈長(水深 × 倍數)與迴旋圈,
+  控制放錨時對地速度;季風增強後偵測走錨並及時反應(鬆鏈、用俥、拋第二錨)與回報。
+seed: 20261212
+startTimeUtc: "2026-12-12T00:30:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.5880, lon: 120.2250 }          # A12 指定錨位
+initial:
+  position: { lat: 22.5825, lon: 120.2262 }      # A12 南方約 0.33 nm
+  heading: 15
+  speed: 3.0
+  telegraph: DSAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 22, trueDir: 30, gustiness: 0.25 }
+  current: { set: 200, drift: 0.4 }
+  waterDepth: 30
+  seabed: mud
+  visibility_nm: 5
+anchors:
+  holdingFactor: 0.9                             # 軟泥抓著力略差(示意;教官可調低以加速走錨)
+briefing:
+  text: |
+    No.1 滿載候泊,VTS 指派高雄外錨地 A12 錨位(水深約 30 m、軟泥;錨地範圍與錨位為示意);錨妥(帶上)後向 VTS 回報。
+    東北季風 22 kn、陣風,預報約 15 分鐘後增強至 7–8 級。附近錨泊船:A11 SEA PEARL(西北 0.4 nm)、A13 KUO HSING 6(東方 0.5 nm)、
+    A10 ORIENT GRACE(下風 0.35 nm)。錨/鏈:AC-14 2,140 kg × 2,Φ42 mm 各 9 節(一節 27.5 m)。
+    依公司錨泊程序:頂風/頂流接近、停止或微後退中放錨、鏈長 ≥ 水深 × 倍數(參數集 anchoring.scopeMultiplier),
+    錨泊當值監看錨位與迴旋圈,走錨時立即用俥、鬆鏈或拋第二錨並報告船長與 VTS。
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: bosun, playedBy: leader }          # 艏樓(錨機)
+    - { role: vts, playedBy: voiceScript }
+    - { role: ecr, playedBy: voiceScript }
+  minParticipants: 2
+  duration_s: 3000
+zones:
+  - id: anchorage
+    name: 高雄外錨地 A 區(示意)
+    type: reporting
+    polygon:                                     # 與 data/areas/kaohsiung-anchorage.json anchorages[0].polygon 相同
+      - { lat: 22.5700, lon: 120.2050 }
+      - { lat: 22.6000, lon: 120.2050 }
+      - { lat: 22.6000, lon: 120.2400 }
+      - { lat: 22.5700, lon: 120.2400 }
+targets:
+  - id: A11
+    name: SEA PEARL
+    mmsi: 416500111
+    shipType: cargo
+    loa: 120
+    beam: 20
+    initial: { position: { lat: 22.5935, lon: 120.2205 }, heading: 30 }
+    behaviour: { mode: anchored, anchor: { swing: 5, period: 480 } }
+  - id: A13
+    name: KUO HSING 6
+    mmsi: 416500113
+    shipType: tanker
+    loa: 95
+    beam: 16
+    initial: { position: { lat: 22.5840, lon: 120.2330 }, heading: 30 }
+    behaviour: { mode: anchored, anchor: { swing: 5, period: 420 } }
+  - id: A10
+    name: ORIENT GRACE
+    mmsi: 416500110
+    shipType: cargo
+    loa: 140
+    beam: 22
+    initial: { position: { lat: 22.5829, lon: 120.2218 }, heading: 30 }
+    behaviour: { mode: anchored, anchor: { swing: 5, period: 540 } }
+timeline:
+  - id: assignAnchorage
+    name: VTS 指派錨位
+    when: { type: time, atLeast: 5 }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.1,高雄 VTS。請於外錨地 A12 下錨,注意附近錨泊船,錨妥後回報。", lang: zh-TW }
+      - message: { to: instructor, text: "觀察:接近方向(頂風)、放錨時對地速度、鏈長選擇(水深 × 倍數)、錨位與迴旋圈監控", severity: info }
+  - id: monsoonSurge
+    name: 東北季風增強
+    phase: degraded
+    when: { type: time, atLeast: "${params:anchoring.e12.monsoonSurgeAt_s}" }
+    actions:
+      - setEnvironment: { wind: { trueSpeed: 40, trueDir: 25, gustiness: 0.35 }, ramp_s: 300 }
+      - voiceScript: { role: vts, channel: vhfPort, text: "高雄 VTS 廣播:東北季風增強,陣風八級,錨泊船舶注意走錨。", lang: zh-TW }
+  - id: dragWarning
+    name: VTS — 你船走錨
+    delay_s: 120
+    when: { type: event, kind: anchorDragging }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.1,VTS 雷達顯示你船位置移動,是否走錨?請回報。", lang: zh-TW }
+      - message: { to: instructor, text: "已走錨 2 分鐘;觀察是否用俥、鬆鏈或拋第二錨,並回報船長與 VTS", severity: warning }
+  - id: engineFailure
+    name: 主機失效(教官:緊急下錨)
+    phase: emergency
+    manual: true
+    actions:
+      - injectFault: mainEngine
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室!主機停了,短時間無法起動!", lang: zh-TW }
+      - message: { to: instructor, text: "已注入主機失效:觀察緊急下錨決策(錨備便、下錨時機與鏈長)", severity: warning }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - endExercise: { reason: 擱淺 }
+  - id: collisionEnd
+    name: 碰撞
+    delay_s: 2
+    when: { type: event, kind: collision }
+    actions:
+      - message: { to: all, text: "與錨泊船碰撞。", severity: alarm }
+      - endExercise: { reason: 碰撞 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: 0.05                                # cpaAlarm 門檻(錨泊船擺動使預測 CPA 有雜訊;實際最小距離以容許帶評估)
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: collision, rule: collision }
+  bands:
+    - { id: anchoredShipDistance, metric: collisionAvoidance.minCpa_nm, direction: below, warn: 0.15, fail: 0.08, penalty: 10, failPenalty: 25 }
+    - { id: letGoSpeed, metric: anchoring.maxLetGoSog_kn, warn: "${params:anchoring.letGoSog_kn}", fail: "2x", penalty: 10, failPenalty: 20 }
+    - { id: scope, metric: anchoring.minScopeRatio, direction: below, warn: "${params:anchoring.scopeMultiplier}", fail: 3, penalty: 10, failPenalty: 20 }
+    - { id: dragTime, metric: anchoring.dragTime_s, warn: 60, fail: 300, penalty: 10, failPenalty: 20 }
+  required:
+    - id: anchorReady
+      after: { event: timelineTriggered, itemId: assignAnchorage }
+      expect: { acknowledge: { kind: anchorReady } }
+      within_s: "${params:anchoring.anchorReady_s}"
+      penalty: 10
+    - id: broughtUp                              # 物理帶上,或當值確認錨妥後依 VTS 指示回報(鏈長較長者不因帶上較晚被扣分)
+      after: { event: anchorLetGo }
+      expect: { any: [ { event: { kind: anchorBroughtUp } }, { acknowledge: { kind: report } } ] }
+      within_s: 900
+      penalty: 15
+      latePenaltyPer_s: 0.02
+    - id: dragResponse
+      after: { event: anchorDragging }
+      expect: { any: [ telegraphChange, rpmOrder, { event: { kind: anchorCommand } }, { event: { kind: anchorLetGo } } ] }
+      within_s: "${params:anchoring.dragResponse_s}"
+      penalty: 20
+      latePenaltyPer_s: 0.1
+    - id: dragReport
+      after: { event: anchorDragging }
+      expect: { any: [ { acknowledge: { kind: report } }, { acknowledge: { kind: callMaster } } ] }
+      within_s: "${params:anchoring.dragReport_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

@@ -254,9 +254,10 @@ F01 四輪、F02 兩船、F03 兩船、E10 無人/有人、E11 Williamson 的關
 各情境實跑(F01 依流程長度、其他 600 s,`build/records/fam/`)並 `--replay` 雜湊/完整性/事件序列一致。
 
 待辦:
-0. (v0.2 審查未修)`trial_targets.json` 尚未存入紀錄標頭:重播時 `ManoeuvreTargets.For` 仍讀目前檔案,目標值更新後舊紀錄的「評估摘要」會與紀錄不一致
-   (雜湊與事件序列不受影響,除非情境以 bands 引用 manoeuvres.outsideTolerance 等)。需改 `src/SimCore/Recording/`(RecordHeader 加 `manoeuvreTargets`
-   {shipId, path, sha256, content})、`Replayer`(重播優先用標頭內容,`--rescore` 才讀目前檔案)與 `ManoeuvreTracker` 建構子注入目標值;本次範圍只能先在每筆紀錄記 `targetsSha256`。
+0. ~~`trial_targets.json` 尚未存入紀錄標頭~~(2026-10-17 已完成):情境使用操縱量測時,`RecordHeader.manoeuvreTargets {shipId, loading, path(相對專案根目錄), sha256, content}`
+   內嵌錄製時的目標檔全文;`Replayer` 以標頭內容建立引擎(`EngineOptions.ManoeuvreTargets` → `AssessmentEngine` → `ManoeuvreTracker`),目標檔日後更新也不改變舊紀錄的重播摘要;
+   `--rescore`(`Replayer.Replay(..., rescoreTargets: true)`)的影子評估改讀目前檔案(與參數集重新評分一致;未給 `--parameters` 時沿用標頭參數值);
+   舊紀錄無此欄位時退回讀目前檔案並於 `ReplayResult.Notes` 警告(`ManoeuvreTargetsSource` = header | file)。測試 `ManoeuvreTargetsHeaderTests`。
 1. Python `scenario.py` `METRIC_NAMES` 加入 `manoeuvres.*`(之後情境才可在 bands 引用);跨語言夾具:新情境無 C# 紀錄夾具,Python `test_scenarios_load_and_match_csharp_header` 對 10 個新情境 skip(需於 `src/Instruments.Web/tests/fixtures/` 錄製 `record-*-core.jsonl`)。
 2. 網頁:`ACKNOWLEDGE_KINDS` / 教官站快速確認鈕加入新 kind(prediction 需可帶 itemId 與 note);講評站顯示 `summary.manoeuvres`(量測值、比較表、資料品質與 notes)。
 3. `data/ships/FSB2/coefficients.ballast.json`(Tools.Calibration estimate);產生後 F01_FSB2_ballast、F02_FSB2 改用 MMG,側推 5 kn 以上無效才會呈現。

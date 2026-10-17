@@ -38,9 +38,17 @@ def _sample(ship: MMGShip) -> Sample:
     )
 
 
+TRIAL_STEERING_PUMP = "both"
+
+
 def _settle(ship: MMGShip, speed_kn: float, seconds: float = 0.0) -> None:
-    """重設到直航穩態(必要時再跑幾秒讓致動器安定)。"""
+    """重設到直航穩態(必要時再跑幾秒讓致動器安定)。
+
+    標準操縱試驗以兩泵操舵(試俥條件;係數檔 rudder.rate_degps 即以兩泵轉舵時間換算,No.2 識別亦以兩泵 14 s);
+    ``reset`` 會回到即時模擬的預設泵 "1"(與 C# 相同),故此處明確設定。No.1 無單/雙泵資料,不受影響。
+    """
     ship.reset(speed_kn=speed_kn)
+    ship.ctl.steering_pump = TRIAL_STEERING_PUMP
     if seconds > 0:
         ship.run(seconds)
 
@@ -398,3 +406,83 @@ def run_all(ship: MMGShip, targets: dict[str, Any]) -> dict[str, Any]:
     if sp:
         out["speedPower"] = speed_rpm_table(ship, [float(p["rpm"]) for p in sp])
     return out
+
+
+# ---------------------------------------------------------------------------
+# 裝載狀態趨勢(壓載 vs 滿載;無操縱資料的裝載狀態用)
+# ---------------------------------------------------------------------------
+TREND_WIND_KN = 25.0  # 受風檢查:正橫風(右舷來)風速
+TREND_LOW_SPEED_KN = 3.0  # 受風檢查:低速自動舵保持航向時的對水速度
+
+
+def loading_trend_metrics(ship: MMGShip) -> dict[str, float]:
+    """同一組標準操縱的趨勢指標(進入速度 = 本裝載 NAVF 轉速的直航穩態速度,即該裝載的海上全速):
+
+    35° 左右迴旋的前進距離/戰術直徑(m 與 /L)、10/10 Z 形(左起)前兩個超越角、緊急停船(NAVF → EFAS)時間與航跡距離、
+    停俥慣性減至 5 kn 的距離、受風(側面積/(L·d);3 kn 自動舵保持 000° 於 25 kn 正橫風中 300 s 後的漂角;
+    零速停俥於同風中 300 s 後的對地速度)。環境在函式結束時恢復為無風。
+    """
+    rpm = float(ship.eng["telegraph"]["NAVF"])
+    v = ship.steady_speed_for_rpm(rpm) / KN_TO_MPS
+    L = ship.L
+    out: dict[str, float] = {"approachSpeed_kn": v, "navfRpm": rpm}
+    for side in ("port", "starboard"):
+        r = turning_circle(ship, 35.0, side, v, max_heading_change_deg=200.0)
+        out[f"turning.{side}.advance_m"] = r.advance_m
+        out[f"turning.{side}.tacticalDiameter_m"] = r.tactical_diameter_m
+        out[f"turning.{side}.advance_L"] = r.advance_m / L
+        out[f"turning.{side}.tacticalDiameter_L"] = r.tactical_diameter_m / L
+    z = zigzag(ship, 10.0, 10.0, "port", v, n_overshoots=2)
+    for i in range(2):
+        out[f"zigzag10_10.overshoot{i + 1}_deg"] = z.overshoots_deg[i] if i < len(z.overshoots_deg) else math.nan
+    cs = crash_stop(ship, v)
+    out["crashStop.stopTime_s"] = cs.stop_time_s
+    out["crashStop.trackReach_m"] = cs.track_reach_m
+    ins = inertia_stop(ship, v, 5.0)
+    out["inertiaStop.distanceTo5kn_m"] = ins.distance_to_target_m
+    out["wind.lateralAreaRatio"] = ship.w_AL / (L * ship.d)
+    try:
+        ship.reset(speed_kn=TREND_LOW_SPEED_KN)
+        ship.set_environment(wind_speed_kn=TREND_WIND_KN, wind_dir_deg=90.0)
+        ship.set_autopilot(True, 0.0, 30.0, 35.0)
+        ship.run(300.0)
+        s = ship.state
+        out["wind.lowSpeedDrift_deg"] = abs(math.degrees(math.atan2(-s.v, s.u)))
+        ship.reset(speed_kn=0.0)
+        ship.set_environment(wind_speed_kn=TREND_WIND_KN, wind_dir_deg=90.0)
+        ship.run(300.0)
+        ge, gn = ship.ground_velocity()
+        out["wind.zeroSpeedDrift_kn"] = math.hypot(ge, gn) / KN_TO_MPS
+    finally:
+        ship.set_environment(wind_speed_kn=0.0, wind_dir_deg=0.0)
+        ship.reset()
+    return out
+
+
+# (指標, 名稱, 期望:-1 = 本裝載應較小、+1 = 應較大、0 = 只列出)
+LOADING_TRENDS: list[tuple[str, str, int]] = [
+    ("turning.port.advance_L", "左迴旋 前進距離 / L", -1),
+    ("turning.starboard.advance_L", "右迴旋 前進距離 / L", -1),
+    ("turning.port.tacticalDiameter_L", "左迴旋 戰術直徑 / L", -1),
+    ("turning.starboard.tacticalDiameter_L", "右迴旋 戰術直徑 / L", -1),
+    ("zigzag10_10.overshoot1_deg", "10/10 Z 形 第 1 超越角", 0),
+    ("zigzag10_10.overshoot2_deg", "10/10 Z 形 第 2 超越角", 0),
+    ("crashStop.stopTime_s", "緊急停船 停船時間", -1),
+    ("crashStop.trackReach_m", "緊急停船 航跡距離", -1),
+    ("inertiaStop.distanceTo5kn_m", "停俥慣性 減至 5 kn 距離", -1),
+    ("wind.lateralAreaRatio", "受風 側面積 / (L·d)", 1),
+    ("wind.lowSpeedDrift_deg", f"受風 {TREND_LOW_SPEED_KN:g} kn 自動舵 {TREND_WIND_KN:g} kn 正橫風 漂角", 1),
+    ("wind.zeroSpeedDrift_kn", f"受風 零速 {TREND_WIND_KN:g} kn 正橫風 300 s 漂移速度", 1),
+]
+
+
+def loading_trends(reference: dict[str, float], other: dict[str, float]) -> list[dict[str, Any]]:
+    """比較兩個裝載狀態的 ``loading_trend_metrics``:回傳每項 {key, item, reference, value, ratio, expect, ok}
+    (expect −1/+1 時 ok 為是否符合預期方向;0 時 ok = None)。"""
+    rows = []
+    for key, name, expect in LOADING_TRENDS:
+        a, b = reference.get(key, math.nan), other.get(key, math.nan)
+        ratio = b / a if a and not math.isnan(a) and not math.isnan(b) else math.nan
+        ok = None if expect == 0 or math.isnan(ratio) else (b < a if expect < 0 else b > a)
+        rows.append({"key": key, "item": name, "reference": a, "value": b, "ratio": ratio, "expect": expect, "ok": ok})
+    return rows

@@ -1,0 +1,50 @@
+{
+  "id": "mailiao-small-oil-berth",
+  "description": "麥寮港小型油品碼頭泊位示意定義(供 E14 無拖船離泊等情境開發);碼頭線、碰墊型式/間距、繫船柱位置與能力皆為示意值,非港方或碼頭設計資料,不可用於實際操船或評估;取得港方泊位圖與碰墊規格後取代(規劃書第 9.1 節水域與港口設施、第 8.1 節 E14)。",
+  "source": "示意(碼頭線南北向 000°/180°、長 150 m,水域在西側;位置為示意,未對照港方圖資)",
+  "fenderTypes": {
+    "cone-800": {
+      "description": "示意:錐型碰墊 H 0.8 m 一般型式曲線(額定壓縮 72 %、額定反力 640 kN;額定能量依 H 1.0 m 型式以 H³ 比例縮小);非特定廠牌型錄值",
+      "height_m": 0.8,
+      "width_m": 2.0,
+      "ratedReaction_kN": 640,
+      "ratedDeflection_pct": 72,
+      "ratedEnergy_kNm": 282.3,
+      "curve": [[0, 0], [5, 19], [10, 37], [15, 53], [20, 66], [25, 77], [30, 85], [35, 91], [40, 95], [45, 97], [50, 98], [55, 98], [60, 98], [65, 99], [72, 100]],
+      "damping_kNs_per_m": 250,
+      "dampingSource": "示意:以黏性阻尼近似橡膠碰墊遲滯;fenderContact 能量仍以靜態曲線積分",
+      "friction": 0.2
+    }
+  },
+  "berths": [
+    {
+      "id": "MLO-SOB-1",
+      "name": "麥寮小型油品碼頭 1 號泊位(示意)",
+      "quay": [
+        { "lat": 23.79, "lon": 120.185 },
+        { "lat": 23.791354338258987, "lon": 120.185 }
+      ],
+      "waterSide": "left",
+      "quayStiffness_kNpm": 20000,
+      "fenders": [
+        { "id": "S01", "type": "cone-800", "chainage_m": 15.0 },
+        { "id": "S02", "type": "cone-800", "chainage_m": 30.0 },
+        { "id": "S03", "type": "cone-800", "chainage_m": 45.0 },
+        { "id": "S04", "type": "cone-800", "chainage_m": 60.0 },
+        { "id": "S05", "type": "cone-800", "chainage_m": 75.0 },
+        { "id": "S06", "type": "cone-800", "chainage_m": 90.0 },
+        { "id": "S07", "type": "cone-800", "chainage_m": 105.0 },
+        { "id": "S08", "type": "cone-800", "chainage_m": 120.0 },
+        { "id": "S09", "type": "cone-800", "chainage_m": 135.0 }
+      ],
+      "bollards": [
+        { "id": "P1", "chainage_m": 2, "setback_m": 3.0, "swl_t": 30 },
+        { "id": "P2", "chainage_m": 40, "setback_m": 3.0, "swl_t": 30 },
+        { "id": "P3", "chainage_m": 65, "setback_m": 3.0, "swl_t": 30 },
+        { "id": "P4", "chainage_m": 90, "setback_m": 3.0, "swl_t": 30 },
+        { "id": "P5", "chainage_m": 115, "setback_m": 3.0, "swl_t": 30 },
+        { "id": "P6", "chainage_m": 148, "setback_m": 3.0, "swl_t": 30 }
+      ]
+    }
+  ]
+}

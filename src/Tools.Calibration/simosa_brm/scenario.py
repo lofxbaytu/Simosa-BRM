@@ -63,6 +63,13 @@ METRIC_NAMES = (  # Assessment/MetricNames.cs
     "general.duration_s", "general.distance_nm", "general.avgSog_kn", "general.maxSog_kn",
     # 警報與 BNWAS(docs/design/sensors-alerts.md 第 5 節;Python 不計算評估,只供結構檢查辨識名稱)
     "alerts.meanAckTime_s", "alerts.maxAckTime_s", "alerts.unacknowledged", "alerts.escalations", "bnwas.stage2Count", "bnwas.stage3Count",
+    # 靠泊/錨泊(BerthingTracker.MetricNameList;physics-tugs-anchors-mooring.md 第 7 節)
+    "berthing.maxLateralSpeed_mps", "berthing.maxLateralSpeed_kn", "berthing.maxContactSpeed_mps", "berthing.maxEnergy_kNm",
+    "berthing.maxEnergyRatio", "berthing.fenderContacts", "berthing.fenderOverloads", "berthing.quayContacts",
+    "berthing.lineBreaks", "berthing.maxLineTensionRatio", "berthing.tugLineBreaks", "berthing.maxTugForce_t",
+    "berthing.tugWorkingTime_s", "berthing.allFastPositionError_m", "anchoring.letGoCount", "anchoring.maxLetGoSog_kn",
+    "anchoring.dragEvents", "anchoring.dragTime_s", "anchoring.maxChainTension_t", "anchoring.minScopeRatio",
+    "anchoring.dragResponseTime_s",
 )
 # 感測器/警報/BNWAS 區段(Scenario/ScenarioBridge.cs;sensors-alerts.md 第 8 節):(欄位, 預設值);預設 None = 可為 null(未設 = 關閉)
 SENSORS_FIELDS = (("magneticCompassError_deg", 0.0),)

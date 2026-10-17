@@ -128,7 +128,7 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 
 - **標題列**:船名、連線狀態(與儀器頁相同的已連線/連線中/未連線/示範模式/資料逾時)、凍結/擱淺/碰撞/故障/資料可疑標示、「即時 / 重播檢視」切換、資料來源(即時連線/示範模式)、「下載紀錄 JSON」、主題、全螢幕。
 - **自船摘要**:與儀器頁相同的 conning 條(`<brm-conning-bar>`)。
-- **情境**:建置時以 `import.meta.glob` 匯入 `data/scenarios/*.yaml`(`yaml` 套件解析,`src/lib/scenario.ts`),列出 id、標題、船、裝載、環境摘要、初始狀態、種子與路徑,以及擴充欄位統計「時間表 n 項(手動 m)· 航線 n 航點 · 區域 n · 評估規則 n 條 · 參數引用 n 個 · 目標船 n」(`src/lib/timeline.ts`、`src/lib/assessment.ts` 解析設計文件第 1 節的 `timeline` / `route` / `zones` / `briefing` / `assessment`);`briefing` 物件版顯示角色(扮演者、必要)、最少人數與附件連結(`data/scenarios/<id>/<file>`);`${params:key}` 參數引用在教官站**不解析**,顯示為「參數 key」(核心載入時解析)。按「載入」送 `loadScenario`。示範模式下改以情境的船、初始航向/速度、風、流、水深重建示範運動學。
+- **情境**:建置時以 `import.meta.glob` 匯入 `data/scenarios/*.yaml`(`yaml` 套件解析,`src/lib/scenario.ts`),列出 id、標題、船、裝載、環境摘要、初始狀態、種子與路徑,以及擴充欄位統計「時間表 n 項(手動 m)· 航線 n 航點 · 區域 n · 評估規則 n 條 · 參數引用 n 個 · 目標船 n」(`src/lib/timeline.ts`、`src/lib/assessment.ts` 解析設計文件第 1 節的 `timeline` / `route` / `zones` / `briefing` / `assessment`);`briefing` 物件版顯示角色(扮演者、必要)、最少人數與附件連結(`data/scenarios/<id>/<file>`);`${params:key}` 參數引用在教官站**不解析**,顯示為「參數 key」(核心載入時解析)。按「載入」送 `loadScenario`。示範模式下改以情境的船、初始位置(情境 origin 座標系)/航向/速度、風、流、水深、拖船與泊位重建示範運動學。
 - **時間表**(`src/components/instructor/timeline-panel.ts`):列出情境 `timeline[]` 的 id、名稱、階段、重複規則、條件摘要(遞迴 all/any/not + 14 種 leaf)、動作摘要與狀態(待觸發 / 待手動 / 已觸發 n 次 @時刻 / 已停用 / 核心拒絕;由 `timelineTriggered` / `timelineArmed` / `timelineDisarmed` / `timelineManual` 事件推得,計數優先用 `state.scenario.timelineFired/Pending`,標題列顯示階段);`manual` 項目有「觸發」鈕(`triggerTimeline`),其他項目需**按住「強制」0.8 秒**(`force: true`);**確認**快速鈕列(口頭辨識、通知機控室、呼叫船長、報告、切換操舵模式、備錨、檢查表、其他)含角色(駕駛員/船長/引水人/舵工/瞭望/帶領者)、對應項目(已觸發且含故障注入的項目;預設自動對應)與備註,送 `acknowledge`;**必要事件倒數**:`assessment.required[]` 的 `after` 事件(例如 `faultInjected steeringFail`、`reportPointPassed WP3`)發生後依 `within_s` 顯示「剩 n s」/「逾時 n s」,`requiredEventMet` / `requiredEventMissed` 事件更新為達成/逾時。`within_s` 為參數引用(教官站不解析)時改由事件 data 取期限:規則 id 的事件(含核心「開始計時」事件)或 `after` 事件本身的 `data.deadline_t` 優先,否則 `data.within_s` + 該事件 `t`(`requiredEventMet` / `Missed` 的 `within_s` 視為自 `after` 事件起算),都沒有才只顯示「計時中」;簡化教官模式的講評摘要同樣顯示剩餘/逾時秒數(核心 summary 的 pending 列,或無 summary 時的「必要事件(即時倒數)」表)。核心不廣播 `state.scenario` 也無事件(Python 參考伺服器)時標「核心不支援,僅顯示」並停用按鈕。
 - **執行控制**:凍結/恢復/重設(重設按兩次確認)、**結束練習**(按兩次確認,送 `endExercise`;`state.scenario.ended` 後停用)、時間倍率 ×0.5 / 1 / 2 / 5 / 10、快照(列出最近 8 份的模擬時間與 tick)與還原。
 - **環境**:真風速/向、陣風、流向/流速、水深、能見度,分組「套用」或「全部套用」(只送有改的欄位);**漸變 s** 欄位附在每次套用上(`ramp_s`,0 = 立即);「帶入目前值」把核心現況(含能見度)填回表單。只有 C# 核心支援的欄位(陣風、能見度、漸變)標示「僅 C# 核心」但仍送出。
@@ -244,6 +244,39 @@ C# SimCore 的感測器故障層、警報管理(MSC.302(87))與 BNWAS(MSC.128(75
 
 畫面以 Playwright(Chromium,1366×768 與 1920×1080,示範模式)檢查過:無水平捲動、console 無錯誤。
 
+## 拖船、錨與繫纜(`docs/design/physics-tugs-anchors-mooring.md`)
+
+C# SimCore 物理第 2 階段(拖船 T 項、錨與錨鏈 A 項、碰墊與繫纜;規劃書第 6.2 節、第 8.1 節 E12–E14、第 8.3 節第 4 類)在網頁端的對應;Python 參考伺服器不輸出這些欄位、這三個指令回 ok=false。
+
+**狀態解析**(`src/types/external.ts`、`src/lib/external-forces.ts` 的 `applyExternalForceBlocks`,由 `state-parser` 呼叫;重播檢視也解析):`state.tugs[]`(模式、狀態、實際出力 t、實際/命令方向(相對船艏)、出力令、效能、繫柱拖力、斷纜、示意位置)、`state.anchors[]`(依左、右排序;鏈長 m/節、最大鏈長、錨鏈孔張力/水平張力、躺底長、抓地力、剎車、鏈端、錨位)、`state.berth`(碼頭硬接觸、受壓碰墊、各纜狀態/張力/MBL/繫船柱/未受力纜長)。**舊狀態沒有欄位時為 undefined、不記「資料可疑」、面板不顯示**;型別錯誤才記入 issues。
+
+**指令**(對外度/噸/公尺;`command.schema.json` `$defs`):
+
+| 指令 | 來源 | 例 |
+|---|---|---|
+| `tugControl` | 教官站拖船面板(模式鈕附上方向/出力草稿;轉盤放開、方向欄 change、出力滑桿 change 時單獨送該欄位) | `{"type":"tugControl","args":{"id":"TG1","mode":"push","direction_deg":270,"power_pct":50}}` |
+| `anchor` | 錨面板(目標鏈長以節送 `targetLength_shackles`;空白 = letGo/veer 到鏈端、heave 收妥) | `{"type":"anchor","args":{"side":"starboard","action":"letGo","targetLength_shackles":4}}` |
+| `mooring` | 繫纜面板(依動作只放相關欄位;slack 預設 2 m) | `{"type":"mooring","args":{"lineId":"HEAD","action":"makeFast","bollard":"B6"}}` |
+| `injectFault tugLineBreak` | 拖船面板「斷纜故障」鈕 | `{"type":"injectFault","args":{"name":"tugLineBreak","args":{"id":"TG2"}}}` |
+
+`direction_deg` 是**作用於自船的力方向**,相對船艏順時針(000 向前、090 向右舷、180 向後、270 向左舷)。
+
+**教官站(`instructor.html`)**:
+
+- `<brm-tug-panel>`:每艘拖船一張卡 —— 狀態(出力中綠、帶纜/換位中黃、拖纜斷裂紅底)、實際出力 / 繫柱拖力、方向(實際 → 命令)、出力令、效能(< 60 % 標示);推頂/拖拉/待命/解纜四鈕(情境 `modes` 不含者停用;斷纜時「拖拉」提示會被拒)、力方向轉盤(船形朝上;點選/拖曳設定、方向鍵 ±5°、Enter 送出;綠線 = 實際、虛線 = 命令、藍點 = 草稿;只有放開 pointerup 才送出,系統取消 pointercancel / lostpointercapture 只還原草稿)、方向欄、出力滑桿(5 % 一格)、斷纜提示與「斷纜故障」鈕。草稿只在編輯中與「已送出、核心尚未回報」時蓋過 state:state 的命令值與送出值一致、或約 2 s(50 次狀態更新)仍未一致(例如被拒)即丟棄,拖船 id 集合改變或教官站重設/載入情境/倒帶/切換來源(`epoch` 遞增)時清空,之後模式鈕附上的方向與出力一律取 state 的命令值。
+- `<brm-anchor-panel>`:左/右錨卡 —— 狀態(抓住綠、送出/起錨/離底黃、走錨紅框紅底)、鏈長「n 節(m)/ 最大節數」、張力(水平)、躺底長、抓地力、剎車;水平張力 / 抓地力比例條(≥ 80 % 黃、走錨紅);目標(節)輸入與 拋錨/鬆鏈/起錨/剎車/放鏈 五鈕(明顯會被核心拒絕者停用並附原因:收存時鬆鏈/起錨/剎車、著底(含起錨中 heaving,即使鏈已上下直立、躺底長 0)或送出中再拋、鏈端時鬆鏈/放鏈)。
+- `<brm-mooring-panel>`:泊位名稱、碼頭硬接觸警示、受壓碰墊(壓縮 % 相對額定壓縮:< 60 % 綠、60–100 % 黃、過載紅;反力 kN)、各纜張力條(相對 MBL:< 50 % 綠、50–80 % 黃、≥ 80 % 或斷裂紅;**假設**:以 MBL 50 % 為一般工作上限)、繫船柱選單(泊位幾何)+ 帶纜、目標張力 + 絞纜、放出長度 + 鬆纜、解纜。
+- 版面:拖船(情境有拖船時)與繫纜(有泊位時)面板排在中欄下方最前面;錨面板在錨使用中、情境初始已錨泊或有泊位/拖船時排前面,否則排在最後(核心有錨資料時一律輸出 anchors,不擠下警報監看)。
+- 簡化教官模式執行畫面:情境有拖船時側欄多一個**精簡拖船令**面板(`compact`:每艘一列,推頂/拖拉/待命/解纜、向前/向右舷/向後/向左舷、25/50/75/100 %;預設鈕以 state 的命令值標示選取;供引水人/船長下拖船令的情境)。
+- 航跡圖(兩頁共用 `<brm-track-plot>`):碼頭線(硬接觸時紅)、碰墊(碼頭面向水域突出的矩形,受壓時依壓縮比例著色、標 `F06 21%`)、繫船柱、纜繩(導纜孔 → 繫船柱,依張力/MBL 著色、絞/鬆中虛線、標張力)、拖船示意位置(◆,拉時畫拖纜)與作用於連接點的力向量(長度 ∝ 出力)、錨位(⚓)與錨鏈(錨鏈孔 → 錨;抓住綠、走錨紅)。泊位幾何由情境 `berth`(`file` + `id` 以建置時匯入的 `data/areas/*.json` 解析;重播時用紀錄 header 內嵌的 `berth.definition`)以 **WGS-84 曲率半徑**換算(與核心 `LocalTangentPlane` 相同);船體具名點(fwd/aftPort…)與錨鏈孔估計式同核心,錨鏈孔優先用 particulars `anchors.hawsePipe`。
+- 事件流與教官指令紀錄:新事件 `tugCommand`、`tugLineParted`、`anchorLetGo`/`anchorCommand`/`anchorBroughtUp`/`anchorDragging`/`anchorHolding`/`anchorAweigh`/`anchorHoused`/`anchorChainFullyOut`/`anchorBrakeSlipping`/`anchorWindlassStalled`、`fenderContact`、`quayContact`、`mooringCommand`、`mooringLineParted` 有中文說明;斷纜、走錨、碼頭硬接觸、碰墊過載為 alarm(紅),剎車滑出/絞盤停轉/鏈端與接觸法向速度 > 0.15 m/s 的碰墊接觸為 warning(**假設**門檻,待公司程序參數集);`commandRejected` 的 19 種外力拒絕原因(`externalForcesUnsupported`、`unknownTug` … `mooringLineParted`)以中文顯示並附對象(拖船 id / 左右錨 / 纜 id)。
+
+**操船台(`index.html`)**:航跡圖左上角浮貼 `<brm-external-readout>`(不佔中央警報面板高度):錨(兩錨收存時一行;使用中顯示狀態、鏈長、張力,走錨紅)、拖船(狀態、出力 t、方向與口語「向左舷」等,斷纜紅);**接近泊位時**(船舯距碼頭面 < 500 m;沒有泊位幾何時以 `state.berth` 存在且 SOG < 4 kn 判斷)顯示艏/艉橫向速度(m/s,右/左)與距碼頭、艏/艉朝碼頭的法向接近速度(> 0.15 m/s 黃)。**state 沒有艏/艉速度欄位,由 `v + r·(±LPP/2)` 推算,畫面註明**:橫向速度為對水(船體座標);碼頭接近速度為**對地**(船體速度轉 ENU 後加 `state.current` 海流,與核心 `BodyFrame.PointGroundVelocity`、碰墊接觸速度 `normalSpeed_mps` 與 `summary.berthing` 同基準)。核心日後提供欄位時改用之。泊位幾何依 `state.scenario.id` 從建置時匯入的情境清單取得(只在 state 有外力欄位時才動態載入,儀器頁一般情況不載 YAML 解析器)。
+
+**示範模式**(`src/demo/demo-external.ts`,**假的**,只供離線測試,不影響示範運動學):兩艘假拖船 TG1(fwd)/TG2(aft)40 t —— 出力一階上升(τ 30 s)、方向 3 °/s 走最短弧、速度效能(推 3/5 kn、拉 4/7 kn)、帶纜 20 s / 推↔拉換位 15 s(示範縮短)、`tugLineBreak` 斷纜與清除;左右錨依 particulars(節數、鏈重、錨鏈孔)—— 拋錨 2 m/s、鬆鏈 0.5 m/s、起錨依起錨速率、著底/離底/收妥、以「水平距離超過鬆弛長度」的線性彈簧近似張力、超過抓地力走錨;自船初始位置右舷 150 m 的示意泊位與三條纜(HEAD/BREAST/STERN;帶纜預張力、T = MBL·(ε/0.18)^1.5、絞/鬆 15 m/min、超過 MBL 斷纜)。拒絕原因與事件 kind/data 與核心同名。教官站載入有 `tugs`/`berth` 的情境時,示範改用情境的拖船與泊位定義(`src/demo/demo-scenario.ts`):本地 ENU 原點 = 情境 `origin`(無則初始緯經度),自船自 `initial.position` 的 x/y(只有 lat/lon 時以 WGS-84 換算到 origin)起算,與航跡圖疊圖同一座標系;纜繩 `initial: fast` 在開始與重設時即帶纜(與核心相同,不發事件;超出纜長則維持收存)。示範目標船、假航線與內建示意泊位皆相對自船初始位置。
+
+畫面以 Playwright(Chromium,1366×768 與 1920×1080,示範模式)檢查過教官站完整/簡化模式與操船台:無水平捲動、console 無錯誤。
+
 ## 程式結構
 
 ```
@@ -275,16 +308,18 @@ src/Instruments.Web/
 │  │                          plot-overlay(航線/區域/事件疊圖)、instructor-command(教官指令與故障目錄)、
 │  │                          operation-log(學員操作推導)、debrief(本地講評摘要)、brm-markers(BRM 標記與匯出)、
 │  │                          session-record(教官站紀錄 v2)、record-replay(JSON Lines / 教官站紀錄解析,含 event/summary)、
-│  │                          alerts(警報/BNWAS/真值解析、排序、圖示狀態、指令、歷史、事件文字)、alert-sound(Web Audio 嗶聲)
+│  │                          alerts(警報/BNWAS/真值解析、排序、圖示狀態、指令、歷史、事件文字)、alert-sound(Web Audio 嗶聲)、
+│  │                          external-forces(拖船/錨/泊位解析、標籤與拒絕原因、指令、事件文字、泊位幾何、艏艉橫向速度)
 │  ├─ net/                    sim-source.ts(來源介面,含非狀態訊息)、ws-client.ts(WebSocket + 重連 + ack/事件框)
 │  ├─ demo/                   demo-sim.ts(示範運動學;假事件、情境/航線狀態、假 summary、操舵模式、假目標船)、demo-source.ts(25 Hz 廣播 + 事件框)、
-│  │                          demo-alerts.ts(示範感測器故障、警報狀態機、BNWAS 循環)
+│  │                          demo-alerts.ts(示範感測器故障、警報狀態機、BNWAS 循環)、demo-external.ts(示範拖船、錨、泊位與繫纜)
 │  └─ components/             brm-conning-bar 及其各儀器(含 route-readout)、brm-track-plot(含疊圖、目標船)、brm-helm、
 │     │                       brm-telegraph、brm-thruster-lever、brm-autopilot、brm-instructor、brm-alert-panel(中央警報面板)、
-│     │                       brm-bnwas(BNWAS 指示)、alert-icon(警報圖示)
+│     │                       brm-bnwas(BNWAS 指示)、alert-icon(警報圖示)、brm-external-readout(操船台錨/拖船/靠泊讀數)
 │     └─ instructor/          scenario-panel、timeline-panel、event-stream、run-control-panel、environment-panel、
 │                             fault-panel、ownship-panel、steering-panel、operation-log-view、command-log-view、brm-marker-bar、
-│                             debrief-summary(核心/本地)、replay-view、alert-monitor(警報/BNWAS 監看)、sensor-truth-panel(真值 vs 指示值)
+│                             debrief-summary(核心/本地)、replay-view、alert-monitor(警報/BNWAS 監看)、sensor-truth-panel(真值 vs 指示值)、
+│                             tug-panel(拖船,含精簡版)、anchor-panel(錨)、mooring-panel(泊位碰墊與繫纜)
 └─ tests/                     vitest:angles、format、state-parser、command、ship-config、demo-sim、
                               ws-client(假 WebSocket)、components(happy-dom 渲染與指令事件)、
                               scenario、timeline(含設計文件 E07 範例)、assessment(含設計文件 summary 範例)、
@@ -297,7 +332,10 @@ src/Instruments.Web/
                               以及 header.scenario 與 data/scenarios YAML 經 parseScenario 結構相同)、
                               alerts(警報/BNWAS/真值解析含 E08 範例、排序與圖示狀態、指令、BNWAS 倒數、歷史、summary.alerts、假 AudioContext 聲響、
                               fault-catalogue 同步、示範警報與 BNWAS 循環)、alert-components(中央警報面板、BNWAS 指示、conning 無效標示、
-                              教官站警報監看/真值面板/講評/故障面板、兩頁示範模式整合)
+                              教官站警報監看/真值面板/講評/故障面板、兩頁示範模式整合)、
+                              external-forces(拖船/錨/泊位解析含舊狀態、指令內容、事件文字與嚴重度、19 種拒絕原因、泊位幾何、
+                              艏艉橫向速度、情境 berth 解析與疊圖、示範拖船/錨/繫纜)、external-components(拖船/錨/繫纜面板指令與停用規則、
+                              精簡拖船令、操船台讀數、教官站只在有欄位時顯示面板、拒絕原因標在教官指令紀錄)
                               fixtures/:E07_steering_failure.yaml、summary-E07.json(取自設計文件第 8.2、4.8 節);
                               record-E07-core.jsonl、record-E01-core.jsonl(`dotnet run --project src/SimCore.Host -- --scenario … --record … --duration 300 --timescale 10` 的縮短版:
                               header、每 5/10 s 一筆 state、全部 event、3 筆 snapshot、summary、footer;footer 的 lines/sha256 為原檔值)

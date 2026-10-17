@@ -6,6 +6,7 @@ import { parse as parseYaml } from 'yaml';
 import { SHIP_IDS, TELEGRAPH_POSITIONS, type LoadingCondition, type ShipId, type TelegraphPosition } from '../types/state.js';
 import { normalizeHeading } from './angles.js';
 import { parseAssessmentRules, type AssessmentRules } from './assessment.js';
+import { parseScenarioTugs, resolveScenarioBerth, type ScenarioBerth, type ScenarioTugDef } from './external-forces.js';
 import { collectParamRefs, isParamRef, parseBriefing, parseRoute, parseTimeline, parseZones, type ScenarioBriefing, type ScenarioRoute, type ScenarioZone, type TimelineItem } from './timeline.js';
 
 const LOADINGS: readonly LoadingCondition[] = ['full', 'ballast', 'intermediate'];
@@ -66,6 +67,12 @@ export interface ScenarioSummary {
   /** 情境內所有 ${params:key} 引用(路徑 → 鍵) */
   paramRefs: Array<{ path: string; key: string }>;
   stats: ScenarioStats;
+  /** 拖船(情境 tugs[];無則省略;docs/design/physics-tugs-anchors-mooring.md 第 2.1 節) */
+  tugs?: ScenarioTugDef[];
+  /** 泊位(情境 berth;file + id 以建置時匯入的 data/areas/*.json 解析;無則省略) */
+  berth?: ScenarioBerth;
+  /** 錨的初始狀態有設定(情境 anchors.port/starboard;E12 錨泊) */
+  anchorsInitial?: boolean;
   /** 解析時發現的問題(缺必要欄位、型別錯誤),空陣列表示通過最小檢查 */
   issues: string[];
 }
@@ -213,6 +220,11 @@ export function parseScenario(yamlText: string, path = ''): ScenarioSummary {
     },
     issues,
   };
+  const tugs = parseScenarioTugs(doc['tugs']);
+  if (tugs.length > 0) summary.tugs = tugs;
+  const berth = resolveScenarioBerth(doc['berth'], AREA_FILES);
+  if (berth) summary.berth = berth;
+  if (isRecord(doc['anchors']) && (isRecord(doc['anchors']['port']) || isRecord(doc['anchors']['starboard']))) summary.anchorsInitial = true;
   if (isRecord(doc['origin'])) {
     const olat = optNumber(doc['origin']['lat']);
     const olon = optNumber(doc['origin']['lon']);
@@ -272,6 +284,9 @@ export function extensionSummary(s: ScenarioSummary): string {
   if (st.assessmentRules > 0) parts.push(`評估規則 ${st.assessmentRules} 條`);
   if (st.paramRefs > 0) parts.push(`參數引用 ${st.paramRefs} 個`);
   if (st.targets > 0) parts.push(`目標船 ${st.targets}`);
+  if (s.tugs && s.tugs.length > 0) parts.push(`拖船 ${s.tugs.length}`);
+  if (s.berth) parts.push(`泊位 ${s.berth.id ?? (typeof s.berth.definition?.['id'] === 'string' ? s.berth.definition['id'] : '')}`.trimEnd());
+  if (s.anchorsInitial) parts.push('已錨泊');
   return parts.join(' · ');
 }
 
@@ -293,6 +308,9 @@ export function parseScenarioMap(files: Record<string, string>): ScenarioSummary
     .map(([key, text]) => parseScenario(text, key))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
+
+/** 建置時匯入的泊位檔(data/areas/*.json;情境 berth.file 以檔名對應,船上離線可用)。 */
+const AREA_FILES = import.meta.glob('@data/areas/*.json', { import: 'default', eager: true }) as Record<string, unknown>;
 
 /** 建置時匯入的全部情境(data/scenarios/*.yaml);沒有情境檔時為空陣列。 */
 const SCENARIO_FILES = import.meta.glob('@data/scenarios/*.{yaml,yml}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;

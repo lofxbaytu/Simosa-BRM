@@ -57,12 +57,9 @@ if (options.Replay is { } replayPath)
     // 依紀錄標頭的模型名稱選擇動力學(紀錄用暫代模型時不會因預設 MMG 而雜湊不一致)
     var recordedDynamics = RecordReader.Read(full).Header.Dynamics;
     var replayFactory = DynamicsFactory(recordedDynamics.StartsWith("mmg", StringComparison.OrdinalIgnoreCase) ? "mmg" : "placeholder");
-    if (options.Rescore && parameterSet is null)
-    {
-        Console.Error.WriteLine("--rescore 需要 --parameters <path>");
-        return 2;
-    }
-    var result = Replayer.Replay(full, LoadShip, replayFactory, rescore: options.Rescore ? parameterSet : null);
+    // --rescore:影子評估以目前的試俥目標檔(data/ships/<ID>/trial_targets.json)重新比較;另給 --parameters 時同時以新參數集重新評分
+    // (未給 --parameters 時沿用紀錄標頭的參數值,只換目標值)
+    var result = Replayer.Replay(full, LoadShip, replayFactory, rescore: options.Rescore ? parameterSet : null, rescoreTargets: options.Rescore);
     Console.WriteLine($"  完整性雜湊:{(result.IntegrityOk ? "一致" : "不一致或缺少 footer")}");
     Console.WriteLine($"  動力學模型:紀錄 {result.DynamicsRecorded} / 目前 {result.DynamicsUsed}");
     Console.WriteLine($"  重播指令數:{result.InputsReplayed},最終 tick {result.FinalTick}");
@@ -70,10 +67,13 @@ if (options.Replay is { } replayPath)
     Console.WriteLine($"  重播雜湊:{result.ActualHash}");
     Console.WriteLine($"  事件序列:紀錄 {result.EventsRecorded} / 重播 {result.EventsReplayed},{(result.EventSequenceMatches ? "一致" : "不一致:" + result.FirstEventMismatch)}");
     if (result.SummaryMatches is { } sm) Console.WriteLine($"  評估摘要:{(sm ? "與紀錄一致" : "與紀錄不一致")}");
+    if (result.ManoeuvreTargetsSource is { } mts)
+        Console.WriteLine($"  試俥目標值:{(mts == "header" ? "紀錄標頭" : mts == "file" ? "目前檔案" : "無")}{(options.Rescore ? "(重新評分改用目前檔案)" : "")}");
+    foreach (var note in result.Notes) Console.WriteLine($"  警告:{note}");
     if (options.Rescore && result.Summary is { } rs)
     {
         // 重新評分:物理、交通、時間表與雜湊仍依紀錄的原情境重播(雜湊與事件序列必須一致),只有評估模組以新參數集重算
-        Console.WriteLine($"  重新評分(參數集 {rs.ParameterSet?.Id} {rs.ParameterSet?.Version}):分數 {rs.Assessment.Score:F0}/{rs.Assessment.PassMark:F0},{(rs.Assessment.Passed ? "通過" : "未通過")}");
+        Console.WriteLine($"  重新評分(參數集 {rs.ParameterSet?.Id} {rs.ParameterSet?.Version}{(parameterSet is null ? ",沿用紀錄標頭參數值" : "")}):分數 {rs.Assessment.Score:F0}/{rs.Assessment.PassMark:F0},{(rs.Assessment.Passed ? "通過" : "未通過")}");
         Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(rs, ContractJson.Indented));
     }
     if (result.Warning is not null) Console.WriteLine($"  警告:{result.Warning}");

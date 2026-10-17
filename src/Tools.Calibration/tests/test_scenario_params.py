@@ -45,7 +45,26 @@ KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {}
 SKIP_LEAVES = {"timeScale"}
 # 一定要有 C# 紀錄夾具的情境(缺夾具時失敗而非略過;其餘情境無夾具時略過)。2026-10-17 加入 E05(無參數集的情境)、
 # E08(sensors/alerts/bnwas 區段與 bnwas.dormant_s 參數引用)。
-REQUIRED_FIXTURES = {"E01_baseline", "E05_pilot_traffic", "E07_steering_failure", "E08_gyro_failure", "E09_blackout"}
+REQUIRED_FIXTURES = {
+    "E01_baseline",
+    "E05_pilot_traffic",
+    "E07_steering_failure",
+    "E08_gyro_failure",
+    "E09_blackout",
+    "E10_engine_failure_lee_shore",
+    "E11_man_overboard",
+    "E12_anchoring_kaohsiung",
+    "E13_tug_berthing_mailiao",
+    "E14_unberthing_no_tug",
+    "F01_FSB1_ballast",
+    "F01_FSB1_full",
+    "F01_FSB2_ballast",
+    "F01_FSB2_full",
+    "F02_FSB1_low_speed",
+    "F02_FSB2_low_speed",
+    "F03_FSB1_channel",
+    "F03_FSB2_channel",
+}  # data/scenarios 下全部情境都必須有核心紀錄夾具(缺少即失敗)
 # 感測器/警報/BNWAS 區段(第六輪新增):C# 一律序列化(含預設值);第六輪前錄製的夾具(E01/E05/E07)header 無這些鍵,
 # 其 YAML 也沒有這些區段,故只在 header 有該鍵時比對(YAML 有該區段而 header 沒有則為失敗)。
 BRIDGE_SECTIONS = ("sensors", "alerts", "bnwas")

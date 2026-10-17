@@ -165,6 +165,14 @@ public static class SimEventKinds
     public const string MooringCommand = "mooringCommand";
     /// <summary>繫纜斷裂(張力 &gt; MBL;data {lineId, tension_t, mbl_t, bollardId})</summary>
     public const string MooringLineParted = "mooringLineParted";
+
+    // engineStartFailure(主機起動失敗/延遲;規劃書第 8.1 節 E14):source engine、學員站可見
+    /// <summary>起動嘗試失敗,遙控系統將於起動時間後自動再試(data {attempt, consecutive, failedAttempts, rpmOrder, telegraph, startsRemaining})</summary>
+    public const string EngineStartFailed = "engineStartFailed";
+    /// <summary>連續起動失敗達上限(3 次),起動封鎖,須車令回 STOP 後再下令(data 同 engineStartFailed)</summary>
+    public const string EngineStartBlocked = "engineStartBlocked";
+    /// <summary>故障成立中點火成功(延遲或先前失敗後;data {after_s 自下令起算, failedAttempts, rpmOrder, telegraph})</summary>
+    public const string EngineStarted = "engineStarted";
 }
 
 /// <summary><see cref="SimEventKinds.CommandRejected"/> 的 data.reason 值。</summary>

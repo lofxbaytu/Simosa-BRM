@@ -232,10 +232,12 @@
             "running",
             "starting",
             "failed"
-          ]
+          ],
+          "description": "failed:mainEngine 故障,或 engineStartFailure 連續 3 次起動失敗而起動封鎖(車令回 STOP 解除);starting:起動/換向中(含 engineStartFailure 的延遲與自動再試)"
         },
         "startsRemaining": {
-          "type": "integer"
+          "type": "integer",
+          "description": "剩餘連續起動次數(particulars engine.maxConsecutiveStarts;每次由停俥起動或換向下令計一次,engineStartFailure 的每次自動再試另計一次)"
         },
         "load_pct": {
           "type": "number"

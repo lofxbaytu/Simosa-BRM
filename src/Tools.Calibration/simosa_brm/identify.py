@@ -325,3 +325,55 @@ def identify_and_save(ship_id: str, loading: str = "full", **kw: Any) -> dict[st
     if kw.get("verbose", True):
         print(f"[identify] 已寫入 {path}")
     return coeffs
+
+
+# ---------------------------------------------------------------------------
+# 滿載識別修正轉移(無操縱資料的裝載狀態)
+# ---------------------------------------------------------------------------
+def transfer_identification(est: dict[str, Any], source: dict[str, Any], source_path: str | None = None) -> dict[str, Any]:
+    """把來源係數檔(通常為同船滿載的識別結果)的「識別值 / 經驗初值」修正轉移到 ``est``(另一裝載狀態的經驗估計)。
+
+    無操縱實測的裝載狀態(例如壓載只有海報車鐘航速)不能識別;直接用經驗式會連同經驗式的系統偏差一起帶入
+    (No.2 滿載經驗式戰術直徑 3.7–4.0 L,識別後 2.7–2.9 L)。本函式假設偏差主要來自模型形式(非線性導數代用 KVLCC2、
+    舵與船體交互作用經驗式),與吃水無關:
+
+    - 初值不為 0 的參數:倍率轉移 p = p_est × (p_識別 / p_初值)(線性導數的吃水相依性由 est 的經驗式保留);
+    - 初值為 0 的參數(swirlAngle):加法轉移 p = p_est + (p_識別 − p_初值);
+    - 結果夾在 ``PARAM_SPECS`` 的物理範圍內。
+
+    回傳新字典;``source.method`` 仍為 ``estimate``(未識別),``source.identifiedParameters`` 為空,
+    轉移明細寫在 ``source.identificationTransfer``。來源未識別時原樣回傳複本。
+    """
+    out = copy.deepcopy(est)
+    ident = ((source.get("source") or {}).get("identification") or {})
+    params = ident.get("parameters") or {}
+    if not params:
+        return out
+    rows: dict[str, Any] = {}
+    for name, p in params.items():
+        if name not in PARAM_SPECS or name == "R0scale":
+            continue
+        path, lo, hi, _sig = PARAM_SPECS[name]
+        p0, pf = float(p["initial"]), float(p["final"])
+        base = _get(est, path)
+        if abs(p0) > 1e-12:
+            mode, factor = "ratio", pf / p0
+            value = base * factor
+        else:
+            mode, factor = "offset", pf - p0
+            value = base + factor
+        value = min(max(value, lo), hi)
+        _set(out, path, value)
+        rows[name] = {"estimate": base, "transferred": value, "mode": mode, "factor": factor,
+                      "sourceInitial": p0, "sourceIdentified": pf}
+    src = out.setdefault("source", {})
+    src["method"] = "estimate"
+    src["identifiedParameters"] = []
+    src["identificationTransfer"] = {
+        "from": source_path or f"data/ships/{source.get('shipId')}/coefficients.{source.get('loading')}.json",
+        "fromLoading": source.get("loading"),
+        "fromIdentificationDate": ident.get("date"),
+        "rule": "初值不為 0:p = p_est × p_識別/p_初值;初值為 0:p = p_est + (p_識別 − p_初值);夾在 identify.PARAM_SPECS 範圍內",
+        "parameters": rows,
+    }
+    return out

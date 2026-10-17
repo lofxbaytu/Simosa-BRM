@@ -68,10 +68,13 @@ public sealed class ManoeuvreTracker
 
     public bool Enabled { get; }
     public ManoeuvreState State { get; private set; } = new();
+    /// <summary>比較用的目標值(未啟用或找不到檔案時 null;紀錄器寫入標頭 manoeuvreTargets)</summary>
+    public ManoeuvreTargets? Targets => _targets;
 
     /// <param name="raise">(kind, itemId, targetId, message, data) → 評估事件</param>
+    /// <param name="targets">試俥/海報目標值(null = 讀 data/ships/&lt;ID&gt;/trial_targets.json;重播時為紀錄標頭的目標值)</param>
     public ManoeuvreTracker(SimulationEngine engine, ShipParticulars ship, LoadingCondition loading, double dt, bool enabled,
-        Action<string, string?, string?, string?, object?> raise)
+        Action<string, string?, string?, string?, object?> raise, ManoeuvreTargets? targets = null)
     {
         _engine = engine;
         _ship = ship;
@@ -82,7 +85,7 @@ public sealed class ManoeuvreTracker
         _maxDraft = ship.GetLoading(loading).MaxDraft_m;
         _raise = raise;
         Enabled = enabled;
-        _targets = enabled ? ManoeuvreTargets.For(ship.Id) : null;
+        _targets = enabled ? targets ?? ManoeuvreTargets.For(ship.Id) : null;
         // 引擎在 Initialize 中先設定致動器初始值再建立評估模組:此時的舵令/轉速令/側推即為情境初始值(指令觀察發生在指令套用之後,不能延後讀取)
         if (enabled) InitLast();
     }

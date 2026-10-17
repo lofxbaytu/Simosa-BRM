@@ -7,6 +7,7 @@ import { geoPointToEnu, parseRoute, parseZones, type ScenarioRoute, type Scenari
 import type { ScenarioSummary } from './scenario.js';
 import { eventSeverity, type EventSeverity } from './sim-event.js';
 import { stateIndexAt } from './record-replay.js';
+import { berthGeometry, parseScenarioTugs, resolveScenarioBerth, type BerthGeometry, type ScenarioMooringLineDef, type ScenarioTugDef } from './external-forces.js';
 
 export interface OverlayWaypoint {
   name: string;
@@ -43,6 +44,27 @@ export interface PlotOverlay {
   route: OverlayRoute | null;
   zones: OverlayZone[];
   events: OverlayEventMark[];
+  /** 泊位幾何(碼頭線、碰墊、繫船柱;情境 berth;docs/design/physics-tugs-anchors-mooring.md 第 4 節) */
+  berth?: BerthGeometry | null;
+  /** 繫纜定義(導纜孔具名點、預設繫船柱;畫纜繩線段用) */
+  mooringLines?: ScenarioMooringLineDef[];
+  /** 拖船定義(連接點;畫拖纜/推頂點用) */
+  tugDefs?: ScenarioTugDef[];
+}
+
+/** 疊圖是否有任何可畫的內容(航線、區域、事件、泊位)。 */
+export function overlayHasContent(o: PlotOverlay): boolean {
+  return o.route !== null || o.zones.length > 0 || o.events.length > 0 || !!o.berth || (o.tugDefs?.length ?? 0) > 0;
+}
+
+function withExternal(base: PlotOverlay, berthRaw: unknown, tugsRaw: unknown, origin: { lat: number; lon: number } | null, resolved?: { definition: Record<string, unknown> | null; lines: ScenarioMooringLineDef[] } | null, tugDefs?: ScenarioTugDef[]): PlotOverlay {
+  const berth = resolved !== undefined ? resolved : resolveScenarioBerth(berthRaw);
+  const geo = berth?.definition ? berthGeometry(berth.definition, origin) : null;
+  if (geo) base.berth = geo;
+  if (berth && berth.lines.length > 0) base.mooringLines = berth.lines;
+  const tugs = tugDefs ?? parseScenarioTugs(tugsRaw);
+  if (tugs.length > 0) base.tugDefs = tugs;
+  return base;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -85,14 +107,15 @@ export function overlayZones(zones: readonly ScenarioZone[], origin: { lat: numb
 export function overlayFromScenario(s: ScenarioSummary | null): PlotOverlay {
   if (!s) return { route: null, zones: [], events: [] };
   const origin = s.origin ?? null;
-  return { route: overlayRoute(s.route, origin), zones: overlayZones(s.zones, origin), events: [] };
+  return withExternal({ route: overlayRoute(s.route, origin), zones: overlayZones(s.zones, origin), events: [] }, undefined, undefined, origin, s.berth ?? null, s.tugs ?? []);
 }
 
 /** 由紀錄 header.scenario(解析後的完整情境物件)建立疊圖(重播檢視)。 */
 export function overlayFromHeaderScenario(raw: unknown): PlotOverlay {
   if (!isRecord(raw)) return { route: null, zones: [], events: [] };
   const origin = originOf(raw);
-  return { route: overlayRoute(parseRoute(raw['route']), origin), zones: overlayZones(parseZones(raw['zones']), origin), events: [] };
+  // 紀錄 header 的情境在載入時已內嵌 berth.definition(重播不讀檔)
+  return withExternal({ route: overlayRoute(parseRoute(raw['route']), origin), zones: overlayZones(parseZones(raw['zones']), origin), events: [] }, raw['berth'], raw['tugs'], origin);
 }
 
 /** 事件標記:以事件時刻的自船位置(狀態序列內插前一筆)為座標;只標 warning/alarm 與時間表觸發。 */

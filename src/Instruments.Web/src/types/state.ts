@@ -3,6 +3,7 @@
 
 import type { TargetState } from './target.js';
 import type { AlertItem, AutopilotStatus, BnwasStatus, SensorStatus, TruthState } from './alerts.js';
+import type { AnchorState, BerthState, TugState } from './external.js';
 
 export type ShipId = 'FSB1' | 'FSB2';
 
@@ -195,4 +196,10 @@ export interface OwnShipState {
   alerts?: AlertItem[];
   /** BNWAS 狀態(核心不支援時省略) */
   bnwas?: BnwasStatus;
+  /** 拖船(情境有拖船時才有;docs/design/physics-tugs-anchors-mooring.md 第 5 節;舊狀態省略 → 不顯示面板) */
+  tugs?: TugState[];
+  /** 左右錨(particulars 有錨資料時核心一律輸出;舊狀態或 Python 參考伺服器省略) */
+  anchors?: AnchorState[];
+  /** 泊位(情境有 berth 時才有):碰墊接觸、碼頭硬接觸、繫纜 */
+  berth?: BerthState;
 }

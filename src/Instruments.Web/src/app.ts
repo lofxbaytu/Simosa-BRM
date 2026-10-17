@@ -1,5 +1,7 @@
 // <brm-app>:整頁版面(上排 conning 條、中間鳥瞰航跡圖、下排操船台)、資料來源(WebSocket 或示範模式)、
 // 主題切換(日/黃昏/夜)與指令路由。規劃書第 7 章第一版儀器;教官控制暫放同頁(第 9.1 節)。
+// 右側警報欄另有精簡錨/拖船讀數與接近泊位時的艏/艉橫向速度(<brm-external-readout>;state 有 tugs/anchors/berth 時才顯示),
+// 泊位幾何依 state.scenario.id 由建置時匯入的情境清單取得(示範模式用示範泊位),航跡圖同時畫碼頭線、碰墊、纜繩、拖船與錨鏈。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, query, state } from 'lit/decorators.js';
@@ -27,6 +29,10 @@ import './components/autopilot-panel.js';
 import './components/instructor-controls.js';
 import './components/alert-panel.js';
 import './components/bnwas-indicator.js';
+import './components/external-readout.js';
+import type { ScenarioSummary } from './lib/scenario.js';
+import { berthGeometry, type BerthGeometry } from './lib/external-forces.js';
+import type { PlotOverlay } from './lib/plot-overlay.js';
 
 export type Theme = 'day' | 'dusk' | 'night';
 export type SourceMode = 'live' | 'demo';
@@ -79,6 +85,19 @@ export class BrmApp extends LitElement {
         grid-template-columns: minmax(0, 1fr) 360px;
         gap: 6px;
         min-height: 0;
+      }
+      /* 航跡圖左上角浮貼錨/拖船/靠泊讀數(不佔警報欄高度,中央警報面板維持原大小) */
+      .plot-wrap {
+        position: relative;
+        min-height: 0;
+        min-width: 0;
+      }
+      .plot-wrap brm-external-readout {
+        position: absolute;
+        left: 8px;
+        top: 24px;
+        max-width: min(380px, 60%);
+        pointer-events: none;
       }
       .alert-col {
         display: grid;
@@ -267,6 +286,11 @@ export class BrmApp extends LitElement {
   @query('brm-autopilot') private autopilotPanel?: AutopilotPanel;
 
   private source: SimSource | null = null;
+  /** 建置時匯入的情境(依 state.scenario.id 取泊位/拖船定義;只在有外力欄位時才解析) */
+  private scenarioCache: ScenarioSummary[] | null = null;
+  private scenarioLoading = false;
+  private overlayKey = '';
+  private overlayCached: PlotOverlay | null = null;
   private unsubscribe: Array<() => void> = [];
   private readonly history = new TrackHistory(1, 3600);
   private lastStateAt = 0;
@@ -324,6 +348,39 @@ export class BrmApp extends LitElement {
     this.soundOn = ev.detail;
     this.sounder.setMuted(!ev.detail);
   };
+
+  /** 航跡圖疊圖(泊位、纜繩、拖船連接點):依 state.scenario.id 的情境;示範模式用示範泊位與拖船。state 沒有外力欄位時為 null。 */
+  private externalOverlay(): PlotOverlay | null {
+    const s = this.shipState;
+    if (s.tugs === undefined && s.berth === undefined && !(s.anchors ?? []).some((a) => a.position)) return null;
+    const key = `${this.mode}:${s.scenario?.id ?? ''}:${s.berth?.id ?? ''}`;
+    if (key === this.overlayKey) return this.overlayCached;
+    this.overlayKey = key;
+    let overlay: PlotOverlay | null = null;
+    if (this.mode === 'demo' && this.source instanceof DemoSource) {
+      const demo = this.source.simulator.demoBerth;
+      const geo: BerthGeometry | null = demo ? berthGeometry(demo.definition, null) : null;
+      overlay = { route: null, zones: [], events: [], ...(geo ? { berth: geo, mooringLines: demo!.lines } : {}), tugDefs: this.source.simulator.demoTugs.map((t) => ({ id: t.id, attach: t.attach })) };
+    } else if (s.scenario?.id) {
+      if (this.scenarioCache === null) {
+        // 情境清單(含 YAML 解析器)只在需要泊位幾何時才動態載入,儀器頁一般情況不載
+        this.overlayKey = '';
+        if (!this.scenarioLoading) {
+          this.scenarioLoading = true;
+          void import('./lib/scenario.js').then((m) => {
+            this.scenarioCache = m.loadScenarioList();
+            this.requestUpdate();
+          });
+        }
+        return null;
+      }
+      const sc = this.scenarioCache.find((x) => x.id === s.scenario!.id);
+      const geo = sc?.berth?.definition ? berthGeometry(sc.berth.definition, sc.origin ?? null) : null;
+      overlay = { route: null, zones: [], events: [], ...(geo ? { berth: geo } : {}), ...(sc?.berth && sc.berth.lines.length > 0 ? { mooringLines: sc.berth.lines } : {}), ...(sc?.tugs ? { tugDefs: sc.tugs } : {}) };
+    }
+    this.overlayCached = overlay && (overlay.berth || (overlay.tugDefs?.length ?? 0) > 0) ? overlay : null;
+    return this.overlayCached;
+  }
 
   private get config(): ShipDisplayConfig {
     return getShipConfig(this.shipState.shipId);
@@ -450,6 +507,7 @@ export class BrmApp extends LitElement {
     const counts = alertCounts(s.alerts);
     // 核心有感測器/BNWAS 欄位即視為支援警報(無警報時 alerts 省略)
     const alertsSupported = !this.hasReceived || s.sensors !== undefined || s.bnwas !== undefined || counts.total > 0;
+    const extOverlay = this.externalOverlay();
     return html`
       <header>
         <span class="title">Simosa BRM 駕駛台儀器</span>
@@ -493,7 +551,10 @@ export class BrmApp extends LitElement {
       ></brm-conning-bar>
 
       <div class="middle">
-        <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived}></brm-track-plot>
+        <div class="plot-wrap">
+          <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${extOverlay}></brm-track-plot>
+          <brm-external-readout floating .state=${this.hasReceived ? s : null} .config=${cfg} .geometry=${extOverlay?.berth ?? null}></brm-external-readout>
+        </div>
         <div class="alert-col">
           <brm-bnwas .bnwas=${s.bnwas}></brm-bnwas>
           <brm-alert-panel .alerts=${s.alerts ?? []} .simTime=${s.t} .soundOn=${this.soundOn} .unsupported=${!alertsSupported}></brm-alert-panel>

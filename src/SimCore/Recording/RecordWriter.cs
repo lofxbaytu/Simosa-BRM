@@ -55,6 +55,7 @@ public sealed class RecordWriter : IDisposable
             Dynamics = engine.Dynamics.ModelName,
             Scenario = engine.Scenario,
             ParameterSet = engine.ParameterSet,
+            ManoeuvreTargets = HeaderTargets(engine),
         });
 
         engine.CommandApplied += OnCommand;
@@ -62,6 +63,18 @@ public sealed class RecordWriter : IDisposable
         engine.EventRaised += OnEvent;
         engine.ScenarioLoading += OnScenarioLoading;
         if (includeStates) engine.Broadcast += OnBroadcast;
+    }
+
+    /// <summary>評估模組使用操縱量測且有目標值時,標頭內嵌目標檔內容(重播不受檔案日後更新影響)。</summary>
+    public static RecordManoeuvreTargets? HeaderTargets(SimulationEngine engine)
+    {
+        var tracker = engine.Assessment?.Manoeuvres;
+        if (tracker is not { Enabled: true, Targets: { } t }) return null;
+        return new RecordManoeuvreTargets
+        {
+            ShipId = engine.Ship.Id, Loading = engine.Loading, Path = t.RelativePath ?? Assessment.ManoeuvreTargets.RelativePathFor(engine.Ship.Id),
+            Sha256 = t.Sha256, Content = t.Content.Clone(),
+        };
     }
 
     /// <summary>情境即將被換掉:在引擎狀態重設前關閉本紀錄(footer 仍是舊情境的最終 tick/雜湊)。</summary>

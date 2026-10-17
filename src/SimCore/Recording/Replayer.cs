@@ -29,6 +29,10 @@ public sealed record ReplayResult
     public Assessment.AssessmentSummary? Summary { get; init; }
     /// <summary>事件序列第一個不一致處的描述</summary>
     public string? FirstEventMismatch { get; init; }
+    /// <summary>操縱量測目標值來源:header(紀錄標頭)| file(目前檔案;舊紀錄或 --rescore)| null(情境未使用操縱量測)</summary>
+    public string? ManoeuvreTargetsSource { get; init; }
+    /// <summary>目標值相關提示(舊紀錄無標頭目標值而改讀目前檔案、目前檔案與標頭 sha256 不同等;不影響雜湊判定)</summary>
+    public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>
@@ -41,14 +45,18 @@ public static class Replayer
     /// <summary>
     /// <paramref name="shipLoader"/> 依船舶 ID 提供 particulars;<paramref name="configure"/> 可在重播前掛上觀察者(例如再錄一份)。
     /// </summary>
+    /// <param name="rescoreTargets">重新評分時讀目前的 trial_targets.json(而非紀錄標頭內嵌的目標值);<paramref name="rescore"/> 未給時
+    /// 影子評估沿用標頭參數值,只換目標值</param>
     /// <param name="rescore">以另一參數集重新評分:物理、交通、時間表與雜湊仍依紀錄的原情境執行(雜湊與事件序列不變),
     /// 另以新參數集的門檻建立影子評估模組,<see cref="ReplayResult.Summary"/> 為其評分(情境引擎設計第 7.4 節)</param>
     public static ReplayResult Replay(string path, Func<string, ShipParticulars> shipLoader,
         Func<ShipParticulars, LoadingCondition, IShipDynamics>? dynamicsFactory = null,
-        Action<SimulationEngine>? configure = null, Action<SimulationEngine>? onStep = null, Parameters.ParameterSet? rescore = null)
+        Action<SimulationEngine>? configure = null, Action<SimulationEngine>? onStep = null, Parameters.ParameterSet? rescore = null,
+        bool rescoreTargets = false)
     {
         var rec = RecordReader.Read(path);
-        var engine = CreateEngine(rec, shipLoader, dynamicsFactory, rescore);
+        var notes = new List<string>();
+        var engine = CreateEngine(rec, shipLoader, dynamicsFactory, rescore, rescoreTargets, notes);
         configure?.Invoke(engine);
         if (onStep is not null) engine.Stepped += onStep;
         var replayedEvents = new List<SimEvent>();
@@ -95,7 +103,7 @@ public static class Replayer
         if ((engine.RescoreAssessment ?? engine.Assessment) is { } assessment)
         {
             summary = engine.Ended ? assessment.LatestSummary : assessment.BuildSummary(engine.Tick, final: true);
-            if (rec.Summary is { } recSummary && rescore is null && summary is not null)
+            if (rec.Summary is { } recSummary && rescore is null && !rescoreTargets && summary is not null)
                 summaryMatches = string.Equals(ContractJson.Serialize(recSummary.Summary), ContractJson.Serialize(summary), StringComparison.Ordinal);
         }
 
@@ -116,6 +124,8 @@ public static class Replayer
             FirstEventMismatch = mismatch,
             SummaryMatches = summaryMatches,
             Summary = summary,
+            ManoeuvreTargetsSource = engine.Assessment?.Manoeuvres is { Enabled: true } mt ? (mt.Targets?.Origin ?? "none") : null,
+            Notes = notes,
         };
     }
 
@@ -123,24 +133,54 @@ public static class Replayer
     /// 依標頭情境重建引擎;<paramref name="rescore"/> 時引擎仍以標頭情境執行(物理/交通/時間表/雜湊不變),
     /// 另以新參數集代入標頭 parameterSet.resolved 的欄位得到重新評分情境,交給 <see cref="SimulationEngine.EnableRescore"/> 建立影子評估模組。
     /// </summary>
+    /// <summary>
+    /// 試俥目標值:標頭有 manoeuvreTargets 時以其內容建立引擎(<see cref="EngineOptions.ManoeuvreTargets"/>);<paramref name="rescoreTargets"/>
+    /// 時影子評估改用目前檔案;舊紀錄(無此欄位)且情境使用操縱量測時退回讀目前檔案,並於 <paramref name="notes"/> 警告。
+    /// </summary>
     public static SimulationEngine CreateEngine(RecordFile rec, Func<string, ShipParticulars> shipLoader,
-        Func<ShipParticulars, LoadingCondition, IShipDynamics>? dynamicsFactory = null, Parameters.ParameterSet? rescore = null)
+        Func<ShipParticulars, LoadingCondition, IShipDynamics>? dynamicsFactory = null, Parameters.ParameterSet? rescore = null,
+        bool rescoreTargets = false, List<string>? notes = null)
     {
         var scenario = rec.Header.Scenario;
         scenario.Validate();
         scenario.ParameterSetInfo = rec.Header.ParameterSet;
         var ship = shipLoader(scenario.Ship.Id);
-        var engine = new SimulationEngine(ship, scenario, dynamicsFactory, new EngineOptions { Dt = rec.Header.Dt });
-        if (rescore is not null)
+        Assessment.ManoeuvreTargets? headerTargets = null;
+        if (rec.Header.ManoeuvreTargets is { } mt)
         {
-            var info = rec.Header.ParameterSet ?? throw new InvalidDataException("紀錄無參數引用,無法重新評分");
-            var node = System.Text.Json.Nodes.JsonNode.Parse(scenario.ToJson())!;
-            var resolved = Parameters.ParameterResolver.Rescore(node, info.Resolved, rescore);
-            var rescored = Scenario.Scenario.FromJson(node.ToJsonString());
-            rescored.ParameterSetInfo = rescore.ToInfo(resolved);
-            engine.EnableRescore(rescored);
+            if (!string.Equals(mt.ShipId, ship.Id, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"紀錄標頭 manoeuvreTargets 的船舶 {mt.ShipId} 與情境 {ship.Id} 不符");
+            headerTargets = Assessment.ManoeuvreTargets.FromHeader(mt.Content, mt.Sha256, mt.Path);
+            if (Assessment.ManoeuvreTargets.LoadCurrent(ship.Id) is { } current && !string.Equals(current.Sha256, mt.Sha256, StringComparison.OrdinalIgnoreCase))
+                notes?.Add($"目前 {current.RelativePath} 已更新(sha256 {Short(current.Sha256)}… ≠ 紀錄 {Short(mt.Sha256)}…);重播使用紀錄標頭的目標值{(rescoreTargets ? ",重新評分使用目前檔案" : "(以 --rescore 改用目前檔案重新評分)")}");
+        }
+        else if (Assessment.ManoeuvreTracker.IsReferenced(scenario))
+            notes?.Add($"紀錄標頭無試俥目標值(舊紀錄):改讀目前 {Assessment.ManoeuvreTargets.RelativePathFor(ship.Id)},目標值若已更新,摘要的操縱比較可能與紀錄不同");
+        var engine = new SimulationEngine(ship, scenario, dynamicsFactory, new EngineOptions { Dt = rec.Header.Dt, ManoeuvreTargets = headerTargets });
+        if (rescore is not null || rescoreTargets)
+        {
+            Scenario.Scenario rescored;
+            if (rescore is not null)
+            {
+                var info = rec.Header.ParameterSet ?? throw new InvalidDataException("紀錄無參數引用,無法重新評分");
+                var node = System.Text.Json.Nodes.JsonNode.Parse(scenario.ToJson())!;
+                var resolved = Parameters.ParameterResolver.Rescore(node, info.Resolved, rescore);
+                rescored = Scenario.Scenario.FromJson(node.ToJsonString());
+                rescored.ParameterSetInfo = rescore.ToInfo(resolved);
+            }
+            else
+            {
+                // 只換目標值:影子評估沿用標頭情境與參數值
+                rescored = Scenario.Scenario.FromJson(scenario.ToJson());
+                rescored.ParameterSetInfo = rec.Header.ParameterSet;
+            }
+            var current = rescoreTargets ? Assessment.ManoeuvreTargets.LoadCurrent(ship.Id) : null;
+            if (rescoreTargets && current is null) notes?.Add($"找不到 {Assessment.ManoeuvreTargets.RelativePathFor(ship.Id)},重新評分沿用紀錄標頭的目標值");
+            engine.EnableRescore(rescored, current);
         }
         return engine;
+
+        static string Short(string sha) => sha.Length > 12 ? sha[..12] : sha;
     }
 
     /// <summary>推進到指定 tick;凍結且佇列已空時無法前進,回傳 false 並記錄警告。</summary>

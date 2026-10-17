@@ -38,9 +38,14 @@
     },
     {
       "name": "engineStartFailure",
-      "label": "起動失敗",
-      "modelled": false,
-      "exercise": "E14"
+      "label": "主機起動失敗/延遲",
+      "modelled": true,
+      "exercise": "E14",
+      "effect": "由 STOP 轉進/倒車(停俥起動或換向後反向點火)時:delay_s = 每次點火再延後的秒數;attempts = 先失敗的起動次數(之後一次成功);兩者皆省略 = 每次都失敗直到清除。失敗後遙控系統於起動時間(係數檔 engine.startDelay_s)後自動再試、每次消耗一次起動空氣(engine.startsRemaining),連續 3 次失敗起動封鎖(engine.state = failed,須車令回 STOP 再下令;期間注入/清除 mainEngine 不解除封鎖、不再自動再試);暫代模型於注入時依目前軸轉速判定是否運轉中(故障未成立時停俥者,再下令須起動);事件 engineStartFailed / engineStartBlocked / engineStarted(itemId engineStartFailure,source engine);已運轉中的主機不受影響;不產生 BAM 警報(本版警報目錄未列)",
+      "args": {
+        "delay_s": null,
+        "attempts": null
+      }
     },
     {
       "name": "bowThruster",

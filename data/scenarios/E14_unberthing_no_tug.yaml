@@ -1,0 +1,137 @@
+# E14 無拖船離泊 — 麥寮小型油品碼頭(規劃書第 8.1 節 E14、第 8.3 節第 4 類;設計 docs/design/physics-tugs-anchors-mooring.md 第 4、7 節;schema src/Contracts/scenario.schema.json)
+# FSB1 壓載(卸貨後)右舷靠麥寮小型油品碼頭 MLO-SOB-1(data/areas/mailiao-small-oil-berth.json,示意:碼頭線 000°、長 150 m、水域在西、9 個 H 0.8 m 錐型碰墊),
+# 艏向北,4 條纜(艏纜、艏倒纜、艉倒纜、艉纜)已繫;無拖船。西風 18 kn 自水側吹向碼頭(吹攏風,壓載受風面積大)。
+# 時間表:T+1 s 注入 engineStartFailure {attempts: 2}(前 2 次起動失敗,遙控系統自動再試,第 3 次成功 = 主機起動延遲;教官可見);
+#         T+unberthing.e14.windShiftAt_s 風向於 2 分鐘內轉為東北 25 kn(陣風 0.3,自碼頭側吹來 = 吹開風);離開泊位區(船舯離碼頭 > 110 m)時結束。
+# 評估(summary.berthing:離泊時碰墊接觸(接近速度、能量比)、碼頭硬接觸、斷纜;summary.manoeuvring:側推使用次數與時間):
+#   開始即繫妥(4 纜受力、艏艉靠在碰墊上):繫泊中在纜繩上的擺盪(T+300 s 轉吹開風後離開碰墊再碰回)逐筆記入 contacts[] 但 approach = false,
+#   不計入 berthing.maxLateralSpeed;解纜後離開碰墊 ≥ 0.5 m 再碰回(離泊時艏/艉擺回碼頭)才是接近接觸。
+#   硬性失敗:擱淺、碼頭硬接觸、繫纜斷裂(纜未解完即動車);必要事件:離泊前簡報(檢查表)、起動失敗後通知機控室/船長、風向改變後首個操船反應。
+# 容許帶 berthing.*(離泊接觸速度、能量)待 Python scenario.py METRIC_NAMES 同步後啟用(C# 已支援,見本檔末段註解)。
+id: E14_unberthing_no_tug
+name: 麥寮小型油碼頭無拖船離泊
+description: >-
+  壓載右舷靠小型油碼頭,吹攏風下無拖船離泊:操船計畫簡報、解纜順序、以側推/俥舵先開艏或開艉離開碰墊;
+  主機起動延遲(前兩次起動失敗)與風向轉為吹開風時的團隊監控與應變;評估離泊時碰墊接觸與側推使用。
+seed: 20261114
+startTimeUtc: "2026-11-14T06:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: ballast
+origin: { lat: 23.79, lon: 120.185 }             # 泊位碼頭線起點(里程 0,碼頭線向北)
+initial:
+  position: { x: -9.75, y: 75 }                  # 右舷靠在碰墊上:碰墊 0.8 m + 半船寬 9 m − 壓縮 0.05 m;船舯在里程 75 m
+  heading: 0
+  speed: 0
+  telegraph: STOP
+  rudder: 0
+environment:
+  wind: { trueSpeed: 18, trueDir: 270, gustiness: 0.2 }
+  current: { set: 180, drift: 0.2 }
+  waterDepth: 11
+  visibility_nm: 5
+berth:
+  file: data/areas/mailiao-small-oil-berth.json
+  id: MLO-SOB-1
+  lines:
+    - { id: HEAD, fairlead: fwdStbd, bollard: P6, mbl_t: 40, length_m: 120, initial: fast }
+    - { id: FWDSPRING, fairlead: fwdStbd, bollard: P3, mbl_t: 40, length_m: 120, initial: fast }
+    - { id: AFTSPRING, fairlead: aftStbd, bollard: P4, mbl_t: 40, length_m: 120, initial: fast }
+    - { id: STERN, fairlead: aftStbd, bollard: P1, mbl_t: 40, length_m: 120, initial: fast }
+briefing:
+  text: |
+    No.1 壓載(艏 2.03 / 艉 5.41 m)右舷靠麥寮小型油品碼頭 MLO-SOB-1(泊位與碰墊為示意值),艏向北;無拖船可用。
+    西風 18 kn 自水側吹向碼頭(吹攏);預報半小時內轉東北風 25 kn(吹開)。艏側推 325 kW(全推力延遲約 35 s)、單俥右旋。
+    離泊前完成操船計畫簡報:解纜順序(先單綁再解)、開艏或開艉的方法、側推與俥舵用法、應變(主機起動失敗、風向改變)。
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: mooring, playedBy: leader }        # 艏艉繫纜站
+  minParticipants: 2
+  duration_s: 1800
+zones:
+  - id: berthArea
+    name: 泊位區(示意;船舯離碼頭 110 m 內)
+    type: reporting
+    polygon:
+      - { x: -110, y: -80 }
+      - { x: 5, y: -80 }
+      - { x: 5, y: 230 }
+      - { x: -110, y: 230 }
+timeline:
+  - id: engineStartFault
+    name: 主機起動延遲(前 2 次起動失敗)
+    visibility: instructor
+    when: { type: time, atLeast: 1 }
+    actions:
+      - injectFault: { name: engineStartFailure, args: { attempts: 2 } }
+      - message: { to: instructor, text: "已注入 engineStartFailure {attempts: 2}:學員首次用俥時前兩次起動失敗、自動再試", severity: info }
+  - id: departureBriefing
+    name: 離泊前簡報
+    when: { type: time, atLeast: 5 }
+    actions:
+      - message: { to: all, text: "離泊前:請完成操船計畫簡報(解纜順序、開艏/開艉、側推與俥舵、應變)。", severity: info }
+  - id: startFailedVoice
+    name: 機控室 — 起動失敗
+    when: { type: event, kind: engineStartFailed }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室:主機起動失敗,遙控系統自動再試,請稍候!", lang: zh-TW }
+  - id: startBlockedVoice
+    name: 機控室 — 起動封鎖
+    when: { type: event, kind: engineStartBlocked }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "機控室:連續三次起動失敗,起動封鎖。請車鐘回停俥再下令。", lang: zh-TW }
+  - id: engineStartedVoice
+    name: 機控室 — 主機已起動
+    when: { type: event, kind: engineStarted }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "機控室:主機已起動。", lang: zh-TW }
+  - id: windShift
+    name: 風向轉東北(吹開)
+    phase: degraded
+    when: { type: time, atLeast: "${params:unberthing.e14.windShiftAt_s}" }
+    actions:
+      - setEnvironment: { wind: { trueSpeed: 25, trueDir: 30, gustiness: 0.3 }, ramp_s: 120 }
+      - message: { to: all, text: "風向轉東北、增強至 25 kn(自碼頭側吹來)。", severity: warning }
+  - id: clearOfBerth
+    name: 離開泊位區
+    when: { type: zone, id: berthArea, inside: false }
+    actions:
+      - message: { to: all, text: "已離開泊位區,離泊完成。", severity: info }
+      - endExercise: { reason: 離泊完成 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - endExercise: { reason: 擱淺 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: quayContact, rule: event, kind: quayContact }
+    - { id: mooringLineParted, rule: event, kind: mooringLineParted }
+  required:
+    - id: briefing
+      after: { event: timelineTriggered, itemId: departureBriefing }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: 300
+      penalty: 10
+    - id: engineStartReport
+      after: { event: engineStartFailed }
+      expect: { any: [ { acknowledge: { kind: notifyEcr } }, { acknowledge: { kind: callMaster } } ] }
+      within_s: "${params:unberthing.engineStartReport_s}"
+      penalty: 10
+    - id: windShiftResponse
+      after: { event: timelineTriggered, itemId: windShift }
+      expect: { any: [ thrusterOrder, rudderOrder, telegraphChange, rpmOrder ] }
+      within_s: "${params:unberthing.windShiftResponse_s}"
+      penalty: 10
+  bands:
+  # 「離泊後再碰回速度」容許帶暫不啟用:berthing.maxLateralSpeed_mps 目前包含離泊過程中艉擺碰墊(正確離泊的參考腳本即超過 0.20 m/s 而被扣 25 分),
+  # 待 BerthingTracker 能區分「已離開泊位後再接觸」再啟用:
+  #   - { id: reContactSpeed, metric: berthing.maxLateralSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }  # 離泊後再碰回(不含繫泊中擺盪;maxContactSpeed 含擺盪,不操船時約 0.14 m/s)
+    - { id: contactEnergy, metric: berthing.maxEnergyRatio, warn: 0.8, fail: 1.0, penalty: 10, failPenalty: 25 }
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

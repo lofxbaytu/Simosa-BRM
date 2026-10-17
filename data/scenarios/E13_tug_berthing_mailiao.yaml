@@ -1,0 +1,165 @@
+# E13 拖船協助靠泊 — 麥寮油碼頭(規劃書第 8.1 節 E13、第 8.3 節第 4 類;設計 docs/design/physics-tugs-anchors-mooring.md 第 2、4、7 節;schema src/Contracts/scenario.schema.json)
+# FSB1 滿載以左舷靠麥寮油碼頭 3 號泊位(data/areas/mailiao-berth.json,示意:碼頭線 085°、水域在南、12 個 H 1.0 m 錐型碰墊、7 個 50 t 繫船柱)。
+# 自泊位外約 60 m(里程 40 m)停俥 1.2 kn 滑行接近(泊位中心里程 130 m);引水人在船(帶領者扮演);2 艘 40 t 拖船已帶纜待命:
+#   TG1 麥寮1號 右舷艏(fwdStbd)、TG2 麥寮2號 右舷艉(aftStbd),皆帶纜推頂(push-pull:推向碼頭、接近時拉住控制橫移速度)。東北風 16 kn(陣風 0.3)自陸側吹來(吹開風)。
+# 時間表:T+30 s 碼頭通知繫纜工未就位 → 等待(階段 waiting);T+berthing.e13.berthReadyAfter_s 碼頭就緒(階段 berthing);
+#         就緒後 berthing.e13.tugLineBreakAfter_s 注入 tugLineBreak {id: TG2}(艉拖船拉住控速時拖纜斷裂,艉部橫移加快);教官手動 allFast 結束。
+# 評估(summary.berthing:橫向接近速度(接近接觸的接觸點法向速度;艏/舯/艉端點速度僅供講評)、各碰墊接觸能量與額定能量比、過載、碼頭硬接觸、斷纜、
+#       繫纜最大張力/MBL、各拖船工作時間與最大出力、繫妥(4 纜受力且艏艉皆靠上)時刻與船舯離泊位中心(碰墊列中點,里程 130 m)的距離):
+#   硬性失敗:擱淺、碼頭硬接觸、繫纜斷裂;必要事件:引水人 MPX、碼頭未準備時回報等待計畫、拖纜斷裂後首個反應;容許帶:港內速限。
+#   教官 allFast 為手動結束、不檢查纜繩狀態:講評以 summary.berthing.allFastAt_s(null = 4 纜未全部受力或艏艉未靠上)與 allFastPositionError_m 為準
+#   (沿碼頭向後的流 0.3 kn 會使船滑出泊位,須以拖船方向或俥保持縱向船位;船位過遠時 HEAD/STERN makeFast 會被拒 bollardOutOfReach)。
+# 容許帶 berthing.*(接近速度、接觸能量)待 Python scenario.py METRIC_NAMES 同步後啟用(C# 已支援,見本檔末段註解)。
+id: E13_tug_berthing_mailiao
+name: 麥寮油碼頭拖船協助靠泊
+description: >-
+  兩艘拖船協助以左舷靠麥寮油碼頭:與引水人 MPX、碼頭未準備時在泊位外以拖船與俥舵保持船位等待,
+  吹開陣風下控制橫向接近速度(碰墊設計值 0.10–0.20 m/s)與接觸能量;艉拖纜斷裂後及時以俥舵/側推與 TG1 接手控速並回報。
+seed: 20261113
+startTimeUtc: "2026-11-13T01:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 23.8082, lon: 120.168 }           # 泊位碼頭線起點(里程 0)
+initial:
+  position: { x: 45.95, y: -66.25 }              # 里程 40 m、離碼頭線 70 m(碰墊面外約 60 m)
+  heading: 85
+  speed: 1.2
+  telegraph: STOP
+  rudder: 0
+environment:
+  wind: { trueSpeed: 16, trueDir: 20, gustiness: 0.3 }
+  current: { set: 250, drift: 0.3 }
+  waterDepth: 14
+  visibility_nm: 5
+tugs:
+  - id: TG1
+    name: 麥寮1號
+    bollardPull_t: 40
+    attach: fwdStbd
+    lineLength_m: 30
+    modes: [push, pull]
+    modeChange_s: 30                             # 帶纜推頂拖船(push-pull)推 ↔ 拉換位
+    initial: { mode: standby, direction_deg: 270, power_pct: 0 }
+  - id: TG2
+    name: 麥寮2號
+    bollardPull_t: 40
+    attach: aftStbd
+    lineLength_m: 30
+    modes: [push, pull]
+    modeChange_s: 30
+    initial: { mode: standby, direction_deg: 270, power_pct: 0 }
+berth:
+  file: data/areas/mailiao-berth.json
+  id: MLO-OIL-3
+  lines:
+    - { id: HEAD, fairlead: fwdPort, bollard: B7, mbl_t: 50, length_m: 150, initial: stowed }
+    - { id: FWDSPRING, fairlead: fwdPort, bollard: B5, mbl_t: 50, length_m: 150, initial: stowed }
+    - { id: AFTSPRING, fairlead: aftPort, bollard: B3, mbl_t: 50, length_m: 150, initial: stowed }
+    - { id: STERN, fairlead: aftPort, bollard: B1, mbl_t: 50, length_m: 150, initial: stowed }
+briefing:
+  text: |
+    No.1 滿載(瀝青)靠麥寮油碼頭 3 號泊位,左舷靠,引水人已在駕駛台(由帶領者扮演)。泊位與碰墊為示意值:
+    碼頭線 085°、12 個 H 1.0 m 錐型碰墊(額定能量 551 kN·m)、繫船柱 B1–B7。拖船:TG1 麥寮1號 右舷艏、TG2 麥寮2號 右舷艉,皆帶纜推頂(各 40 t;推 ↔ 拉換位約 30 s)。
+    東北風 16 kn、陣風,自碼頭側吹來(吹開風);港內速限 5 kn。靠泊接近速度依公司程序(參數集 berthing.approachSpeed_mps,假設值待公司程序)。
+    與引水人 MPX:靠泊計畫、拖船位置與用法、繫纜順序(艏纜 → 艏倒纜 → 艉倒纜 → 艉纜)、應變(拖纜斷裂、碼頭未準備)。
+  roles:
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: tug, playedBy: voiceScript }
+    - { role: berth, playedBy: voiceScript }
+  minParticipants: 2
+  duration_s: 2400
+zones:
+  - id: harbour
+    name: 港內速限區(示意)
+    type: speedLimit
+    speedLimit_kn: "${params:port.mailiao.innerSpeedLimit_kn}"
+    polygon:
+      - { x: -800, y: -600 }
+      - { x: 600, y: -600 }
+      - { x: 600, y: 200 }
+      - { x: -800, y: 200 }
+timeline:
+  - id: pilotMpx
+    name: 引水人 MPX
+    when: { type: time, atLeast: 5 }
+    actions:
+      - voiceScript: { role: pilot, channel: bridge, text: "船長,我們左舷靠三號泊位。兩艘拖船在右舷艏艉帶纜推頂,接近時拉住控速。東北風吹開,靠攏時速度要慢。", lang: zh-TW }
+      - message: { to: instructor, text: "觀察:MPX(靠泊計畫、拖船、繫纜順序、應變)、橫向接近速度、碰墊接觸能量", severity: info }
+  - id: berthNotReady
+    name: 碼頭未準備 → 等待
+    phase: waiting
+    when: { type: time, atLeast: 30 }
+    actions:
+      - voiceScript: { role: berth, channel: vhfPort, text: "三號泊位呼叫 FS Bitumen No.1:繫纜工還沒到位,請在泊位外等候約六分鐘。", lang: zh-TW }
+      - message: { to: instructor, text: "碼頭未準備:觀察是否以拖船與俥舵在泊位外保持船位、回報引水人/船長等待計畫", severity: warning }
+  - id: berthReady
+    name: 碼頭就緒
+    phase: berthing
+    when: { type: time, atLeast: "${params:berthing.e13.berthReadyAfter_s}" }
+    actions:
+      - voiceScript: { role: berth, channel: vhfPort, text: "三號泊位:繫纜工已就位,可以靠泊。", lang: zh-TW }
+  - id: tugLineBreak
+    name: 艉拖纜斷裂(TG2)
+    phase: degraded
+    when: { type: time, atLeast: "${params:berthing.e13.tugLineBreakAfter_s}", since: { event: timelineTriggered, itemId: berthReady } }
+    actions:
+      - injectFault: { name: tugLineBreak, args: { id: TG2 } }
+      - voiceScript: { role: tug, channel: vhfPort, text: "麥寮2號報告:拖纜斷了!重新帶纜需要約一分半鐘。", lang: zh-TW }
+  - id: tugReconnect
+    name: TG2 可重新帶纜
+    delay_s: 90
+    when: { type: event, kind: tugLineParted }
+    actions:
+      - clearFault: tugLineBreak
+      - voiceScript: { role: tug, channel: vhfPort, text: "麥寮2號:新拖纜準備好了,可以再帶纜。", lang: zh-TW }
+  - id: firstContact
+    name: 首次碰墊接觸
+    when: { type: event, kind: fenderContact }
+    actions:
+      - message: { to: instructor, text: "首次碰墊接觸:見 summary.berthing.contacts(接近速度、能量比)", severity: info }
+  - id: allFast
+    name: 繫纜完成(教官)
+    manual: true
+    actions:
+      - message: { to: all, text: "全部纜繩已繫妥,靠泊完成。", severity: info }
+      - endExercise: { reason: 靠泊完成 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - endExercise: { reason: 擱淺 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: quayContact, rule: event, kind: quayContact }        # 碼頭硬接觸(船體越過碰墊觸及碼頭面)
+    - { id: mooringLineParted, rule: event, kind: mooringLineParted }
+  bands:
+    - { id: speed, metric: manoeuvring.timeOverSpeedLimit_s, warn: 0, fail: 60, penalty: 5, failPenalty: 10 }
+    - { id: approachSpeed, metric: berthing.maxLateralSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }
+    - { id: contactEnergy, metric: berthing.maxEnergyRatio, warn: 0.8, fail: 1.0, penalty: 10, failPenalty: 25 }
+    - { id: fenderOverload, metric: berthing.fenderOverloads, warn: 0, fail: 1, penalty: 10, failPenalty: 20 }
+    - { id: berthPosition, metric: berthing.allFastPositionError_m, warn: "${params:berthing.allFastPositionTolerance_m}", fail: "2x", penalty: 10, failPenalty: 20 }
+  required:
+    - id: mpx
+      after: { event: timelineTriggered, itemId: pilotMpx }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: 300
+      penalty: 10
+    - id: waitReport
+      after: { event: timelineTriggered, itemId: berthNotReady }
+      expect: { any: [ { acknowledge: { kind: report } }, { acknowledge: { kind: verbal } } ] }
+      within_s: "${params:berthing.waitReport_s}"
+      penalty: 10
+    - id: tugLineBreakResponse
+      after: { event: tugLineParted }
+      expect: { any: [ telegraphChange, rpmOrder, rudderOrder, thrusterOrder, { event: { kind: tugCommand } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:berthing.tugLineBreakResponse_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.1
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

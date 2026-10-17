@@ -69,7 +69,27 @@ export type AlertEventKind =
   | 'bnwasModeChanged'
   | 'autopilotTripped';
 
-export type SimEventKind = TrafficEventKind | TimelineEventKind | AssessmentEventKind | InstructorEventKind | AlertEventKind;
+/** 拖船、錨、泊位事件 kind(docs/design/physics-tugs-anchors-mooring.md 第 6.2 節):tugCommand / anchorLetGo / anchorCommand /
+ *  mooringCommand 的來源依指令來源,其餘 engine。 */
+export type ExternalForceEventKind =
+  | 'tugCommand'
+  | 'tugLineParted'
+  | 'anchorLetGo'
+  | 'anchorCommand'
+  | 'anchorBroughtUp'
+  | 'anchorDragging'
+  | 'anchorHolding'
+  | 'anchorAweigh'
+  | 'anchorHoused'
+  | 'anchorChainFullyOut'
+  | 'anchorBrakeSlipping'
+  | 'anchorWindlassStalled'
+  | 'fenderContact'
+  | 'quayContact'
+  | 'mooringCommand'
+  | 'mooringLineParted';
+
+export type SimEventKind = TrafficEventKind | TimelineEventKind | AssessmentEventKind | InstructorEventKind | AlertEventKind | ExternalForceEventKind;
 
 export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'collision',
@@ -132,6 +152,22 @@ export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'bnwasReset',
   'bnwasModeChanged',
   'autopilotTripped',
+  'tugCommand',
+  'tugLineParted',
+  'anchorLetGo',
+  'anchorCommand',
+  'anchorBroughtUp',
+  'anchorDragging',
+  'anchorHolding',
+  'anchorAweigh',
+  'anchorHoused',
+  'anchorChainFullyOut',
+  'anchorBrakeSlipping',
+  'anchorWindlassStalled',
+  'fenderContact',
+  'quayContact',
+  'mooringCommand',
+  'mooringLineParted',
 ] as const;
 
 export interface SimEvent {

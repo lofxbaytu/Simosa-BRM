@@ -21,7 +21,9 @@ public static class MetricNames
 
     // 操縱量測 manoeuvres.*(ManoeuvreTracker.MetricNameList;ship-familiarisation.md 第 2.6 節):同 id 最近一次 measured 的量測值;
     // Python scenario.py METRIC_NAMES 尚未加入,情境 bands 暫勿引用(Python 結構檢查會判為未知指標)
-    public static readonly string[] All = BaseNames.Concat(ManoeuvreTracker.MetricNameList()).ToArray();
+    // 靠泊/錨泊 berthing.* / anchoring.*(BerthingTracker.MetricNameList;physics-tugs-anchors-mooring.md 第 7 節):Python scenario.py METRIC_NAMES
+    // 尚未加入,data/scenarios 的 bands 暫勿引用(Python 結構檢查會判為未知指標);E12–E14 以 hardFail event 規則與必要事件評估,容許帶見情境內註解
+    public static readonly string[] All = BaseNames.Concat(ManoeuvreTracker.MetricNameList()).Concat(BerthingTracker.MetricNameList).ToArray();
 
     private static readonly HashSet<string> Set = new(All, StringComparer.Ordinal);
 

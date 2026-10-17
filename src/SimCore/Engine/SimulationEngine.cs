@@ -30,6 +30,11 @@ public sealed class EngineOptions
     public int SnapshotHistory { get; init; } = 60;
     /// <summary>時間倍率上限</summary>
     public double MaxTimeScale { get; init; } = 10.0;
+    /// <summary>
+    /// 操縱量測比較用的試俥目標值(null = 讀 data/ships/&lt;ID&gt;/trial_targets.json)。重播時由紀錄標頭 manoeuvreTargets 注入,
+    /// 使目標值檔案日後更新也不改變舊紀錄的重播摘要(只影響 summary 比較,不影響物理與雜湊)。
+    /// </summary>
+    public Assessment.ManoeuvreTargets? ManoeuvreTargets { get; init; }
 }
 
 /// <summary>
@@ -57,6 +62,7 @@ public sealed class SimulationEngine
     /// <summary>重新評分用的影子評估模組(以新參數集解析的情境建立;事件不對外發出、不進雜湊;情境引擎設計第 7.4 節)</summary>
     private AssessmentEngine? _rescore;
     private Scenario.Scenario? _rescoreScenario;
+    private ManoeuvreTargets? _rescoreTargets;
     private readonly RampSet _ramps = new();
     private readonly List<PhaseSpan> _phaseHistory = new();
     private long _seq;
@@ -206,6 +212,7 @@ public sealed class SimulationEngine
             throw new InvalidOperationException($"情境需要船舶 {scenario.Ship.Id},目前為 {Ship.Id};請一併提供 particulars");
         ScenarioLoading?.Invoke(this, scenario);
         _rescoreScenario = null;
+        _rescoreTargets = null;
         Initialize();
     }
 
@@ -214,13 +221,15 @@ public sealed class SimulationEngine
     /// 另以 <paramref name="rescored"/>(同一情境、以新參數集重新代入門檻)建立影子評估模組;其事件只餵回自己(不對外發出、不進雜湊、不觸發時間表),
     /// 其 summary 由 <see cref="RescoreAssessment"/> 取得。只能在 tick 0 呼叫。
     /// </summary>
-    public void EnableRescore(Scenario.Scenario rescored)
+    /// <param name="targets">影子評估的試俥目標值(重播 --rescore 時為目前檔案;null = 與主評估相同的來源)</param>
+    public void EnableRescore(Scenario.Scenario rescored, ManoeuvreTargets? targets = null)
     {
         if (Tick != 0) throw new InvalidOperationException("重新評分須在推進前(tick 0)啟用");
         if (!string.Equals(rescored.Id, Scenario.Id, StringComparison.Ordinal) || !string.Equals(rescored.Ship.Id, Scenario.Ship.Id, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"重新評分的情境 {rescored.Id}/{rescored.Ship.Id} 與目前情境 {Scenario.Id}/{Scenario.Ship.Id} 不符");
         _rescoreScenario = rescored.Validate();
-        _rescore = new AssessmentEngine(_rescoreScenario, Ship, this, _projection, Options.Dt, RaiseRescore);
+        _rescoreTargets = targets;
+        _rescore = new AssessmentEngine(_rescoreScenario, Ship, this, _projection, Options.Dt, RaiseRescore, _rescoreTargets ?? Options.ManoeuvreTargets);
     }
 
     private void Initialize()
@@ -299,8 +308,8 @@ public sealed class SimulationEngine
         _ramps.Clear();
         _hashScenarioEngine = sc.HasScenarioEngine;
         _timeline = new TimelineEngine(sc, this, _stepsPerSecond);
-        _assessment = new AssessmentEngine(sc, Ship, this, _projection, Options.Dt, RaiseAssessment);
-        _rescore = _rescoreScenario is { } rs ? new AssessmentEngine(rs, Ship, this, _projection, Options.Dt, RaiseRescore) : null;
+        _assessment = new AssessmentEngine(sc, Ship, this, _projection, Options.Dt, RaiseAssessment, Options.ManoeuvreTargets);
+        _rescore = _rescoreScenario is { } rs ? new AssessmentEngine(rs, Ship, this, _projection, Options.Dt, RaiseRescore, _rescoreTargets ?? Options.ManoeuvreTargets) : null;
         var depthZones = _assessment.Zones.DepthZones();
         if (depthZones.Count > 0) Environment.Depth = new ZoneDepth((ConstantDepth)Environment.Depth, depthZones);
     }
@@ -661,6 +670,8 @@ public sealed class SimulationEngine
                     // 感測器層先記下注入時的指示值(凍結/保持值、漂移起點),再把名稱加入 faults[]
                     if (FaultNames.Modelled.Contains(f)) _sensors.OnFaultInjected(f, cmd.Arg("args"), Tick, TruthSample(), already);
                     if (!already) _faults.Add(f);
+                    // 主機起動失敗/延遲:記下 args(delay_s、attempts)並重設計數(重複注入亦重設)
+                    if (f == FaultNames.EngineStartFailure) _act.InjectStartFailure(FaultArgDouble(cmd, "delay_s"), FaultArgDouble(cmd, "attempts") is { } at ? (int)Math.Round(at) : null);
                     Raise(NewEvent(SimEventKinds.FaultInjected, source, itemId, null, f, new { fault = f, args = cmd.Arg("args"), alreadyActive = already }));
                     if (Autopilot.Enabled && !AutopilotAvailable) TripAutopilot(f);
                     // 拖纜斷裂(args.id 指定拖船;重複注入可斷另一艘)
@@ -678,6 +689,7 @@ public sealed class SimulationEngine
                     {
                         _sensors.OnFaultCleared(cf);
                         if (cf == FaultNames.TugLineBreak) _external.RestoreTugLines();
+                        if (cf == FaultNames.EngineStartFailure) _act.ClearStartFailure();
                         Raise(NewEvent(SimEventKinds.FaultCleared, source, itemId, null, cf, new { fault = cf }));
                     }
                 }
@@ -687,6 +699,7 @@ public sealed class SimulationEngine
                     _faults.Clear();
                     foreach (var name in all) _sensors.OnFaultCleared(name);
                     if (all.Contains(FaultNames.TugLineBreak)) _external.RestoreTugLines();
+                    if (all.Contains(FaultNames.EngineStartFailure)) _act.ClearStartFailure();
                     foreach (var name in all) Raise(NewEvent(SimEventKinds.FaultCleared, source, itemId, null, name, new { fault = name }));
                 }
                 break;
@@ -784,6 +797,10 @@ public sealed class SimulationEngine
         if (r.Reject is { } reason) RejectCommand(cmd, source, itemId, reason);
         else if (r.Kind is { } kind) Raise(NewEvent(kind, source, r.ItemId ?? itemId, null, r.Message, r.Data));
     }
+
+    /// <summary>injectFault {name, args} 的 args 數值欄位(數值或數值字串)。</summary>
+    private static double? FaultArgDouble(SimCommand cmd, string name)
+        => cmd.Arg("args") is { ValueKind: JsonValueKind.Object } a && a.TryGetProperty(name, out var v) ? SimCommand.AsDouble(v) : null;
 
     /// <summary>injectFault {name, args} 的 args 字串欄位。</summary>
     private static string? FaultArgString(SimCommand cmd, string name)
@@ -1103,6 +1120,7 @@ public sealed class SimulationEngine
 
         // 致動器(含主機換向狀態機)先推進;MMG 模式回傳 RK4 各階段的舵角/轉速/側推,與 Python 參考實作的耦合積分一致
         // 舵機故障:舵卡住;切到 emergency(應急操舵)後舵以降低的速率再度可動(規劃書第 7.2 節操舵模式)
+        _act.StartFailureActive = _faults.Contains(FaultNames.EngineStartFailure);
         var controls = _act.Step(Options.Dt,
             // FU 失效:隨動迴路(fu 與自動舵)無法動舵,NFU 與應急操舵可動
             rudderJammed: (_faults.Contains(FaultNames.SteeringGear) && _steeringMode != SteeringMode.Emergency)
@@ -1110,6 +1128,7 @@ public sealed class SimulationEngine
             engineFailed: _faults.Contains(FaultNames.MainEngine),
             thrusterFailed: _faults.Contains(FaultNames.BowThruster),
             rudderRateDegPerSec: RudderRateForStep());
+        if (_act.LastStartOutcome != StartOutcome.None) OnStartOutcome(_act.LastStartOutcome);
 
         var sample = Environment.SampleAt(Motion.X, Motion.Y);
         // 外力(拖船/錨/碰墊/繫纜):只在情境使用時走含外力的積分(未使用時位元與舊版相同)
@@ -1165,6 +1184,30 @@ public sealed class SimulationEngine
             TakeSnapshot();
     }
 
+    /// <summary>
+    /// engineStartFailure 起動結果 → 事件(source engine、學員站可見)。失敗的嘗試由遙控系統自動再試,每次再消耗一次起動空氣
+    /// (下令本身已在 <see cref="SetRpmOrder"/> 計一次)。
+    /// </summary>
+    private void OnStartOutcome(StartOutcome outcome)
+    {
+        var telegraph = ContractJson.EnumName(_telegraph);
+        if (outcome == StartOutcome.Started)
+        {
+            Raise(NewEvent(SimEventKinds.EngineStarted, SimEventSources.Engine, FaultNames.EngineStartFailure, null, $"主機起動(下令後 {_act.LastStartAfterSec:F0} s)",
+                new { after_s = _act.LastStartAfterSec, failedAttempts = _act.StartFailedAttempts, rpmOrder = _act.RpmOrder, telegraph }, visible: true));
+            return;
+        }
+        if (_startsRemaining is { } n && n > 0) _startsRemaining = n - 1;
+        var blocked = outcome == StartOutcome.Blocked;
+        Raise(NewEvent(blocked ? SimEventKinds.EngineStartBlocked : SimEventKinds.EngineStartFailed, SimEventSources.Engine, FaultNames.EngineStartFailure, null,
+            blocked ? $"主機連續 {_act.StartConsecutiveFailures} 次起動失敗,起動封鎖(車令回 STOP 後再下令)" : $"主機起動失敗(第 {_act.StartConsecutiveFailures} 次),自動再試",
+            new
+            {
+                attempt = _act.StartConsecutiveFailures, consecutive = _act.StartConsecutiveFailures, failedAttempts = _act.StartFailedAttempts,
+                rpmOrder = _act.RpmOrder, telegraph, startsRemaining = _startsRemaining,
+            }, visible: true));
+    }
+
     private void UpdateHash()
     {
         // 既有欄位的位元組配置不變;目標船(若有)接在其後,因此無目標船的情境雜湊與舊版完全相同
@@ -1180,6 +1223,9 @@ public sealed class SimulationEngine
         // 外力模組只在使用時追加(情境無拖船/泊位且錨未用過者雜湊與舊版相同)
         var hashExternal = _external.Active;
         if (hashExternal) size += _external.HashLongs * 8;
+        // 主機起動故障(engineStartFailure)只在成立或留有狀態時追加(未使用者雜湊與舊版相同)
+        var hashStart = _act.StartFailureActive || _act.HasStartFailureState;
+        if (hashStart) size += 8 * 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
@@ -1225,6 +1271,17 @@ public sealed class SimulationEngine
             o += _bnwas.WriteHash(buf[o..]);
         }
         if (hashExternal) o += _external.WriteHash(buf[o..]);
+        if (hashStart)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], 0x454E4753_54415254); o += 8; // 區塊標記("ENGSTART")
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _act.StartFailureActive ? 1 : 0); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], BitConverter.DoubleToInt64Bits(_act.StartFailureDelayS ?? -1.0)); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _act.StartFailureAttempts ?? -1); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _act.StartFailedAttempts); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _act.StartConsecutiveFailures); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _act.StartBlocked ? 1 : 0); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], BitConverter.DoubleToInt64Bits(_act.StartAttemptTimerSec)); o += 8;
+        }
         SHA256.HashData(buf[..o], _hash);
     }
 
@@ -1240,7 +1297,8 @@ public sealed class SimulationEngine
         Dt = Options.Dt,
         Motion = new MotionSnapshot(Motion.U, Motion.V, Motion.R, Motion.X, Motion.Y, Motion.Psi),
         Actuators = new ActuatorSnapshot(_act.RudderOrderDeg, _act.RudderDeg, _act.RpmOrder, _act.Rpm, _act.ThrusterOrder, _act.ThrusterActual,
-            _act.EngineMode, _act.EngineTimerSec, _act.RpmTarget, _act.RpmTau),
+            _act.EngineMode, _act.EngineTimerSec, _act.RpmTarget, _act.RpmTau,
+            _act.StartFailureDelayS, _act.StartFailureAttempts, _act.StartFailedAttempts, _act.StartConsecutiveFailures, _act.StartBlocked, _act.StartAttemptTimerSec),
         Telegraph = _telegraph,
         Environment = new EnvironmentSnapshot(
             Environment.WindTrueSpeedMps, Environment.WindTrueDirFromRad, Environment.Gustiness, Environment.GustFactor,
@@ -1330,6 +1388,12 @@ public sealed class SimulationEngine
             EngineTimerSec = s.Actuators.EngineTimerSec,
             RpmTarget = s.Actuators.RpmTarget,
             RpmTau = s.Actuators.RpmTau,
+            StartFailureDelayS = s.Actuators.StartFailureDelayS,
+            StartFailureAttempts = s.Actuators.StartFailureAttempts,
+            StartFailedAttempts = s.Actuators.StartFailedAttempts,
+            StartConsecutiveFailures = s.Actuators.StartConsecutiveFailures,
+            StartBlocked = s.Actuators.StartBlocked,
+            StartAttemptTimerSec = s.Actuators.StartAttemptTimerSec,
         };
         _telegraph = s.Telegraph;
         var depth = Environment.Depth;
@@ -1452,7 +1516,8 @@ public sealed class SimulationEngine
         var truthSog = Units.MpsToKn(sogMps);
         var ind = _sensors.Read(new SensorTruth(Units.RadToDeg(m.Psi), m.X, m.Y, truthCog, truthSog, stwKn, ukc), Tick);
         var (indLat, indLon) = ind.X == m.X && ind.Y == m.Y ? (lat, lon) : _projection.ToGeodetic(ind.X, ind.Y);
-        var engineState = _faults.Contains(FaultNames.MainEngine) ? EngineRunState.Failed
+        // 起動封鎖(engineStartFailure 連續失敗)亦顯示 failed
+        var engineState = _faults.Contains(FaultNames.MainEngine) || (_act.StartBlocked && _faults.Contains(FaultNames.EngineStartFailure)) ? EngineRunState.Failed
             : _act.Parameters.EngineStateMachine ? _act.EngineMode switch
             {
                 EngineMode.Stopped => EngineRunState.Stopped,

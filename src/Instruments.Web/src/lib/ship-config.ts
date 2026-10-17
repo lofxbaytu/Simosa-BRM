@@ -40,6 +40,23 @@ export interface ShipDisplayConfig {
   /** 滿載平均吃水 (m) */
   draftLoaded_m: number;
   draftBallast_m: number;
+  /** 錨具(particulars anchors;錨鏈孔位置顯示錨鏈、示範模式的錨;無資料時省略) */
+  anchors?: ShipAnchorConfig;
+}
+
+/** 錨具顯示/示範所需欄位(particulars anchors;估計值依 particulars 的 source 註記)。 */
+export interface ShipAnchorConfig {
+  shacklesPort: number;
+  shacklesStbd: number;
+  shackleLength_m: number;
+  /** 錨鏈單位質量 (kg/m) */
+  chainMass_kgPerM: number;
+  /** 錨重 (kg) */
+  anchorMass_kg: number;
+  heavingRate_mPerMin: number;
+  /** 錨鏈孔(船體座標,m;x 向艏、|y| 半寬) */
+  hawseX_m: number;
+  hawseY_m: number;
 }
 
 type TelegraphEntry = { rpm: number; speedLoaded_kn?: number; speedBallast_kn?: number };
@@ -113,11 +130,31 @@ function hardOverTime(p: Particulars): number {
   return 28; // SOLAS II-1/29 最低要求:35°→30° 另一舷 28 秒內
 }
 
+function anchorsFrom(p: Particulars): ShipAnchorConfig | undefined {
+  const a = (p as { anchors?: Record<string, unknown> }).anchors;
+  if (!a || typeof a !== 'object') return undefined;
+  const n = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+  const chain = (a['chain'] ?? {}) as Record<string, unknown>;
+  const hawse = (a['hawsePipe'] ?? {}) as Record<string, unknown>;
+  const lpp = p.hull.lengthBetweenPerpendiculars_m;
+  const d = n(a['chainDiameter_mm'], 42);
+  return {
+    shacklesPort: n(a['shacklesPort'], 9),
+    shacklesStbd: n(a['shacklesStbd'], 9),
+    shackleLength_m: n(a['shackleLength_m'], 27.5),
+    chainMass_kgPerM: n(chain['mass_kgPerM'], 0.0219 * d * d),
+    anchorMass_kg: n(a['mass_kg'], n(a['massEstimate_kg'], 2000)),
+    heavingRate_mPerMin: n(a['heavingRate_mPerMin'], n(a['heavingRateEstimate_mPerMin'], 21.7)),
+    hawseX_m: n(hawse['x_m'], 0.47 * lpp),
+    hawseY_m: Math.abs(n(hawse['y_m'], 0.15 * p.hull.breadth_m)),
+  };
+}
+
 function fromParticulars(p: Particulars): ShipDisplayConfig {
   const rudderMax = p.rudder.maxAngle_deg;
   const normalMax = (p.rudder as { normalMaxAngle_deg?: number }).normalMaxAngle_deg ?? rudderMax;
   const bt = p.bowThruster as { turningRateAtZeroSpeed_degPerMin?: number; fullThrustDelay_s?: number; notEffectiveAbove_kn?: number };
-  return {
+  const cfg: ShipDisplayConfig = {
     id: p.id as ShipId,
     name: p.name,
     loa_m: p.hull.lengthOverall_m,
@@ -134,6 +171,9 @@ function fromParticulars(p: Particulars): ShipDisplayConfig {
     draftLoaded_m: p.loadingConditions.full.draftMean_m,
     draftBallast_m: p.loadingConditions.ballast.draftMean_m,
   };
+  const anchors = anchorsFrom(p);
+  if (anchors) cfg.anchors = anchors;
+  return cfg;
 }
 
 const CONFIGS: Record<ShipId, ShipDisplayConfig> = {

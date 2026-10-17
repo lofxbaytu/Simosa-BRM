@@ -20,6 +20,10 @@ sources:                              # 程序文件索引;parameters[].source �
   ASSUMED-FAM: { title: "假設值,待公司程序(船舶熟悉 F01–F03 流程時間;規劃書第 8.0、8.1 節,待 BRM-TRN-001 熟悉訓練章節核定)", revision: "0", date: 2026-10-17 }
   ASSUMED-E10: { title: "假設值,待公司程序(E10 主機失效向岸漂流;規劃書第 8.1 節 E10,待公司緊急程序與搜救通報程序核對)", revision: "0", date: 2026-10-17 }
   ASSUMED-E11: { title: "假設值,待公司程序(E11 人員落水;規劃書第 8.1 節 E11、IAMSAR 第 III 卷,待公司緊急程序核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-BERTH: { title: "假設值,待公司程序(靠泊接近速度與碰墊/繫纜限值;規劃書第 8.3 節第 4 類:一般油碼頭碰墊設計值約 0.10–0.20 m/s,以港方與公司程序為準)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E12: { title: "假設值,待公司程序(E12 錨泊/緊急下錨;規劃書第 8.1 節 E12、STCW A-II/2 錨泊,待公司錨泊程序與船長常規命令核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E13: { title: "假設值,待公司程序(E13 拖船協助靠泊;規劃書第 8.1 節 E13,待公司靠泊程序與麥寮港拖船規定核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E14: { title: "假設值,待公司程序(E14 無拖船離泊;規劃書第 8.1 節 E14,待公司離泊程序核對)", revision: "0", date: 2026-10-17 }
 parameters:
   navigation.cpa.openSea_nm:      { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.2", description: 開闊海最小 CPA }
   navigation.cpa.coastal_nm:      { value: 0.5,  unit: nm,  source: DWO-007, clause: "4.2", description: 沿岸/港外最小 CPA }
@@ -84,4 +88,21 @@ parameters:
   emergency.manOverboard.callMaster_s:     { value: 60,  unit: s, source: ASSUMED-E11, clause: "", description: 落水到通知船長 }
   emergency.manOverboard.notifySar_s:      { value: 300, unit: s, source: ASSUMED-E11, clause: "", description: 落水到 GMDSS(DSC/VHF 16 PAN PAN 或 MAYDAY RELAY)與海巡通報 }
   emergency.manOverboard.return_s:         { value: 1200, unit: s, source: ASSUMED-E11, clause: "", description: 落水到回到落水者附近(2 倍船長內)的期限 }
+  # 靠泊/錨泊(規劃書第 8.3 節第 4 類;summary.berthing / anchoring;docs/design/physics-tugs-anchors-mooring.md 第 7 節)
+  berthing.approachSpeed_mps:      { value: 0.15, unit: mps, source: ASSUMED-BERTH, clause: "", min: 0.10, max: 0.20, description: 靠泊橫向接近速度上限(容許帶 warn;碰墊設計值 0.10–0.20 m/s,公司程序值待定) }
+  berthing.approachSpeedFail_mps:  { value: 0.20, unit: mps, source: ASSUMED-BERTH, clause: "", min: 0.10, max: 0.30, description: 靠泊橫向接近速度失敗門檻(容許帶 fail;碰墊設計值上限) }
+  berthing.tugLineBreakResponse_s: { value: 60,  unit: s, source: ASSUMED-E13, clause: "", description: 拖纜斷裂到首個反應(車令/舵令/側推/回報引水人) }
+  berthing.waitReport_s:           { value: 120, unit: s, source: ASSUMED-E13, clause: "", description: 碼頭未準備通知到回報等待計畫(引水人/船長) }
+  berthing.e13.berthReadyAfter_s:  { value: 360, unit: s, source: ASSUMED-E13, clause: "", description: E13 碼頭未準備 → 準備就緒的等待時間(自情境開始) }
+  berthing.e13.tugLineBreakAfter_s: { value: 240, unit: s, source: ASSUMED-E13, clause: "", description: E13 碼頭就緒後到拖纜斷裂注入的時間 }
+  berthing.allFastPositionTolerance_m: { value: 15, unit: m, source: ASSUMED-E13, clause: "", description: 繫妥時船舯與泊位中心(碰墊列中點)的容許距離(summary.berthing.allFastPositionError_m 比較;容許帶 warn) }
+  anchoring.scopeMultiplier:       { value: 5,   unit: count, source: ASSUMED-E12, clause: "", min: 3, max: 10, description: 錨鏈長選擇:鏈長 ≥ 水深 × 倍數(天候不良時加長;summary.anchoring.minScopeRatio 比較) }
+  anchoring.letGoSog_kn:           { value: 0.5, unit: kn, source: ASSUMED-E12, clause: "", description: 放錨時對地速度上限(停止或微後退中放錨) }
+  anchoring.dragResponse_s:        { value: 120, unit: s, source: ASSUMED-E12, clause: "", description: 首次走錨到首個反應(車令/鬆鏈/拋第二錨) }
+  anchoring.dragReport_s:          { value: 180, unit: s, source: ASSUMED-E12, clause: "", description: 首次走錨到回報(船長/VTS) }
+  anchoring.anchorReady_s:         { value: 600, unit: s, source: ASSUMED-E12, clause: "", description: 指定錨位後到錨備便 }
+  anchoring.e12.monsoonSurgeAt_s:  { value: 900, unit: s, source: ASSUMED-E12, clause: "", description: E12 東北季風增強(風速漸增)的時刻(自情境開始) }
+  unberthing.e14.windShiftAt_s:    { value: 300, unit: s, source: ASSUMED-E14, clause: "", description: E14 風向改變(吹攏 → 吹開)的時刻(自情境開始) }
+  unberthing.engineStartReport_s:  { value: 60,  unit: s, source: ASSUMED-E14, clause: "", description: 主機起動失敗到通知機控室/船長 }
+  unberthing.windShiftResponse_s:  { value: 90,  unit: s, source: ASSUMED-E14, clause: "", description: 風向改變到首個操船反應(側推/舵令/車令) }
 overrides: {}                         # 保留:依船舶 ID 覆寫(第一版不解析)

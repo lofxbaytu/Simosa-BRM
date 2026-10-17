@@ -47,6 +47,8 @@ public sealed record AssessmentSnapshot
     public required RuleState Rules { get; init; }
     /// <summary>操縱量測(情境未使用時 null;舊快照無此欄位時還原為初始狀態)</summary>
     public ManoeuvreState? Manoeuvres { get; init; }
+    /// <summary>靠泊/錨泊指標(舊快照無此欄位時還原為初始狀態)</summary>
+    public BerthingState? Berthing { get; init; }
 }
 
 /// <summary>
@@ -70,13 +72,16 @@ public sealed class AssessmentEngine
     public FaultResponseTracker Faults { get; private set; }
     /// <summary>操縱量測(迴旋、Z 形、停船、側推、舵機擺動、人員落水;情境引用 manoeuvre 事件/指標或有 MOB 目標時啟用)</summary>
     public ManoeuvreTracker Manoeuvres { get; private set; }
+    /// <summary>靠泊與錨泊指標(規劃書第 8.3 節第 4 類;情境有泊位/拖船/錨時輸出 summary.berthing / anchoring)</summary>
+    public BerthingTracker Berthing { get; private set; }
     public RuleState Rules { get; private set; } = new();
     public AssessmentSummary? LatestSummary { get; private set; }
     public bool Ended => Rules.Ended;
 
     /// <param name="raise">(kind, itemId, targetId, message, data) → 引擎發事件(source = assessment)</param>
+    /// <param name="targets">操縱量測的試俥目標值(null = 讀 data/ships/&lt;ID&gt;/trial_targets.json;重播時為紀錄標頭的目標值)</param>
     public AssessmentEngine(Scenario.Scenario scenario, ShipParticulars ship, SimulationEngine engine, LocalTangentPlane projection, double dt,
-        Action<string, string?, string?, string?, object?> raise)
+        Action<string, string?, string?, string?, object?> raise, ManoeuvreTargets? targets = null)
     {
         _engine = engine;
         _scenario = scenario;
@@ -92,7 +97,8 @@ public sealed class AssessmentEngine
         Metrics = new MetricsCollector(_a.Manoeuvring?.HardOverDeg ?? engine.Actuators.Parameters.RudderMaxDeg, _a.Manoeuvring?.RotLimitDegPerMin, dt, engine.Telegraph);
         Encounters = new EncounterTracker(_a.Encounter, _a.MinCpaNm);
         Faults = new FaultResponseTracker(_a, dt);
-        Manoeuvres = new ManoeuvreTracker(engine, ship, scenario.Ship.Loading, dt, ManoeuvreTracker.IsReferenced(scenario), raise);
+        Manoeuvres = new ManoeuvreTracker(engine, ship, scenario.Ship.Loading, dt, ManoeuvreTracker.IsReferenced(scenario), raise, targets);
+        Berthing = new BerthingTracker(engine, scenario, loa);
         foreach (var b in _a.Bands) Rules.Bands[b.Id] = new BandState();
         foreach (var q in _a.Required) Rules.Required[q.Id] = new RequiredState();
     }
@@ -104,6 +110,7 @@ public sealed class AssessmentEngine
     public void OnEvent(SimEvent e)
     {
         Manoeuvres.OnEvent(e);
+        Berthing.OnEvent(e);
         Faults.OnEvent(e);
         if (e.Kind == TrafficEventKinds.Collision) Encounters.OnCollision();
         if (e.Kind == SimEventKinds.Grounding) Metrics.OnGrounding();
@@ -132,6 +139,7 @@ public sealed class AssessmentEngine
     public void OnAction(ObservedAction a)
     {
         Manoeuvres.OnAction(a);
+        Berthing.OnAction(a, a.Tick * _dt);
         Metrics.OnAction(a);
         Encounters.OnAction(a, a.Tick * _dt, Raise);
         Faults.OnAction(a);
@@ -260,6 +268,7 @@ public sealed class AssessmentEngine
         Metrics.Sample(sit, SpeedLimit(), UkcLimit(), Raise);
         Encounters.Update(sit, _engine.Traffic, Raise);
         Manoeuvres.Update(sit);
+        Berthing.Update(sit);
     }
 
     /// <summary>硬性失敗、容許帶、必要事件逾時;更新 LatestSummary。定稿後(endExercise)不再評估也不重建 summary(Finalize 的物件即唯一的 final summary)。</summary>
@@ -386,7 +395,9 @@ public sealed class AssessmentEngine
             case "general.distance_nm": return m.DistanceM / Units.MetresPerNauticalMile;
             case "general.avgSog_kn": return m.Samples > 0 ? m.SumSogKn / m.Samples : null;
             case "general.maxSog_kn": return m.MaxSogKn;
-            default: return name.StartsWith("manoeuvres.", StringComparison.Ordinal) ? Manoeuvres.Metric(name) : null;
+            default:
+                if (name.StartsWith("berthing.", StringComparison.Ordinal) || name.StartsWith("anchoring.", StringComparison.Ordinal)) return Berthing.Metric(name, sit?.Time ?? _engine.Time);
+                return name.StartsWith("manoeuvres.", StringComparison.Ordinal) ? Manoeuvres.Metric(name) : null;
         }
     }
 
@@ -454,6 +465,8 @@ public sealed class AssessmentEngine
             FaultResponses = Faults.State.Records.ToArray(),
             Alerts = Metrics.AlertSummary(),
             Manoeuvres = Manoeuvres.Enabled ? Clone(Manoeuvres.Summary().ToList()) : null,
+            Berthing = Berthing.BerthingSummary() is { } bs ? Clone(bs) : null,
+            Anchoring = Berthing.AnchoringSummary(time) is { } an ? Clone(an) : null,
             Events = new SummaryEvents { Total = byKind.Values.Sum(), ByKind = byKind },
             Assessment = new SummaryAssessment
             {
@@ -476,6 +489,7 @@ public sealed class AssessmentEngine
         Faults = Clone(Faults.State),
         Rules = Clone(Rules),
         Manoeuvres = Manoeuvres.Enabled ? Clone(Manoeuvres.State) : null,
+        Berthing = Berthing.BerthingEnabled || Berthing.AnchoringEnabled ? Clone(Berthing.State) : null,
     };
 
     public void Restore(AssessmentSnapshot s)
@@ -487,6 +501,7 @@ public sealed class AssessmentEngine
         Faults.Restore(Clone(s.Faults));
         Rules = Clone(s.Rules);
         if (Manoeuvres.Enabled) Manoeuvres.Restore(s.Manoeuvres is { } ms ? Clone(ms) : new ManoeuvreState());
+        Berthing.Restore(s.Berthing is { } bst ? Clone(bst) : new BerthingState());
         foreach (var b in _a.Bands) Rules.Bands.TryAdd(b.Id, new BandState());
         foreach (var q in _a.Required) Rules.Required.TryAdd(q.Id, new RequiredState());
     }

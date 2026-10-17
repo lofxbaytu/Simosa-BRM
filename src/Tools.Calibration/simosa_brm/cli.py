@@ -36,6 +36,18 @@ def cmd_estimate(a: argparse.Namespace) -> int:
     except FileNotFoundError:
         tt = None
     c = estimate_coefficients(sp, tt)
+    if a.transfer_from:
+        # 無操縱資料的裝載狀態:把同船另一裝載(通常滿載)的識別修正轉移到經驗估計(identify.transfer_identification)
+        from .coefficients import load_coefficients
+        from .identify import transfer_identification
+
+        if a.transfer_from == a.loading:
+            raise SystemExit("--transfer-from 不可與 --loading 相同")
+        src_path = paths.coefficients_path(a.ship, a.transfer_from)
+        src = load_coefficients(a.ship, a.transfer_from, src_path)
+        c = transfer_identification(c, src, f"data/ships/{a.ship}/coefficients.{a.transfer_from}.json")
+    for n in a.note or []:
+        c["source"]["notes"].append(n)
     out = Path(a.out) if a.out else paths.calibration_out_dir(a.ship) / f"coefficients.{a.loading}.estimate.json"
     save_coefficients(c, out)
     print(f"已寫入 {out}")
@@ -114,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
     _ship_args(e)
     e.add_argument("--out", help="輸出路徑(預設 build/calibration/<ID>/coefficients.<loading>.estimate.json)")
     e.add_argument("--print", action="store_true", help="同時印出主要係數")
+    e.add_argument("--transfer-from", choices=["full", "ballast"], default=None,
+                   help="把同船該裝載係數檔的識別修正(識別值/經驗初值)轉移到本裝載的經驗估計(無操縱資料的裝載狀態用;結果仍標 estimate)")
+    e.add_argument("--note", action="append", help="附加到 source.notes 的說明(可重複)")
     e.set_defaults(func=cmd_estimate)
 
     i = sub.add_parser("identify", help="參數識別,寫 data/ships/<ID>/coefficients.<loading>.json")

@@ -25,7 +25,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from .coefficients import load_or_estimate  # noqa: E402
-from .manoeuvres import run_all  # noqa: E402
+from .manoeuvres import loading_trend_metrics, loading_trends, run_all  # noqa: E402
 from .mmg import MMGShip  # noqa: E402
 from .particulars import KN_TO_MPS, load_particulars, load_trial_targets  # noqa: E402
 
@@ -322,6 +322,18 @@ def validate(ship_id: str, loading: str = "full", dt: float = 0.02, out_dir: Pat
     ship = MMGShip(sp, coeffs, dt=dt)
     results = run_all(ship, tt)
     rows = compare(results, tt, sp.lpp)
+    target_loading = str(tt.get("condition", "full"))
+    trends: list[dict[str, Any]] | None = None
+    if loading != target_loading:
+        # 目標值(試俥/海報)屬另一裝載狀態:比對只列參考;正式項目改為本裝載的海報車鐘航速(阻力擬合資料),
+        # 另以同一組標準操縱與目標裝載的係數檔比較趨勢(壓載:迴旋圈較小、停船較短、受風較大)
+        for r in rows:
+            r.formal = False
+            r.note = (r.note + ";" if r.note else "") + f"目標為 {target_loading} 資料,{loading} 僅供參考"
+        rows.extend(_telegraph_speed_rows(ship, tt))
+        ref_sp = load_particulars(ship_id, target_loading)
+        ref_ship = MMGShip(ref_sp, load_or_estimate(ref_sp), dt=dt)
+        trends = loading_trends(loading_trend_metrics(ref_ship), loading_trend_metrics(ship))
     out = out_dir or paths.calibration_out_dir(ship_id)
     out.mkdir(parents=True, exist_ok=True)
     figs: list[Path] = []
@@ -333,7 +345,7 @@ def validate(ship_id: str, loading: str = "full", dt: float = 0.02, out_dir: Pat
         figs.append(_plot_speed_rpm(ship, tt, out, ship_id))
     formal = [r for r in rows if r.formal and r.within is not None]
     n_ok = sum(1 for r in formal if r.within)
-    md = render_markdown(ship_id, loading, sp, tt, coeffs, rows, figs, dt, n_ok, len(formal))
+    md = render_markdown(ship_id, loading, sp, tt, coeffs, rows, figs, dt, n_ok, len(formal), trends, target_loading)
     md_path = out / f"validation.{loading}.md"
     md_path.write_text(md, encoding="utf-8")
     summary = {
@@ -341,11 +353,43 @@ def validate(ship_id: str, loading: str = "full", dt: float = 0.02, out_dir: Pat
         "rows": [r.as_dict() for r in rows], "formalWithinTolerance": f"{n_ok}/{len(formal)}",
         "report": str(md_path), "figures": [str(f) for f in figs],
     }
+    if trends is not None:
+        summary["loadingTrends"] = {"reference": target_loading, "rows": trends,
+                                    "asExpected": f"{sum(1 for t in trends if t['ok'])}/{sum(1 for t in trends if t['ok'] is not None)}"}
     (out / f"validation.{loading}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     if verbose:
         print(render_table(rows))
+        if trends is not None:
+            print(render_trends(trends, target_loading, loading))
         print(f"正式驗收項目在公差內:{n_ok}/{len(formal)};報告:{md_path}")
     return summary
+
+
+def _telegraph_speed_rows(ship: MMGShip, tt: dict[str, Any]) -> list[Row]:
+    """本裝載的海報車鐘航速(particulars engine.telegraph 的 speedLoaded_kn / speedBallast_kn)vs 直航穩態速度。"""
+    from .manoeuvres import speed_rpm_table
+
+    v_kn = float(tt.get("tolerances", {}).get("speed_kn", 0.5))
+    rows: list[Row] = []
+    for order in ("NAVF", "FAH", "HAH", "SAH", "DSAH"):
+        v = ship.sp.telegraph_speed_kn(order)
+        if not v:
+            continue
+        rpm = ship.sp.telegraph_rpm(order)
+        sim = speed_rpm_table(ship, [rpm])[0]["speed_kn"]
+        rows.append(Row(f"速度-轉速({ship.sp.loading.name},海報車鐘)", f"{order} {rpm:g} rpm", float(v), sim, v_kn, "kn",
+                        "阻力由同一組海報航速擬合,非獨立驗證"))
+    return rows
+
+
+def render_trends(trends: list[dict[str, Any]], ref_loading: str, loading: str) -> str:
+    lines = [f"| 項目 | {ref_loading} | {loading} | 比值 | 預期 | 判定 |", "|---|---:|---:|---:|:---:|:---:|"]
+    for t in trends:
+        exp = {-1: "較小", 1: "較大", 0: "—"}[t["expect"]]
+        verdict = "參考" if t["ok"] is None else ("✔" if t["ok"] else "✘")
+        nd = 2 if t["key"].endswith("_L") or t["key"].endswith("Ratio") or t["key"].endswith("_kn") else 1
+        lines.append(f"| {t['item']} | {_fmt(t['reference'], nd)} | {_fmt(t['value'], nd)} | {_fmt(t['ratio'], 2)} | {exp} | {verdict} |")
+    return "\n".join(lines)
 
 
 def render_table(rows: list[Row]) -> str:
@@ -367,7 +411,8 @@ def render_table(rows: list[Row]) -> str:
 
 
 def render_markdown(ship_id: str, loading: str, sp, tt: dict[str, Any], coeffs: dict[str, Any], rows: list[Row],
-                    figs: list[Path], dt: float, n_ok: int, n_formal: int) -> str:
+                    figs: list[Path], dt: float, n_ok: int, n_formal: int, trends: list[dict[str, Any]] | None = None,
+                    target_loading: str = "full") -> str:
     src = coeffs.get("source", {})
     ident = src.get("identification", {})
     lines = [
@@ -381,9 +426,21 @@ def render_markdown(ship_id: str, loading: str, sp, tt: dict[str, Any], coeffs: 
         "",
         "## 模擬 vs 目標",
         "",
-        render_table(rows),
-        "",
     ]
+    if trends is not None:
+        lines += [f"> 目標值為 {target_loading} 裝載資料,{loading} 的迴旋/Z 形/停船比對只列參考(不計入驗收);正式項目只有本裝載的海報車鐘航速。"
+                  f"合理性以下節「裝載趨勢」與 {target_loading} 係數檔的同一組標準操縱比較。", ""]
+    lines += [render_table(rows), ""]
+    if trends is not None:
+        n_t = sum(1 for t in trends if t["ok"] is not None)
+        n_tok = sum(1 for t in trends if t["ok"])
+        xfer = src.get("identificationTransfer")
+        lines += [f"## 裝載趨勢({loading} vs {target_loading},同一組標準操縱)", "",
+                  f"- 進入速度 = 各裝載 NAVF 轉速的直航穩態速度;{target_loading} 用 `coefficients.{target_loading}.json`。符合預期方向:**{n_tok}/{n_t}**",
+                  "- 預期(規劃書第 3 章壓載特性):壓載迴旋圈較小、停船時間/距離較短、受風較大。", ""]
+        if xfer:
+            lines += [f"- 本係數檔含滿載識別修正轉移(`source.identificationTransfer`,來源 `{xfer.get('from')}`)。", ""]
+        lines += [render_trends(trends, target_loading, loading), ""]
     if ident:
         lines += ["## 識別參數(初值 → 識別值)", "", "| 參數 | 經驗初值 | 識別值 | 範圍 |", "|---|---:|---:|---|"]
         for n, p in ident.get("parameters", {}).items():
@@ -394,7 +451,7 @@ def render_markdown(ship_id: str, loading: str, sp, tt: dict[str, Any], coeffs: 
     notes = src.get("notes", [])
     if notes:
         lines += ["## 以經驗式補足的資料", ""] + [f"- {n}" for n in notes] + [""]
-    bad = [r for r in rows if r.within is False]
+    bad = [r for r in rows if r.within is False and (trends is None or r.formal)]
     lines += ["## 已知偏差與可能原因", ""]
     if not bad:
         lines.append("- 全部比對項目在公差內。")

@@ -12,6 +12,7 @@
 cd "D:\Simosa BRM\src\Tools.Calibration"
 uv sync --all-extras                                     # 建立 .venv(快取在 ..\..\.cache\uv)
 uv run simosa-brm estimate --ship FSB1 --loading full    # 經驗公式估計 → build\calibration\FSB1\coefficients.full.estimate.json
+uv run simosa-brm estimate --ship FSB2 --loading ballast --transfer-from full --out ..\..\data\ships\FSB2\coefficients.ballast.json --note …   # 壓載估計 + 滿載識別修正轉移(見「壓載係數」)
 uv run simosa-brm identify --ship FSB1 --loading full    # 參數識別   → data\ships\FSB1\coefficients.full.json
 uv run simosa-brm validate --ship FSB1 --loading full    # 驗證報告   → build\calibration\FSB1\validation.full.md + png
 uv run simosa-brm manoeuvre turning --ship FSB1 --rudder 35 --side port --speed 14.5
@@ -30,7 +31,7 @@ uv run pytest -q                                         # 測試(黃金測試�
 | `identify` | 以 `trial_targets.identification` 區擬合 8–12 個參數(`--params`、`--dt`、`--max-nfev`、`--prior-weight`、`--workers`);validation 區不用於擬合 |
 | `validate` | 執行全部標準操縱(識別區 + 驗證區),與目標比對並標示是否在 `tolerances` 內,寫 markdown/png/json |
 | `manoeuvre` | `turning` / `zigzag` / `crashstop` / `inertia` / `thruster` / `speed`,可加 `--depth`、`--wind kn,deg`、`--csv` |
-| `serve` | WebSocket 服務;接收 `command.schema.json` 的全部 15 種命令(支援矩陣見下);`--scenario` 啟動時載入情境 |
+| `serve` | WebSocket 服務;接收 `command.schema.json` 的命令(支援矩陣見下);`--scenario` 啟動時載入情境 |
 
 WebSocket 範例(JavaScript):
 
@@ -51,20 +52,22 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 
 | 命令 | 讀取欄位 | 語意 | 狀態 |
 |---|---|---|---|
-| `rudder` | `value` 度(右正) | 舵令,夾到 ±`rudder.maxAngle_deg`;關閉自動舵 | 實作 |
+| `rudder` | `value` 度(右正) | 舵令,夾到 ±`rudder.maxAngle_deg`;關閉自動舵;autopilot / nfu 模式切回 fu(emergency 保持,C# 相同) | 實作 |
 | `telegraph` | `value` EFAS…NAVF | 車鐘 → 轉速令(係數檔 `engine.telegraph`);未知車令 `ok=false` | 實作 |
 | `rpm` | `value` rpm(倒車負) | 直接轉速令,幅度夾到 [minRpm, maxRpm];車鐘以最接近者標示 | 實作 |
 | `thruster` | `value` −1…1 | 側推令;無側推的船固定 0 | 實作 |
-| `autopilot` | `args.enabled/heading/rotLimit/rudderLimit` | 簡單 PID 航向控制 | 實作 |
+| `autopilot` | `args.enabled/heading/rotLimit/rudderLimit` | 簡單 PID 航向控制;啟用 → `steering.mode = autopilot`、解除 → fu(原為 autopilot 時)。`enabled` 只認布林,**省略(或非布林)時只更新航向/rotLimit/rudderLimit、不改啟用狀態與操舵模式**(與 C# 相同;fu/nfu 中送 `{heading}` 不會切到自動舵);`rotLimit` 取 max(1, \|值\|) 度/分。`enabled: true` 在 emergency 模式中拒絕(`ok=false`,detail「拒絕(emergencySteering)」)、在 `autopilotFailure` / `gyroFailure` 時拒絕(「拒絕(autopilotUnavailable)」),狀態不變 | 實作 |
+| `steeringMode` | `value`(或 `args.mode`)fu / nfu / autopilot / emergency(不分大小寫);`args.pump` 1 / 2 / both(數值 1、2 與 "all"、"1+2" 亦可,不明值不變);`args.direction` port / starboard / stop(nfu);`args.heading`、`args.rotLimit`(autopilot) | 情境引擎設計 D32、D35,語意同 C# `SimulationEngine`:**nfu** 推桿 port/starboard 時舵令為該側滿舵、舵以舵機速率移動,stop 舵停在原處,省略方向維持、不明方向視同 stop;**進出 nfu 時舵令先同步到目前舵角**(推桿的滿舵舵令或先前隨動舵令失效);**autopilot** 同 `autopilot {enabled: true}`,未給航向且原本未啟用時保持目前航向、rotLimit 取 max(1, \|值\|) 度/分;**emergency** 應急操舵:`steeringGear` 故障下舵仍可動,速率為 `steeringGear.emergencyHardOverTime35_s`(35°/t)或係數檔速率的一半,emergency 中 `steeringMode autopilot` 拒絕(emergencySteering,需先 fu);`autopilotFailure` / `gyroFailure` 時 `steeringMode autopilot` 拒絕(autopilotUnavailable,emergency 優先),自動舵啟用中注入這兩種故障則跳脫:舵停在目前舵角、模式回 fu(C# TripAutopilot);**泵**:速率 = 係數檔速率 × hardOverTime35(無則雙泵、單泵)/ 所選泵的轉舵時間(both 用雙泵、1/2 用單泵;No.2 預設泵 1 = 28 s,both = 14 s;No.1 無泵資料不換算)。`steeringPumpFailure` 使所有模式速率減半、`steeringFuOnly` 使 fu/autopilot 動不了舵。state 輸出 `steering {mode, pump, nfuActive?}`(nfuActive 只在 nfu);未知模式 `ok=false`。非預設(nfu / emergency / 泵非 1)才加入狀態雜湊(3 個 int64,與 C# 相同規則),快照/還原含操舵模式。Python 不發事件(steeringModeChanged / commandRejected),拒絕原因只在 ack | 實作 |
 | `freeze` / `resume` | — | 凍結/恢復(時間不前進) | 實作 |
 | `reset` | 無 `args` 且已載入情境:回到情境初始狀態(C# 語意)。有 `args`:自船覆寫 `x/y` 或 `lat/lon`(經 LTP 轉本地)、`heading`、`speed`、`rpm`、`telegraph`,未給者為 0 / 停俥;`loading`、`tugs` 忽略並在 detail 註明 | 直航重設,tick 歸零、故障清除 | 實作 |
 | `timeScale` | `value` ≥ 0 | 即時倍率(0 = 暫停推進) | 實作 |
 | `loadScenario` | `value`(代號或路徑),否則 `args.path`、`args.id`;依序嘗試 | 代號解析為 `data/scenarios/<id>.yaml`(也接受絕對路徑或相對工作目錄/專案根目錄的路徑);先解析 `${params:…}` 參數引用(見下節)並做時間表/航線/區域/評估/簡報的結構檢查,再依 `ship.id/loading` 重建模型、套初始位置(經緯度經 `LocalTangentPlane` 轉 ENU,與 C# 同式)/航向/航速/車鐘或轉速/舵角、環境(風、陣風、流、水深、能見度)、種子與 `timeScale`;tick 與時間歸零、快照清空。檔案不存在、YAML 錯誤、未解析的參數鍵、結構錯誤、裝載不存在等皆 `ok=false` 且原模型不變。`detail` 回報情境代號、名稱與參數集版次/引用數;之後 state JSON 含 `scenario {id, phase: "normal", parameterSetVersion?}` | 實作 |
 | `setEnvironment` | `args.wind{trueSpeed,trueDir,gustiness}`、`args.current{set,drift}`、`args.waterDepth`、`args.visibility_nm`(或 `visibility`) | 部分更新;速度不為負、角度正規化、陣風夾到 [0,1]、非正水深忽略(與 C# 相同)。`gustiness`:每秒以種子亂數更新風速係數 1±gustiness(`state.wind.trueSpeed` 回報有效風速,與 C# 相同;亂數為 Python `random.Random(seed)`,序列與 .NET `Random` 不同,故含陣風時兩核心狀態雜湊不同)。`visibility_nm`:只記錄(`command.schema.json` 的 `args` 未列欄位、`state.schema.json` 無此欄位、運動模型不使用),ack detail 註明 | 實作(能見度僅記錄) |
 | `snapshot` / `restore` | `value` 名稱(預設 `default`) | 記憶體快照:運動狀態、控制、環境、主機狀態機、故障、擱淺、陣風係數與亂數狀態;`restore` 無此名稱 `ok=false`。`loadScenario` 後快照清空 | 實作 |
-| `injectFault` | `value` 名稱 | 加入故障(同名不重複)並在 `state.faults` 廣播。會改變行為的三種(`src/SimCore/Engine/FaultNames.cs`):`steeringGear` 舵角停在目前位置(舵令與自動舵照記但不作用);`mainEngine` 轉速令視為 0、軸轉速以停俥時間常數衰減、`engine.state = failed`,車鐘改令無效;`bowThruster` 側推令視為 0、實際推力依延遲衰減。其餘名稱(如 `gyroDrift`、`gpsJump`、`radarFailure`、`blackout`)僅記錄並廣播,由儀器端自行反應,detail 註明 | 實作(三種行為 + 其餘記錄) |
+| `injectFault` | `value` 名稱 | 加入故障(同名不重複)並在 `state.faults` 廣播。會改變行為的五種(`src/SimCore/Engine/FaultNames.cs`):`steeringGear` 舵角停在目前位置(舵令與自動舵照記但不作用;emergency 操舵可動);`steeringFuOnly` fu 與自動舵動不了舵(nfu、emergency 可動);`steeringPumpFailure` 舵機速率減半;`mainEngine` 轉速令視為 0、軸轉速以停俥時間常數衰減、`engine.state = failed`,車鐘改令無效;`bowThruster` 側推令視為 0、實際推力依延遲衰減。`autopilotFailure` / `gyroFailure`:自動舵不可用(啟用被拒 autopilotUnavailable;啟用中注入則跳脫回 fu,detail 註明),感測器層不模擬。其餘名稱(如 `gyroDrift`、`gpsJump`、`radarFailure`、`blackout`)僅記錄並廣播,由儀器端自行反應,detail 註明(C# 另有 `engineStartFailure`,Python 尚未實作,僅記錄) | 實作(五種行為 + 其餘記錄) |
 | `clearFault` | `value` 名稱;省略 / null / 空字串 = 全部 | 清除指定故障(不在清單中仍 `ok=true`,detail 註明)或全部(C# 語意) | 實作 |
 | `triggerTimeline` / `acknowledge` / `getAssessment` / `endExercise` | — | 情境引擎指令(C# SimCore 實作);Python 參考實作不執行時間表、不評估,固定 `ok=false`、`detail` 說明未實作,模型不變 | 未實作(回 ok=false) |
+| `targetControl` | — | 目標船指令(C# SimCore 實作);Python 只模擬自船(無目標船、AIS、COLREG 行為),固定 `ok=false`、`detail` 說明「Python 參考實作無目標船」,模型不變 | 未實作(回 ok=false) |
 | `alertAcknowledge` / `alertSilence` / `bnwasMode` / `bnwasReset` | — | 警報管理(BAM)與 BNWAS 指令(C# SimCore 實作;docs/design/sensors-alerts.md);Python 不實作感測器層/警報/BNWAS(不輸出 `state.truth/sensors/alerts/bnwas`),固定 `ok=false`、模型不變 | 未實作(回 ok=false) |
 
 未在 `command.schema.json` 的命令回 `ok=false`、`detail` 為「未知命令」。
@@ -94,7 +97,7 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 | `manoeuvres.py` | 迴旋、Z 形、緊急停船、慣性停船、倒車→進車、側推迴轉、速度-轉速 |
 | `identify.py` | scipy `least_squares`(trf,有界)+ 平行有限差分 Jacobian + 先驗殘差 |
 | `report.py` | 驗證報告(markdown、matplotlib png、json) |
-| `server.py` | websockets 即時模擬(25 Hz 廣播、15 種命令、情境載入、故障、快照;情境引擎 4 指令與警報/BNWAS 4 指令回 ok=false) |
+| `server.py` | websockets 即時模擬(25 Hz 廣播、自船命令、操舵模式、情境載入、故障、快照;情境引擎 4 指令、警報/BNWAS 4 指令與 targetControl 回 ok=false) |
 | `cli.py` | `simosa-brm` 入口 |
 | `tests/` | 單位/正負慣例、確定性、B 系列與 KVLCC2 回歸、速度-轉速、FSB1 迴旋/Z 形/停船黃金測試、FSB2 海報比對、WebSocket、情境載入/故障/陣風/快照(`test_server_scenario_faults.py`)、參數集/引用解析/結構檢查/與 C# 紀錄標頭的跨語言一致性(`test_scenario_params.py`) |
 
@@ -137,6 +140,41 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 - FSB1 滿載(試俥實測):識別區 13/14 在公差內(右迴旋橫距 142.8 m vs 175.5 m 超出,其餘前進距離/戰術直徑偏差 ≤ 8.3%、10/10 超越角偏差 ≤ 1.9°);驗證區 20/20 Z 形 4/4、緊急停船時間 288 s(試俥 259 s,+11%)/航跡 1285 m(1191 m,+8%)2/2、速度-轉速 4/4;正式驗收項目 23/26。慣性停船(試俥航跡彎曲)、倒車→進車(換向延遲以進→退值假設、無風車/壓縮制動模型)、艏側推 90°(左 −17%、右 −9%,參考項)仍超出。
 - FSB2 滿載(海報,8 參數粗識別,航向穩定性導數留經驗值):迴旋識別區 17/22 在公差內(左/右戰術直徑 282/300 m vs 海報 208/245 m、90° 速度偏高 1.4–1.8 kn、右 270° 速度偏低 0.8 kn);緊急停船超出(停船時間 +74%、航跡 +36%,海報讀值且換向延遲未知);EEDI 13.06 kn/110 rpm 點與海報 12.8 kn/133.6 rpm 互相矛盾(trial_targets 已註記)。放開 Y'_r(9 參數)可達 19/22,但 Y'_r 跑到物理下界 0.02(船體橫向力幾乎消失),與 12 參數時 Y'_v、Y'_r 跑到下界同一現象,故不採用;海報戰術直徑 2.0 L 對 104 m 油輪偏小,待試俥報告核對。
 
+## 壓載係數(估計、未識別;2026-10-17)
+
+| 檔案 | 產生方式 | 資料 |
+|---|---|---|
+| `data/ships/FSB1/coefficients.ballast.json` | `estimate --loading ballast`(純經驗式) | 吃水 F 2.03 / A 5.41 m(裝載手冊 COND.3);阻力由海報車鐘壓載航速擬合;海報壓載迴旋/停船估計值只供趨勢參考 |
+| `data/ships/FSB2/coefficients.ballast.json` | `estimate --loading ballast --transfer-from full`(經驗式 + 滿載識別修正轉移) | 吃水 F 4.4 / A 6.5 m(2026-09 實際航次;海報 5.80 m 平吃水);Cb 0.738、排水量 8,578 t 依吃水比估計;阻力由海報 `speedBallast_kn`(NAVF 13.3 kn … DSAH 6.0 kn)擬合;海報無壓載操縱資料 |
+
+- **滿載識別修正轉移**(`identify.transfer_identification`):對滿載識別過的參數,初值不為 0 者 p_壓載 = p_壓載經驗 × p_滿載識別 / p_滿載經驗,
+  初值為 0 者(swirlAngle)加上差值,夾在 `PARAM_SPECS` 範圍內;明細寫入 `source.identificationTransfer`,`source.method` 仍為 `estimate`、
+  `identifiedParameters` 為空。理由:No.2 滿載的經驗式戰術直徑 3.7–4.0 L,識別後 2.7–2.9 L(−26 至 −29%,主要是舵-船體交互作用與 KVLCC2
+  代用非線性導數的偏差,與吃水無關);純經驗壓載得 3.2–3.6 L,反而大於滿載識別結果,與壓載迴旋圈較小的常識相反。No.1 滿載識別修正只有
+  −8 至 −12%,壓載維持純經驗(以 `--transfer-from full` 重產可得戰術直徑 2.75/2.94 L,與現檔 2.73/3.13 L 差異不大;未改動)。
+- **舵面積**:particulars 為 null 時改以滿載吃水估計(舵為固定幾何;先前壓載依壓載吃水縮小為 10.3 m²,現與滿載同為 13.61 m²);No.1 有實測面積不受影響。
+- **驗證**:`validate --loading ballast` 對目標裝載(trial_targets.condition = full)以外的裝載,把迴旋/Z 形/停船比對改列「參考」,正式項目只剩本裝載海報車鐘航速
+  (5/5;阻力即由此擬合,非獨立驗證),另加「裝載趨勢」節:以各裝載 NAVF 轉速的直航速度執行同一組標準操縱,與滿載係數檔比較方向
+  (`manoeuvres.loading_trend_metrics` / `loading_trends`;測試 `tests/test_fsb2_ballast.py`)。報告 `build/calibration/<ID>/validation.ballast.md`。
+
+裝載趨勢(dt 0.02 s;壓載 / 滿載,括號為比值;受風項為 25 kn 正橫風):
+
+| 項目 | FSB2 滿載 → 壓載 | FSB1 滿載 → 壓載 | 預期 |
+|---|---|---|---|
+| 進入速度(NAVF) | 12.8 → 13.3 kn | 14.5 → 14.7 kn | — |
+| 左/右 35° 戰術直徑 / L | 2.71 → 2.33(0.86)/ 2.89 → 2.52(0.87) | 3.00 → 2.72(0.91)/ 3.18 → 3.13(0.98) | 較小 ✔ |
+| 左/右 前進距離 / L | 2.89 → 2.53(0.87)/ 2.99 → 2.63(0.88) | 2.90 → 2.74(0.95)/ 2.99 → 2.95(0.99) | 較小 ✔ |
+| 10/10 Z 形 第 1/2 超越角 | 5.0/6.6° → 5.5/6.2° | 7.0/8.8° → 5.5/4.4° | 參考 |
+| 緊急停船 時間 / 航跡 | 355 s / 1,254 m → 283 s / 1,080 m(0.80 / 0.86) | 285 s / 1,230 m → 208 s / 894 m(0.73 / 0.73) | 較短 ✔ |
+| 停俥慣性減至 5 kn 距離 | 2,605 → 2,117 m(0.81) | 2,699 → 1,335 m(0.49) | 較短 ✔ |
+| 側面積 / (L·d) | 1.03 → 1.71 | 1.02 → 2.13 | 較大 ✔ |
+| 3 kn 自動舵保持航向的漂角 | 5.5 → 11.1°(2.0) | 6.4 → 16.4°(2.6) | 較大 ✔ |
+| 零速 300 s 漂移速度 | 0.84 → 1.00 kn | 0.88 → 1.04 kn | 較大 ✔ |
+
+FSB2 壓載海報車鐘航速 5 點重現在 0.01 kn 內。限制:目標值只有航速;迴旋/停船為估計,F01_FSB2_ballast 的量測 `dataQuality` 為 none(無比較);
+艉傾 2.1 m 未納入導數(實船壓載航向穩定性可能較高、迴旋圈可能較模擬大);受風面積、換向延遲 90 s 為假設;滿載重新識別後須重產壓載檔
+(`test_ballast_file_matches_tool_output` 會提示)。
+
 ## 物理模型審查(2026-10-08,對抗式)與修正
 
 逐項核對 Yasukawa & Yoshimura (2015) 的運動方程式、船體/螺槳/舵模型、正負慣例、RK4、風與淺水、MSC.137(76) 量測定義與識別資料分工,
@@ -165,8 +203,8 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 3. **慣性停船**試俥航跡彎曲(head reach 1098 m、side reach 402 m),直線滑行模擬的 5 kn 時間/距離偏大約 2 倍;屬資料條件差異,未調整阻力。
 4. **試俥功率**:以 B 系列 K_Q 估計的軸功率比試俥低約 17–20%(實際螺槳非 B 系列、PBCF、η_R 等);速度-轉速以推力恆等校準,不受影響,但功率/負荷顯示僅供參考。
 5. **Schilling 舵** 35° 以上升力曲線與滑流不對稱為假設模型;No.1 右迴旋橫距(初期迴轉快、定常圓大的試俥特徵)無法完全重現。
-6. **No.2** 僅海報圖面讀值;舵面積、受風面積、側推推力、換向延遲為估計;取得操縱試驗報告後重跑 `identify`。壓載狀態(兩船)僅有海報車鐘速度,係數為估計(`loading=ballast` 可用,未驗證);艏艉吃水差對導數的影響未納入。
-7. 風為 Blendermann 參數式與估計面積,陣風只是每秒更新的風速係數(無空間/頻譜模型);淺水修正為趨勢用倍率;岸壁效應、浪、拖船、錨纜、4 自由度橫搖未實作(規劃書 6.2 其餘項目)。故障只有 `steeringGear`、`mainEngine`、`bowThruster` 三種改變行為(與 C# 相同),其餘名稱僅記錄;能見度只記錄不用。情境的時間表/航線/區域/評估與 sensors/alerts/bnwas 設定只做參數解析與結構檢查(後者補 C# 預設值後保留),不執行(情境引擎、感測器故障層、警報與 BNWAS 由 C# SimCore 負責)。
+6. **No.2** 僅海報圖面讀值;舵面積、受風面積、側推推力、換向延遲為估計;取得操縱試驗報告後重跑 `identify`。壓載狀態(兩船)僅有海報車鐘速度,係數為估計(`loading=ballast` 可用,未驗證;見「壓載係數」);艏艉吃水差對導數的影響未納入。
+7. 風為 Blendermann 參數式與估計面積,陣風只是每秒更新的風速係數(無空間/頻譜模型);淺水修正為趨勢用倍率;岸壁效應、浪、拖船、錨纜、4 自由度橫搖未實作(規劃書 6.2 其餘項目)。故障只有 `steeringGear`、`mainEngine`、`bowThruster`、`steeringFuOnly`、`steeringPumpFailure` 五種改變行為(與 C# 相同;C# 的 `engineStartFailure` 尚未移植);`autopilotFailure` / `gyroFailure` 只模擬「自動舵不可用」(啟用被拒、啟用中跳脫,與 C# 相同),電羅經指示值等感測器層不模擬;其餘名稱僅記錄;能見度只記錄不用。情境的時間表/航線/區域/評估與 sensors/alerts/bnwas 設定只做參數解析與結構檢查(後者補 C# 預設值後保留),不執行(情境引擎、感測器故障層、警報與 BNWAS 由 C# SimCore 負責)。
 8. 兩船 `x_G` 設 0(LCG 未知);KVLCC2 回歸測試已用論文值 x_G = 11.2 m,x_G 對迴旋直徑影響約 8–10%,取得兩船 LCG 後應填入 `reference.xG_m`。
 10. **低速/零速艏搖阻尼**只有橫流阻力(C_D = 1.0,未校準)與多項式外推;零速側推的穩態迴轉率約 40–45°/min(海報 20°/min),艏側推 90° 迴轉時間偏短約 16%;側推有效推力(`thruster.effectiveness`)與 C_D 待船長/引水人評價或 VDR 資料校準(規劃書 6.4 將側推列為趨勢項)。側推時船體因「旋轉力的運動學」((m+m_y)v r 耦合)會逐漸獲得前進速度(上限約 推力/((m+m_x)r)),與試俥記錄「約 1 kn」一致。
 11. **倒退(u<0)**:多項式 Y、N 導數沿用前進值(MMG 標準模型未定義倒退),僅阻力方向與舵流向已處理;倒退操縱性未驗證。

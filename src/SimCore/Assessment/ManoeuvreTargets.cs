@@ -42,18 +42,39 @@ public sealed class ManoeuvreTargets
     /// <summary>主要目標值的資料品質:trial(No.1 試俥)| poster(No.2 海報讀值)</summary>
     public string Grade => _grade;
 
-    /// <summary>依船舶 ID 讀取(找不到專案根目錄或檔案時 null)。</summary>
-    public static ManoeuvreTargets? For(string shipId)
-        => Cache.GetOrAdd(shipId, id =>
+    /// <summary>目標檔相對專案根目錄的路徑('/' 分隔,例如 data/ships/FSB1/trial_targets.json;測試建立者為 null)</summary>
+    public string? RelativePath { get; init; }
+
+    /// <summary>目標檔內容(紀錄標頭 manoeuvreTargets.content;重播優先使用,不讀目前檔案)</summary>
+    public JsonElement Content => _root;
+
+    /// <summary>目標值來源:file(讀目前檔案)| header(紀錄標頭)| test</summary>
+    public string Origin { get; init; } = "test";
+
+    /// <summary>目標檔的專案相對路徑。</summary>
+    public static string RelativePathFor(string shipId) => $"data/ships/{shipId}/trial_targets.json";
+
+    /// <summary>依船舶 ID 讀取(找不到專案根目錄或檔案時 null;每個程序快取一次)。</summary>
+    public static ManoeuvreTargets? For(string shipId) => Cache.GetOrAdd(shipId, LoadCurrent);
+
+    /// <summary>讀目前的目標檔(不經快取;重播 --rescore 以目前檔案重新評分時用)。</summary>
+    public static ManoeuvreTargets? LoadCurrent(string shipId)
+    {
+        var root = RepositoryPaths.TryFindRoot();
+        if (root is null) return null;
+        var path = Path.Combine(root, "data", "ships", shipId, "trial_targets.json");
+        if (!File.Exists(path)) return null;
+        var bytes = File.ReadAllBytes(path);
+        using var doc = JsonDocument.Parse(bytes);
+        return new ManoeuvreTargets(doc.RootElement.Clone())
         {
-            var root = RepositoryPaths.TryFindRoot();
-            if (root is null) return null;
-            var path = Path.Combine(root, "data", "ships", id, "trial_targets.json");
-            if (!File.Exists(path)) return null;
-            var bytes = File.ReadAllBytes(path);
-            using var doc = JsonDocument.Parse(bytes);
-            return new ManoeuvreTargets(doc.RootElement.Clone()) { Sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() };
-        });
+            Sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), RelativePath = RelativePathFor(shipId), Origin = "file",
+        };
+    }
+
+    /// <summary>由紀錄標頭的 manoeuvreTargets(content + sha256)重建;sha256 沿用標頭值(檔案原始位元組的雜湊,content 重新序列化後位元組可能不同)。</summary>
+    public static ManoeuvreTargets FromHeader(JsonElement content, string sha256, string? path)
+        => new(content.Clone()) { Sha256 = sha256, RelativePath = path, Origin = "header" };
 
     /// <summary>由 JSON 文字建立(測試用)。</summary>
     public static ManoeuvreTargets FromJson(string json)

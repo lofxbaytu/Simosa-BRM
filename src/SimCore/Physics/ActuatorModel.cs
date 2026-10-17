@@ -19,6 +19,18 @@ public enum EngineMode
     Starting,
 }
 
+/// <summary>起動嘗試的本步結果(engineStartFailure;引擎據以發 engineStartFailed / engineStartBlocked / engineStarted 事件)。</summary>
+public enum StartOutcome
+{
+    None,
+    /// <summary>故障成立中點火成功(延遲或先前失敗後)</summary>
+    Started,
+    /// <summary>起動失敗(將自動再試)</summary>
+    Failed,
+    /// <summary>連續失敗達上限,起動封鎖(須車令回 STOP)</summary>
+    Blocked,
+}
+
 /// <summary>致動器參數(由 particulars 或 MMG 係數檔推得)。</summary>
 public sealed record ActuatorParameters
 {
@@ -129,6 +141,115 @@ public sealed class ActuatorModel
     /// <summary>本步的轉速時間常數(秒;燃油切斷時為軸停止時間常數)</summary>
     public double RpmTau { get; set; }
 
+    // ---- engineStartFailure 故障(fault-catalogue;規劃書第 8.1 節 E14「主機起動延遲」、第 6.2 節起動空氣次數)----
+    // 由停俥起動或換向後反向點火時視為一次「起動嘗試」:故障成立時依 args 延遲或失敗;以下欄位進快照與雜湊(非預設時)
+
+    /// <summary>遙控系統自動連續起動的上限:連續失敗達此次數即「起動封鎖」,須車令回 STOP 後再下令(Nabtesco M-800 類遙控系統的 3 次自動起動)</summary>
+    public const int MaxAutoStartAttempts = 3;
+    /// <summary>engineStartFailure 是否成立(引擎每步依 faults[] 設定;非狀態)</summary>
+    public bool StartFailureActive { get; set; }
+    /// <summary>故障 args.delay_s:每次點火再延後的秒數(null = 不延遲)</summary>
+    public double? StartFailureDelayS { get; set; }
+    /// <summary>故障 args.attempts:自注入起失敗的起動次數(之後一次成功);delay_s 與 attempts 皆省略 = 每次都失敗直到清除</summary>
+    public int? StartFailureAttempts { get; set; }
+    /// <summary>自注入起已失敗的起動次數</summary>
+    public int StartFailedAttempts { get; set; }
+    /// <summary>本次車令的連續失敗次數(車令歸零時清除)</summary>
+    public int StartConsecutiveFailures { get; set; }
+    /// <summary>起動封鎖(連續失敗達 <see cref="MaxAutoStartAttempts"/>;車令歸零或故障清除時解除)</summary>
+    public bool StartBlocked { get; set; }
+    /// <summary>起動嘗試計時(秒;到達點火條件後起算,≥ delay_s 時嘗試;失敗後設為 −startDelay 以等待下一次嘗試)</summary>
+    public double StartAttemptTimerSec { get; set; }
+    /// <summary>本步的起動結果(引擎據以發事件;不進快照)</summary>
+    public StartOutcome LastStartOutcome { get; private set; }
+    /// <summary>本步點火(故障成立中)時距下令的秒數(EngineTimerSec;事件用)</summary>
+    public double LastStartAfterSec { get; private set; }
+
+    /// <summary>起動故障相關狀態是否非預設(決定雜湊是否追加;未使用此故障者雜湊與舊版相同)</summary>
+    public bool HasStartFailureState => StartFailureDelayS is not null || StartFailureAttempts is not null || StartFailedAttempts != 0
+                                        || StartConsecutiveFailures != 0 || StartBlocked || StartAttemptTimerSec != 0.0;
+
+    /// <summary>
+    /// 注入 engineStartFailure:記下 args 並重設計數(重複注入亦重設)。暫代模型(顯式更新、無換向狀態機)在故障未成立期間不更新
+    /// <see cref="EngineMode"/>/<see cref="RpmTarget"/>(未使用者雜湊與舊版相同),注入時依目前軸轉速與車令重新設定,
+    /// 避免沿用陳舊的「運轉中」而跳過起動閘(例如情境開始即進車 → 故障未成立時停俥、軸已靜止 → 注入 → 再進車)。
+    /// </summary>
+    public void InjectStartFailure(double? delayS, int? attempts)
+    {
+        StartFailureDelayS = delayS is { } d && d > 0 ? d : null;
+        StartFailureAttempts = attempts is { } n && n >= 0 ? n : null;
+        StartFailedAttempts = 0;
+        StartConsecutiveFailures = 0;
+        StartBlocked = false;
+        StartAttemptTimerSec = 0.0;
+        if (!Parameters.CoupledRk4) SyncExplicitEngineState();
+    }
+
+    /// <summary>
+    /// 暫代模型:依目前軸轉速與車令設定狀態機模式(起動閘的「運轉中」判斷依據)。軸未靜止且與車令同向 = 運轉中(Run、目標 = 車令);
+    /// 否則 Stopped(下一個非零車令須經起動閘;反向轉動者先滑行到軸靜止)。
+    /// </summary>
+    private void SyncExplicitEngineState()
+    {
+        var running = RpmOrder != 0.0 && Math.Abs(Rpm) >= Parameters.ShaftStillRpm && Math.Sign(Rpm) == Math.Sign(RpmOrder);
+        EngineMode = running ? EngineMode.Run : EngineMode.Stopped;
+        RpmTarget = running ? RpmOrder : 0.0;
+        EngineTimerSec = 0.0;
+    }
+
+    /// <summary>清除 engineStartFailure:解除封鎖與嘗試計時(失敗次數保留供講評;args 清除)。</summary>
+    public void ClearStartFailure()
+    {
+        StartFailureDelayS = null;
+        StartFailureAttempts = null;
+        StartConsecutiveFailures = 0;
+        StartBlocked = false;
+        StartAttemptTimerSec = 0.0;
+    }
+
+    /// <summary>
+    /// 點火閘(到達正常點火條件時呼叫;回傳 true = 本步點火)。故障未成立時一律 true。成立時:封鎖中不點火;
+    /// 嘗試計時 ≥ delay_s 時嘗試一次:依 attempts 決定成敗(無 attempts 且無 delay_s = 失敗);失敗後等 startDelay 再自動嘗試,
+    /// 連續失敗達 <see cref="MaxAutoStartAttempts"/> 次封鎖。
+    /// </summary>
+    private bool StartGate(double dt)
+    {
+        if (!StartFailureActive) return true;
+        if (StartBlocked) return false;
+        StartAttemptTimerSec += dt;
+        if (StartAttemptTimerSec < (StartFailureDelayS ?? 0.0) - 1e-9) return false;
+        var fails = StartFailureAttempts is { } n ? StartFailedAttempts < n : StartFailureDelayS is null;
+        if (!fails)
+        {
+            StartAttemptTimerSec = 0.0;
+            StartConsecutiveFailures = 0;
+            LastStartOutcome = StartOutcome.Started;
+            LastStartAfterSec = EngineTimerSec;
+            return true;
+        }
+        StartFailedAttempts++;
+        StartConsecutiveFailures++;
+        StartAttemptTimerSec = -Parameters.StartDelaySec;
+        if (StartConsecutiveFailures >= MaxAutoStartAttempts)
+        {
+            StartBlocked = true;
+            LastStartOutcome = StartOutcome.Blocked;
+        }
+        else LastStartOutcome = StartOutcome.Failed;
+        return false;
+    }
+
+    /// <summary>
+    /// 車令歸零:解除封鎖、重設連續失敗與嘗試計時。只在車令(轉速令)本身為 0 時呼叫;主機故障(mainEngine)使目標為 0 時不呼叫,
+    /// 封鎖與連續失敗次數保留(契約:連續 3 次失敗起動封鎖,須車令回 STOP 再下令)。
+    /// </summary>
+    private void ResetStartAttempt()
+    {
+        StartConsecutiveFailures = 0;
+        StartBlocked = false;
+        StartAttemptTimerSec = 0.0;
+    }
+
     public ActuatorModel(ActuatorParameters parameters)
     {
         Parameters = parameters;
@@ -157,6 +278,7 @@ public sealed class ActuatorModel
         RudderOrderDeg = Units.Clamp(RudderOrderDeg, -p.RudderMaxDeg, p.RudderMaxDeg);
         ThrusterOrder = p.HasBowThruster ? Units.Clamp(ThrusterOrder, -1.0, 1.0) : 0.0;
         var rudderRate = rudderJammed ? 0.0 : Math.Max(0.0, rudderRateDegPerSec ?? p.RudderRateDegPerSec);
+        LastStartOutcome = StartOutcome.None;
         return p.CoupledRk4
             ? StepCoupled(dt, rudderRate, engineFailed, thrusterFailed)
             : StepExplicit(dt, rudderRate, engineFailed, thrusterFailed);
@@ -180,6 +302,7 @@ public sealed class ActuatorModel
         var target = RpmOrder;
         if (engineFailed) target = 0.0;
         else if (p.MinimumRpm is { } min && target != 0.0 && Math.Abs(target) < min) target = Math.Sign(target) * min;
+        if (StartFailureActive) target = ExplicitStartGate(dt, target, orderZero: RpmOrder == 0.0);
         Rpm += (target - Rpm) * (dt / p.RpmTimeConstantSec);
         if (Math.Abs(Rpm) < 1e-6 && target == 0.0) Rpm = 0.0;
 
@@ -189,6 +312,48 @@ public sealed class ActuatorModel
         ThrusterActual += Units.Clamp(thrTarget - ThrusterActual, -thrRate, thrRate);
 
         return ControlStages.Constant(ToControlInput());
+    }
+
+    /// <summary>
+    /// 暫代模型(無換向狀態機)在 engineStartFailure 成立時的起動閘:主機未運轉(或反向)時須點火,點火前目標轉速為 0
+    /// (反向者先滑行到軸靜止);已在同向運轉者不受影響。故障未成立時不呼叫(與舊版位元一致;注入時以 <see cref="SyncExplicitEngineState"/> 同步)。
+    /// <paramref name="orderZero"/>:車令本身為 0(STOP)才解除封鎖;主機故障使目標為 0 時保留封鎖。
+    /// </summary>
+    private double ExplicitStartGate(double dt, double target, bool orderZero)
+    {
+        var p = Parameters;
+        if (target == 0.0)
+        {
+            EngineMode = EngineMode.Stopped;
+            EngineTimerSec = 0.0;
+            if (orderZero) ResetStartAttempt();
+            return 0.0;
+        }
+        var dir = Math.Sign(target);
+        var running = (EngineMode == EngineMode.Run && Math.Sign(RpmTarget) == dir)
+                      || (EngineMode is not (EngineMode.Starting or EngineMode.Reversing) && Math.Abs(Rpm) >= p.ShaftStillRpm && Math.Sign(Rpm) == dir);
+        if (running)
+        {
+            EngineMode = EngineMode.Run;
+            RpmTarget = target;
+            return target;
+        }
+        if (EngineMode is not (EngineMode.Starting or EngineMode.Reversing))
+        {
+            EngineTimerSec = 0.0;
+            StartAttemptTimerSec = 0.0;
+        }
+        EngineTimerSec += dt;
+        var still = Math.Abs(Rpm) < p.ShaftStillRpm;
+        if (still && StartGate(dt))
+        {
+            EngineMode = EngineMode.Run;
+            RpmTarget = target;
+            return target;
+        }
+        EngineMode = still ? EngineMode.Starting : EngineMode.Reversing;
+        RpmTarget = 0.0;
+        return 0.0;
     }
 
     // ------------------------------------------------------------------ MMG 模式:狀態機 + 耦合 RK4
@@ -222,6 +387,8 @@ public sealed class ActuatorModel
             RpmTarget = 0.0;
             RpmTau = p.ShaftStopTimeConstantSec;
             EngineTimerSec = 0.0;
+            // 車令歸零才解除起動封鎖;主機故障(engineFailed)使 cmd = 0 時保留封鎖與連續失敗次數
+            if (!engineFailed || Math.Abs(EffectiveRpmOrder(false)) < 1e-9) ResetStartAttempt();
             return;
         }
         var cmdDir = cmd > 0 ? 1.0 : -1.0;
@@ -247,9 +414,11 @@ public sealed class ActuatorModel
             {
                 EngineMode = EngineMode.Reversing;
                 EngineTimerSec = 0.0;
+                StartAttemptTimerSec = 0.0;
             }
             EngineTimerSec += dt;
-            if (EngineTimerSec >= p.ReversalDelaySec && Math.Abs(n) <= p.StartThresholdRpm)
+            // 反向點火即一次起動嘗試(engineStartFailure 時經點火閘延遲或失敗)
+            if (EngineTimerSec >= p.ReversalDelaySec && Math.Abs(n) <= p.StartThresholdRpm && StartGate(dt))
             {
                 EngineMode = EngineMode.Run;
                 RpmTarget = cmd;
@@ -267,9 +436,10 @@ public sealed class ActuatorModel
         {
             EngineMode = EngineMode.Starting;
             EngineTimerSec = 0.0;
+            StartAttemptTimerSec = 0.0;
         }
         EngineTimerSec += dt;
-        if (EngineTimerSec >= p.StartDelaySec)
+        if (EngineTimerSec >= p.StartDelaySec && StartGate(dt))
         {
             EngineMode = EngineMode.Run;
             RpmTarget = cmd;

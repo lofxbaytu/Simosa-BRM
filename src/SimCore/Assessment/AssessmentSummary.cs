@@ -27,6 +27,10 @@ public sealed record AssessmentSummary
     [JsonPropertyName("alerts")] public required SummaryAlerts Alerts { get; init; }
     /// <summary>操縱量測(規劃書第 8.1 節 F01–F03、E11;ship-familiarisation.md 第 2 節):情境未使用操縱量測時 null(省略,舊紀錄 summary 不變)</summary>
     [JsonPropertyName("manoeuvres")] public IReadOnlyList<ManoeuvreRecord>? Manoeuvres { get; init; }
+    /// <summary>靠泊指標(規劃書第 8.3 節第 4 類;情境有泊位或拖船時輸出,否則 null 省略,舊紀錄 summary 不變)</summary>
+    [JsonPropertyName("berthing")] public SummaryBerthing? Berthing { get; init; }
+    /// <summary>錨泊指標(情境有 anchors 區段或錨曾被使用時輸出,否則 null 省略)</summary>
+    [JsonPropertyName("anchoring")] public SummaryAnchoring? Anchoring { get; init; }
     [JsonPropertyName("events")] public required SummaryEvents Events { get; init; }
     [JsonPropertyName("assessment")] public required SummaryAssessment Assessment { get; init; }
 

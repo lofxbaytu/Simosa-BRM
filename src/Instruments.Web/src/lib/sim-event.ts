@@ -6,6 +6,7 @@
 import type { SimEvent, SimEventKind, SimEventSource, VoiceScriptData } from '../types/event.js';
 import { formatHeading } from './format.js';
 import { alertEventLabel, alertEventSeverity } from './alerts.js';
+import { ANCHOR_SIDE_LABEL, EXTERNAL_COMMAND_EVENT_KINDS, EXTERNAL_REJECT_REASON_LABEL, externalEventLabel, externalEventSeverity } from './external-forces.js';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -64,6 +65,8 @@ export function defaultSourceFor(kind: string): SimEventSource {
   if (TIMELINE_KINDS.has(kind)) return 'timeline';
   if (ASSESSMENT_KINDS.has(kind)) return 'assessment';
   if (INSTRUCTOR_KINDS.has(kind)) return 'instructor';
+  // tugCommand / anchorLetGo / anchorCommand / mooringCommand 來源依指令來源(缺 source 的舊紀錄視為教官);其他外力事件為 engine
+  if (EXTERNAL_COMMAND_EVENT_KINDS.has(kind)) return 'instructor';
   return 'engine';
 }
 
@@ -116,6 +119,8 @@ export type EventSeverity = 'info' | 'warning' | 'alarm';
 export function eventSeverity(e: SimEvent): EventSeverity {
   const alertSev = alertEventSeverity(e);
   if (alertSev) return alertSev;
+  const extSev = externalEventSeverity(e);
+  if (extSev) return extSev;
   switch (e.kind) {
     case 'collision':
     case 'grounding':
@@ -161,11 +166,19 @@ export const ACK_KIND_LABEL: Readonly<Record<string, string>> = {
   other: '其他',
 };
 
-/** commandRejected 的 reason 顯示文字(D35、sensors-alerts.md 第 2.3、3.3 節)。 */
+/** commandRejected 的 reason 顯示文字(D35、sensors-alerts.md 第 2.3、3.3 節;拖船/錨/繫纜 19 種見 physics-tugs-anchors-mooring.md 第 6.2 節)。 */
 export const REJECT_REASON_LABEL: Readonly<Record<string, string>> = {
   emergencySteering: '應急操舵中不可自動舵',
   autopilotUnavailable: '自動舵不可用(電羅經或自動舵失效)',
   unknownAlert: '未知的警報 id',
+  ...EXTERNAL_REJECT_REASON_LABEL,
+};
+
+/** commandRejected 的指令名稱顯示文字(外力指令中文化;其他保留原字串)。 */
+export const COMMAND_NAME_LABEL: Readonly<Record<string, string>> = {
+  tugControl: '拖船令',
+  anchor: '錨令',
+  mooring: '繫纜令',
 };
 
 /** 操舵模式顯示名稱(state.steering.mode / steeringMode 指令 value)。 */
@@ -234,6 +247,8 @@ export function voiceScriptData(e: SimEvent): VoiceScriptData | null {
 export function eventLabel(e: SimEvent): string {
   const alertText = alertEventLabel(e);
   if (alertText !== null) return alertText;
+  const extText = externalEventLabel(e);
+  if (extText !== null) return extText;
   const target = e.targetId ? ` ${e.targetId}` : '';
   const item = e.itemId ? ` ${e.itemId}` : '';
   switch (e.kind as SimEventKind) {
@@ -354,8 +369,14 @@ export function eventLabel(e: SimEvent): string {
       return `手動觸發${item}${d(e, 'ok') === false ? ' — 核心拒絕' : ''}${e.message ? ` ${e.message}` : ''}`;
     case 'steeringModeChanged':
       return `操舵模式 ${STEERING_MODE_LABEL[ds(e, 'from')] ?? ds(e, 'from') ?? '?'} → ${STEERING_MODE_LABEL[ds(e, 'to')] ?? ds(e, 'to') ?? '?'}${ds(e, 'pump') ? `(泵 ${ds(e, 'pump')})` : ''}`;
-    case 'commandRejected':
-      return `指令被拒 ${ds(e, 'command')}${REJECT_REASON_LABEL[ds(e, 'reason')] ? `(${REJECT_REASON_LABEL[ds(e, 'reason')]})` : ds(e, 'reason') ? `(${ds(e, 'reason')})` : ''}`;
+    case 'commandRejected': {
+      const cmd = ds(e, 'command');
+      const args = d(e, 'args');
+      // 外力指令附上對象(拖船 id / 錨側 / 纜 id),教官一眼看出哪一項被拒
+      const who = COMMAND_NAME_LABEL[cmd] && isRecord(args) ? (typeof args['id'] === 'string' ? args['id'] : typeof args['side'] === 'string' ? (ANCHOR_SIDE_LABEL[args['side'] as 'port' | 'starboard'] ?? args['side']) : typeof args['lineId'] === 'string' ? args['lineId'] : '') : '';
+      const name = COMMAND_NAME_LABEL[cmd] ? `${COMMAND_NAME_LABEL[cmd]}(${cmd})` : cmd;
+      return `指令被拒 ${name}${who ? ` ${who}` : ''}${REJECT_REASON_LABEL[ds(e, 'reason')] ? `(${REJECT_REASON_LABEL[ds(e, 'reason')]})` : ds(e, 'reason') ? `(${ds(e, 'reason')})` : ''}`;
+    }
     default:
       return `${e.kind}${item}${target}${e.message ? ` ${e.message}` : ''}`;
   }

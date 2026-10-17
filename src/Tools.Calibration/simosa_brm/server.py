@@ -7,7 +7,13 @@
 - 每筆命令回 {"type": "ack", "command": ..., "ok": bool, "detail": ..., "tick": ...};未支援或失敗者回 ok=false
   並在 detail 說明,模型狀態不變。情境引擎指令 triggerTimeline / acknowledge / getAssessment / endExercise 固定回 ok=false
   (Python 參考實作不模擬時間表與評估;情境引擎設計第 2.3 節);警報/BNWAS 指令 alertAcknowledge / alertSilence / bnwasMode /
-  bnwasReset 亦固定回 ok=false(不實作感測器層、BAM 與 BNWAS,不輸出 state.truth/sensors/alerts/bnwas;sensors-alerts.md 第 9 節)。
+  bnwasReset 亦固定回 ok=false(不實作感測器層、BAM 與 BNWAS,不輸出 state.truth/sensors/alerts/bnwas;sensors-alerts.md 第 9 節);
+  targetControl 固定回 ok=false(Python 無目標船)。
+- steeringMode(fu / nfu / autopilot / emergency、pump、nfu direction;D32、D35)語意與 C# 相同,state 輸出 steering;
+  emergency 中 autopilot 啟用/切換被拒(ok=false,detail 為拒絕原因 emergencySteering,狀態不變);autopilotFailure /
+  gyroFailure 時同樣被拒(拒絕原因 autopilotUnavailable),自動舵啟用中注入這兩種故障則跳脫回 fu(C# TripAutopilot)。
+- autopilot 指令的 enabled 只認布林;缺省時只更新航向 / rotLimit / rudderLimit、不改啟用狀態與操舵模式(與 C# 相同);
+  rotLimit 兩條路徑都取 max(1, |值|) 度/分。
 - 已載入情境時 state JSON 加 scenario {id, phase: "normal", parameterSetVersion?}(state.schema.json 的 scenario 物件;
   Python 不推進階段,phase 固定 normal)。
 """
@@ -16,21 +22,38 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from typing import Any
 
-from .mmg import FAULT_BOW_THRUSTER, FAULT_MAIN_ENGINE, FAULT_STEERING_GEAR, MMGShip, make_ship
+from .mmg import (
+    AUTOPILOT_BLOCKING_FAULTS,
+    FAULT_BOW_THRUSTER,
+    FAULT_MAIN_ENGINE,
+    FAULT_STEERING_FU_ONLY,
+    FAULT_STEERING_GEAR,
+    FAULT_STEERING_PUMP,
+    CommandRejected,
+    MMGShip,
+    make_ship,
+    normalize_pump,
+)
 from .scenario import apply_scenario, load_scenario, ship_from_scenario
 
 BROADCAST_DT = 0.04
 
 # 會改變模型行為的故障(src/SimCore/Engine/FaultNames.cs)之 ack 說明;其餘名稱只記錄並廣播
 FAULT_DETAIL = {
-    FAULT_STEERING_GEAR: "已套用:舵機故障,舵角停在目前位置(舵令照記但不作用)",
+    FAULT_STEERING_GEAR: "已套用:舵機故障,舵角停在目前位置(舵令照記但不作用;steeringMode emergency 時以應急速率可動)",
+    FAULT_STEERING_FU_ONLY: "已套用:FU 失效,fu 與自動舵動不了舵(nfu、emergency 可動)",
+    FAULT_STEERING_PUMP: "已套用:舵機泵失效,所有操舵模式舵機速率減半",
     FAULT_MAIN_ENGINE: "已套用:主機故障,轉速衰減至 0,engine.state = failed",
     FAULT_BOW_THRUSTER: "已套用:艏側推不可用,側推令視為 0",
 }
 RECORD_ONLY_DETAIL = "僅記錄並廣播(核心不改變行為,由儀器端自行反應)"
+# autopilotFailure / gyroFailure:Python 只模擬「自動舵不可用」(啟用被拒、啟用中跳脫),感測器層(電羅經指示值)不模擬
+AUTOPILOT_FAULT_DETAIL = ("部分套用:自動舵不可用(autopilot {enabled: true} 與 steeringMode autopilot 拒絕 autopilotUnavailable);"
+                          "電羅經指示值等感測器層 Python 不模擬,僅記錄並廣播")
 # 情境引擎指令(command.schema.json):Python 參考實作只做情境的參數解析與結構檢查,不模擬時間表/評估
 UNIMPLEMENTED_DETAIL = {
     "triggerTimeline": "未實作:Python 參考實作不執行時間表(情境引擎由 C# SimCore 執行)",
@@ -42,7 +65,12 @@ UNIMPLEMENTED_DETAIL = {
     "alertSilence": "未實作:Python 參考實作無警報管理(BAM),不輸出 state.alerts",
     "bnwasMode": "未實作:Python 參考實作無 BNWAS(情境 bnwas 設定只保留、不模擬)",
     "bnwasReset": "未實作:Python 參考實作無 BNWAS(情境 bnwas 設定只保留、不模擬)",
+    # 目標船(targets、AIS、COLREG 行為)由 C# SimCore 執行;Python 只模擬自船(情境 targets 不載入)
+    "targetControl": "未實作:Python 參考實作無目標船(只模擬自船;情境 targets、AIS 與 COLREG 行為由 C# SimCore 執行),模型不變",
 }
+STEERING_MODE_LABEL = {"fu": "隨動(FU)", "nfu": "非隨動(NFU)", "autopilot": "自動舵", "emergency": "應急操舵"}
+NFU_LABEL = {-1: "推左舵", 0: "停", 1: "推右舵"}
+REJECT_DETAIL = "拒絕({reason}):{msg};狀態不變"
 
 
 class SimServer:
@@ -98,7 +126,30 @@ class SimServer:
             elif t == "thruster":
                 ship.set_thruster(float(v))
             elif t == "autopilot":
-                ship.set_autopilot(bool(args.get("enabled", True)), args.get("heading"), args.get("rotLimit"), args.get("rudderLimit"))
+                # enabled 只認 JSON 布林(C# ArgAsBool);缺省或非布林時只更新設定、不改啟用狀態與操舵模式(與 C# 相同)
+                enabled = args.get("enabled")
+                if not isinstance(enabled, bool):
+                    if "enabled" in args:
+                        detail = f"enabled {enabled!r} 非布林,視同未指明;"
+                    enabled = None
+                ship.set_autopilot(enabled, args.get("heading"), args.get("rotLimit"), args.get("rudderLimit"))
+                if enabled is None:
+                    detail += ("只更新自動舵設定(未指明 enabled,啟用狀態不變:"
+                               + ("自動舵啟用中" if ship.ctl.autopilot else f"未啟用,操舵模式維持 {ship.ctl.steering_mode}") + ")")
+            elif t == "steeringMode":
+                mode = v if v is not None else args.get("mode")
+                info = ship.set_steering_mode(mode, args.get("pump"), args.get("direction"), args.get("heading"), args.get("rotLimit"))
+                c = ship.ctl
+                detail = (f"操舵模式 {info['from']} → {info['to']}({STEERING_MODE_LABEL[info['to']]})" if info["from"] != info["to"]
+                          else f"操舵模式維持 {info['to']}") + f";泵 {c.steering_pump}"
+                if info["pumpFrom"] != c.steering_pump:
+                    detail += f"(由 {info['pumpFrom']} 改)"
+                if args.get("pump") is not None and normalize_pump(args.get("pump")) is None:
+                    detail += f";泵 {args.get('pump')!r} 不明,未變更"
+                if c.steering_mode == "nfu":
+                    detail += f";NFU {NFU_LABEL[c.nfu_direction]}"
+                if c.steering_mode == "autopilot":
+                    detail += f";航向 {math.degrees(c.autopilot_heading) % 360.0:.1f}°"
             elif t == "freeze":
                 ship.ctl.frozen = True
             elif t == "resume":
@@ -151,8 +202,16 @@ class SimServer:
                 if not name:
                     ok, detail = False, "故障名稱不可為空"
                 else:
+                    was_autopilot = ship.ctl.autopilot
                     modelled = ship.inject_fault(name)
-                    detail = FAULT_DETAIL[name] if modelled else RECORD_ONLY_DETAIL
+                    if modelled:
+                        detail = FAULT_DETAIL[name]
+                    elif name in AUTOPILOT_BLOCKING_FAULTS:
+                        detail = AUTOPILOT_FAULT_DETAIL
+                    else:
+                        detail = RECORD_ONLY_DETAIL
+                    if was_autopilot and not ship.ctl.autopilot:
+                        detail += ";自動舵跳脫:舵停在目前舵角,操舵模式回 fu"
             elif t == "clearFault":
                 name = str(v).strip() if v is not None else ""
                 if name:
@@ -188,6 +247,8 @@ class SimServer:
                 ok, detail = False, UNIMPLEMENTED_DETAIL[t]
             else:
                 ok, detail = False, f"未知命令 {t!r}"
+        except CommandRejected as exc:  # 指令被拒絕、狀態不變(C# commandRejected)
+            ok, detail = False, REJECT_DETAIL.format(reason=exc.reason, msg=exc)
         except Exception as exc:  # noqa: BLE001 - 回報給客戶端
             ok, detail = False, f"{type(exc).__name__}: {exc}"
         return {"type": "ack", "command": t, "ok": ok, "detail": detail, "tick": self.ship.state.tick}

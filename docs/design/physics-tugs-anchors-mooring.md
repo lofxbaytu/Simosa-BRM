@@ -302,7 +302,7 @@ lines:
 - 碰墊:接觸點以碰墊軸線近似;船體外形為 11 點多邊形(不含外飄、舭部);碰墊在泊位檔中只有一種水平位置(無高度/潮位);碼頭硬接觸以懲罰彈簧近似。
 - 繫纜:直線(無垂度)、無纜重;絞纜機無剎車滑出模型。
 - 暫代模型的外力響應為概略值(第 1.1 節);定量評估以 MMG 為準。
-- 評估模組(`src/SimCore/Assessment`,本工作不改)尚未把 `fenderContact` 能量/接近速度、`anchorLetGo` 時間做成指標;事件已進紀錄,可由講評站或日後評估規則(`event` 規則)使用。
+- ~~評估模組尚未把 `fenderContact` 能量/接近速度、`anchorLetGo` 時間做成指標~~(2026-10-17 已完成,見第 9 節 `BerthingTracker`、summary.berthing / anchoring)。
 - 時間表動作尚無 `tugControl`/`anchor`/`mooring`(只可注入 `tugLineBreak`)。
 
 ## 8. 測試
@@ -313,3 +313,91 @@ lines:
 | `AnchorTests` | 懸鏈線解析幾何(y = a(cosh − 1)、弧長、T = H + wh)、單調性與區域連續、全懸空方程式、鬆弛/拉直;particulars 與估計;抓地/走錨門檻與遲滯、拖動速率上限;起錨 60 s = 21.7 m、絞盤停轉;剎車滑出;鏈端;MMG 流中拋錨 → 帶上 → 起錨 → 離底 → 收妥;拖船拉動造成走錨與重新抓住 |
 | `BerthTests` | 碰墊曲線反力/能量/觸底;質點 + 線性碰墊的 ½ m v² 能量、δ_max、R_max;只推不拉(含阻尼);過載;硬接觸;繫纜靜平衡(張力 = 拖力、應變式)、絞纜、斷裂、拒絕;麥寮示意泊位(檔案解析、header 內嵌、MMG 拖船推靠、繫纜後靜止) |
 | `ExternalForceEngineTests` | 舊情境/未使用區段雜湊與舊版相同(MMG 與暫代)、拋錨後才改變;快照 JSON 往返後續跑位元一致與事件序列;紀錄 → 重播雜湊/事件一致;暫代模型接受、不支援模型拒絕;契約欄位 |
+| `BerthingAssessmentTests` | 靠泊/錨泊指標:質點 + 線性碰墊的艏/舯/艉接近速度 = v0、能量比 = ½mv²/2/額定;推靠中反彈再碰回不是新的靠上、拉離 ≥ 0.5 m 再推回才是;繫妥後的接觸不是接近接觸;繫妥時船位偏差與 `berthing.allFastPositionTolerance_m` 容許帶;容許帶引用 `berthing.approachSpeed_mps`(warn)/`approachSpeedFail_mps`(fail);碼頭硬接觸 hardFail(event 規則);斷纜張力/MBL;拖船工作時間與最大出力;拖纜斷裂次數;開始即靠在碰墊上的 initial 接觸段;快照還原續跑 summary 相同;無泊位/錨的情境 summary 不含新區塊;放錨速度、帶上鏈長/水深與 `anchoring.scopeMultiplier` 容許帶;走錨到首個反應時間;紀錄 → 重播 summary 一致 |
+| `BerthingScenarioTests` | E12/E13/E14 載入、參數與示意泊位/錨地檔一致;固定腳本的關鍵事件序列、必要事件、summary.berthing / anchoring;紀錄 → 重播雜湊/事件/summary 一致;E12 鏈長 7/9 節不因帶上較晚被扣分(錨妥回報);E13 參考腳本(拖船橫向/艏向/縱向控制)allFast 前四纜皆 fast、無 bollardOutOfReach、船舯在泊位中心 ± 15 m;E14 不操船時繫泊中擺盪不是靠上、`maxLateralSpeed` 為 null |
+| `EngineStartFailureTests` | engineStartFailure(主機起動失敗/延遲,E14):attempts、delay_s、持續失敗 3 次封鎖、換向點火、暫代模型(含故障未成立時停俥後才注入、清除後再注入)、mainEngine 注入/清除不解除封鎖、快照與重播 |
+
+## 9. 靠泊與錨泊評估(`src/SimCore/Assessment/BerthingTracker.cs`;規劃書第 8.3 節第 4 類)
+
+只讀引擎狀態與上表事件,不改物理、不用亂數;狀態進評估快照(`AssessmentSnapshot.Berthing`),**不進雜湊鏈**(與其他評估累計值相同),
+故未使用泊位/拖船/錨的情境雜湊、事件序列與 summary 皆與舊版相同(summary 不輸出新區塊)。
+
+### 9.1 量測定義
+
+| 項目 | 定義 |
+|---|---|
+| 接觸段 | 船體與碰墊/碼頭由「無接觸」變為「接觸」到不再接觸;以每秒評估步取樣或 `fenderContact` / `quayContact` 事件開始,取樣不再接觸時結束 |
+| 靠上(landing) | 一次靠泊接近:**第一次接觸段**,或**未繫妥且所有碰墊都已離開碰墊面 ≥ 0.5 m**(`BerthingTracker.LandingClearanceM`,每秒取樣船體外形到碰墊面的距離)之後的接觸段。靠妥後在碰墊上的反覆輕碰、拖船推靠中的反彈、繫泊中在纜繩上的擺盪都不是新的靠上(2026-10-17 審查修正:E14 不操船 600 s 原本產生 24 筆 landing) |
+| 艏/舯/艉橫向接近速度 | 船體點 (+LOA/2, 0)、(0, 0)、(−LOA/2, 0) 的對地速度(含流)在最近碼頭線段法向(朝碼頭為正)的分量;取**接觸開始前最後一個無接觸的每秒取樣**(≤ 1 s 前,未受碰墊反力影響)。情境開始即接觸者 `initial: true`、速度為 null。**僅供講評**:端點含偏擺分量 r·x,比實際接觸點的法向速度大,不併入 `maxLateralSpeed` |
+| 碰墊接觸 | 每個 `fenderContact` 一筆:接觸點法向接近速度(接觸開始時,m/s 與 kn)、靜態曲線能量 E(δ_max)、額定能量與能量比 E/E_rated、最大反力、壓縮 %、過載;`approach` = **接近接觸**:未繫妥,且該碰墊自上次接觸(或情境開始)以來曾離開 ≥ 0.5 m(先靠上艏端、艉端後才擺靠者,艉端碰墊的第一次接觸仍是接近接觸)。情境開始即接觸的碰墊須先離開 ≥ 0.5 m |
+| 靠泊橫向接近速度 | `maxLateralSpeed` = 所有接近接觸(碰墊接觸 `approach: true` 與未繫妥時的碼頭硬接觸)**接觸點法向速度**的最大值;無接近接觸時 null。每次靠上另記 `contactSpeed`(該次靠上接近接觸的最大值)。`maxContactSpeed` 則為全部碰墊接觸(含繫泊中擺盪) |
+| 繫妥(allFast) | 每秒評估:所有已設定的纜繩皆受力(fast / heaving / slacking),且本次靠泊船舯前、後的碰墊都已有接觸事件(艏艉皆已靠上,不必同時接觸)。記下 `allFastAt_s`、船舯里程 `allFastMidshipChainage_m` 與泊位中心偏差 `allFastPositionError_m`(船舯里程 − 泊位中心,正 = 沿碼頭線方向超前);泊位中心 `berthCentreChainage_m` = 碰墊列首尾中點(無碰墊時為碼頭線中點)。繫妥期間的接觸不是接近接觸;無任何纜繩受力時解除。艏艉靠上旗標在離開所有碰墊 ≥ 0.5 m、未繫妥且纜繩未全部受力時清除(先繫纜再以纜繩/拖船靠攏時,離開再靠回仍屬同一次靠泊) |
+| 碼頭硬接觸 | `quayContact` 次數、最大穿入、接觸時法向速度 |
+| 繫纜 | 每秒取樣的最大張力(t)與 MBL,比值 T/MBL;`mooringLineParted` 計斷纜次數(張力取事件值) |
+| 拖船 | status `working` 的累計秒數(每秒取樣)、最大出力(t)、繫柱拖力;`tugLineParted` 計拖纜斷裂次數與時刻 |
+| 放錨 | 每次 `anchorLetGo`(含教官/學員)時自船對地速度、目標鏈長與預定 scope(目標鏈長 / 水深) |
+| 帶上 | `anchorBroughtUp` 時鏈長、節數、水深與 **scope = 鏈長 / 水深**(鏈長選擇,與參數集 `anchoring.scopeMultiplier` 比較) |
+| 走錨 | `anchorDragging` 次數、首次時刻;累計走錨時間(每秒取樣 dragging);錨鏈孔最大張力(每秒取樣與事件值) |
+| 走錨偵測與反應 | 首次走錨後第一次 `acknowledge`(偵測/回報)時刻;第一個學員反應(舵令、車令、轉速、側推、操舵模式,或教官/學員送出的 `anchor` 指令 `anchorCommand`/`anchorLetGo`)的時刻、方式與反應時間 |
+
+### 9.2 指標(`MetricNames`;容許帶可引用,Python `scenario.py` METRIC_NAMES 尚未同步,`data/scenarios` 暫勿引用)
+
+`berthing.maxLateralSpeed_mps`、`berthing.maxLateralSpeed_kn`(接近接觸的接觸點法向速度最大值;見上表,不含艏/舯/艉端點速度與繫泊中擺盪)、`berthing.maxContactSpeed_mps`(全部碰墊接觸)、
+`berthing.maxEnergy_kNm`、`berthing.maxEnergyRatio`、`berthing.fenderContacts`、`berthing.fenderOverloads`、`berthing.quayContacts`、`berthing.lineBreaks`、
+`berthing.maxLineTensionRatio`、`berthing.tugLineBreaks`、`berthing.maxTugForce_t`、`berthing.tugWorkingTime_s`、`berthing.allFastPositionError_m`(繫妥時船舯與泊位中心的距離,絕對值;未繫妥時 null)、
+`anchoring.letGoCount`、`anchoring.maxLetGoSog_kn`、`anchoring.dragEvents`、`anchoring.dragTime_s`、`anchoring.maxChainTension_t`、`anchoring.minScopeRatio`、
+`anchoring.dragResponseTime_s`(未反應時為自首次走錨起的經過時間,容許帶可在無反應時判定)。
+
+事件類規則以既有 hardFail `event` 規則表示(Python 已支援):`{ id: quayContact, rule: event, kind: quayContact }`、`{ rule: event, kind: mooringLineParted }`。
+容許帶範例(C# 已驗證;待 Python 同步後 E12–E14 啟用,見各情境檔末段註解):
+
+```yaml
+bands:
+  - { id: approachSpeed, metric: berthing.maxLateralSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }
+  - { id: contactEnergy, metric: berthing.maxEnergyRatio, warn: 0.8, fail: 1.0, penalty: 10, failPenalty: 25 }
+  - { id: scope, metric: anchoring.minScopeRatio, direction: below, warn: "${params:anchoring.scopeMultiplier}", fail: 3, penalty: 10 }
+  - { id: letGoSpeed, metric: anchoring.maxLetGoSog_kn, warn: "${params:anchoring.letGoSog_kn}", fail: "2x", penalty: 10 }
+  - { id: berthPosition, metric: berthing.allFastPositionError_m, warn: "${params:berthing.allFastPositionTolerance_m}", fail: "2x", penalty: 10, failPenalty: 20 }
+```
+
+參數集(`data/parameters/company-procedures.yaml`;來源 `ASSUMED-BERTH` / `ASSUMED-E12`–`E14`,**假設值,待公司程序**):`berthing.approachSpeed_mps` 0.15
+(碰墊設計值 0.10–0.20 m/s,min/max 限制)、`berthing.approachSpeedFail_mps` 0.20、`berthing.allFastPositionTolerance_m` 15、`anchoring.scopeMultiplier` 5(count)、`anchoring.letGoSog_kn` 0.5、
+`anchoring.dragResponse_s` 120、`anchoring.dragReport_s` 180 等。
+
+### 9.3 summary 區塊(JSON 範例取自 `BerthingScenarioTests.E13` 參考腳本,數值四捨五入、陣列節錄;`summary.berthing` 在情境有泊位或拖船時輸出,`summary.anchoring` 在情境有 `anchors` 區段或錨曾被使用時輸出)
+
+```json
+"berthing": {
+  "berthId": "MLO-OIL-3", "maxLateralSpeed_mps": 0.135, "maxLateralSpeed_kn": 0.263, "maxContactSpeed_mps": 0.135, "maxEnergy_kNm": 55.3, "maxEnergyRatio": 0.100,
+  "fenderContacts": 9, "fenderOverloads": 0, "quayContacts": 0, "lineBreaks": 0, "maxLineTensionRatio": 0.60, "tugLineBreaks": 1, "tugWorkingTime_s": 1125, "maxTugForce_t": 9.6,
+  "berthCentreChainage_m": 130, "allFastAt_s": 806, "allFastMidshipChainage_m": 134.3, "allFastPositionError_m": 4.3,
+  "landings": [ { "t_s": 770, "sampleAt_s": 769, "initial": false, "bow_mps": -0.03, "bow_kn": -0.06, "midship_mps": 0.17, "midship_kn": 0.34, "stern_mps": 0.38, "stern_kn": 0.73,
+                  "max_mps": 0.38, "max_kn": 0.73, "contactSpeed_mps": 0.076, "contactSpeed_kn": 0.147 },
+                { "t_s": 795, "sampleAt_s": 794, "initial": false, "bow_mps": 0.11, "bow_kn": 0.22, "midship_mps": 0.16, "midship_kn": 0.30, "stern_mps": 0.20, "stern_kn": 0.38,
+                  "max_mps": 0.20, "max_kn": 0.38, "contactSpeed_mps": 0.135, "contactSpeed_kn": 0.263 } ],
+  "contacts": [ { "fenderId": "F08", "t_s": 771.84, "approach": true, "normalSpeed_mps": 0.076, "normalSpeed_kn": 0.147, "energy_kNm": 13.4, "ratedEnergy_kNm": 551.4, "energyRatio": 0.024,
+                  "maxReaction_kN": 313.4, "deflection_pct": 8.4, "overload": false },
+                { "fenderId": "F08", "t_s": 797.02, "approach": true, "normalSpeed_mps": 0.135, "normalSpeed_kn": 0.263, "energy_kNm": 54.8, "ratedEnergy_kNm": 551.4, "energyRatio": 0.099,
+                  "maxReaction_kN": 592.7, "deflection_pct": 17.4, "overload": false } ],
+  "lines": [ { "lineId": "HEAD", "maxTension_t": 3.1, "mbl_t": 50, "maxTensionRatio": 0.06, "parted": false },
+             { "lineId": "FWDSPRING", "maxTension_t": 29.8, "mbl_t": 50, "maxTensionRatio": 0.60, "parted": false } ],
+  "tugs": [ { "id": "TG1", "workingTime_s": 610, "maxForce_t": 9.6, "bollardPull_t": 40, "lineParted": false },
+            { "id": "TG2", "workingTime_s": 515, "maxForce_t": 8.7, "bollardPull_t": 40, "lineParted": true, "linePartedAt_s": 600 } ]
+},
+"anchoring": {
+  "letGoCount": 1, "maxLetGoSog_kn": 1.71, "dragEvents": 4, "dragTime_s": 66, "maxChainTension_t": 12.4, "minScopeRatio": 5.5,
+  "firstDragAt_s": 1160.3, "dragDetectedAt_s": 1219, "dragResponseAt_s": 1219, "dragResponseTime_s": 58.7, "dragResponseBy": "event:anchorCommand:veer",
+  "anchors": [ { "side": "starboard", "letGoCount": 1, "letGoAt_s": 169, "letGoSog_mps": 0.88, "letGoSog_kn": 1.71, "maxLetGoSog_kn": 1.71, "targetLength_m": 165,
+                 "plannedScopeRatio": 5.5, "waterDepth_m": 30, "broughtUpAt_s": 480.2, "broughtUpLength_m": 165, "broughtUpShackles": 6, "scopeRatio": 5.5,
+                 "maxLength_m": 192.5, "maxTension_t": 12.4, "dragEvents": 4, "firstDragAt_s": 1160.3, "dragTime_s": 66, "brakeSlips": 0 } ]
+}
+```
+
+### 9.4 情境
+
+| 情境 | 位置(示意) | 重點 | 評估(Python 相容的規則) |
+|---|---|---|---|
+| `E12_anchoring_kaohsiung` | 高雄外錨地 A12(`data/areas/kaohsiung-anchorage.json`,水深 30 m、軟泥,3 艘錨泊船) | 東北季風 22 kn → T+`anchoring.e12.monsoonSurgeAt_s` 增至 40 kn;鏈長選擇;走錨偵測與反應;教官手動主機失效 = 緊急下錨 | hardFail 擱淺/碰撞;bands 與錨泊船最小距離;required 錨備便、放錨後帶上**或錨妥回報**(`anchorBroughtUp` 或 acknowledge report,900 s、逾時每秒 0.02 分漸進;鏈長較長而帶上較晚者不被扣滿)、走錨反應(`anchoring.dragResponse_s`)、回報 |
+| `E13_tug_berthing_mailiao` | 麥寮油碼頭 MLO-OIL-3(`mailiao-berth.json`) | 2 艘 push-pull 拖船、引水人(角色)、東北吹開風;碼頭未準備 → 等待(`berthing.e13.berthReadyAfter_s`);就緒後 `tugLineBreak {id: TG2}` | hardFail 碼頭硬接觸/斷纜(event);bands 港內速限;required MPX、等待回報、拖纜斷裂反應;summary.berthing 繫妥時船位(`allFastPositionError_m`,泊位中心 = 碰墊列中點 130 m)。教官 `allFast` 為手動結束,不檢查纜繩狀態:以 summary 的 `allFastAt_s`(null = 未繫妥)與船位偏差講評 |
+| `E14_unberthing_no_tug` | 麥寮小型油品碼頭 MLO-SOB-1(新 `mailiao-small-oil-berth.json`,9 個 H 0.8 m 碰墊) | 壓載右舷靠、吹攏風、4 纜已繫;`engineStartFailure {attempts: 2}`;T+`unberthing.e14.windShiftAt_s` 轉吹開風 | hardFail 碼頭硬接觸/斷纜;required 簡報、起動失敗通知機控室、風向改變反應;summary.berthing(離泊接觸)、manoeuvring.thruster* |
+
