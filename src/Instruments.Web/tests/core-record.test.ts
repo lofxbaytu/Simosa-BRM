@@ -1,6 +1,6 @@
-// 核心與教官站的契約一致性:用 C# 主控程序實際產生的紀錄(tests/fixtures/record-E07-core.jsonl、record-E01-core.jsonl;
+// 核心與教官站的契約一致性:用 C# 主控程序實際產生的紀錄(tests/fixtures/record-E07-core.jsonl、record-E01-core.jsonl、record-E05-core.jsonl;
 // `dotnet run --project src/SimCore.Host -- --scenario data/scenarios/E07_steering_failure.yaml --record … --duration 300 --timescale 10`
-// 後縮短:保留 header、每 5 s(E07)/10 s(E01)一筆 state、全部 event、3 筆 snapshot、summary、footer)驗證:
+// 後縮短:保留 header、每 10 s(E07、E05)/20 s(E01)一筆 state、全部 event、3 筆 snapshot、summary、footer)驗證:
 //  - record-replay 解析器讀得到 header v2 / parameterSet / event / summary / footer;
 //  - 事件解析(sim-event)對核心每一種實際輸出的 kind 都有 source、t、data 與中文標籤;
 //  - summary 解析(assessment)欄位名與核心 AssessmentSummary.cs 一致(freezes、t_s、clause、escort、legIndex…);
@@ -22,6 +22,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, '../../..');
 const e07Text = readFileSync(path.resolve(here, 'fixtures/record-E07-core.jsonl'), 'utf-8');
 const e01Text = readFileSync(path.resolve(here, 'fixtures/record-E01-core.jsonl'), 'utf-8');
+const e05Text = readFileSync(path.resolve(here, 'fixtures/record-E05-core.jsonl'), 'utf-8');
 const e07Lines = e07Text.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>);
 
 describe('核心紀錄(E07_steering_failure,MMG,300 s)', () => {
@@ -239,5 +240,94 @@ describe('核心紀錄(E01_baseline,MMG,300 s)', () => {
     const sum = parseAssessmentSummary(lines.find((l) => l['kind'] === 'summary')!['summary']);
     expect(sum?.final).toBe(true);
     expect(sum?.raw['general']).toEqual({ duration_s: 300, freezes: 0, distance_nm: sum!.general.distance_nm, avgSog_kn: sum!.general.avgSog_kn, maxSog_kn: sum!.general.maxSog_kn });
+  });
+});
+
+// E05 無任何 ${params:…} 引用、無 route/zones/timeline/評估規則:核心紀錄的 header 與 summary 都「省略」parameterSet 鍵
+//(不是 null、不是空物件),解析器也不補;PILOT 以 ownDistance 觸發,300 s 內自船距引水站仍 > 1.5 nm,故只有 3 個目標出現。
+describe('核心紀錄(E05_pilot_traffic,MMG,300 s,無參數集)', () => {
+  const r = parseReplay(e05Text);
+  const lines = e05Text.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>);
+
+  it('格式與分段:30 筆 state、3 筆 snapshot、無輸入', () => {
+    expect(r.source).toBe('simcore-jsonl');
+    expect(r.errors).toEqual([]);
+    expect(r.unknownKinds).toEqual({});
+    expect(r.states).toHaveLength(30);
+    expect(r.snapshots.map((s) => s.tick)).toEqual([500, 5000, 15000]);
+    expect(r.inputs).toEqual([]);
+    expect(r.footer).toMatchObject({ finalTick: 15000, inputs: 0 });
+    expect(r.footer!.stateHash).toMatch(/^[0-9A-F]{64}$/);
+  });
+
+  it('header:無參數集時 parameterSet 鍵省略(原始行與解析結果皆 undefined),情境無引用', () => {
+    expect(r.header).toMatchObject({ version: 2, dt: 0.02, shipId: 'FSB1', loading: 'full', seed: 20260505, dynamics: 'mmg/1', scenarioId: 'E05_pilot_traffic' });
+    const headerLine = lines.find((l) => l['kind'] === 'header')!;
+    expect('parameterSet' in headerLine).toBe(false);
+    expect(r.header.parameterSet).toBeUndefined();
+    expect(JSON.stringify(r.header.scenario)).not.toContain('${params:');
+    const fromHeader = parseScenario(JSON.stringify(r.header.scenario), 'data/scenarios/E05_pilot_traffic.yaml');
+    const fromYaml = parseScenario(readFileSync(path.join(projectRoot, 'data/scenarios/E05_pilot_traffic.yaml'), 'utf-8'), 'data/scenarios/E05_pilot_traffic.yaml');
+    expect(fromHeader.issues).toEqual([]);
+    expect(fromYaml.paramRefs).toHaveLength(0);
+    expect(fromHeader.paramRefs).toHaveLength(0);
+    expect(fromHeader.timeline).toHaveLength(0);
+    expect(fromHeader.route).toBeNull();
+    expect(fromHeader.zones).toHaveLength(0);
+    expect(fromHeader.assessment.minCpa_nm).toEqual({ value: 0.5 });
+  });
+
+  it('目標船:情境 4 艘,300 s 內出現 3 艘(PILOT 的 ownDistance 觸發未達),最後一幀 targets 為 T1/T2/T3', () => {
+    expect((r.header.scenario as { targets: unknown[] }).targets).toHaveLength(4);
+    const last = r.states[r.states.length - 1]!;
+    expect(last.targets.map((t) => t.id)).toEqual(['T1', 'T2', 'T3']);
+    expect(last.targets.map((t) => t.behaviour)).toEqual(['colreg', 'colreg', 'colreg']);
+    expect(last.targets[0]).toMatchObject({ name: 'EVER ORIENT', shipType: 'cargo', aisOn: true });
+    expect(last.targets[2]!.ais?.mmsi).toBe(416300103);
+    expect(last.scenario).toMatchObject({ id: 'E05_pilot_traffic', phase: 'normal', timelineFired: 0, timelinePending: 0, hardFailed: false, score: 100, ended: false });
+    expect(last.scenario?.parameterSetVersion).toBeUndefined();
+    expect(last.route).toBeUndefined();
+    let prev: OwnShipState | undefined;
+    for (const line of lines.filter((l) => l['kind'] === 'state')) {
+      const parsed = parseState(line['state'], prev)!;
+      expect(parsed.issues).toEqual([]);
+      prev = parsed.state;
+    }
+  });
+
+  it('event 行:11 個事件(colreg ×4、cpaAlarm ×3、encounterStarted ×3、cpaClear ×1),皆屬 traffic/assessment 來源', () => {
+    expect(r.events).toHaveLength(11);
+    expect(r.events.map((e) => e.seq)).toEqual([...Array(11).keys()]);
+    expect(r.events.slice(0, 9).every((e) => e.tick === 50)).toBe(true);
+    expect(r.events.map((e) => e.kind)).toEqual([
+      'colreg', 'colreg', 'colreg', 'cpaAlarm', 'cpaAlarm', 'cpaAlarm', 'encounterStarted', 'encounterStarted', 'encounterStarted', 'colreg', 'cpaClear',
+    ]);
+    expect(r.events.slice(0, 3).map((e) => [e.targetId, e.message])).toEqual([['T1', 'headOn/giveWay'], ['T2', 'crossing/standOn'], ['T3', 'crossing/giveWay']]);
+    expect(r.events.at(-1)).toMatchObject({ kind: 'cpaClear', targetId: 'T1', t: 148 });
+    for (const e of r.events) {
+      expect(e.source).toBe(defaultSourceFor(e.kind));
+      expect((SIM_EVENT_KINDS as readonly string[]).includes(e.kind)).toBe(true);
+      expect(eventLabel(e)).not.toMatch(/\?|undefined|NaN/);
+      expect(eventLabel(e).startsWith(e.kind)).toBe(false);
+    }
+    expect(eventSeverity(r.events[3]!)).not.toBe('info');
+  });
+
+  it('summary 行:無參數集時 parameterSet 省略、無規則時 bands/required/parameters 為空、track 為 null、3 筆會遇', () => {
+    const s = r.summary!;
+    const summaryLine = lines.find((l) => l['kind'] === 'summary')!['summary'] as Record<string, unknown>;
+    expect('parameterSet' in summaryLine).toBe(false);
+    expect(s.parameterSet).toBeUndefined();
+    expect(s).toMatchObject({ version: 1, advisory: true, final: true, scenarioId: 'E05_pilot_traffic', shipId: 'FSB1', loading: 'full' });
+    expect(s.assessment).toMatchObject({ score: 100, passMark: 70, passed: true, hardFailed: false, hardFails: [], bands: [], required: [], parameters: [] });
+    expect(s.track).toBeNull();
+    expect(s.collisionAvoidance).toMatchObject({ encounters: 3, collisions: 0 });
+    expect(s.collisionAvoidance.targets.map((t) => [t.targetId, t.situation])).toEqual([['T1', 'headOn/giveWay'], ['T2', 'crossing/standOn'], ['T3', 'crossing/giveWay']]);
+    expect(s.events.total).toBe(11);
+    expect(s.events.byKind).toEqual({ colreg: 4, cpaAlarm: 3, cpaClear: 1, encounterStarted: 3 });
+    expect(s.ukc).toMatchObject({ timeBelowLimit_s: 0, excursions: 0, groundings: 0 });
+    expect(s.ukc!.limit_m).toBeUndefined();
+    expect(s.manoeuvring.telegraphOrders).toEqual([{ order: 'HAH', from_s: 0, to_s: 300, duration_s: 300 }]);
+    expect(parseAssessmentSummary(summaryLine)?.final).toBe(true);
   });
 });

@@ -1,0 +1,217 @@
+# E09 全船失電:高雄第二港口進港段,引水人在船,距碼頭約 1.5 nm(規劃書第 8.1 節 E09;schema:src/Contracts/scenario.schema.json;情境引擎設計第 8.3 節)
+# FSB1 滿載自第二港口防波堤口進港,沿 3 段航道(走廊半寬 50 m)以 SAH 6 kn 接近油碼頭;港內退潮流 0.6 kn 逆向、西南風 12 kn。
+# 時間表(以既有動作組合,不改引擎):T+120 s 全船失電(injectFault mainEngine + steeringGear 為 modelled;blackout/gyroFailure/radarFailure 只記錄,供儀器端反應;階段 emergency)
+#          → 45 s 後應急發電機供電(clearFault steeringGear:操舵恢復)→ 失電後 6 分鐘主機恢復(clearFault mainEngine,階段 degraded)
+#          → 教官確認「儀器重啟完成」後清除只記錄的故障並回 normal。60 s 內無相關動作(必要事件 blackoutFirstAction 逾時)則引水人催促下錨;失電後 90 s VTS 詢問狀況。
+# 評估:失電首個相關動作 ≤ 60 s(車令 STOP/操舵模式切換,或備援的 acknowledge checklist)、下錨決策 acknowledge anchorReady ≤ 180 s、向 VTS 報告 ≤ 180 s、
+#        UKC 與淺灘禁區硬性失敗、CPA 容許帶(航道門檻 navigation.cpa.channel_nm)、速限引用 port.kaohsiung.* 參數。
+id: E09_blackout
+name: 高雄港進港全船失電
+description: >-
+  第二港口進港段全船失電:主機停車、失去操舵、電羅經與雷達失效;應急發電機 45 s 後供電(操舵恢復),主機 6 分鐘後才可用。
+  團隊需排定優先順序(車鐘歸零、備便雙錨、下錨決策)、通知 VTS/引水/拖船,並監控漂移、UKC 與出港船;評估應變時間、下錨決策與溝通。
+seed: 20260909
+startTimeUtc: "2026-09-09T01:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.5500, lon: 120.2900 }
+initial:
+  position: { lat: 22.5496, lon: 120.2892 }    # WP1 西南 0.05 nm,位於航段 0 的延長線上(航向 058°);距泊位約 1.55 nm
+  heading: 58
+  speed: 6.0
+  telegraph: SAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 12, trueDir: 225, gustiness: 0.15 }
+  current: { set: 240, drift: 0.6 }             # 退潮,沿航道逆向流出
+  waterDepth: 14                                 # 航道外;航道內由 zones channel 覆寫 12.5 m
+  visibility_nm: 5
+briefing:
+  text: |
+    高雄第二港口進港,滿載,引水人已登船(由帶領者扮演)。航道三段:WP1→WP2 058°、WP2→WP3 020°、WP3→泊位 347°;
+    走廊半寬 50 m,航道速限 10 kn、港內 8 kn、碼頭 500 m 內 5 kn;退潮 0.6 kn 逆向。UKC 政策:航道內 ≥ 10% 吃水。
+    發生全船失電時依公司緊急程序 SMS-EMG-005 處置:車鐘歸零、備便雙錨、通知 VTS 與引水人、評估下錨或等待拖船。
+  attachments:
+    - { title: 航程計畫(高雄第二港口進港), file: docs/passage-plan-kaohsiung.pdf }
+    - { title: 緊急程序 — 全船失電, file: docs/SMS-EMG-005.pdf }
+  roles:
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: vts, playedBy: voiceScript }
+  minParticipants: 3
+route:
+  name: 高雄第二港口進港航道
+  xtdLimit_m: "${params:navigation.xtd.channel_m}"
+  waypoints:
+    - { name: WP1, lat: 22.5500, lon: 120.2900, speedLimit_kn: "${params:port.kaohsiung.channelSpeedLimit_kn}" }
+    - { name: WP2, lat: 22.5562, lon: 120.3008, checkpoint: true, speedLimit_kn: "${params:port.kaohsiung.channelSpeedLimit_kn}" }
+    - { name: WP3, lat: 22.5632, lon: 120.3036, checkpoint: true, speedLimit_kn: "${params:port.kaohsiung.speedLimit_kn}", report: "高雄 VTS 報告點(VHF 14)" }
+    - { name: BERTH, lat: 22.5690, lon: 120.3022, arrivalRadius_m: 120, speedLimit_kn: "${params:port.kaohsiung.berthSpeedLimit_kn}" }
+zones:
+  - id: channel
+    name: 進港航道(UKC 政策區)
+    type: ukcPolicy
+    waterDepth_m: 12.5
+    ukcMin: { fractionOfDraft: "${params:navigation.ukc.channel_fraction}" }
+    polygon:                                     # 航線兩側 130 m
+      - { lat: 22.5490, lon: 120.2907 }
+      - { lat: 22.5552, lon: 120.3015 }
+      - { lat: 22.5628, lon: 120.3048 }
+      - { lat: 22.5693, lon: 120.3034 }
+      - { lat: 22.5687, lon: 120.3010 }
+      - { lat: 22.5636, lon: 120.3024 }
+      - { lat: 22.5572, lon: 120.3001 }
+      - { lat: 22.5510, lon: 120.2893 }
+  - id: shoal_SE
+    name: 航道東南側淺灘(禁區)
+    type: noGo
+    polygon:
+      - { lat: 22.5455, lon: 120.2930 }
+      - { lat: 22.5515, lon: 120.3040 }
+      - { lat: 22.5485, lon: 120.3060 }
+      - { lat: 22.5425, lon: 120.2950 }
+  - id: berthApproach
+    name: 碼頭 500 m 速限區
+    type: speedLimit
+    speedLimit_kn: "${params:port.kaohsiung.berthSpeedLimit_kn}"
+    polygon:
+      - { lat: 22.5645, lon: 120.2973 }
+      - { lat: 22.5735, lon: 120.2973 }
+      - { lat: 22.5735, lon: 120.3071 }
+      - { lat: 22.5645, lon: 120.3071 }
+targets:
+  - id: OUT1
+    name: HAI AN 8
+    mmsi: 416400301
+    shipType: cargo
+    loa: 100
+    beam: 16
+    draft: 6.0
+    initial:
+      position: { lat: 22.5572, lon: 120.2995 }   # 航道內出港:自 WP2 左舷側 170 m 起沿自船航段 0 的平行線反向航行,左舷對左舷通過(COLREG 第 9/14 條);失電後約 3 分鐘通過
+      heading: 238
+      speed: 5
+    behaviour:
+      mode: waypoints
+      waypoints:                                   # 自船 WP1 與其延長線向左舷平移 170 m
+        - { lat: 22.5513, lon: 120.2891, speed: 6 }
+        - { lat: 22.5473, lon: 120.2821, speed: 7 }
+      stopAtEnd: true
+    trigger: { type: time, time: 150 }
+  - id: ANCH1
+    name: YONG XING
+    mmsi: 416400302
+    shipType: tanker
+    loa: 110
+    beam: 18
+    initial: { position: { lat: 22.5503, lon: 120.2988 }, heading: 60 }    # 航道右舷側 450 m 錨泊(淺灘與航道之間),艏向對退潮流(來向 060)
+    behaviour: { mode: anchored, anchor: { swing: 5, period: 600 } }   # 迴盪幅度小,避免錨泊船的擺動速度造成預測 CPA 雜訊
+timeline:
+  - id: pilotBrief
+    name: 引水人簡報(語音)
+    when: { type: time, atLeast: 30 }
+    actions:
+      - voiceScript: { role: pilot, channel: bridge, text: "船長,過了防波堤後保持六節,WP2 轉零二零,碼頭五百公尺內減到五節。前方有一艘出港船,左舷對左舷。", lang: zh-TW }
+      - message: { to: instructor, text: "引水人 MPX 開始;觀察是否核對航程計畫與速限", severity: info }
+  - id: blackout
+    name: 全船失電
+    phase: emergency
+    when: { type: time, atLeast: "${params:emergency.blackout.injectAt_s}" }
+    actions:
+      - injectFault: mainEngine                  # modelled:轉速衰減至 0,engine.state = failed
+      - injectFault: steeringGear                # modelled:舵卡在目前角(失去操舵)
+      - injectFault: blackout                    # 以下只記錄與廣播,由儀器端自行反應(燈光、ECDIS、警報)
+      - injectFault: gyroFailure
+      - injectFault: radarFailure
+      - voiceScript: { role: ecr, channel: phone, text: "機艙:全船失電!主機跳脫,應急發電機起動中。", lang: zh-TW }
+      - message: { to: instructor, text: "已注入全船失電(主機 + 舵機 + 電羅經/雷達);期望 60 s 內車鐘歸零或切換操舵模式、180 s 內下錨決策與通知 VTS(SMS-EMG-005)", severity: alarm }
+  - id: emergencyPower
+    name: 應急發電機供電(操舵恢復)
+    when: { type: time, atLeast: "${params:emergency.blackout.emergencyPower_s}", since: { event: timelineTriggered, itemId: blackout } }
+    actions:
+      - clearFault: steeringGear
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,應急發電機已供電,舵機一號泵恢復。主機要重新起動,至少五到八分鐘。", lang: zh-TW }
+      - message: { to: all, text: "應急發電機供電,操舵恢復", severity: warning }
+  - id: vtsCall
+    name: VTS 詢問狀況
+    when: { type: time, atLeast: "${params:emergency.blackout.vtsCallAfter_s}", since: { event: timelineTriggered, itemId: blackout } }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.1, Kaohsiung VTS, 看到你在航道減速,請報狀況與意圖。", lang: zh-TW }
+  - id: pilotPrompt
+    name: 引水人催促(無反應時)
+    when:                                        # 「無反應」= 必要事件 blackoutFirstAction 逾時(失電後 firstAction_s 內無車令/操舵模式切換/確認)
+      all:
+        - { type: fault, name: blackout, active: true }
+        - { type: event, kind: requiredEventMissed, itemId: blackoutFirstAction }
+    actions:
+      - voiceScript: { role: pilot, channel: bridge, text: "船長,船沒車沒舵了,還在往前漂。要不要先備便雙錨?我叫拖船過來。", lang: zh-TW }
+      - message: { to: instructor, text: "失電後 60 s 無相關動作;觀察船長是否主導優先順序(車鐘歸零 → 備便錨 → 通知 VTS)", severity: warning }
+  - id: engineRestored
+    name: 主機恢復可用
+    phase: degraded
+    when: { type: time, atLeast: "${params:emergency.blackout.mainEngineRestore_s}", since: { event: timelineTriggered, itemId: blackout } }
+    actions:
+      - clearFault: mainEngine
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,主機已備便,可以用車。電羅經還在穩定中,請用磁羅經核對。", lang: zh-TW }
+      - message: { to: all, text: "主機恢復可用;電羅經與雷達仍待重啟", severity: warning }
+  - id: instrumentsRestored
+    name: 儀器重啟完成(教官確認後清除只記錄的故障)
+    manual: true
+    actions:
+      - clearFault: blackout
+      - clearFault: gyroFailure
+      - clearFault: radarFailure
+      - message: { to: all, text: "電羅經與雷達恢復正常", severity: info }
+      - phase: normal
+  - id: speedCoach
+    name: 超速提示
+    repeat: { every_s: 60, max: 3 }
+    when: { type: event, kind: speedLimitExceeded }
+    actions:
+      - message: { to: instructor, text: "超過航道/港內/碼頭速限;觀察引水人與船長是否提出", severity: warning }
+  - id: end
+    name: 到達泊位附近結束
+    when: { type: ownDistance, waypoint: BERTH, lessThan: 0.15 }
+    actions:
+      - endExercise: { reason: 到達泊位接近區 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.channel_nm}"       # 航道內通過距離門檻(cpaAlarm 與會遇關注 2×)
+  encounter:
+    detectionRange_nm: 3
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  ukc:
+    min: { metres: "${params:navigation.ukc.minimum_m}" }
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: collision, rule: collision }
+    - { id: noGo, rule: zoneEntered, zoneId: shoal_SE }
+    - { id: ukcHard, rule: ukc, lessThan: { fractionOfDraft: "${params:navigation.ukc.hardFail_fraction}" } }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.channel_m}", fail: 2x, penalty: 10, failPenalty: 25 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 120, penalty: 5, failPenalty: 15 }
+    - { id: ukcTime, metric: ukc.timeBelowLimit_s, warn: 0, fail: 30, penalty: 10, failPenalty: 25 }
+    - { id: speed, metric: manoeuvring.timeOverSpeedLimit_s, warn: 0, fail: 120, penalty: 5, failPenalty: 15 }
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.channel_nm}", fail: "${params:navigation.cpa.channelHardFail_nm}", penalty: 10, failPenalty: 30 }
+  required:
+    - id: blackoutFirstAction
+      after: { event: faultInjected, itemId: blackout }
+      expect: { any: [ telegraphChange, steeringModeChange, { acknowledge: { kind: checklist } } ] }   # 車鐘歸 STOP(telegraph 指令)或操舵模式切換可自動偵測;acknowledge checklist(失電清單啟動)為備援
+      within_s: "${params:emergency.blackout.firstAction_s}"
+      penalty: 20
+      latePenaltyPer_s: 0.5
+    - id: anchorDecision
+      after: { event: faultInjected, itemId: blackout }
+      expect: { acknowledge: { kind: anchorReady } }        # 教官/帶領者按「下錨決策/備便錨」(command.schema acknowledge.kind 列舉無 anchor,以 anchorReady 代表)
+      within_s: "${params:emergency.blackout.anchorReady_s}"
+      penalty: 15
+    - id: notifyVts
+      after: { event: faultInjected, itemId: blackout }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:emergency.blackout.notifyVts_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

@@ -248,6 +248,30 @@ describe('操舵模式面板', () => {
     expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'autopilot', args: { pump: '2', heading: 123, rotLimit: 12 } });
   });
 
+  it('compact(簡化教官模式):只有 FU / NFU / 應急操舵三鈕與 NFU 推桿,沒有自動舵、泵與航向/ROT 表單;指令照常送出', async () => {
+    const cmds = captureCommands();
+    const el = await mount('brm-steering-panel', { state: { ...defaultState('FSB1'), steering: { mode: 'fu', pump: 'both' } } }, { compact: '' });
+    expect(shadowText(el)).toContain('FU 隨動 · 泵 both');
+    expect(Array.from(el.shadowRoot!.querySelectorAll('.modes button')).map((b) => b.className.split(' ')[0])).toEqual(['mode-fu', 'mode-nfu', 'mode-emergency']);
+    expect(el.shadowRoot!.querySelector('button.mode-autopilot')).toBeNull();
+    expect(el.shadowRoot!.querySelector('select.pump')).toBeNull();
+    expect(el.shadowRoot!.querySelector('input.ap-heading')).toBeNull();
+    q<HTMLButtonElement>(el, 'button.mode-nfu').click();
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'stop' } });
+    q<HTMLButtonElement>(el, 'button.nfu-port').dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'port' } });
+    q<HTMLButtonElement>(el, 'button.nfu-port').dispatchEvent(new Event('pointerup', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'stop' } });
+    q<HTMLButtonElement>(el, 'button.nfu-stbd').dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'starboard' } });
+    q<HTMLButtonElement>(el, 'button.nfu-stbd').dispatchEvent(new Event('pointerleave', { bubbles: true }));
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'nfu', args: { direction: 'stop' } });
+    q<HTMLButtonElement>(el, 'button.mode-emergency').click();
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'emergency' });
+    q<HTMLButtonElement>(el, 'button.mode-fu').click();
+    expect(cmds.at(-1)).toEqual({ type: 'steeringMode', value: 'fu' });
+  });
+
   it('核心未回報時顯示提示;應急操舵中自動舵鈕停用', async () => {
     const el = await mount<HTMLElement & { state: OwnShipState | null }>('brm-steering-panel', { state: null });
     expect(shadowText(el)).toContain('核心未回報');

@@ -173,7 +173,9 @@ public sealed class Scenario
             if (!ruleIds.Add(r.Id)) Error(path, $"規則 id 重複:{r.Id}");
             if (!HardFailRule.Rules.Contains(r.Rule)) Error(path, $"未知的 rule:{r.Rule}");
             if (r.Rule == "cpa" && r.LessThanNumber is null) Error(path, "cpa 規則需要 lessThan(nm)");
-            if (r.Rule == "ukc" && r.LessThanUkc is null) Error(path, "ukc 規則需要 lessThan {metres|fractionOfDraft}");
+            // lessThan 須為物件且至少含 metres 或 fractionOfDraft 其一(與 Python structural_issues 相同;純數字或空物件皆不可)
+            if (r.Rule == "ukc" && (r.LessThanUkc is not { } u || u.Metres is null && u.FractionOfDraft is null))
+                Error(path, "ukc 規則需要 lessThan {metres|fractionOfDraft}");
             if (r.Rule == "zoneEntered" && (r.ZoneId is null || !zoneIds.Contains(r.ZoneId))) Error(path, $"zoneEntered 引用不存在的區域:{r.ZoneId}");
             if (r.Rule == "event" && string.IsNullOrWhiteSpace(r.Kind)) Error(path, "event 規則需要 kind");
         }
@@ -197,6 +199,7 @@ public sealed class Scenario
             if (r.After.Waypoint is { } awp && !wpNames.Contains(awp)) Error($"{path}.after", $"after 引用不存在的航點:{awp}");
             if (r.After.ZoneId is { } azid && !zoneIds.Contains(azid)) Error($"{path}.after", $"after 引用不存在的區域:{azid}");
             if (r.WithinS <= 0) Error(path, "within_s 必須為正");
+            if (r.Expect.IsEmpty) Error($"{path}.expect", "必要事件需要 expect");
             foreach (var leaf in r.Expect.Leaves())
             {
                 if (leaf.Name is { } n && !ExpectSpec.SimpleNames.Contains(n)) Error($"{path}.expect", $"未知的 expect:{n}");

@@ -28,16 +28,19 @@ export class ConningBar extends LitElement {
     .bar {
       height: 100%;
       display: grid;
-      grid-template-columns: 1.7fr 1fr 1.1fr 1.8fr 1.5fr 1.1fr 1fr 1.2fr 1.1fr 1.3fr;
+      /* 格序:HDG ROT SPEED RUDDER RPM BOW-THR UKC WIND CURRENT TIME/POS(ROUTE) */
+      grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.5fr;
       gap: 6px;
     }
     .bar.with-route {
-      grid-template-columns: 1.7fr 1fr 1.1fr 1.8fr 1.5fr 1.1fr 1fr 1.2fr 1.1fr 1.3fr 1.3fr;
+      /* 單列 11 格(教官站 1920 寬):風/流/時間格加寬,避免「真風 040° 12.0 kn」「流向 SET 200°」「23°48.004'N」被截斷 */
+      grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.5fr 1.1fr;
     }
     @media (max-width: 1500px) {
       .bar,
       .bar.with-route {
-        grid-template-columns: 1.7fr 1fr 1.1fr 1.8fr 1.5fr 1.1fr;
+        /* 兩列 × 6 格:第二列為 UKC / 風 / 流 / 時間 / 航線,第 2 欄(ROT / 風)略加寬 */
+        grid-template-columns: 1.6fr 1.1fr 1.2fr 1.7fr 1.4fr 1.1fr;
         grid-template-rows: 1fr 1fr;
       }
     }

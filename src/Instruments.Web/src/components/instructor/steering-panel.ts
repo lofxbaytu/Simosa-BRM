@@ -1,6 +1,7 @@
 // 操舵模式控制(規劃書第 7.2 節操舵模式選擇;設計文件 D32/D35):顯示 state.steering(模式、泵、NFU 推舵中),
 // 按鈕 FU / NFU / 自動舵 / 應急操舵送 steeringMode 指令;NFU 的左/右推桿按住送 direction、放開送 stop;
 // 泵選擇隨指令附上;自動舵可帶設定航向與 ROT 限制。核心只有 C# SimCore 支援(Python 參考伺服器照收無作用)。
+// compact 屬性(簡化教官模式執行畫面):只顯示目前模式、FU / NFU / 應急操舵三鈕與 NFU 左右推桿,不顯示自動舵、泵與航向/ROT 表單。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -42,6 +43,17 @@ export class SteeringPanel extends LitElement {
         font-weight: 600;
         font-size: 12px;
       }
+      :host([compact]) .modes {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      :host([compact]) .modes button,
+      :host([compact]) .nfu button {
+        min-height: 44px;
+        font-size: 15px;
+      }
+      :host([compact]) .status {
+        font-size: 16px;
+      }
       .nfu {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
@@ -67,6 +79,8 @@ export class SteeringPanel extends LitElement {
   ];
 
   @property({ attribute: false }) state: OwnShipState | null = null;
+  /** 精簡版(簡化教官模式):只有模式狀態、FU / NFU / 應急操舵三鈕與 NFU 推桿。 */
+  @property({ type: Boolean, reflect: true }) compact = false;
 
   @state() private pump: SteeringPump | '' = '';
   @state() private heading: number | undefined;
@@ -117,12 +131,13 @@ export class SteeringPanel extends LitElement {
     const st = this.state?.steering;
     const mode = st?.mode;
     const emergencyBlocksAutopilot = mode === 'emergency';
+    const modes = this.compact ? STEERING_MODES.filter((m) => m !== 'autopilot') : STEERING_MODES;
     return html`
       <div class="panel">
         <div class="panel-title"><span>操舵模式 STEERING</span><span class="tag unsupported">僅 C# 核心</span></div>
         <div class="status ${st ? st.mode : 'none'}" aria-live="polite">${steeringLabel(st)}</div>
         <div class="modes" role="group" aria-label="操舵模式">
-          ${STEERING_MODES.map(
+          ${modes.map(
             (m) => html`<button class="mode-${m} ${mode === m ? 'active' : ''}" ?disabled=${m === 'autopilot' && emergencyBlocksAutopilot} title=${m === 'autopilot' && emergencyBlocksAutopilot ? '應急操舵中接不到自動舵,需先切回 FU' : ''} @click=${() => this.setMode(m)}>${STEERING_MODE_LABEL[m]}</button>`,
           )}
         </div>
@@ -153,7 +168,9 @@ export class SteeringPanel extends LitElement {
             右 STBD ▶
           </button>
         </div>
-        <div class="form">
+        ${this.compact
+          ? nothing
+          : html`<div class="form">
           <label>舵機泵</label>
           <select class="pump" .value=${this.pump} @change=${this.setPump}>
             <option value="">(核心目前${st ? ` ${st.pump}` : ''})</option>
@@ -164,8 +181,8 @@ export class SteeringPanel extends LitElement {
             <input class="ap-heading" type="number" min="0" max="360" step="1" placeholder="保持" .value=${this.heading === undefined ? '' : String(this.heading)} @input=${(e: Event) => (this.heading = numberFromInput(e.target))} />
             <input class="ap-rot" type="number" min="1" max="120" step="1" placeholder="限制" .value=${this.rotLimit === undefined ? '' : String(this.rotLimit)} @input=${(e: Event) => (this.rotLimit = numberFromInput(e.target))} />
           </div>
-        </div>
-        ${emergencyBlocksAutopilot ? html`<div class="hint bad">應急操舵中:自動舵指令會被核心拒絕(commandRejected),需先切回 FU</div>` : nothing}
+        </div>`}
+        ${emergencyBlocksAutopilot && !this.compact ? html`<div class="hint bad">應急操舵中:自動舵指令會被核心拒絕(commandRejected),需先切回 FU</div>` : nothing}
         ${mode === 'nfu' ? html`<div class="hint">NFU:按住左/右推桿推舵,放開即停;離開 NFU 時舵令同步到目前舵角</div>` : nothing}
       </div>
     `;

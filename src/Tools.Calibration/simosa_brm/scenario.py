@@ -15,7 +15,7 @@
   id 唯一、參照存在、動作/條件/規則名稱在允許清單、航點 ≥ 2 且不重合、多邊形 3–64 點且不自交 …),**不模擬**;解析後的子樹
   原樣保留在結果中。與 C# 相同:origin 未給時先以 initial.position 推導再做航點/多邊形幾何檢查;id/name 可為數字(讀成字串)、
   ``repeat`` 不分大小寫、``bands[].fail`` 字串 strip 後再比對、briefing 不檢查數值範圍。
-  **刻意比 C# 嚴**(C# 目前缺口):``required[].expect`` 必填、``ukc`` 規則的 lessThan 需 metres|fractionOfDraft。
+  ``required[].expect`` 必填、``ukc`` 規則的 lessThan 需 metres|fractionOfDraft:C# ``Scenario.StructuralIssues`` 已同步檢查(兩邊一致)。
 """
 
 from __future__ import annotations

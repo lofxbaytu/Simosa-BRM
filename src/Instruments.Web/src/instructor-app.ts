@@ -5,7 +5,7 @@
 //    教官指令與核心回應、BRM 快速標記(第 8.2 節五大類)。
 //    核心推送的事件框 {"type":"event"} 與評估框 {"type":"assessment"}(設計文件 docs/design/scenario-engine.md 第 5.2 節)
 //    經 onMessage 收下;語音腳本事件由 VoiceScriptPlayer 播放(簡化模式自動、完整模式按「播放」)。
-//  - simple(?mode=simple):船上簡化教官模式(第 9.1 節 R13):選擇練習 → 簡報 → 開始 → 凍結/結束 →
+//  - simple(?mode=simple):船上簡化教官模式(第 9.1 節 R13):選擇練習 → 簡報 → 開始(含精簡版操舵面板)→ 凍結/結束 →
 //    自動講評摘要與紀錄下載。
 //  - replay(?mode=replay):講評站雛型(第 9.2 節),載入 JSON Lines 紀錄檔離線重播,不需核心。
 // 指令與狀態格式同儀器頁(src/Contracts);資料來源可為 WebSocket 核心或示範模式。
@@ -243,6 +243,9 @@ export class InstructorApp extends LitElement {
       .center .bottom {
         display: grid;
         grid-template-columns: 1.2fr 1fr 0.9fr 0.9fr;
+        /* 列高依面板內容(不平均分配),放不下時整列捲動,面板不會互相疊上 */
+        grid-auto-rows: max-content;
+        align-content: start;
         gap: 6px;
         max-height: 36vh;
         overflow: auto;
@@ -256,6 +259,19 @@ export class InstructorApp extends LitElement {
         }
         .body {
           grid-template-columns: 280px minmax(0, 1fr) 320px;
+        }
+      }
+      /* 1366×768 等寬度 ≤ 1440px 的筆電:中欄下方四個面板改兩列兩欄;左欄面板依內容高度排列、整欄捲動,避免面板擠壓與文字截斷 */
+      @media (max-width: 1440px) {
+        .center .bottom {
+          grid-template-columns: 1fr 1fr;
+          max-height: 42vh;
+        }
+        .col.left {
+          /* auto 列在可捲動的格線容器內會被平均分配(Chromium),用 max-content 讓列高跟著內容 */
+          grid-template-rows: max-content max-content max-content;
+          align-content: start;
+          overflow-y: auto;
         }
       }
 
@@ -331,9 +347,11 @@ export class InstructorApp extends LitElement {
       }
       .simple .stage.running .side {
         display: grid;
-        grid-template-rows: minmax(0, 1fr) auto minmax(0, 0.6fr);
+        /* 標記鈕、操舵面板、時間表依內容高度;操作紀錄吃剩餘高度,1366×768 放不下時側欄捲動 */
+        grid-template-rows: max-content max-content max-content minmax(90px, 1fr);
         gap: 10px;
         min-height: 0;
+        overflow-y: auto;
       }
       .simple .stage.running .actions {
         grid-column: 1 / -1;
@@ -1023,6 +1041,7 @@ export class InstructorApp extends LitElement {
             <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${this.alarmTargets}></brm-track-plot>
             <div class="side">
               <brm-marker-bar large .markers=${this.markers}></brm-marker-bar>
+              <brm-steering-panel compact .state=${this.hasReceived ? s : null}></brm-steering-panel>
               <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>
               <brm-operation-log .events=${this.opEvents} .max=${50}></brm-operation-log>
             </div>

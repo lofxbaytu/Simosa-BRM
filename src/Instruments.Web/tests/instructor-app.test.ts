@@ -20,8 +20,8 @@ const record = [
 
 const seekEvent = (t: number): SimEvent => ({ kind: 'frozen', tick: Math.round(t / 0.02), t, source: 'instructor', seq: 0, visible: false, phase: 'normal' });
 
-async function mountApp(): Promise<App> {
-  history.replaceState(null, '', '/?demo=1'); // 示範模式:不開 WebSocket
+async function mountApp(query = '/?demo=1'): Promise<App> {
+  history.replaceState(null, '', query); // 示範模式:不開 WebSocket
   const el = document.createElement('brm-instructor-app') as App;
   document.body.appendChild(el);
   await el.updateComplete;
@@ -190,5 +190,43 @@ describe('教官站操舵模式(示範模式)', () => {
     expect(last.command.type).toBe('autopilot');
     expect(last.ack).toMatchObject({ ok: false, detail: '應急操舵中不可自動舵' });
     expect(opLog.events.filter((e) => e.kind === 'steeringMode')).toHaveLength(2); // nfu、emergency 各一筆,事件與狀態不重複
+  });
+
+  it('簡化教官模式執行畫面有精簡版操舵面板(compact):只有 FU/NFU/應急三鈕與推桿,指令進示範核心並改變 state.steering', async () => {
+    const app = await mountApp('/?demo=1&mode=simple');
+    expect(app.shadowRoot!.querySelector('brm-steering-panel')).toBeNull(); // 選擇練習階段沒有
+    const scenarioPanel = app.shadowRoot!.querySelector('brm-scenario-panel') as App;
+    scenarioPanel.shadowRoot!.querySelector<HTMLButtonElement>('button.load')!.click(); // 預設選第一個情境
+    await app.updateComplete;
+    expect(app.shadowRoot!.querySelector('.stage.briefing')).not.toBeNull();
+    app.shadowRoot!.querySelector<HTMLButtonElement>('button.start')!.click();
+    await app.updateComplete;
+    expect(app.shadowRoot!.querySelector('.stage.running')).not.toBeNull();
+    const panel = app.shadowRoot!.querySelector('.stage.running .side brm-steering-panel') as (App & { compact: boolean }) | null;
+    expect(panel).not.toBeNull();
+    expect(panel!.compact).toBe(true);
+    expect(panel!.hasAttribute('compact')).toBe(true);
+    await panel!.updateComplete;
+    expect(panel!.shadowRoot!.querySelector('button.mode-autopilot')).toBeNull();
+    expect(panel!.shadowRoot!.querySelector('select.pump')).toBeNull();
+    expect(panel!.shadowRoot!.textContent).toContain('FU 隨動 · 泵 both');
+    panel!.shadowRoot!.querySelector<HTMLButtonElement>('button.mode-nfu')!.click();
+    await app.updateComplete;
+    await panel!.updateComplete;
+    expect(panel!.shadowRoot!.textContent).toContain('NFU 非隨動 · 泵 both · 推桿放開');
+    panel!.shadowRoot!.querySelector<HTMLButtonElement>('button.nfu-stbd')!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await app.updateComplete;
+    await panel!.updateComplete;
+    expect(panel!.shadowRoot!.textContent).toContain('推舵中');
+    panel!.shadowRoot!.querySelector<HTMLButtonElement>('button.nfu-stbd')!.dispatchEvent(new Event('pointerup', { bubbles: true }));
+    await app.updateComplete;
+    await panel!.updateComplete;
+    expect(panel!.shadowRoot!.textContent).toContain('推桿放開');
+    panel!.shadowRoot!.querySelector<HTMLButtonElement>('button.mode-emergency')!.click();
+    await app.updateComplete;
+    await panel!.updateComplete;
+    expect(panel!.shadowRoot!.textContent).toContain('應急操舵 · 泵 both');
+    const opLog = app.shadowRoot!.querySelector('brm-operation-log') as HTMLElement & { events: ReadonlyArray<{ kind: string; label: string }> };
+    expect(opLog.events.filter((e) => e.kind === 'steeringMode').map((e) => e.label)).toEqual(['操舵模式 FU 隨動 → NFU 非隨動(泵 both)', 'NFU 推桿推舵', 'NFU 推桿放開', '操舵模式 NFU 非隨動 → 應急操舵(泵 both)']);
   });
 });

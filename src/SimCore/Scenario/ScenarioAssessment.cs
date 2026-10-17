@@ -154,6 +154,9 @@ public sealed class ExpectSpec
         "rudderOrder", "telegraphChange", "rpmOrder", "thrusterOrder", "steeringModeChange", "autopilotOn", "autopilotOff", "acknowledge",
     };
 
+    /// <summary>未給任何內容(YAML 缺 expect 時反序列化的預設值);Scenario.StructuralIssues 視為錯誤,與 Python scenario.py 一致。</summary>
+    [JsonIgnore] public bool IsEmpty => Name is null && Acknowledge is null && Event is null && Any is null;
+
     /// <summary>所有 leaf。</summary>
     public IEnumerable<ExpectSpec> Leaves()
     {

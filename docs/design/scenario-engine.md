@@ -1014,6 +1014,27 @@ assessment:
 
 備註:座標為示意(麥寮港外海岸線與航道以實際 ENC/港方資料校正,第 3.4 節);`audio/E07/*.ogg` 不存在時教官站退回 TTS(`voiceScript.file` 缺檔為載入 warning)。情境包目錄 `data/scenarios/E07_steering_failure/`(音檔、附件)為選配。
 
+### 8.3 `E09_blackout.yaml`(新,2026-10-17):全船失電的時間表組合
+
+規劃書第 8.1 節 E09「進港、引水人在船、距碼頭 1.5 nm;全船失電;應急發電機 45 s;主機 5 至 8 分鐘不可用;失去操舵」。第 1.1.4 節把 `blackout` 列為「只記錄(第一版;後續 = mainEngine + steeringGear + 儀器失效的組合)」;E09 **不改引擎**,直接以時間表把這個組合寫成三個時刻的動作(檔案 `data/scenarios/E09_blackout.yaml`;高雄第二港口進港段,FSB1 滿載,引水人已登船,目標船 OUT1 出港、ANCH1 錨泊)。
+
+| 時刻(自情境開始) | 項目 | 動作 | 效果 |
+|---|---|---|---|
+| T+120 s(`emergency.blackout.injectAt_s`) | `blackout`(`phase: emergency`) | `injectFault` × 5:`mainEngine`、`steeringGear`(modelled)+ `blackout`、`gyroFailure`、`radarFailure`(只記錄);`voiceScript` 機艙「全船失電」;`message` 教官 | 轉速衰減至 0、`engine.state = failed`;舵卡在目前角;`faults[]` 含 5 項供儀器端反應(燈光、ECDIS、雷達、電羅經);必要事件 `blackoutFirstAction`/`anchorDecision`/`notifyVts` 開始計時(`requiredEventPending` × 3) |
+| +45 s(`emergency.blackout.emergencyPower_s`,`since: {event: timelineTriggered, itemId: blackout}`) | `emergencyPower` | `clearFault: steeringGear`;`message: {to: all}`「應急發電機供電,操舵恢復」 | 舵再度可動;主機仍 failed(`mainEngine` 仍在 `faults[]`) |
+| +90 s(`emergency.blackout.vtsCallAfter_s`) | `vtsCall` | VTS 語音詢問狀況(`vhfPort`) | 期望 `acknowledge {kind: report}` |
+| 必要事件 `blackoutFirstAction` 逾時(`requiredEventMissed`,與 E07 `ecrPrompt` 同寫法,D26) | `pilotPrompt` | 引水人催促備便雙錨 | 只在失電後 60 s 內無車令/操舵模式切換/確認時觸發 |
+| +360 s(`emergency.blackout.mainEngineRestore_s`;規劃書 5 至 8 分鐘取 6) | `engineRestored`(`phase: degraded`) | `clearFault: mainEngine`;語音「主機已備便」 | 車令再度有效;只記錄的 3 項故障仍在(電羅經/雷達待重啟) |
+| 教官手動(`manual: true`) | `instrumentsRestored` | `clearFault` × 3;`phase: normal` | 對應 E07 `emergencySteering` 的手動收尾 |
+
+評估(全部可自動偵測,第 1.3 節):`blackoutFirstAction` = `{any: [telegraphChange, steeringModeChange, {acknowledge: {kind: checklist}}]}`(車鐘歸 STOP 或切換操舵模式;`acknowledge checklist` 為「失電清單啟動」備援)≤ `emergency.blackout.firstAction_s`(60 s);`anchorDecision` = `acknowledge {kind: anchorReady}` ≤ `emergency.blackout.anchorReady_s`(180 s,既有 SMS-EMG-005 參數;`command.schema.json` 的 `acknowledge.kind` 列舉沒有 `anchor`,以 `anchorReady` 代表下錨決策);`notifyVts` = `acknowledge {kind: report}` ≤ `emergency.blackout.notifyVts_s`。硬性失敗:擱淺、碰撞、淺灘禁區 `shoal_SE`、UKC < 5% 吃水;容許帶:XTD、UKC、速限、CPA(航道門檻 `navigation.cpa.channel_nm` / `channelHardFail_nm`,D27)。速限引用 `port.kaohsiung.speedLimit_kn`(港內 8,既有)與新參數 `port.kaohsiung.channelSpeedLimit_kn`(航道 10)、`port.kaohsiung.berthSpeedLimit_kn`(碼頭 500 m 內 5)。
+
+參數集新增的鍵(`emergency.blackout.injectAt_s`、`emergencyPower_s`、`mainEngineRestore_s`、`firstAction_s`、`notifyVts_s`、`vtsCallAfter_s`、`port.kaohsiung.channelSpeedLimit_kn`、`berthSpeedLimit_kn`)全部標來源 `ASSUMED-E09`(title「假設值,待公司程序」),待訓練負責人依 SMS-EMG-005 與港方規定核對後改源並 bump version;既有鍵與 version 未動(E07 黃金摘要 `assessment-E07-600s.json` 只因 `parameterSet.sha256` 改變而更新)。
+
+注意事項(撰寫時踩到的):(1) 錨泊目標船的初始 `heading` 要接近風流合成來向(此處退潮流 set 240 → 艏向 060),否則 `IntegrateAnchored` 以 120 s 時間常數擺頭時船舯繞錨位移動,對地速度可達數節,會對自船發出假的 `cpaAlarm`;(2) 出港船若沿多段航線反向航行,啟用當下的航向可能與自船航段相交而預測 CPA 過小,E09 讓 OUT1 自 WP2 左舷側 170 m 起只走航段 0 的平行線;(3) 時間表 `time.atLeast` 可引用參數(流式 `{ }` 內須加引號,D1)。
+
+測試 `tests/SimCore.Tests/BlackoutScenarioTests.cs`(以 MMG 動力學,與主控程序 `--scenario data/scenarios/E09_blackout.yaml --duration 600 --timescale 10 --record` 同一事件序列):載入/驗證零 error(3 個「只記錄」warning);無人操作 600 s 的 `faultInjected` × 5 於 120 s(modelled 2 項在前)、`faultCleared` steeringGear 165 s / mainEngine 480 s、`phaseChanged` normal→emergency→degraded、`requiredEventMissed` 181 s 後 `pilotPrompt` 182 s、summary 未通過且無硬性失敗、紀錄→重播雜湊/事件/summary 一致;有人操作(STOP 135 s、anchorReady 170 s、report 230 s、手動 `instrumentsRestored`)三項必要事件 met、故障全清、階段回 normal、重播一致。
+
 ## 9. 邊界情況與決策
 
 | 情況 | 處理 |

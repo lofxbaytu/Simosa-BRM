@@ -43,6 +43,8 @@ TOL = 1e-9
 KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {}
 # 夾具錄製時主控程序以 --timescale 覆寫、或 C# 另行正規化而不比對的欄位
 SKIP_LEAVES = {"timeScale"}
+# 一定要有 C# 紀錄夾具的情境(缺夾具時失敗而非略過;其餘情境無夾具時略過)。2026-10-17 加入 E05(無參數集的情境)。
+REQUIRED_FIXTURES = {"E01_baseline", "E05_pilot_traffic", "E07_steering_failure"}
 
 
 def _fixture_header(scenario_id: str) -> dict[str, Any] | None:
@@ -380,13 +382,15 @@ def test_scenarios_load_and_match_csharp_header(scenario_file: Path) -> None:
 
     header = _fixture_header(sc["id"])
     if header is None:
+        assert sc["id"] not in REQUIRED_FIXTURES, f"缺少 C# 紀錄夾具 record-*-core.jsonl(header.scenario.id == {sc['id']})"
         pytest.skip(f"無 C# 紀錄夾具(record-*-core.jsonl header.scenario.id == {sc['id']})")
     cs_sc, cs_ps = header["scenario"], header.get("parameterSet")
     drift = KNOWN_FIXTURE_DRIFT.get(sc["id"], set())
     current_sha = hashlib.sha256((paths.repo_root() / DEFAULT_PARAMETER_SET_PATH).read_bytes()).hexdigest().upper()
 
     if sc["parameterSet"] is None:
-        assert cs_ps is None or not cs_ps.get("resolved")
+        assert "parameterSet" not in header, "無參數引用時 C# header 應省略 parameterSet 鍵"  # E05:鍵省略,非 null/空物件
+        assert cs_ps is None
     else:
         ps = sc["parameterSet"]
         assert cs_ps is not None

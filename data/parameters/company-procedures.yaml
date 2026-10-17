@@ -15,6 +15,7 @@ sources:                              # 程序文件索引;parameters[].source �
   PORT-MLW: { title: 麥寮港港口規定(港方), revision: "2025", date: 2025-01-01, external: true }
   PORT-KHH: { title: 高雄港港口規定(港方), revision: "2025", date: 2025-01-01, external: true }
   BRM-TRN-001: { title: BRM 訓練程序(評估準則), revision: "draft", date: 2026-10-01 }
+  ASSUMED-E09: { title: "假設值,待公司程序(E09 全船失電;數值依規劃書第 3.4 節高雄港速限與第 8.1 節 E09,待公司 SMS-EMG-005 核對)", revision: "0", date: 2026-10-17 }
 parameters:
   navigation.cpa.openSea_nm:      { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.2", description: 開闊海最小 CPA }
   navigation.cpa.coastal_nm:      { value: 0.5,  unit: nm,  source: DWO-007, clause: "4.2", description: 沿岸/港外最小 CPA }
@@ -40,5 +41,13 @@ parameters:
   emergency.steeringFailure.notifyEcr_s:   { value: 120, unit: s, source: SMS-EMG-004, clause: "2.3" }
   emergency.steeringFailure.emergencySteering_s: { value: 300, unit: s, source: SMS-EMG-004, clause: "3.1" }
   emergency.blackout.anchorReady_s: { value: 180, unit: s, source: SMS-EMG-005, clause: "" }
+  emergency.blackout.injectAt_s:    { value: 120, unit: s, source: ASSUMED-E09, clause: "", description: E09 失電注入時刻(自情境開始) }
+  emergency.blackout.emergencyPower_s: { value: 45, unit: s, source: ASSUMED-E09, clause: "", description: 失電到應急發電機供電(操舵恢復;規劃書 E09 45 s) }
+  emergency.blackout.mainEngineRestore_s: { value: 360, unit: s, source: ASSUMED-E09, clause: "", description: 失電到主機恢復可用(規劃書 E09 5 至 8 分鐘,取 6 分鐘) }
+  emergency.blackout.firstAction_s: { value: 60,  unit: s, source: ASSUMED-E09, clause: "", description: 失電到首個相關動作(車鐘歸零/操舵模式切換/確認) }
+  emergency.blackout.notifyVts_s:   { value: 180, unit: s, source: ASSUMED-E09, clause: "", description: 失電到向 VTS 報告狀況 }
+  emergency.blackout.vtsCallAfter_s: { value: 90, unit: s, source: ASSUMED-E09, clause: "", description: 失電後 VTS 主動詢問狀況的時刻(時間表) }
+  port.kaohsiung.channelSpeedLimit_kn: { value: 10, unit: kn, source: ASSUMED-E09, clause: "", description: 高雄港航道速限(規劃書第 3.4 節;港方規定待核對) }
+  port.kaohsiung.berthSpeedLimit_kn: { value: 5,  unit: kn, source: ASSUMED-E09, clause: "", description: 高雄港碼頭 500 m 內速限(規劃書第 3.4 節;港方規定待核對) }
   assessment.passMark:            { value: 70,   unit: score, source: BRM-TRN-001, clause: "6" }
 overrides: {}                         # 保留:依船舶 ID 覆寫(第一版不解析)

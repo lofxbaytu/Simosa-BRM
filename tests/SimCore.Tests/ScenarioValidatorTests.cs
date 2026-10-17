@@ -49,6 +49,24 @@ public class ScenarioValidatorTests
         HasError("assessment:\n  hardFail: [ { id: h, rule: zoneEntered, zoneId: nope } ]", "區域");
     }
 
+    /// <summary>與 Python simosa_brm.scenario.structural_issues 對齊(原本只有 Python 檢查):required[].expect 必填、ukc 規則 lessThan 須含 metres|fractionOfDraft。</summary>
+    [Fact]
+    public void RequiredExpectAndUkcUnitAlignedWithPython()
+    {
+        HasError("assessment:\n  required: [ { id: r, after: { event: faultInjected }, within_s: 10 } ]", "必要事件需要 expect");
+        HasError("assessment:\n  hardFail: [ { id: u, rule: ukc, lessThan: 2 } ]", "ukc 規則需要 lessThan {metres|fractionOfDraft}");
+        HasError("assessment:\n  hardFail: [ { id: u, rule: ukc, lessThan: { feet: 2 } } ]", "ukc 規則需要 lessThan {metres|fractionOfDraft}");
+        HasError("assessment:\n  hardFail: [ { id: u, rule: ukc } ]", "ukc 規則需要 lessThan {metres|fractionOfDraft}");
+        // 正確寫法不報錯(水深 30 m,初始 UKC 充足)
+        foreach (var ok in new[] {
+            "assessment:\n  required: [ { id: r, after: { event: faultInjected }, expect: rudderOrder, within_s: 10 } ]",
+            "assessment:\n  required: [ { id: r, after: { event: faultInjected }, expect: { any: [ rpmOrder, { acknowledge: { kind: notifyEcr } } ] }, within_s: 10 } ]",
+            "assessment:\n  hardFail: [ { id: u, rule: ukc, lessThan: { metres: 1 } } ]",
+            "assessment:\n  hardFail: [ { id: u, rule: ukc, lessThan: { fractionOfDraft: 0.1 } } ]",
+        })
+            Assert.DoesNotContain(Check(ok), i => i.Severity == ScenarioIssueSeverity.Error);
+    }
+
     [Fact]
     public void InitialStateHardFailsAreErrors()
     {
