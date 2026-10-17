@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/command.schema.json",
   "title": "SimCommand",
-  "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。情境引擎新增 triggerTimeline、acknowledge、endExercise、getAssessment(查詢:主控程序直接回覆 {\"type\":\"assessment\",\"final\",\"summary\"},不進引擎佇列、不寫 input 行);steeringMode 為操舵模式選擇(value: fu|nfu|autopilot|emergency;args.pump 1|2|both;nfu 以 args.direction port|starboard|stop 推舵;autopilot 等同 autopilot{enabled:true},可帶 heading/rotLimit;emergency 在 steeringGear 故障下讓舵以降低速率再度可動;模式變更發事件 steeringModeChanged {from,to,pump});setEnvironment args 加 visibility_nm、ramp_s(漸變秒數);injectFault 可為 value 字串或 args {name, args}。WebSocket 另推送 {\"type\":\"event\",\"event\":SimEvent} 與 {\"type\":\"assessment\",…} 框。",
+  "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。情境引擎新增 triggerTimeline、acknowledge、endExercise、getAssessment(查詢:主控程序直接回覆 {\"type\":\"assessment\",\"final\",\"summary\"},不進引擎佇列、不寫 input 行);steeringMode 為操舵模式選擇(value: fu|nfu|autopilot|emergency;args.pump 1|2|both;nfu 以 args.direction port|starboard|stop 推舵;autopilot 等同 autopilot{enabled:true},可帶 heading/rotLimit;emergency 在 steeringGear 故障下讓舵以降低速率再度可動,且 emergency 模式下 autopilot{enabled:true}/steeringMode autopilot 被拒並發事件 commandRejected {command,reason:emergencySteering};進出 nfu 時舵令同步到目前舵角、不明 direction 視同 stop;模式變更發事件 steeringModeChanged {from,to,pump});setEnvironment args 加 visibility_nm、ramp_s(漸變秒數);injectFault 可為 value 字串或 args {name, args}。WebSocket 另推送 {\"type\":\"event\",\"event\":SimEvent} 與 {\"type\":\"assessment\",…} 框。",
   "type": "object",
   "required": [
     "type"

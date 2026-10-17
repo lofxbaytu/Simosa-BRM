@@ -459,12 +459,13 @@ public sealed record TrafficEvent : SimEvent { }   // Source 固定 "traffic";Tr
 | assessment | `speedLimitExceeded` / `speedLimitRestored` | `data: {sog_kn, limit_kn, source: leg\|zone, id}` |
 | assessment | `encounterStarted` / `encounterFirstAction` / `encounterClosed` | `targetId`;`data: {range_nm, cpa_nm, tcpa_min, action, headingChange_deg, speedChange_kn}` |
 | assessment | `requiredEventPending` | `after` 事件發生、必要事件開始計時(D33);`itemId` = 規則 id;`data: {after: kind, afterItemId, afterSeq, start_t, within_s(已解析的參數值), deadline_t = start_t + within_s, penalty}`,教官站據此倒數 |
-| assessment | `requiredEventMet` / `requiredEventMissed` | `itemId` = 規則 id;`data: {dt_s, within_s, by: kind}` |
+| assessment | `requiredEventMet` / `requiredEventMissed` | `itemId` = 規則 id;`data: {dt_s, within_s, by: kind, late, penalty}`;逾時以 `dt_s > within_s` 判定(與 `faultResponses.withinFirstAction = dt ≤ within_s` 一致),動作落在期限與下一整秒評估之間時同一 tick 先補發 `requiredEventMissed` 再發 `requiredEventMet {late: true}`(D35) |
 | assessment | `hardFail` | `itemId` = 規則 id;`data: {rule, value, limit, paramKey}` |
 | assessment | `bandWarn` / `bandFail` | 指標首次進入 warn/fail 帶 |
 | instructor | `acknowledge` | `data: {kind, role, note, itemId}` |
 | instructor | `timelineManual` | `triggerTimeline` 指令收到(成功與否皆記,`data.ok`) |
 | instructor / timeline | `steeringModeChanged` | 操舵模式或泵變更(指令 `steeringMode`、`autopilot` 啟用/解除、`rudder` 把 autopilot/nfu 切回 fu;D32);`data: {from, to, pump}` |
+| instructor / timeline | `commandRejected` *(D35)* | 指令被拒絕、狀態不變;`data: {command, reason, args}`;目前只有 `reason: emergencySteering`(emergency 模式下 `autopilot {enabled: true}` / `steeringMode autopilot`,需先 `steeringMode fu`);時間表 `autopilot` 動作被拒時不發 `autopilotOverride` |
 
 ### 3.3 執行時序(每步)
 
@@ -658,7 +659,7 @@ distToWp = |B − P|;brgToWp = atan2(B − P)
 | `getAssessment` | — | **查詢**:主控程序直接以 `LatestSummary` 回覆該客戶端 `{"type":"assessment", …}`;不進引擎佇列 | 否 |
 | `setEnvironment` *(擴充)* | `args` 加 `visibility_nm`、`ramp_s` | 第 3.5 節 | 是 |
 | `injectFault` *(擴充)* | `value: string` 或 `args: {name, args}` | 向後相容 | 是 |
-| `steeringMode` *(v0.3,D32)* | `value: fu\|nfu\|autopilot\|emergency`;`args: {pump?: 1\|2\|both, direction?: port\|starboard\|stop(nfu), heading?, rotLimit?(autopilot)}` | 操舵模式選擇(規劃書第 7.2 節);模式/泵變更發 `steeringModeChanged`,並以 `steeringModeChange` 動作餵必要事件與故障應變 | 是 |
+| `steeringMode` *(v0.3,D32)* | `value: fu\|nfu\|autopilot\|emergency`;`args: {pump?: 1\|2\|both, direction?: port\|starboard\|stop(nfu), heading?, rotLimit?(autopilot)}` | 操舵模式選擇(規劃書第 7.2 節);模式/泵變更發 `steeringModeChanged`,並以 `steeringModeChange` 動作餵必要事件與故障應變;進出 nfu 時舵令先同步到目前舵角、不明 `direction` 視同 stop、`autopilot` 帶 `heading` 時觀察 `autopilotHeading`、emergency 模式下 `autopilot` 被拒(`commandRejected`;D35) | 是 |
 
 WebSocket 新增推送框(與 state 框同通道,以 `type` 區分;`ws-client.ts` 已把非 state 物件交給 `onMessage`):
 - `{"type":"event","event":{…SimEvent}}`:每個事件即時推送給所有客戶端(學員站忽略或只顯示 `visible: true`)。
@@ -1040,6 +1041,11 @@ assessment:
 | `setEnvironment.visibility_nm` 而情境能見度為無限制(null) | 不建立漸變,直接寫入目標值;`environmentChange.data.changes.visibility.from = null` |
 | `timeScale ≤ 0` | 視同 `freeze`:發 `frozen` 事件並計入 `general.freezes`(之後 `resume` 有對應的 `resumed`) |
 | 自動舵開啟時下手動舵令 | 視為一次 `autopilotOff` 動作(`autopilotSwitches`、必要事件 expect `autopilotOff`),時間表 `ownShip` 覆寫不計 |
+| NFU 推桿中以 `steeringMode fu/emergency/autopilot` 離開 nfu | 舵令先同步到目前舵角(舵停在原處),不沿用推桿的滿舵舵令;之後由 `rudder` 指令或自動舵給新舵令(D35) |
+| 進入 nfu 時 `direction` 省略或不明(例如 `left`) | 進入 nfu 一律先把舵令同步到目前舵角,先前的隨動舵令失效;不明方向視同 `stop`(推桿放開,`nfuActive: false`),推桿中送不明方向亦視同放開(D35) |
+| emergency 模式下 `autopilot {enabled: true}` 或 `steeringMode autopilot`(學員或時間表) | 應急操舵(舵機房操舵)接不到自動舵:整個指令拒絕、狀態不變,發 `commandRejected {command, reason: emergencySteering}`;需先 `steeringMode fu`。`autopilot {enabled: false}` 照常(D35) |
+| `steeringMode autopilot {heading}` 改航向 | 與 `autopilot {heading}` 同樣觀察 `autopilotHeading`(會遇首次行動 ≥ 5°、必要事件);未給 heading(保持艏向)或改變 < 1° 不算(D35) |
+| 必要事件 `after` 落在非整秒 tick(教官 `injectFault`)、動作在期限與下一整秒之間送達 | `Meet` 以 `dt > within_s` 判 late(先補發 `requiredEventMissed`),罰分依 `latePenaltyPer_s`;與 `faultResponses.withinFirstAction` 一致(D35) |
 | 航段長度 ≤ 到達半徑 / 自船尚未到達航段起點 | 到達半徑判定需 `s ≥ 0`(已過本航段起點);驗證器對航段長 ≤ 半徑的航點發 warning |
 | 航道情境的 CPA 門檻 | 驗證器對 `minCpa` 容許帶或 `cpa` 硬性失敗門檻 > 2 × 走廊半寬者發 warning(航道內任何交會都會超出);E07 改用 `navigation.cpa.channel_nm`/`channelHardFail_nm` |
 | 無 WebSocket 客戶端時 `voiceScript` | 事件仍記錄;無人播放(簡化教官模式一定有教官站) |
@@ -1098,5 +1104,6 @@ assessment:
 | D32 | 第 10 節開放問題 1:操舵模式不在契約中 | **v0.3 新增指令 `steeringMode`**(`value: fu\|nfu\|autopilot\|emergency`,`args {pump: 1\|2\|both, direction: port\|starboard\|stop, heading, rotLimit}`)、狀態 `state.steering {mode, pump, nfuActive?}`、事件 `steeringModeChanged {from, to, pump}`(source instructor/timeline)、快照 `Steering {mode, pump, nfuDirection}`。行為:**nfu** 以推桿方向驅動舵——`direction: port/starboard` 把舵令設為該側滿舵(舵以舵機速率移動),`stop` 把舵令設為目前舵角(舵停在原處;首次進入 nfu 未給方向視為 stop);推桿動作幅度 ≥ 1° 視為一次 `rudderOrder`;**autopilot** 等同 `autopilot {enabled: true}`(未給 heading 時保持目前艏向),與 `Autopilot.Enabled` 雙向同步(`autopilot` 指令啟用/解除也發 `steeringModeChanged`);**emergency** 為應急操舵:`steeringGear` 故障下舵不再卡住、以 particulars `rudder.steeringGear.emergencyHardOverTime35_s` 的速率(無資料時隨動速率一半)移動,舵令仍以 `rudder` 指令(電話下令)表示;**fu** 為預設。`rudder` 指令在 autopilot/nfu 模式下視同切回 fu(emergency 保持)。泵:`"1"\|"2"` 用 `hardOverTime35_onePump_s`、`both` 用 `_twoPumps_s` 相對 `HardOverTime35Seconds` 換算速率,無資料時不變。評估:模式變更(學員指令)以 `ObservedAction steeringModeChange` 餵 `AssessmentEngine`/`FaultResponseTracker`(無規則時亦為預設相關動作);`steeringModeChange` expect 仍同時接受自動舵解除與 `acknowledge {kind: steeringMode}`(備援)。雜湊:只在非預設(nfu/emergency 或泵非 1)時於目標船位元組之後追加 `int64 mode, pumpIndex, nfuDirection`(fu/autopilot 不追加,與既有「`Autopilot.Enabled` 不進雜湊、其舵令已在雜湊內」一致,E05/舊紀錄雜湊不變)。E07 `steeringFirstAction.expect` 改為 `[telegraphChange, rpmOrder, thrusterOrder, steeringModeChange, {acknowledge: {kind: steeringMode}}]`;黃金摘要 `assessment-E07-600s.json` 只因腳本 500 s 的 `autopilot` 指令多 1 個 `steeringModeChanged` 事件而更新(`events.total` 20 → 21)。 | 讓 E07 的「切換應急操舵」可自動偵測;最簡單且可測的 NFU 做法 |
 | D33 | 第 3.2 節必要事件只有 met/missed 事件 | 新增 `requiredEventPending`(source assessment,不進雜湊):`after` 事件使規則進入 pending 時立即發出,`data {after, afterItemId, afterSeq, start_t, within_s, deadline_t, penalty}`,`within_s` 為已解析的參數值。引擎 `Raise` 改為「觀察者在觀察途中再發出的事件先排隊、外層事件送完後依序發出」,故 `requiredEventPending.seq` 緊接在觸發事件之後(紀錄與 WebSocket 順序與因果一致);既有程式沒有巢狀發事件,舊紀錄的事件序列不受影響 | 教官站倒數需要計時起點與期限,原本 `within_s` 為參數引用時只能顯示「計時中」 |
 | D34 | 第 2.3 節 `header.parameterSet.path` | 改為**相對專案根目錄**(`data/parameters/company-procedures.yaml`,'/' 分隔;`RepositoryPaths.ToProjectRelative`,專案外的檔案原樣);`ParameterSet.Path` 同 | 原為絕對路徑,洩漏機器路徑且紀錄不能跨機器比對 |
+| D35 | 第 7.2 節 / D32 操舵模式(審查發現 5 項) | **進出 nfu 時舵令同步到目前舵角**(`SetSteeringMode`:原本只有 `direction: stop` 與 `rudder` 指令會覆寫舵令,`steeringMode fu/emergency` 離開 nfu 後舵繼續走到滿舵;首次進入 nfu 帶不明 `direction` 時舵沿用舊隨動舵令);**不明 `direction` 視同 stop**;**emergency 模式拒絕 `autopilot {enabled: true}` 與 `steeringMode autopilot`**(新事件 `commandRejected {command, reason: emergencySteering, args}`,source 同指令來源;時間表 `autopilot` 被拒時不發 `autopilotOverride`;原本會切成 autopilot 模式而舵再度卡住);**`steeringMode autopilot {heading}` 觀察 `autopilotHeading`**(與 `autopilot` 指令共用 `ObserveAutopilotHeadingChange`,未給 heading 時保持艏向不算);**必要事件 late 以 `dt > within_s` 判定**(`AssessmentEngine.Meet`;原本只看整秒評估是否已判 missed,after 事件落在非整秒 tick 時期限後、下一整秒前的動作被判 met 且與 `withinFirstAction` 矛盾;現同一 tick 先補發 `requiredEventMissed`)。測試:`SteeringModeTests.LeavingNfuBySteeringModeHoldsRudder…`、`EnteringNfuWithUnknownDirection…`、`AutopilotCannotBeEnabledInEmergencySteering`、`SteeringModeAutopilotHeadingChangeIsObserved…`、`AssessmentEngineTests.ActionAfterDeadlineButBeforeNextWholeSecondIsLateNotMet`;E07 黃金摘要不變 | 舵令同步使 nfu 的「推桿放開舵停在原處」在所有離開路徑都成立;應急操舵物理上接不到自動舵;評估與故障應變對「逾時」須同一定義 |
 
 主控程序:`--record [<path>]`、`--parameters <path>`、`--validate`、`--rescore`(與 `--replay` 併用);重播結束碼需雜湊、完整性與事件序列皆一致(重新評分亦同,D23)。驗證紀錄:`build/records/e07-test.jsonl`(E07 300 s ×10,9 個事件、1 行 summary;`--replay` 雜湊/事件/summary 一致;`--rescore` 以 `navigation.xtd.channel_m` 50 → 20 重播:雜湊與事件序列不變、分數 85 → 60)。

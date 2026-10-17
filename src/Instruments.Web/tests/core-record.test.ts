@@ -57,10 +57,12 @@ describe('核心紀錄(E07_steering_failure,MMG,300 s)', () => {
     expect(JSON.stringify(r.header.scenario)).not.toContain('${params:');
   });
 
-  it('event 行:9 個事件、seq 連續、source 與 kind 推得的預設一致、每種 kind 都有中文標籤', () => {
-    expect(r.events).toHaveLength(9);
-    expect(r.events.map((e) => e.kind)).toEqual(['encounterStarted', 'timelineTriggered', 'voiceScript', 'message', 'targetActivated', 'cpaAlarm', 'xtdExceeded', 'bandWarn', 'bandWarn']);
-    expect(r.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  // 航道 CPA 門檻為 navigation.cpa.channel_nm = 0.05 nm:OUT1(CPA 0.20 nm)與錨泊的 ANCH1 都不觸發 cpaAlarm/encounterStarted,
+  // 故 300 s 內只有時間表(pilotBoarded)、目標船出現與 XTD 相關事件共 7 個。
+  it('event 行:7 個事件、seq 連續、source 與 kind 推得的預設一致、每種 kind 都有中文標籤', () => {
+    expect(r.events).toHaveLength(7);
+    expect(r.events.map((e) => e.kind)).toEqual(['timelineTriggered', 'voiceScript', 'message', 'targetActivated', 'xtdExceeded', 'bandWarn', 'bandWarn']);
+    expect(r.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
     for (const e of r.events) {
       expect(e.source).toBe(defaultSourceFor(e.kind));
       expect(e.t).toBeCloseTo(e.tick * 0.02, 9);
@@ -76,17 +78,18 @@ describe('核心紀錄(E07_steering_failure,MMG,300 s)', () => {
     const trig = r.events.find((e) => e.kind === 'timelineTriggered')!;
     expect(trig.itemId).toBe('pilotBoarded');
     expect(trig.data).toEqual({ fireCount: 1, manual: false, forced: false });
-    const cpa = r.events.find((e) => e.kind === 'cpaAlarm')!;
-    expect(cpa).toMatchObject({ source: 'traffic', targetId: 'OUT1' });
-    expect(cpa.cpa_nm).toBeCloseTo(0.199, 2);
-    expect(eventSeverity(cpa)).toBe('warning');
+    expect(r.events.find((e) => e.kind === 'cpaAlarm')).toBeUndefined();
+    const activated = r.events.find((e) => e.kind === 'targetActivated')!;
+    expect(activated).toMatchObject({ source: 'traffic', targetId: 'OUT1', t: 240 });
+    expect(eventSeverity(activated)).toBe('info');
     const xtd = r.events.find((e) => e.kind === 'xtdExceeded')!;
     expect(xtd.data).toMatchObject({ limit_m: 50, legIndex: 0 });
     expect(eventLabel(xtd)).toBe('XTD 超限 50 m(限 50 m)');
     const band = r.events.filter((e) => e.kind === 'bandWarn');
     expect(band.map((e) => e.itemId)).toEqual(['xtdMax', 'xtdTime']);
     expect(band[0]!.data).toMatchObject({ metric: 'track.maxXtd_m', warn: 50, penalty: 10 });
-    expect(eventIndexAt(r.events, 60)).toBe(3);
+    expect(eventIndexAt(r.events, 60)).toBe(2);
+    expect(eventIndexAt(r.events, 240)).toBe(3);
     expect(eventIndexAt(r.events, 0.5)).toBe(-1);
   });
 
@@ -116,16 +119,17 @@ describe('核心紀錄(E07_steering_failure,MMG,300 s)', () => {
     expect(s.assessment.required[0]).toMatchObject({ within_s: 60, penalty: 0, paramKey: 'emergency.steeringFailure.firstAction_s', source: 'SMS-EMG-004', revision: '1', clause: '2.1' });
     expect(s.assessment.parameters.length).toBeGreaterThan(0);
     expect(s.assessment.parameters.map((p) => p.key)).toContain('navigation.xtd.channel_m');
-    expect(s.events.total).toBe(9);
-    expect(s.events.byKind).toEqual({ bandWarn: 2, cpaAlarm: 1, encounterStarted: 1, message: 1, targetActivated: 1, timelineTriggered: 1, voiceScript: 1, xtdExceeded: 1 });
+    expect(s.events.total).toBe(7);
+    expect(s.events.byKind).toEqual({ bandWarn: 2, message: 1, targetActivated: 1, timelineTriggered: 1, voiceScript: 1, xtdExceeded: 1 });
     // 事件統計與 event 行一致
     const counted: Record<string, number> = {};
     for (const e of r.events) counted[e.kind] = (counted[e.kind] ?? 0) + 1;
     expect(counted).toEqual(s.events.byKind);
-    // 避碰(D2:minCpa_nm 為非 escort 目標的最小實際通過距離)、航跡、UKC、操縱
-    expect(s.collisionAvoidance.encounters).toBe(1);
-    expect(s.collisionAvoidance.targets[0]).toMatchObject({ targetId: 'ANCH1', name: 'SHENG LI', detectedAt_s: 1, substantial: false, escort: false });
-    expect(s.collisionAvoidance.minCpa_nm).toBeCloseTo(s.collisionAvoidance.targets[0]!.minRange_nm!, 9);
+    // 避碰:航道門檻 0.05 nm 下無會遇(targets 空、minCpa_nm 省略),minCpa 容許帶因而 ok 且無 value;航跡、UKC、操縱
+    expect(s.collisionAvoidance).toEqual({ encounters: 0, collisions: 0, targets: [] });
+    expect(s.collisionAvoidance.minCpa_nm).toBeUndefined();
+    expect(s.assessment.bands[4]).toMatchObject({ id: 'minCpa', metric: 'collisionAvoidance.minCpa_nm', warn: 0.05, fail: 0.025, state: 'ok', paramKey: 'navigation.cpa.channel_nm' });
+    expect(s.assessment.bands[4]!.value).toBeUndefined();
     expect(s.track).toMatchObject({ maxXtdLeg: 0, corridorExcursions: 1, legIndex: 0, complete: false, offRoute: false, waypoints: [] });
     expect(s.track!.maxXtd_m).toBeCloseTo(60.0, 0);
     expect(s.track!.timeOutsideCorridor_s).toBe(30);
@@ -168,6 +172,9 @@ describe('核心紀錄(E07_steering_failure,MMG,300 s)', () => {
     expect(last.targets[0]!.ais?.mmsi).toBe(416400201);
     expect(last.targets[1]).toMatchObject({ name: 'SHENG LI', lights: 'anchored', behaviour: 'anchored' });
     expect(last.targets[1]!.cpa_nm).toBeCloseTo(1.01, 1);
+    expect(last.targets[0]!.cpa_nm).toBeCloseTo(0.60, 1);
+    // 2026-10-17 新增的操舵模式欄位(state.steering)已進紀錄
+    expect((e07Lines.filter((l) => l['kind'] === 'state').at(-1)!['state'] as { steering: unknown }).steering).toEqual({ mode: 'fu', pump: '1' });
   });
 
   it('header.scenario(核心序列化)與 data/scenarios/E07_steering_failure.yaml 經 parseScenario 結構相同', () => {
@@ -191,7 +198,7 @@ describe('核心紀錄(E07_steering_failure,MMG,300 s)', () => {
     expect(fromYaml.paramRefs).toHaveLength(18);
     expect(fromHeader.paramRefs).toHaveLength(0);
     expect(fromHeader.route!.xtdLimit_m).toEqual({ value: 50 });
-    expect(fromHeader.assessment.minCpa_nm).toEqual({ value: 0.5 });
+    expect(fromHeader.assessment.minCpa_nm).toEqual({ value: 0.05 }); // navigation.cpa.channel_nm(航道專用門檻)
   });
 });
 

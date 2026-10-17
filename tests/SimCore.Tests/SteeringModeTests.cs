@@ -251,6 +251,204 @@ public class SteeringModeTests
     }
 
     [Fact]
+    public void LeavingNfuBySteeringModeHoldsRudderInsteadOfRunningToHardOver()
+    {
+        // 審查發現:NFU 推桿中以 steeringMode fu/emergency 離開(非 rudder 指令)時舵令仍為滿舵,舵在新模式下繼續走到滿舵(D35)
+        var e = TestData.MinimalEngine();
+        var rate = e.Actuators.Parameters.RudderRateDegPerSec;
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Nfu, direction: "starboard"));
+        e.ProcessPendingCommands();
+        e.Run(100); // 2 s
+        var held = e.Actuators.RudderDeg;
+        Assert.Equal(2.0 * rate, held, 6);
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Fu));
+        e.ProcessPendingCommands();
+        Assert.Equal(SteeringMode.Fu, e.SteeringMode);
+        Assert.Equal(held, e.Actuators.RudderOrderDeg, 6); // 舵令同步到目前舵角
+        Assert.Null(e.BuildState().Steering!.NfuActive);
+        e.Run(500);
+        Assert.Equal(held, e.Actuators.RudderDeg, 6); // 舵停在原處,不再往 35° 走
+        e.Enqueue(SimCommand.Rudder(10)); // 隨動舵令照常生效
+        e.ProcessPendingCommands();
+        e.Run(500);
+        Assert.Equal(10.0, e.Actuators.RudderDeg, 6);
+
+        // nfu port → emergency:同樣停在原處;之後 rudder(電話下令)以應急速率移動
+        var f = TestData.MinimalEngine();
+        f.Enqueue(SimCommand.SteeringMode(SteeringMode.Nfu, direction: "port"));
+        f.ProcessPendingCommands();
+        f.Run(100);
+        var heldPort = f.Actuators.RudderDeg;
+        Assert.Equal(-2.0 * rate, heldPort, 6);
+        f.Enqueue(SimCommand.SteeringMode(SteeringMode.Emergency));
+        f.ProcessPendingCommands();
+        Assert.Equal(SteeringMode.Emergency, f.SteeringMode);
+        Assert.Equal(heldPort, f.Actuators.RudderOrderDeg, 6);
+        f.Run(500);
+        Assert.Equal(heldPort, f.Actuators.RudderDeg, 6);
+
+        // nfu → autopilot:自動舵之後逐步覆寫舵令,但切換瞬間同樣不留滿舵舵令
+        var g = TestData.MinimalEngine();
+        g.Enqueue(SimCommand.SteeringMode(SteeringMode.Nfu, direction: "starboard"));
+        g.ProcessPendingCommands();
+        g.Run(100);
+        g.Enqueue(SimCommand.SteeringMode(SteeringMode.Autopilot));
+        g.ProcessPendingCommands();
+        Assert.Equal(SteeringMode.Autopilot, g.SteeringMode);
+        Assert.Equal(g.Actuators.RudderDeg, g.Actuators.RudderOrderDeg, 6);
+    }
+
+    [Fact]
+    public void EnteringNfuWithUnknownDirectionHoldsRudderAndDoesNotKeepFuOrder()
+    {
+        // 審查發現:首次進入 nfu 時 direction 非法 → 舵令沿用 FU 舵令 20°、舵繼續走但 nfuActive=false(D35:進入 nfu 先同步舵令;不明方向視同 stop)
+        var e = TestData.MinimalEngine();
+        var rate = e.Actuators.Parameters.RudderRateDegPerSec;
+        e.Enqueue(SimCommand.Rudder(20));
+        e.ProcessPendingCommands();
+        e.Run(50); // 1 s
+        var held = e.Actuators.RudderDeg;
+        Assert.Equal(rate, held, 6);
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Nfu, direction: "left"));
+        e.ProcessPendingCommands();
+        Assert.Equal(SteeringMode.Nfu, e.SteeringMode);
+        Assert.Equal(0, e.NfuDirection);
+        Assert.False(e.BuildState().Steering!.NfuActive);
+        Assert.Equal(held, e.Actuators.RudderOrderDeg, 6);
+        e.Run(500);
+        Assert.Equal(held, e.Actuators.RudderDeg, 6); // 舵停在進入時的角度,不走到 20°
+
+        // 推桿中送不明方向:視同放開推桿
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Nfu, direction: "starboard"));
+        e.ProcessPendingCommands();
+        e.Run(100);
+        var held2 = e.Actuators.RudderDeg;
+        Assert.True(held2 > held + 1.0);
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Nfu, direction: "right"));
+        e.ProcessPendingCommands();
+        Assert.Equal(0, e.NfuDirection);
+        e.Run(100);
+        Assert.Equal(held2, e.Actuators.RudderDeg, 6);
+
+        // 未給方向進入 nfu(既有語意):同樣停在原處
+        var f = TestData.MinimalEngine();
+        f.Enqueue(SimCommand.Rudder(20));
+        f.ProcessPendingCommands();
+        f.Run(50);
+        var heldF = f.Actuators.RudderDeg;
+        f.Enqueue(SimCommand.SteeringMode(SteeringMode.Nfu));
+        f.ProcessPendingCommands();
+        f.Run(500);
+        Assert.Equal(heldF, f.Actuators.RudderDeg, 6);
+    }
+
+    [Fact]
+    public void AutopilotCannotBeEnabledInEmergencySteering()
+    {
+        // 審查發現:emergency + steeringGear 故障下 autopilot{enabled:true} 把模式改成 autopilot,舵再度卡住而自動舵「啟用」卻無效(D35:拒絕並發 commandRejected)
+        var e = TestData.MinimalEngine();
+        var events = TestData.Capture(e);
+        var rate = e.Actuators.Parameters.RudderRateDegPerSec;
+        e.Enqueue(SimCommand.InjectFault(FaultNames.SteeringGear));
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Emergency));
+        e.Enqueue(SimCommand.Rudder(20));
+        e.ProcessPendingCommands();
+        e.Run(50);
+        var before = e.Actuators.RudderDeg;
+        Assert.Equal(rate / 2.0, before, 6);
+        var modeEventsBefore = events.Count(x => x.Kind == SimEventKinds.SteeringModeChanged);
+
+        e.Enqueue(SimCommand.Autopilot(true, heading: 60));
+        e.ProcessPendingCommands();
+        Assert.Equal(SteeringMode.Emergency, e.SteeringMode);
+        Assert.False(e.Autopilot.Enabled);
+        Assert.Equal(20.0, e.Actuators.RudderOrderDeg); // 指令整個不生效(航向也不改)
+        var rejected = Assert.Single(events, x => x.Kind == SimEventKinds.CommandRejected);
+        Assert.Equal(SimEventSources.Instructor, rejected.Source);
+        Assert.Equal("autopilot", rejected.DataString("command"));
+        Assert.Equal(CommandRejectReasons.EmergencySteering, rejected.DataString("reason"));
+        Assert.Equal(modeEventsBefore, events.Count(x => x.Kind == SimEventKinds.SteeringModeChanged));
+        e.Run(200);
+        Assert.Equal(before + 4.0 * rate / 2.0, e.Actuators.RudderDeg, 6); // 舵繼續以應急速率走向 20°,沒有再卡住
+
+        // steeringMode autopilot 走同一規則;autopilot {enabled:false} 照常(無事可做、不拒絕)
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Autopilot, heading: 60));
+        e.Enqueue(SimCommand.Autopilot(false));
+        e.ProcessPendingCommands();
+        Assert.Equal(SteeringMode.Emergency, e.SteeringMode);
+        Assert.Equal(2, events.Count(x => x.Kind == SimEventKinds.CommandRejected));
+        Assert.Equal("steeringMode", events.Last(x => x.Kind == SimEventKinds.CommandRejected).DataString("command"));
+        Assert.Equal(0, e.Assessment!.Metrics.State.AutopilotSwitches);
+
+        // 時間表的 autopilot 動作亦拒絕(source timeline、無 autopilotOverride)
+        var t = TestData.MinimalEngine("""
+            timeline:
+              - id: ap
+                when: { type: time, atLeast: 5 }
+                actions: [ { autopilot: { enabled: true, heading: 90 } } ]
+            """);
+        var tEvents = TestData.Capture(t);
+        t.Enqueue(SimCommand.InjectFault(FaultNames.SteeringGear));
+        t.Enqueue(SimCommand.SteeringMode(SteeringMode.Emergency));
+        t.ProcessPendingCommands();
+        TestData.RunTo(t, 10);
+        Assert.Equal(SteeringMode.Emergency, t.SteeringMode);
+        Assert.False(t.Autopilot.Enabled);
+        Assert.DoesNotContain(tEvents, x => x.Kind == SimEventKinds.AutopilotOverride);
+        var tr = Assert.Single(tEvents, x => x.Kind == SimEventKinds.CommandRejected);
+        Assert.Equal(SimEventSources.Timeline, tr.Source);
+        Assert.Equal("ap", tr.ItemId);
+
+        // 先切回 fu(故障已清)再啟用自動舵才有效
+        e.Enqueue(SimCommand.ClearFault(FaultNames.SteeringGear));
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Fu));
+        e.Enqueue(SimCommand.Autopilot(true, heading: 60));
+        e.ProcessPendingCommands();
+        Assert.Equal(SteeringMode.Autopilot, e.SteeringMode);
+        Assert.True(e.Autopilot.Enabled);
+    }
+
+    [Fact]
+    public void SteeringModeAutopilotHeadingChangeIsObservedLikeAutopilotCommand()
+    {
+        // 審查發現:steeringMode autopilot {heading} 不觀察 autopilotHeading,經此路徑改航向的學員不會被記到 encounterFirstAction(D35)
+        const string headOn = """
+            targets:
+              - id: T1
+                initial: { position: { x: 0, y: 7408 }, heading: 180, speed: 6 }
+            assessment:
+              minCpa_nm: 0.5
+              encounter: { detectionRange_nm: 3 }
+            """;
+        var e = TestData.MinimalEngine(headOn, speedKn: 8);
+        var events = TestData.Capture(e);
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Autopilot, heading: 0));
+        e.ProcessPendingCommands();
+        TestData.RunTo(e, 400);
+        Assert.Single(events, x => x.Kind == SimEventKinds.EncounterStarted && x.TargetId == "T1");
+        Assert.DoesNotContain(events, x => x.Kind == SimEventKinds.EncounterFirstAction);
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Autopilot, heading: 40));
+        e.ProcessPendingCommands();
+        Assert.Equal(40.0, Units.RadToDeg(e.Autopilot.HeadingRad), 9);
+        var first = Assert.Single(events, x => x.Kind == SimEventKinds.EncounterFirstAction && x.TargetId == "T1");
+        Assert.Equal("autopilot", first.DataString("action")); // EncounterTracker 以指令名稱記首次行動
+
+        // 與 autopilot 指令同:未給 heading(保持艏向)不算改航向;< 1° 不算
+        var f = TestData.MinimalEngine(headOn, speedKn: 8);
+        var fEvents = TestData.Capture(f);
+        f.Enqueue(SimCommand.Autopilot(true, heading: 0));
+        f.ProcessPendingCommands();
+        TestData.RunTo(f, 400);
+        f.Enqueue(SimCommand.SteeringMode(SteeringMode.Autopilot, pump: "2"));
+        f.Enqueue(SimCommand.SteeringMode(SteeringMode.Autopilot, heading: 0.5));
+        f.ProcessPendingCommands();
+        Assert.DoesNotContain(fEvents, x => x.Kind == SimEventKinds.EncounterFirstAction);
+        f.Enqueue(SimCommand.Autopilot(true, heading: 40));
+        f.ProcessPendingCommands();
+        Assert.Single(fEvents, x => x.Kind == SimEventKinds.EncounterFirstAction && x.TargetId == "T1");
+    }
+
+    [Fact]
     public void ParameterSetPathIsRelativeToProjectRoot()
     {
         var set = TestData.Parameters();

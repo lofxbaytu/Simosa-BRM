@@ -37,13 +37,10 @@ from simosa_brm.server import SimServer
 FIXTURES_DIR = paths.repo_root() / "src" / "Instruments.Web" / "tests" / "fixtures"
 TOL = 1e-9
 
-# 夾具錄製後情境 YAML / 參數集又被編輯過的欄位(路徑前綴):E07 的 CPA 門檻改用航道專用參數(鍵名不同;夾具的
-# parameterSet.sha256 與目前檔案不同時才容許)、ecrPrompt 的第二個條件改為 event requiredEventMissed。
-# 重新錄製夾具(dotnet run --project src/SimCore.Host -- --scenario E07_steering_failure --record …)後可清空。
-KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {
-    "E07_steering_failure": {"assessment.minCpa_nm", "assessment.bands[4].warn", "assessment.bands[4].fail", "timeline[3].when.all[1]",
-                             "assessment.required[0]"},  # 夾具錄製後 E07 必要事件改為可自動偵測的 steeringModeChange
-}
+# 夾具錄製後情境 YAML / 參數集又被編輯過的欄位(路徑前綴;情境 id → 路徑集合)。夾具與目前檔案一致時應為空;
+# 再度編輯情境/參數集後可暫列於此,並以 dotnet run --project src/SimCore.Host -- --scenario <id> --record … 重新錄製後清空
+#(2026-10-17 已重新錄製 E01/E07)。
+KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {}
 # 夾具錄製時主控程序以 --timescale 覆寫、或 C# 另行正規化而不比對的欄位
 SKIP_LEAVES = {"timeScale"}
 

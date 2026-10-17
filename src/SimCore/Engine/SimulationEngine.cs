@@ -502,6 +502,12 @@ public sealed class SimulationEngine
 
             case SimCommandType.Autopilot:
             {
+                // 應急操舵(舵機房操舵)物理上接不到自動舵:emergency 模式下的啟用要求整個拒絕(狀態不變、發 commandRejected),需先 steeringMode fu;解除照常(D35)
+                if (_steeringMode == SteeringMode.Emergency && cmd.ArgAsBool("enabled") == true)
+                {
+                    RejectCommand(cmd, source, itemId, CommandRejectReasons.EmergencySteering);
+                    break;
+                }
                 var wasEnabled = Autopilot.Enabled;
                 var oldHeading = Autopilot.HeadingRad;
                 if (cmd.ArgAsBool("enabled") is { } enabled) Autopilot.Enabled = enabled;
@@ -510,8 +516,7 @@ public sealed class SimulationEngine
                 if (fromInstructor)
                 {
                     if (Autopilot.Enabled != wasEnabled) Observe(Autopilot.Enabled ? ActionKinds.AutopilotOn : ActionKinds.AutopilotOff, 1.0);
-                    var dh = Math.Abs(Units.RadToDeg(Units.WrapRadPi(Autopilot.HeadingRad - oldHeading)));
-                    if (Autopilot.Enabled && dh >= 1.0) Observe(ActionKinds.AutopilotHeading, dh);
+                    ObserveAutopilotHeadingChange(oldHeading);
                 }
                 else Raise(NewEvent(SimEventKinds.AutopilotOverride, source, itemId, null, null, cmd.Args));
                 // 操舵模式與自動舵同步:啟用 → autopilot;解除 → fu(autopilotOff 已觀察,不再重複 steeringModeChange)
@@ -524,16 +529,26 @@ public sealed class SimulationEngine
             {
                 var modeName = cmd.ValueAsString() ?? cmd.ArgAsString("mode");
                 if (modeName is null || !Enum.TryParse<SteeringMode>(modeName, ignoreCase: true, out var mode)) break;
+                // emergency → autopilot 與 autopilot 指令同樣拒絕(D35)
+                if (mode == SteeringMode.Autopilot && _steeringMode == SteeringMode.Emergency)
+                {
+                    RejectCommand(cmd, source, itemId, CommandRejectReasons.EmergencySteering);
+                    break;
+                }
                 var pump = SteeringPumps.Normalize(cmd.Arg("pump"));
                 var wasAutopilot = Autopilot.Enabled;
+                var oldHeading = Autopilot.HeadingRad;
+                var headingGiven = false;
                 if (mode == SteeringMode.Autopilot)
                 {
-                    if (cmd.ArgAsDouble("heading") is { } hdg) Autopilot.HeadingRad = Units.DegToRad(Units.NormalizeHeadingDeg(hdg));
-                    else if (!wasAutopilot) Autopilot.HeadingRad = Motion.Psi; // 未給航向時保持目前艏向
+                    if (cmd.ArgAsDouble("heading") is { } hdg) { Autopilot.HeadingRad = Units.DegToRad(Units.NormalizeHeadingDeg(hdg)); headingGiven = true; }
+                    else if (!wasAutopilot) Autopilot.HeadingRad = Motion.Psi; // 未給航向時保持目前艏向(不視為改航向動作)
                     if (cmd.ArgAsDouble("rotLimit") is { } lim) Autopilot.RotLimitDegPerMin = Math.Max(1.0, Math.Abs(lim));
                 }
                 SetSteeringMode(mode, pump, source, itemId, observe: fromInstructor);
                 if (fromInstructor && Autopilot.Enabled != wasAutopilot) Observe(Autopilot.Enabled ? ActionKinds.AutopilotOn : ActionKinds.AutopilotOff, 1.0);
+                // 帶 heading 的 steeringMode autopilot 與 autopilot {heading} 等價:同樣觀察 autopilotHeading(會遇首次行動、必要事件)
+                if (headingGiven && fromInstructor) ObserveAutopilotHeadingChange(oldHeading);
                 if (mode == SteeringMode.Nfu) ApplyNfu(cmd.ArgAsString("direction"), fromInstructor);
                 break;
             }
@@ -641,7 +656,8 @@ public sealed class SimulationEngine
     }
 
     /// <summary>
-    /// 切換操舵模式(規劃書第 7.2 節;情境引擎設計 D32):autopilot ⇔ Autopilot.Enabled;離開 nfu 時推動方向歸零;
+    /// 切換操舵模式(規劃書第 7.2 節;情境引擎設計 D32、D35):autopilot ⇔ Autopilot.Enabled;進出 nfu 時先把舵令同步到目前舵角(舵停在原處:
+    /// 進入 nfu 時先前的隨動舵令失效、由推桿決定;離開 nfu 時推桿的滿舵舵令失效,之後由 rudder 指令或自動舵給新舵令),離開 nfu 時推動方向歸零;
     /// 模式或泵改變時發 steeringModeChanged {from, to, pump},<paramref name="observe"/> 時並以 steeringModeChange 動作餵評估(必要事件、故障應變)。
     /// </summary>
     private void SetSteeringMode(SteeringMode to, string? pump, string source, string? itemId, bool observe)
@@ -650,6 +666,7 @@ public sealed class SimulationEngine
         var pumpFrom = _steeringPump;
         if (pump is not null) _steeringPump = pump;
         _steeringMode = to;
+        if (from != to && (from == SteeringMode.Nfu || to == SteeringMode.Nfu)) HoldRudder();
         if (to != SteeringMode.Nfu) _nfuDirection = 0;
         Autopilot.Enabled = to == SteeringMode.Autopilot;
         if (from == to && pumpFrom == _steeringPump) return;
@@ -658,11 +675,13 @@ public sealed class SimulationEngine
         if (observe && from != to) Observe(ActionKinds.SteeringModeChange, 1.0);
     }
 
-    /// <summary>NFU 推桿:port/starboard 時舵令設為該側滿舵(舵以舵機速率移動),stop 時舵令設為目前舵角(舵停在原處);未給方向則不變。幅度 ≥ 1° 視為一次舵令。</summary>
+    /// <summary>
+    /// NFU 推桿:port/starboard 時舵令設為該側滿舵(舵以舵機速率移動),stop 時舵令設為目前舵角(舵停在原處);未給方向則不變(首次進入 nfu 已由
+    /// <see cref="SetSteeringMode"/> 同步舵令,等同 stop);不明方向視同 stop(推桿放開,舵不會沿用舊舵令繼續走;D35)。幅度 ≥ 1° 視為一次舵令。
+    /// </summary>
     private void ApplyNfu(string? direction, bool fromInstructor)
     {
-        var dir = direction?.ToLowerInvariant() switch { "port" => -1, "starboard" => 1, "stop" => 0, null => _nfuDirection, _ => (int?)null };
-        if (dir is not { } d) return;
+        var d = direction?.ToLowerInvariant() switch { "port" => -1, "starboard" => 1, "stop" => 0, null => _nfuDirection, _ => 0 };
         _nfuDirection = d;
         var before = _act.RudderOrderDeg;
         _act.RudderOrderDeg = d == 0 ? Units.Clamp(_act.RudderDeg, -_act.Parameters.RudderMaxDeg, _act.Parameters.RudderMaxDeg) : d * _act.Parameters.RudderMaxDeg;
@@ -684,6 +703,22 @@ public sealed class SimulationEngine
     }
 
     /// <summary>學員指令觀察 → 評估模組(會遇首次行動、必要事件、故障應變、操縱指標)。</summary>
+    /// <summary>舵令同步到目前舵角(夾在滿舵範圍內):舵停在原處。</summary>
+    private void HoldRudder() => _act.RudderOrderDeg = Units.Clamp(_act.RudderDeg, -_act.Parameters.RudderMaxDeg, _act.Parameters.RudderMaxDeg);
+
+    /// <summary>自動舵啟用中且設定航向較 <paramref name="oldHeadingRad"/> 改變 ≥ 1° 時觀察一次 autopilotHeading(會遇首次行動以 ≥ 5° 判定);autopilot 與 steeringMode autopilot 共用。</summary>
+    private void ObserveAutopilotHeadingChange(double oldHeadingRad)
+    {
+        if (!Autopilot.Enabled) return;
+        var dh = Math.Abs(Units.RadToDeg(Units.WrapRadPi(Autopilot.HeadingRad - oldHeadingRad)));
+        if (dh >= 1.0) Observe(ActionKinds.AutopilotHeading, dh);
+    }
+
+    /// <summary>拒絕指令(狀態不變):發 commandRejected {command, reason}(source 同指令來源),供教官站/紀錄說明為何無效。</summary>
+    private void RejectCommand(SimCommand cmd, string source, string? itemId, string reason)
+        => Raise(NewEvent(SimEventKinds.CommandRejected, source, itemId, null, $"{ContractJson.EnumName(cmd.Type)}:{reason}",
+            new { command = ContractJson.EnumName(cmd.Type), reason, args = cmd.Args }));
+
     private void Observe(string kind, double magnitude)
     {
         var a = new ObservedAction(kind, Tick, magnitude);

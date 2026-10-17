@@ -141,6 +141,9 @@ public sealed class AssessmentEngine
         st.MetTick = tick;
         st.By = by;
         var dt = (tick - st.StartTick) * _dt;
+        // 逾時判定以 dt > within_s 為準(與 FaultResponseTracker 的 withinFirstAction = dt ≤ within_s 一致),不只看整秒評估是否已判 missed:
+        // after 事件落在非整秒 tick(教官 injectFault)時,期限與下一整秒之間送達的動作仍為 late,並先補發 requiredEventMissed 使事件序列與整秒路徑相同
+        if (st.State == "pending" && dt > rule.WithinS) MarkMissed(rule, st);
         if (st.State == "missed")
         {
             st.State = "late";
@@ -153,6 +156,13 @@ public sealed class AssessmentEngine
             st.Penalty = 0;
         }
         _raise(SimEventKinds.RequiredEventMet, rule.Id, null, null, new { dt_s = dt, within_s = rule.WithinS, by, late = st.State == "late", penalty = st.Penalty });
+    }
+
+    private void MarkMissed(RequiredEvent rule, RequiredState st)
+    {
+        st.State = "missed";
+        st.Penalty = rule.Penalty;
+        _raise(SimEventKinds.RequiredEventMissed, rule.Id, null, null, new { within_s = rule.WithinS, penalty = rule.Penalty });
     }
 
     private static bool MatchesAfter(AfterSpec after, SimEvent e)
@@ -285,12 +295,7 @@ public sealed class AssessmentEngine
         {
             var st = Rules.Required[rule.Id];
             if (st.State != "pending") continue;
-            if ((sit.Tick - st.StartTick) * _dt > rule.WithinS)
-            {
-                st.State = "missed";
-                st.Penalty = rule.Penalty;
-                _raise(SimEventKinds.RequiredEventMissed, rule.Id, null, null, new { within_s = rule.WithinS, penalty = rule.Penalty });
-            }
+            if ((sit.Tick - st.StartTick) * _dt > rule.WithinS) MarkMissed(rule, st);
         }
         LatestSummary = BuildSummary(sit.Tick, final: false);
     }

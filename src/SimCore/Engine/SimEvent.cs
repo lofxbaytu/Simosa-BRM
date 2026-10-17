@@ -80,6 +80,8 @@ public static class SimEventKinds
     public const string ExerciseEnded = "exerciseEnded";
     /// <summary>操舵模式變更(指令 steeringMode、autopilot 或 rudder 解除自動舵/NFU;data {from, to, pump})</summary>
     public const string SteeringModeChanged = "steeringModeChanged";
+    /// <summary>指令被拒絕、狀態不變(source 同指令來源):data {command, reason, args};目前只有 emergency 模式下的自動舵啟用(D35)</summary>
+    public const string CommandRejected = "commandRejected";
     // engine
     public const string Grounding = "grounding";
     // assessment
@@ -108,4 +110,11 @@ public static class SimEventKinds
     // instructor
     public const string Acknowledge = "acknowledge";
     public const string TimelineManual = "timelineManual";
+}
+
+/// <summary><see cref="SimEventKinds.CommandRejected"/> 的 data.reason 值。</summary>
+public static class CommandRejectReasons
+{
+    /// <summary>應急操舵中不能啟用自動舵(需先 steeringMode fu;D35)</summary>
+    public const string EmergencySteering = "emergencySteering";
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using SimosaBRM.SimCore.Assessment;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Engine;
 using Xunit;
@@ -142,6 +143,78 @@ public class AssessmentEngineTests
         Assert.Equal(2, events.Count(x => x.Kind == SimEventKinds.RequiredEventMissed));
         Assert.Equal(2, events.Count(x => x.Kind == SimEventKinds.RequiredEventMet));
         Assert.True(events.Single(x => x.Kind == SimEventKinds.RequiredEventMet && x.ItemId == "slow").DataBool("late"));
+    }
+
+    [Fact]
+    public void ActionAfterDeadlineButBeforeNextWholeSecondIsLateNotMet()
+    {
+        // 審查發現:after 事件落在非整秒 tick(教官 injectFault)時,期限與下一整秒評估之間送達的動作被判 met(late=false),
+        // 與 FaultResponseTracker 的 withinFirstAction = dt ≤ within_s 矛盾;修正後以 dt > within_s 判 late,並先補發 requiredEventMissed
+        var e = TestData.MinimalEngine("""
+            assessment:
+              required:
+                - id: first
+                  after: { event: faultInjected }
+                  expect: { any: [ telegraphChange, steeringModeChange ] }
+                  within_s: 60
+                  penalty: 20
+                - id: notify
+                  after: { event: faultInjected }
+                  expect: { acknowledge: { kind: notifyEcr } }
+                  within_s: 60
+                  penalty: 10
+                  latePenaltyPer_s: 0.5
+            """);
+        var events = TestData.Capture(e);
+        TestData.RunTo(e, 100.5);
+        e.Enqueue(SimCommand.InjectFault(FaultNames.SteeringGear)); e.ProcessPendingCommands();
+        Assert.Equal(160.5, events.Single(x => x.Kind == SimEventKinds.RequiredEventPending && x.ItemId == "first").DataNumber("deadline_t"));
+        TestData.RunTo(e, 160.8);
+        Assert.DoesNotContain(events, x => x.Kind == SimEventKinds.RequiredEventMissed); // 整秒評估(160.0)尚未逾時
+        e.Enqueue(SimCommand.SteeringMode(SteeringMode.Emergency)); e.ProcessPendingCommands(); // dt 60.3 > 60
+        TestData.RunTo(e, 162.5);
+        e.Enqueue(SimCommand.Acknowledge("notifyEcr")); e.ProcessPendingCommands();              // dt 62 → late 1 分
+        TestData.RunTo(e, 170);
+
+        var missedFirst = events.Single(x => x.Kind == SimEventKinds.RequiredEventMissed && x.ItemId == "first");
+        var metFirst = events.Single(x => x.Kind == SimEventKinds.RequiredEventMet && x.ItemId == "first");
+        Assert.True(missedFirst.Seq < metFirst.Seq); // 先 missed 再 met(late),與整秒路徑的事件序列相同
+        Assert.Equal(metFirst.Tick, missedFirst.Tick);
+        Assert.True(metFirst.DataBool("late"));
+        Assert.Equal(60.3, metFirst.DataNumber("dt_s")!.Value, 9);
+        Assert.Equal(20.0, metFirst.DataNumber("penalty"));
+        var r = e.LatestSummary!.Assessment.Required;
+        var first = r.Single(x => x.Id == "first");
+        Assert.Equal("late", first.State);
+        Assert.Equal(20.0, first.Penalty);
+        Assert.Equal(ActionKinds.SteeringModeChange, first.By);
+        var fault = e.Assessment!.Faults.State.Records.Single();
+        Assert.False(fault.WithinFirstAction); // 與 faultResponses 一致
+        Assert.Equal(60.3, fault.FirstAction!.DtS, 9);
+
+        // notify:整秒評估 161 已判 missed(既有路徑),之後確認 → late,逾 2 s × 0.5 = 1 分
+        var notify = r.Single(x => x.Id == "notify");
+        Assert.Equal("late", notify.State);
+        Assert.Equal(1.0, notify.Penalty, 9);
+        Assert.Equal(2, events.Count(x => x.Kind == SimEventKinds.RequiredEventMissed));
+        Assert.Equal(100 - 20 - 1, e.LatestSummary.Assessment.Score, 9);
+
+        // 剛好在期限送達(dt = within_s)仍為 met
+        var g = TestData.MinimalEngine("""
+            assessment:
+              required:
+                - { id: first, after: { event: faultInjected }, expect: telegraphChange, within_s: 60, penalty: 20 }
+            """);
+        var gEvents = TestData.Capture(g);
+        TestData.RunTo(g, 100.5);
+        g.Enqueue(SimCommand.InjectFault(FaultNames.SteeringGear)); g.ProcessPendingCommands();
+        TestData.RunTo(g, 160.5);
+        g.Enqueue(SimCommand.Telegraph(TelegraphOrder.SAH)); g.ProcessPendingCommands();
+        TestData.RunTo(g, 165);
+        Assert.Equal("met", g.LatestSummary!.Assessment.Required.Single().State);
+        Assert.False(gEvents.Single(x => x.Kind == SimEventKinds.RequiredEventMet).DataBool("late"));
+        Assert.DoesNotContain(gEvents, x => x.Kind == SimEventKinds.RequiredEventMissed);
+        Assert.True(g.Assessment!.Faults.State.Records.Single().WithinFirstAction);
     }
 
     [Fact]
