@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- simosa-pkg 主控台程式:金鑰、更新包、紀錄包、直連同步與隨身碟備援(設計文件 docs/design/packaging-sync.md) -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SimosaBRM.Packaging.Cli</RootNamespace>
+    <AssemblyName>simosa-pkg</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tools.Packaging/Tools.Packaging.csproj" />
+  </ItemGroup>
+</Project>

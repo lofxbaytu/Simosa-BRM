@@ -56,7 +56,20 @@ export type AssessmentEventKind =
 /** 教官指令產生的事件 kind;steeringModeChanged / commandRejected 來源依指令來源(instructor 或 timeline,D32/D35)。 */
 export type InstructorEventKind = 'acknowledge' | 'timelineManual' | 'steeringModeChanged' | 'commandRejected';
 
-export type SimEventKind = TrafficEventKind | TimelineEventKind | AssessmentEventKind | InstructorEventKind;
+/** 警報管理/BNWAS/自動舵脫開事件 kind(docs/design/sensors-alerts.md 第 3.4、4 節;bnwasReset 的來源依指令來源,其餘 engine)。 */
+export type AlertEventKind =
+  | 'alertRaised'
+  | 'alertSilenced'
+  | 'alertReannunciated'
+  | 'alertAcknowledged'
+  | 'alertRectified'
+  | 'alertEscalated'
+  | 'bnwasStage'
+  | 'bnwasReset'
+  | 'bnwasModeChanged'
+  | 'autopilotTripped';
+
+export type SimEventKind = TrafficEventKind | TimelineEventKind | AssessmentEventKind | InstructorEventKind | AlertEventKind;
 
 export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'collision',
@@ -109,6 +122,16 @@ export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'timelineManual',
   'steeringModeChanged',
   'commandRejected',
+  'alertRaised',
+  'alertSilenced',
+  'alertReannunciated',
+  'alertAcknowledged',
+  'alertRectified',
+  'alertEscalated',
+  'bnwasStage',
+  'bnwasReset',
+  'bnwasModeChanged',
+  'autopilotTripped',
 ] as const;
 
 export interface SimEvent {
@@ -146,6 +169,7 @@ export interface VoiceScriptData {
 }
 
 /** 教官確認種類(command.schema.json acknowledge.args.kind)。 */
-export type AcknowledgeKind = 'verbal' | 'notifyEcr' | 'callMaster' | 'report' | 'checklist' | 'steeringMode' | 'anchorReady' | 'other';
+export type AcknowledgeKind = 'verbal' | 'notifyEcr' | 'callMaster' | 'report' | 'checklist' | 'steeringMode' | 'anchorReady' | 'gyroCheck' | 'other';
 
-export const ACKNOWLEDGE_KINDS: readonly AcknowledgeKind[] = ['verbal', 'notifyEcr', 'callMaster', 'report', 'checklist', 'steeringMode', 'anchorReady', 'other'] as const;
+/** gyroCheck:羅經交叉核對發現異常(E08;sensors-alerts.md 第 8 節)。 */
+export const ACKNOWLEDGE_KINDS: readonly AcknowledgeKind[] = ['verbal', 'notifyEcr', 'callMaster', 'report', 'checklist', 'steeringMode', 'anchorReady', 'gyroCheck', 'other'] as const;

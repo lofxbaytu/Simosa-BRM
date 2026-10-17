@@ -338,6 +338,34 @@ export interface SummaryFaultResponse {
   cleared_s?: number;
   withinFirstAction?: boolean;
   withinNotifyEcr?: boolean;
+  /** 該故障對應警報的第一次確認時刻與距注入秒數(sensors-alerts.md 第 5 節) */
+  alertAckAt_s?: number;
+  alertAckDt_s?: number;
+}
+
+/** summary.alerts.records[]:每次警報成立一筆。 */
+export interface SummaryAlertRecord {
+  id: string;
+  priority?: string;
+  raisedAt_s?: number;
+  acknowledgedAt_s?: number;
+  ackTime_s?: number;
+  rectifiedAt_s?: number;
+  escalated: boolean;
+  silences: number;
+}
+
+/** summary.alerts(規劃書第 8.3 節第 5、7 類;C# 核心才有)。 */
+export interface SummaryAlerts {
+  raised?: number;
+  acknowledged?: number;
+  unacknowledged?: number;
+  escalations?: number;
+  silences?: number;
+  meanAckTime_s?: number;
+  maxAckTime_s?: number;
+  records: SummaryAlertRecord[];
+  bnwas: { stage1?: number; stage2?: number; stage3?: number; resets?: number };
 }
 
 export interface SummaryHardFail {
@@ -419,6 +447,8 @@ export interface AssessmentSummary {
   faultResponses: SummaryFaultResponse[];
   events: { total?: number; byKind: Record<string, number> };
   assessment: SummaryAssessment;
+  /** 警報確認與 BNWAS 階段次數(舊核心/示範沒有時 null) */
+  alerts: SummaryAlerts | null;
   /** 原始物件(供未列欄位的顯示與匯出) */
   raw: Record<string, unknown>;
 }
@@ -495,7 +525,7 @@ export function parseAssessmentSummary(raw: unknown): AssessmentSummary | null {
   const faultResponses: SummaryFaultResponse[] = (Array.isArray(raw['faultResponses']) ? raw['faultResponses'] : []).filter(isRecord).map((f) => {
     const fr: SummaryFaultResponse = {
       fault: str(f['fault']),
-      ...pickNums(f, ['injectedAt_s', 'cleared_s']),
+      ...pickNums(f, ['injectedAt_s', 'cleared_s', 'alertAckAt_s', 'alertAckDt_s']),
       acknowledgements: (Array.isArray(f['acknowledgements']) ? f['acknowledgements'] : []).filter(isRecord).map((a) => {
         const ack: SummaryFaultResponse['acknowledgements'][number] = { kind: str(a['kind']), ...pickNums(a, ['t_s', 'dt_s']) };
         if (typeof a['role'] === 'string') ack.role = a['role'];
@@ -562,6 +592,7 @@ export function parseAssessmentSummary(raw: unknown): AssessmentSummary | null {
     faultResponses,
     events: { byKind },
     assessment,
+    alerts: parseSummaryAlerts(raw['alerts']),
     raw,
   };
   if (typeof ukc['limitSource'] === 'string') summary.ukc.limitSource = ukc['limitSource'];
@@ -573,6 +604,21 @@ export function parseAssessmentSummary(raw: unknown): AssessmentSummary | null {
   const ps = parseParameterSetRef(raw['parameterSet']);
   if (ps) summary.parameterSet = ps;
   return summary;
+}
+
+/** summary.alerts → SummaryAlerts;不是物件回傳 null。 */
+export function parseSummaryAlerts(v: unknown): SummaryAlerts | null {
+  if (!isRecord(v)) return null;
+  const bn = isRecord(v['bnwas']) ? v['bnwas'] : {};
+  return {
+    ...pickNums(v, ['raised', 'acknowledged', 'unacknowledged', 'escalations', 'silences', 'meanAckTime_s', 'maxAckTime_s']),
+    records: (Array.isArray(v['records']) ? v['records'] : []).filter(isRecord).map((r) => {
+      const rec: SummaryAlertRecord = { id: str(r['id']), escalated: r['escalated'] === true, silences: num(r['silences']) ?? 0, ...pickNums(r, ['raisedAt_s', 'acknowledgedAt_s', 'ackTime_s', 'rectifiedAt_s']) };
+      if (typeof r['priority'] === 'string') rec.priority = r['priority'];
+      return rec;
+    }),
+    bnwas: pickNums(bn, ['stage1', 'stage2', 'stage3', 'resets']),
+  };
 }
 
 /** WebSocket 回覆框 {"type":"assessment","final":bool,"summary":{…}} → summary(含 final 旗標);非評估框回傳 null。 */

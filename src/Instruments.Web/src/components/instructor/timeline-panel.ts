@@ -22,7 +22,8 @@ import { ACK_KIND_LABEL, ROLE_LABEL } from '../../lib/sim-event.js';
 
 export const HOLD_MS = 800;
 
-const QUICK_ACKS = ['verbal', 'notifyEcr', 'callMaster', 'report', 'steeringMode', 'anchorReady', 'checklist'] as const;
+/** 確認快速鈕;gyroCheck = 羅經交叉核對發現異常(E08,sensors-alerts.md 第 8 節) */
+const QUICK_ACKS = ['verbal', 'notifyEcr', 'callMaster', 'report', 'steeringMode', 'anchorReady', 'checklist', 'gyroCheck'] as const;
 const ROLES = ['officer', 'master', 'pilot', 'helmsman', 'lookout', 'leader'] as const;
 
 export interface TimelineItemStatus {

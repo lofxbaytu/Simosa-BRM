@@ -64,6 +64,13 @@ export class EventStream extends LitElement {
         color: var(--ob-alarm);
         font-weight: 600;
       }
+      /* 共用樣式的 .alarm(紅底)會套到事件列,使紅字落在紅底上;事件列改為淡紅底 */
+      .list .item.alarm {
+        background: color-mix(in srgb, var(--ob-alarm) 12%, transparent);
+        color: var(--ob-text);
+        padding: 2px 4px;
+        border-radius: 3px;
+      }
       .item.visible .text::after {
         content: ' 學員可見';
         font-size: 9px;

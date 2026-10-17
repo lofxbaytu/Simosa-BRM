@@ -10,6 +10,9 @@
 // 操舵模式(D32/D35):state.steering 與 steeringMode 指令(fu/nfu/autopilot/emergency、泵、NFU 推桿;應急操舵下拒絕自動舵並發
 // commandRejected;模式/泵變更發 steeringModeChanged);兩艘假目標船(直線等速:一艘交叉相遇、CPA 小於門檻而處於 cpaAlarm,
 // 一艘錨泊)含 range/bearing/CPA/TCPA,讓航跡圖與 CPA/TCPA 小表離線可見。
+// 感測器故障/警報/BNWAS(docs/design/sensors-alerts.md;demo-alerts.ts):output() 的頂層 heading/pos/cog/sog/stw/depthBelowKeel
+// 為指示值、另附 truth/sensors/autopilot/alerts/bnwas;自動舵以指示航向操舵;示範假警報與 BNWAS 循環(見 demo-alerts.ts)。
+// current 仍為真值(運動學內部狀態)。
 
 import { clamp, degToRad, knotsToMps, mpsToKnots, normalizeHeading, radToDeg, headingDifference } from '../lib/angles.js';
 import { getShipConfig, telegraphStep, type ShipDisplayConfig } from '../lib/ship-config.js';
@@ -18,6 +21,7 @@ import type { SimCommand } from '../types/command.js';
 import type { SimEvent, SimEventSource } from '../types/event.js';
 import type { TargetState } from '../types/target.js';
 import { STEERING_MODES, STEERING_PUMPS, TELEGRAPH_POSITIONS, type OwnShipState, type ShipId, type SteeringModeValue, type SteeringPump, type SteeringStatus, type TelegraphPosition } from '../types/state.js';
+import { BNWAS_RESET_COMMANDS, DemoAlerts, DemoBnwas, DemoSensors, demoAlertConditions, demoLatLon, type DemoEmit } from './demo-alerts.js';
 
 export const DEMO_DT = 0.02; // 50 Hz
 
@@ -41,6 +45,8 @@ export interface DemoOptions {
   waterDepth_m?: number;
   wind?: { trueSpeed: number; trueDir: number };
   current?: { set: number; drift: number };
+  /** 示範警報管理與 BNWAS(假警報、BNWAS 循環、故障類警報;預設關,DemoSource 預設開) */
+  alerts?: boolean;
 }
 
 interface AutopilotState {
@@ -99,6 +105,12 @@ export class DemoSim {
   /** 自船對地速度 ENU (m/s),供目標船 CPA 計算 */
   private ownVe = 0;
   private ownVn = 0;
+  private readonly emitFn: DemoEmit = (kind, source, extra) => {
+    this.emit(kind, source, extra);
+  };
+  private sensors = new DemoSensors();
+  private alerts = new DemoAlerts(this.emitFn);
+  private bnwas = new DemoBnwas(this.emitFn);
 
   constructor(options: DemoOptions = {}) {
     const shipId = options.shipId ?? 'FSB1';
@@ -112,6 +124,7 @@ export class DemoSim {
       waterDepth_m: options.waterDepth_m ?? 20,
       wind: options.wind ?? { trueSpeed: 12, trueDir: 40 },
       current: options.current ?? { set: 200, drift: 0.8 },
+      alerts: options.alerts ?? false,
     };
     this.state = this.initialState();
   }
@@ -344,6 +357,54 @@ export class DemoSim {
     return this.state;
   }
 
+  /** 自動舵是否可用(無 autopilotFailure 且電羅經有效) */
+  get autopilotAvailable(): boolean {
+    return !(this.state.faults ?? []).includes('autopilotFailure') && this.sensors.headingValid;
+  }
+
+  /**
+   * 對外狀態(DemoSource 廣播):current 的複本,頂層換成感測器指示值,並附 truth/sensors/autopilot/alerts/bnwas
+   * (state.schema.json;alerts 無警報時省略)。
+   */
+  output(): OwnShipState {
+    const s = structuredClone(this.state);
+    const o = this.sensors.overlay(this.state, s.faults ?? []);
+    s.truth = this.sensors.truth(this.state, o);
+    s.heading = Math.round(o.heading * 100) / 100;
+    s.pos = { ...demoLatLon(this.opts.originLat, this.opts.originLon, o.pos.x, o.pos.y), x: o.pos.x, y: o.pos.y };
+    s.cog = o.cog;
+    s.sog = o.sog;
+    s.stw = o.stw;
+    s.depthBelowKeel = o.depthBelowKeel;
+    s.sensors = o.sensors;
+    s.autopilot = { enabled: this.autopilot.enabled, setHeading: this.autopilot.heading, rotLimit_degPerMin: this.autopilot.rotLimit, available: this.autopilotAvailable };
+    if (this.opts.alerts) {
+      const alerts = this.alerts.list;
+      if (alerts.length > 0) s.alerts = alerts;
+      s.bnwas = this.bnwas.status(this.state.t, this.autopilot.enabled);
+    }
+    return s;
+  }
+
+  /** 電羅經/自動舵失效時脫開自動舵(autopilotTripped + steeringModeChanged autopilot → fu,來源 engine)。 */
+  private tripAutopilot(reason: 'headingInvalid' | 'autopilotFailure', fault: string): void {
+    if (!this.autopilot.enabled && this.steering.mode !== 'autopilot') return;
+    this.autopilot.enabled = false;
+    this.state.rudderOrder = this.state.rudder;
+    this.emit('autopilotTripped', 'engine', { data: { reason, fault } });
+    if (this.steering.mode === 'autopilot') this.setSteering('fu', undefined, 'engine');
+  }
+
+  private rejectUnavailable(command: string, args: Record<string, unknown>): void {
+    this.emit('commandRejected', 'instructor', { data: { command, reason: 'autopilotUnavailable', args: { ...args } } });
+  }
+
+  private alertTargetId(cmd: SimCommand): string | undefined {
+    if (typeof cmd.value === 'string' && cmd.value) return cmd.value;
+    const id = cmd.args?.['id'];
+    return typeof id === 'string' && id ? id : undefined;
+  }
+
   get isFrozen(): boolean {
     return this.frozen;
   }
@@ -351,6 +412,8 @@ export class DemoSim {
   /** 接受與核心相同的指令。 */
   apply(cmd: SimCommand): void {
     const s = this.state;
+    // 駕駛台操作重設 BNWAS(sensors-alerts.md 第 4 節)
+    if (this.opts.alerts && BNWAS_RESET_COMMANDS.has(cmd.type)) this.bnwas.reset(s.t, cmd.type, 'instructor');
     switch (cmd.type) {
       case 'rudder': {
         if (typeof cmd.value === 'number' && Number.isFinite(cmd.value)) {
@@ -389,6 +452,10 @@ export class DemoSim {
           this.emit('commandRejected', 'instructor', { data: { command: 'autopilot', reason: 'emergencySteering', args: { ...a } } });
           break;
         }
+        if (enabled && !this.autopilotAvailable) {
+          this.rejectUnavailable('autopilot', a);
+          break;
+        }
         const heading = typeof a['heading'] === 'number' ? normalizeHeading(a['heading']) : this.autopilot.heading;
         const rotLimit = typeof a['rotLimit'] === 'number' ? clamp(a['rotLimit'], 1, 120) : this.autopilot.rotLimit;
         this.autopilot = { enabled, heading, rotLimit };
@@ -406,6 +473,10 @@ export class DemoSim {
         if (mode === 'autopilot') {
           if (this.steering.mode === 'emergency') {
             this.emit('commandRejected', 'instructor', { data: { command: 'steeringMode', reason: 'emergencySteering', args: { ...a } } });
+            break;
+          }
+          if (!this.autopilotAvailable) {
+            this.rejectUnavailable('steeringMode', a);
             break;
           }
           const heading = typeof a['heading'] === 'number' ? normalizeHeading(a['heading']) : s.heading;
@@ -437,6 +508,9 @@ export class DemoSim {
       case 'reset':
         this.autopilot = { enabled: false, heading: 0, rotLimit: 15 };
         this.steering = { mode: 'fu', pump: 'both' };
+        this.sensors = new DemoSensors();
+        this.alerts = new DemoAlerts(this.emitFn);
+        this.bnwas = new DemoBnwas(this.emitFn);
         this.rThruster = 0;
         this.frozen = false;
         this.freezes = 0;
@@ -470,13 +544,18 @@ export class DemoSim {
         break;
       }
       case 'injectFault': {
-        // 示範模式只記錄故障名稱(供教官站清單預覽),不改變運動學;名稱可為 value 字串或 args.name
+        // 示範模式不改變運動學(舵機/主機故障只記錄);感測器故障改變指示值、故障類警報成立(demo-alerts.ts);
+        // 名稱可為 value 字串或 args.name,參數在 args.args
         const name = typeof cmd.value === 'string' ? cmd.value : typeof cmd.args?.['name'] === 'string' ? (cmd.args['name'] as string) : '';
+        const fargsRaw = cmd.args?.['args'];
+        const fargs = typeof fargsRaw === 'object' && fargsRaw !== null && !Array.isArray(fargsRaw) ? (fargsRaw as Record<string, unknown>) : {};
         if (name.trim()) {
           const faults = s.faults ?? [];
           const already = faults.includes(name);
           if (!already) s.faults = [...faults, name];
-          this.emit('faultInjected', 'instructor', { data: { fault: name, alreadyActive: already } });
+          // gyroDrift 重複注入以新速率續漂;其他感測器故障只在首次注入時擷取保持值
+          if (!already || name === 'gyroDrift') this.sensors.inject(name, fargs, s);
+          this.emit('faultInjected', 'instructor', { data: { fault: name, alreadyActive: already, ...(Object.keys(fargs).length > 0 ? { args: { ...fargs } } : {}) } });
           if (!already) {
             this.faultInjections.push({ fault: name, t: s.t });
             if (this.phase === 'normal') {
@@ -484,6 +563,8 @@ export class DemoSim {
               this.phase = 'degraded';
             }
           }
+          if (name === 'gyroFailure') this.tripAutopilot('headingInvalid', name);
+          else if (name === 'autopilotFailure') this.tripAutopilot('autopilotFailure', name);
         }
         break;
       }
@@ -491,9 +572,26 @@ export class DemoSim {
         const before = s.faults ?? [];
         if (typeof cmd.value === 'string') s.faults = before.filter((f) => f !== cmd.value);
         else s.faults = [];
-        for (const f of before) if (!(s.faults ?? []).includes(f)) this.emit('faultCleared', 'instructor', { data: { fault: f } });
+        for (const f of before) {
+          if ((s.faults ?? []).includes(f)) continue;
+          this.sensors.clear(f);
+          this.emit('faultCleared', 'instructor', { data: { fault: f } });
+        }
         break;
       }
+      case 'alertAcknowledge':
+      case 'alertSilence': {
+        const id = this.alertTargetId(cmd);
+        const ok = cmd.type === 'alertAcknowledge' ? this.alerts.acknowledge(id, s.t) : this.alerts.silence(id, s.t);
+        if (!ok) this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: 'unknownAlert', id } });
+        break;
+      }
+      case 'bnwasMode':
+        this.bnwas.setMode(cmd.value, cmd.args ?? {}, s.t, 'instructor');
+        break;
+      case 'bnwasReset':
+        this.bnwas.reset(s.t, 'bnwasReset', 'instructor');
+        break;
       case 'acknowledge': {
         const a = cmd.args ?? {};
         const kind = typeof a['kind'] === 'string' ? a['kind'] : 'other';
@@ -547,9 +645,9 @@ export class DemoSim {
     this.stepTimeline();
     const cfg = this.cfg;
 
-    // 自動舵:依航向誤差求目標 ROT(受限制),再以 ROT 誤差決定舵令
+    // 自動舵:依「指示」航向誤差求目標 ROT(受限制),再以 ROT 誤差決定舵令(gyroDrift 時跟隨錯誤航向,E08)
     if (this.autopilot.enabled) {
-      const err = headingDifference(s.heading, this.autopilot.heading); // 右轉正
+      const err = headingDifference(this.sensors.heading(s), this.autopilot.heading); // 右轉正
       const desiredRot = clamp(err * 1.0, -this.autopilot.rotLimit, this.autopilot.rotLimit);
       const rudder = 0.6 * (desiredRot - s.rot) + 0.15 * err;
       s.rudderOrder = clamp(rudder, -cfg.rudderNormalMax_deg, cfg.rudderNormalMax_deg);
@@ -608,6 +706,12 @@ export class DemoSim {
     s.tick += 1;
     this.updateDerived(s, ve, vn);
     this.stepTargets(s, dt);
+    // BNWAS 與警報(核心順序:BNWAS.Update → AlertManager.Update)
+    if (this.opts.alerts) {
+      this.bnwas.step(s.t, this.autopilot.enabled);
+      const { conditions, texts } = demoAlertConditions(s.faults ?? [], s.t, this.sensors, s);
+      this.alerts.update(s.t, conditions, this.bnwas.alertPriority, texts);
+    }
     return s;
   }
 

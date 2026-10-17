@@ -62,6 +62,89 @@ public sealed record OwnShipState
     [JsonPropertyName("scenario")] public ScenarioStatus? Scenario { get; init; }
     /// <summary>航線狀態(XTD/下一航點;規劃書第 7.2 節 conning 最低資訊);情境無 route 時省略</summary>
     [JsonPropertyName("route")] public RouteStatus? Route { get; init; }
+    /// <summary>
+    /// 真值(教官站/講評用;設計文件 sensors-alerts.md 第 2 節):heading/pos/cog/sog/stw/depthBelowKeel 頂層欄位為「指示值」(感測器故障時與真值不同),
+    /// 此區塊為模擬的真實值與誤差。學員端儀器不應顯示。
+    /// </summary>
+    [JsonPropertyName("truth")] public TruthState? Truth { get; init; }
+    /// <summary>感測器有效性與磁羅經(儀器端據以標示「無效/可疑」)</summary>
+    [JsonPropertyName("sensors")] public SensorStatus? Sensors { get; init; }
+    /// <summary>自動舵(啟用、設定航向、ROT 限制、是否可用)</summary>
+    [JsonPropertyName("autopilot")] public AutopilotStatus? Autopilot { get; init; }
+    /// <summary>警報清單(BAM;依優先序、成立時間;無警報時省略)</summary>
+    [JsonPropertyName("alerts")] public IReadOnlyList<AlertStatus>? Alerts { get; init; }
+    /// <summary>BNWAS(MSC.128(75))狀態</summary>
+    [JsonPropertyName("bnwas")] public BnwasStatus? Bnwas { get; init; }
+}
+
+/// <summary>真值區塊(state.schema.json <c>truth</c>)。</summary>
+public sealed record TruthState
+{
+    [JsonPropertyName("heading")] public required double Heading { get; init; }
+    [JsonPropertyName("pos")] public required GeoPosition Pos { get; init; }
+    [JsonPropertyName("cog")] public required double Cog { get; init; }
+    [JsonPropertyName("sog")] public required double Sog { get; init; }
+    [JsonPropertyName("stw")] public required double Stw { get; init; }
+    [JsonPropertyName("depthBelowKeel")] public required double DepthBelowKeel { get; init; }
+    /// <summary>指示航向 − 真航向(度,−180..180;右正)</summary>
+    [JsonPropertyName("headingError_deg")] public required double HeadingErrorDeg { get; init; }
+    /// <summary>指示位置與真位置的距離(m)</summary>
+    [JsonPropertyName("positionError_m")] public required double PositionErrorM { get; init; }
+}
+
+/// <summary>感測器有效性(state.schema.json <c>sensors</c>):false 時對應的頂層欄位為最後有效值(保持顯示),NMEA 句型標示無效或停送。</summary>
+public sealed record SensorStatus
+{
+    [JsonPropertyName("headingValid")] public required bool HeadingValid { get; init; }
+    [JsonPropertyName("positionValid")] public required bool PositionValid { get; init; }
+    [JsonPropertyName("depthValid")] public required bool DepthValid { get; init; }
+    [JsonPropertyName("stwValid")] public required bool StwValid { get; init; }
+    /// <summary>磁羅經指示(修正自差/磁差後的真航向,度;不受電羅經故障影響)</summary>
+    [JsonPropertyName("magneticHeading")] public required double MagneticHeading { get; init; }
+}
+
+/// <summary>自動舵狀態(state.schema.json <c>autopilot</c>)。</summary>
+public sealed record AutopilotStatus
+{
+    [JsonPropertyName("enabled")] public required bool Enabled { get; init; }
+    /// <summary>設定航向(度,0–360)</summary>
+    [JsonPropertyName("setHeading")] public required double SetHeading { get; init; }
+    [JsonPropertyName("rotLimit_degPerMin")] public required double RotLimitDegPerMin { get; init; }
+    /// <summary>可啟用(無 autopilotFailure 且指示航向有效)</summary>
+    [JsonPropertyName("available")] public required bool Available { get; init; }
+}
+
+/// <summary>警報(state.schema.json <c>alerts[]</c>;MSC.302(87))。</summary>
+public sealed record AlertStatus
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    /// <summary>NMEA ALR 警報編號</summary>
+    [JsonPropertyName("number")] public required int Number { get; init; }
+    [JsonPropertyName("priority")] public required Alerts.AlertPriority Priority { get; init; }
+    [JsonPropertyName("category")] public required Alerts.AlertCategory Category { get; init; }
+    [JsonPropertyName("source")] public required string Source { get; init; }
+    [JsonPropertyName("state")] public required Alerts.AlertState State { get; init; }
+    [JsonPropertyName("text")] public required string Text { get; init; }
+    [JsonPropertyName("raisedAt_s")] public required double RaisedAtS { get; init; }
+    [JsonPropertyName("acknowledgedAt_s")] public double? AcknowledgedAtS { get; init; }
+    [JsonPropertyName("silencedUntil_s")] public double? SilencedUntilS { get; init; }
+    [JsonPropertyName("escalated")] public required bool Escalated { get; init; }
+    [JsonPropertyName("count")] public required int Count { get; init; }
+    /// <summary>目前有聲響(activeUnacknowledged 且優先序為 emergencyAlarm/alarm/warning)</summary>
+    [JsonPropertyName("audible")] public required bool Audible { get; init; }
+}
+
+/// <summary>BNWAS 狀態(state.schema.json <c>bnwas</c>)。</summary>
+public sealed record BnwasStatus
+{
+    [JsonPropertyName("mode")] public required Scenario.BnwasMode Mode { get; init; }
+    /// <summary>作動中(on,或 auto 且自動舵啟用)</summary>
+    [JsonPropertyName("active")] public required bool Active { get; init; }
+    /// <summary>0 休眠、1 視覺、2 駕駛台聲響、3 後備值班官</summary>
+    [JsonPropertyName("stage")] public required int Stage { get; init; }
+    /// <summary>距下一階段的秒數(未作動或第三階段時省略)</summary>
+    [JsonPropertyName("remaining_s")] public double? RemainingS { get; init; }
+    [JsonPropertyName("dormant_s")] public required double DormantS { get; init; }
 }
 
 /// <summary>情境引擎狀態摘要(state.schema.json `scenario`)。</summary>

@@ -1,5 +1,6 @@
 // 自動舵面板:開/關、設定航向(±1/±10 與輸入框、採用現在航向)、ROT 限制;送 autopilot 指令。
-// state.schema 沒有自動舵狀態欄位,故開關狀態由本面板保存並以 autopilot-changed 事件通知 <brm-app>。
+// 開關狀態由本面板保存並以 autopilot-changed 事件通知 <brm-app>;C# 核心另有 state.autopilot(sensors-alerts.md 第 2.3 節):
+// available = false(電羅經或自動舵失效)時停用「開」並標「不可用」,核心脫開自動舵時 <brm-app> 呼叫 disable() 同步。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -70,6 +71,8 @@ export class AutopilotPanel extends LitElement {
   /** 目前航向(供「採用現在航向」) */
   @property({ type: Number }) heading = 0;
   @property({ type: Number }) rotLimitMax = 60;
+  /** 核心回報的自動舵可用性(state.autopilot.available;核心未回報時 true) */
+  @property({ type: Boolean }) available = true;
 
   @state() private enabled = false;
   @state() private setHeading = 0;
@@ -132,9 +135,9 @@ export class AutopilotPanel extends LitElement {
   override render() {
     return html`
       <div class="panel">
-        <div class="panel-title"><span>自動舵 AUTOPILOT</span><span class="label">${this.enabled ? 'AUTO' : 'HAND'}</span></div>
-        <button class="toggle ${this.enabled ? 'on' : ''}" aria-pressed=${this.enabled} @click=${this.toggle}>
-          ${this.enabled ? '自動舵 開' : '自動舵 關'}
+        <div class="panel-title"><span>自動舵 AUTOPILOT</span><span class="label ${this.available ? '' : 'alarm'}">${this.available ? (this.enabled ? 'AUTO' : 'HAND') : '不可用'}</span></div>
+        <button class="toggle ${this.enabled ? 'on' : ''}" aria-pressed=${this.enabled} ?disabled=${!this.available && !this.enabled} title=${this.available ? '' : '電羅經或自動舵失效,自動舵不可啟用'} @click=${this.toggle}>
+          ${this.enabled ? '自動舵 開' : this.available ? '自動舵 關' : '自動舵 不可用'}
         </button>
         <div class="set">
           <button title="−10°" @click=${() => this.adjust(-10)}>−10</button>

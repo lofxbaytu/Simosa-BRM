@@ -1,0 +1,158 @@
+# E08 電羅經失效/航向感測誤差:彰化外海沿岸北上,夜間(規劃書第 8.1 節 E08;schema:src/Contracts/scenario.schema.json;設計文件 docs/design/sensors-alerts.md 第 7 節)
+# FSB1 滿載以 11 kn 自動舵 029° 沿岸北上往台中港,東側 1.5 nm 外有淺灘禁區;夜間能見度 8 nm、東北風 15 kn、漲潮流 0.8 kn。
+# 時間表:T+1 s 接上自動舵 → T+60 s 電羅經開始漂移 −1°/分(gyroDrift,無警報;指示值偏左,自動舵跟隨錯誤航向,真航向逐漸偏右、往岸側)
+#          → 漂移 300 s 內未偵測(必要事件 driftDetected 逾時)則瞭望員提示燈塔方位異常 → 漂移 420 s 後電羅經完全失效(gyroFailure:警報 alarm、
+#          指示航向無效、HDT 停送、自動舵脫開)→ 教官確認電羅經重新啟動後清除故障。BNWAS on(夜航當值),休眠期 540 s(bridge.bnwas.dormantPeriod_s)。
+# 評估:偵測漂移(切手動 autopilotOff/操舵模式/舵令,或 acknowledge gyroCheck 回報羅經比對異常)≤ 300 s、失效警報確認 ≤ 30 s、
+#        手操舵 ≤ 60 s、通知船長 ≤ 180 s;航跡偏差(沿岸門檻 navigation.xtd.coastal_m)、淺灘禁區與擱淺/碰撞硬性失敗。
+# 變化題:alerts.headingMonitor_deg 設 5 可讓航向監視(電羅經 vs 磁羅經)在漂移約 5 分鐘後發 warning(規劃書第 7.2 節自動舵航向監視警報)。
+id: E08_gyro_failure
+name: 夜間沿岸電羅經漂移與失效
+description: >-
+  夜間沿岸北上,電羅經無警報緩慢漂移,自動舵跟隨錯誤航向使船偏向岸側淺灘;之後電羅經完全失效、自動舵脫開。
+  團隊需以磁羅經、GPS COG、燈塔方位交叉核對發現異常、改手操舵並通知船長;評估偵測時間、警報確認時間、航跡保持與 BNWAS。
+seed: 20261120
+startTimeUtc: "2026-11-20T13:30:00Z"            # 當地 21:30(夜間)
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 23.9000, lon: 120.2000 }
+initial:
+  position: { lat: 23.8854, lon: 120.1912 }    # WP1 西南 1 nm,位於航段 0 的延長線上(航向 029°)
+  heading: 29
+  speed: 11.0
+  rudder: 0
+environment:
+  wind: { trueSpeed: 15, trueDir: 30, gustiness: 0.1 }
+  current: { set: 20, drift: 0.8 }              # 漲潮北流
+  waterDepth: 35
+  visibility_nm: 8
+sensors:
+  magneticCompassError_deg: 1.0                 # 磁羅經修正後剩餘誤差(交叉核對時約差 1°)
+alerts:
+  escalate_s: 300                               # MSC.302(87):warning 未確認 5 分鐘升級為 alarm
+  silence_s: 30
+  offHeading_deg: 10                            # 自動舵偏航警報(以指示航向判定:漂移時自動舵「準確地」跟隨錯誤航向,不會觸發)
+  offHeadingDelay_s: 10
+  shallowWater_m: 5.0                           # 測深儀淺水警報(龍骨下水深)
+bnwas:
+  mode: "on"                                    # 夜航當值(常規命令:航行中 BNWAS 一律開啟)
+  dormant_s: 540                                # = 參數 bridge.bnwas.dormantPeriod_s(Python 參考實作尚未保留 bnwas 區段,引用會使跨語言檢查失敗;支援後改為 "${params:…}")
+  stage2_s: 15
+  stage3_s: 90
+briefing:
+  text: |
+    夜間 21:30,FSB1 滿載自麥寮北上往台中港外錨地,二副當值、一名瞭望員;自動舵 029°、11 kn。
+    航線:WP1→WP2 029°、WP2→WP3 032°,沿岸航段 XTD 限制 300 m;右舷(東側)1.5 nm 外為彰化外海淺灘。
+    常規命令:每 15 分鐘交叉核對電羅經與磁羅經、以 GPS COG 與燈塔方位核對航跡;羅經異常立即改手操舵並通知船長;BNWAS 開啟。
+  attachments:
+    - { title: 航程計畫(麥寮—台中), file: docs/passage-plan-mailiao-taichung.pdf }
+    - { title: 船長常規命令, file: docs/DWO-007.pdf }
+  roles:
+    - { role: oow, playedBy: trainee, required: true }
+    - { role: lookout, playedBy: voiceScript }
+    - { role: master, playedBy: leader }
+  minParticipants: 2
+route:
+  name: 彰化外海沿岸北上
+  xtdLimit_m: "${params:navigation.xtd.coastal_m}"
+  waypoints:
+    - { name: WP1, lat: 23.9000, lon: 120.2000 }
+    - { name: WP2, lat: 24.0500, lon: 120.2900, checkpoint: true }
+    - { name: WP3, lat: 24.1800, lon: 120.3800 }
+zones:
+  - id: shoal_E
+    name: 彰化外海淺灘(禁區)
+    type: noGo
+    polygon:                                     # 航段 0 右舷 1.5–3.5 km、自 WP1 起 3–16 km
+      - { lat: 23.9172, lon: 120.2271 }
+      - { lat: 24.0197, lon: 120.2887 }
+      - { lat: 24.0111, lon: 120.3059 }
+      - { lat: 23.9086, lon: 120.2444 }
+timeline:
+  - id: autopilotOn
+    name: 自動舵 029°(初始狀態)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - autopilot: { enabled: true, heading: 29, rotLimit: 15 }
+      - message: { to: instructor, text: "自動舵已接上 029°;BNWAS on。觀察羅經交叉核對頻率", severity: info }
+  - id: masterOrders
+    name: 船長交班叮囑(語音)
+    when: { type: time, atLeast: 20 }
+    actions:
+      - voiceScript: { role: master, channel: bridge, text: "二副,我下去休息。自動舵 029,每 15 分鐘對一次羅經,有異常馬上叫我。", lang: zh-TW }
+  - id: gyroDrift
+    name: 電羅經漂移(無警報)
+    phase: degraded
+    when: { type: time, atLeast: "${params:emergency.gyroFailure.driftAt_s}" }
+    actions:
+      - injectFault: { name: gyroDrift, args: { rate_degPerMin: "${params:emergency.gyroFailure.driftRate_degPerMin}" } }
+      - message: { to: instructor, text: "已注入電羅經漂移(每分鐘 1°、無警報);自動舵跟隨指示航向,真航向逐漸偏向右舷岸側。期望 5 分鐘內交叉核對發現", severity: warning }
+  - id: lookoutCue
+    name: 瞭望員提示(未偵測時)
+    when: { type: event, kind: requiredEventMissed, itemId: driftDetected }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "二副,右舷那座燈塔的方位一直往後跑,我們是不是離岸越來越近?", lang: zh-TW }
+  - id: gyroFail
+    name: 電羅經完全失效(警報)
+    phase: emergency
+    when:
+      all:
+        - { type: fault, name: gyroDrift, active: true }
+        - { type: time, atLeast: "${params:emergency.gyroFailure.failAfter_s}", since: { event: timelineTriggered, itemId: gyroDrift } }
+    actions:
+      - injectFault: gyroFailure
+      - message: { to: instructor, text: "電羅經完全失效:警報 alarm、HDT 停送、自動舵脫開(舵停在原處)。期望 30 s 內確認警報、60 s 內手操舵(磁羅經)、3 分鐘內通知船長", severity: warning }
+  - id: gyroRestored
+    name: 電羅經重新啟動完成(教官確認)
+    manual: true
+    actions:
+      - clearFault: gyroFailure
+      - clearFault: gyroDrift
+      - voiceScript: { role: master, channel: bridge, text: "電羅經重新啟動了,先跟磁羅經對過再接自動舵。", lang: zh-TW }
+      - phase: normal
+  - id: end
+    name: 30 分鐘結束
+    when: { type: time, atLeast: 1800 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  ukc:
+    min: { fractionOfDraft: "${params:navigation.ukc.openSea_fraction}" }
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: collision, rule: collision }
+    - { id: shoal, rule: zoneEntered, zoneId: shoal_E }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.coastal_m}", fail: 2x, penalty: 10, failPenalty: 25 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 120, penalty: 5, failPenalty: 15 }
+    - { id: headingDev, metric: track.meanHeadingDeviation_deg, warn: 3, fail: 6, penalty: 5, failPenalty: 10 }
+  required:
+    - id: driftDetected
+      after: { event: faultInjected, itemId: gyroDrift }
+      expect: { any: [ autopilotOff, steeringModeChange, rudderOrder, { acknowledge: { kind: gyroCheck } } ] }   # 切手動/改操舵模式/下舵令,或回報羅經比對異常(教官按 gyroCheck)
+      within_s: "${params:emergency.gyroFailure.detectDrift_s}"
+      penalty: 20
+      latePenaltyPer_s: 0.1
+    - id: alarmAck
+      after: { event: faultInjected, itemId: gyroFail }
+      expect: { event: { kind: alertAcknowledged } }                         # BAM 警報確認(alertAcknowledge 指令)
+      within_s: "${params:emergency.gyroFailure.alarmAck_s}"
+      penalty: 10
+      latePenaltyPer_s: 0.2
+    - id: manualSteering
+      after: { event: faultInjected, itemId: gyroFail }
+      expect: { any: [ rudderOrder, steeringModeChange ] }
+      within_s: "${params:emergency.gyroFailure.manualSteering_s}"
+      penalty: 15
+    - id: callMaster
+      after: { event: faultInjected, itemId: gyroFail }
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:emergency.gyroFailure.callMaster_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

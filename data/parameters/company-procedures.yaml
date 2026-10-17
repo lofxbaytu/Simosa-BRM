@@ -16,6 +16,7 @@ sources:                              # 程序文件索引;parameters[].source �
   PORT-KHH: { title: 高雄港港口規定(港方), revision: "2025", date: 2025-01-01, external: true }
   BRM-TRN-001: { title: BRM 訓練程序(評估準則), revision: "draft", date: 2026-10-01 }
   ASSUMED-E09: { title: "假設值,待公司程序(E09 全船失電;數值依規劃書第 3.4 節高雄港速限與第 8.1 節 E09,待公司 SMS-EMG-005 核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E08: { title: "假設值,待公司程序(E08 電羅經失效與 BNWAS;數值依規劃書第 8.1 節 E08、MSC.128(75)、MSC.302(87),待公司航行/緊急程序核對)", revision: "0", date: 2026-10-17 }
 parameters:
   navigation.cpa.openSea_nm:      { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.2", description: 開闊海最小 CPA }
   navigation.cpa.coastal_nm:      { value: 0.5,  unit: nm,  source: DWO-007, clause: "4.2", description: 沿岸/港外最小 CPA }
@@ -50,4 +51,12 @@ parameters:
   port.kaohsiung.channelSpeedLimit_kn: { value: 10, unit: kn, source: ASSUMED-E09, clause: "", description: 高雄港航道速限(規劃書第 3.4 節;港方規定待核對) }
   port.kaohsiung.berthSpeedLimit_kn: { value: 5,  unit: kn, source: ASSUMED-E09, clause: "", description: 高雄港碼頭 500 m 內速限(規劃書第 3.4 節;港方規定待核對) }
   assessment.passMark:            { value: 70,   unit: score, source: BRM-TRN-001, clause: "6" }
+  bridge.bnwas.dormantPeriod_s:    { value: 540, unit: s, source: ASSUMED-E08, clause: "", min: 180, max: 720, description: BNWAS 休眠期(夜航當值;MSC.128(75) 3–12 分鐘) }
+  emergency.gyroFailure.driftAt_s:  { value: 60,  unit: s, source: ASSUMED-E08, clause: "", description: E08 電羅經開始漂移的時刻(自情境開始) }
+  emergency.gyroFailure.driftRate_degPerMin: { value: -1.0, unit: degPerMin, source: ASSUMED-E08, clause: "", description: E08 漂移速率(負 = 指示值偏左,自動舵把船帶向右舷岸側;規劃書 E08 每分鐘 1°) }
+  emergency.gyroFailure.failAfter_s: { value: 420, unit: s, source: ASSUMED-E08, clause: "", description: 漂移開始到電羅經完全失效 }
+  emergency.gyroFailure.detectDrift_s: { value: 300, unit: s, source: ASSUMED-E08, clause: "", description: 漂移開始到偵測(切手動/改航向/回報羅經比對異常) }
+  emergency.gyroFailure.alarmAck_s:  { value: 30,  unit: s, source: ASSUMED-E08, clause: "", description: 電羅經失效警報到確認(BAM) }
+  emergency.gyroFailure.manualSteering_s: { value: 60, unit: s, source: ASSUMED-E08, clause: "", description: 電羅經失效到手操舵(舵令或操舵模式切換) }
+  emergency.gyroFailure.callMaster_s: { value: 180, unit: s, source: ASSUMED-E08, clause: "", description: 電羅經失效到通知船長 }
 overrides: {}                         # 保留:依船舶 ID 覆寫(第一版不解析)

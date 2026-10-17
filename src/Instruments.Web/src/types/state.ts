@@ -2,6 +2,7 @@
 // 慣例:角度以度、航向 0–360、舵角右正左負、ROT 右轉正(度/分)、轉速倒車負。
 
 import type { TargetState } from './target.js';
+import type { AlertItem, AutopilotStatus, BnwasStatus, SensorStatus, TruthState } from './alerts.js';
 
 export type ShipId = 'FSB1' | 'FSB2';
 
@@ -184,4 +185,14 @@ export interface OwnShipState {
   steering?: SteeringStatus;
   /** 已出現的目標船(state.targets[];舊狀態或情境無目標船時為空陣列) */
   targets: TargetState[];
+  /** 真值(教官站/講評用,學員端儀器不顯示;頂層 heading/pos/cog/sog/stw/depthBelowKeel 為指示值;C# SimCore 才有) */
+  truth?: TruthState;
+  /** 感測器有效性(false 時頂層對應欄位為最後有效值,儀器標「無效」)與磁羅經 */
+  sensors?: SensorStatus;
+  /** 核心的自動舵狀態(gyroFailure/autopilotFailure 時 available = false) */
+  autopilot?: AutopilotStatus;
+  /** 警報清單(BAM;無警報或舊狀態時省略;排序見 lib/alerts.ts sortAlerts) */
+  alerts?: AlertItem[];
+  /** BNWAS 狀態(核心不支援時省略) */
+  bnwas?: BnwasStatus;
 }

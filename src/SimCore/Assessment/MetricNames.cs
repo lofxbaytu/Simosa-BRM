@@ -14,6 +14,8 @@ public static class MetricNames
         "manoeuvring.thrusterOrders", "manoeuvring.thrusterTime_s", "manoeuvring.timeOverSpeedLimit_s", "manoeuvring.maxOverSpeed_kn",
         "manoeuvring.autopilotTime_s", "manoeuvring.autopilotSwitches",
         "general.duration_s", "general.distance_nm", "general.avgSog_kn", "general.maxSog_kn",
+        // 警報與 BNWAS(sensors-alerts.md 第 5 節;Python scenario.py METRIC_NAMES 尚未加入,情境 bands 暫勿引用)
+        "alerts.meanAckTime_s", "alerts.maxAckTime_s", "alerts.unacknowledged", "alerts.escalations", "bnwas.stage2Count", "bnwas.stage3Count",
     };
 
     private static readonly HashSet<string> Set = new(All, StringComparer.Ordinal);

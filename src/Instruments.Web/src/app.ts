@@ -15,6 +15,9 @@ import { COMMAND_EVENT, tileStyles, type CommandEvent } from './components/share
 import type { AutopilotChangedDetail, AutopilotPanel } from './components/autopilot-panel.js';
 import type { SimEvent } from './types/event.js';
 import { eventFromFrame, eventLabel } from './lib/sim-event.js';
+import { AlertSounder } from './lib/alert-sound.js';
+import { alertCounts } from './lib/alerts.js';
+import { ALERT_SOUND_TOGGLE_EVENT } from './components/alert-panel.js';
 import './components/conning-bar.js';
 import './components/track-plot.js';
 import './components/helm-wheel.js';
@@ -22,6 +25,8 @@ import './components/telegraph-control.js';
 import './components/thruster-lever.js';
 import './components/autopilot-panel.js';
 import './components/instructor-controls.js';
+import './components/alert-panel.js';
+import './components/bnwas-indicator.js';
 
 export type Theme = 'day' | 'dusk' | 'night';
 export type SourceMode = 'live' | 'demo';
@@ -67,6 +72,19 @@ export class BrmApp extends LitElement {
         padding: 6px;
         background: var(--ob-bg-app);
         filter: brightness(var(--ob-dim));
+      }
+      /* 中間列:鳥瞰航跡圖 + 右側警報欄(BNWAS 指示、中央警報面板) */
+      .middle {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 6px;
+        min-height: 0;
+      }
+      .alert-col {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 6px;
+        min-height: 0;
       }
       header {
         display: flex;
@@ -198,12 +216,30 @@ export class BrmApp extends LitElement {
         min-height: 24px;
         padding: 1px 4px;
       }
+      header .alert-badge {
+        font-weight: 700;
+        border-radius: 4px;
+        padding: 0 6px;
+        background: var(--ob-alarm);
+        color: var(--ob-alarm-text);
+      }
+      header .alert-badge.warning {
+        background: var(--ob-warning);
+        color: #1a1000;
+      }
       /* 1366×768 等較小螢幕:conning 條折成兩列,需要較高的列;下排操船台略縮 */
       @media (max-width: 1500px) {
         :host {
           grid-template-rows: auto minmax(220px, 32vh) minmax(0, 1fr) minmax(200px, 27vh);
           gap: 4px;
           padding: 4px;
+        }
+        .middle {
+          grid-template-columns: minmax(0, 1fr) 344px;
+          gap: 4px;
+        }
+        .alert-col {
+          gap: 4px;
         }
       }
     `,
@@ -221,6 +257,11 @@ export class BrmApp extends LitElement {
   @state() private wsUrl = DEFAULT_WS_URL;
   @state() private hasReceived = false;
   @state() private banner: { text: string; severity: string } | null = null;
+  /** 本頁警報聲響設定(預設開;AlertSounder 存 localStorage) */
+  @state() private soundOn = true;
+  private readonly sounder = new AlertSounder();
+  /** 上一筆核心狀態的 autopilot.enabled(偵測核心脫開自動舵:true → false) */
+  private coreAutopilotEnabled: boolean | undefined;
   private bannerTimer: ReturnType<typeof setTimeout> | null = null;
 
   @query('brm-autopilot') private autopilotPanel?: AutopilotPanel;
@@ -250,6 +291,11 @@ export class BrmApp extends LitElement {
     this.addEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.addEventListener('autopilot-changed', this.onAutopilotChanged as EventListener);
     this.addEventListener('sim-reset', this.onReset);
+    this.addEventListener(ALERT_SOUND_TOGGLE_EVENT, this.onSoundToggle as EventListener);
+    this.soundOn = !this.sounder.muted;
+    // 瀏覽器要求使用者互動後才可發聲:第一次點擊/按鍵時建立 AudioContext
+    window.addEventListener('pointerdown', this.unlockSound, true);
+    window.addEventListener('keydown', this.unlockSound, true);
   }
 
   override disconnectedCallback(): void {
@@ -260,7 +306,22 @@ export class BrmApp extends LitElement {
     this.removeEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.removeEventListener('autopilot-changed', this.onAutopilotChanged as EventListener);
     this.removeEventListener('sim-reset', this.onReset);
+    this.removeEventListener(ALERT_SOUND_TOGGLE_EVENT, this.onSoundToggle as EventListener);
+    window.removeEventListener('pointerdown', this.unlockSound, true);
+    window.removeEventListener('keydown', this.unlockSound, true);
+    this.sounder.dispose();
   }
+
+  private unlockSound = (): void => {
+    this.sounder.unlock();
+    window.removeEventListener('pointerdown', this.unlockSound, true);
+    window.removeEventListener('keydown', this.unlockSound, true);
+  };
+
+  private onSoundToggle = (ev: CustomEvent<boolean>): void => {
+    this.soundOn = ev.detail;
+    this.sounder.setMuted(!ev.detail);
+  };
 
   private get config(): ShipDisplayConfig {
     return getShipConfig(this.shipState.shipId);
@@ -283,6 +344,11 @@ export class BrmApp extends LitElement {
         this.shipState = state;
         this.issues = issues;
         this.history.push(state.pos.x, state.pos.y, state.t);
+        this.sounder.update(state.alerts);
+        // 核心脫開自動舵(autopilotTripped:電羅經/自動舵失效)時同步本頁自動舵面板
+        const coreAp = state.autopilot?.enabled;
+        if (this.coreAutopilotEnabled === true && coreAp === false && this.autopilot.enabled) this.autopilotPanel?.disable();
+        this.coreAutopilotEnabled = coreAp;
       }),
       source.onStatus((status, detail) => {
         this.status = status;
@@ -309,6 +375,8 @@ export class BrmApp extends LitElement {
   }
 
   private stopSource(): void {
+    this.sounder.update(undefined);
+    this.coreAutopilotEnabled = undefined;
     for (const u of this.unsubscribe) u();
     this.unsubscribe = [];
     this.source?.stop();
@@ -375,6 +443,9 @@ export class BrmApp extends LitElement {
     const faults = s.faults ?? [];
     const pillClass = this.stale ? 'stale' : this.status;
     const pillText = this.stale ? '資料逾時' : STATUS_LABEL[this.status];
+    const counts = alertCounts(s.alerts);
+    // 核心有感測器/BNWAS 欄位即視為支援警報(無警報時 alerts 省略)
+    const alertsSupported = !this.hasReceived || s.sensors !== undefined || s.bnwas !== undefined || counts.total > 0;
     return html`
       <header>
         <span class="title">Simosa BRM 駕駛台儀器</span>
@@ -387,6 +458,8 @@ export class BrmApp extends LitElement {
           ${faults.map((f) => html`<span class="alarm">故障:${f}</span>`)}
           ${s.visibility_nm !== undefined && s.visibility_nm < 2 ? html`<span class="warning">能見度 ${s.visibility_nm.toFixed(1)} nm</span>` : nothing}
           ${this.issues.length > 0 ? html`<span class="warning" title=${this.issues.join(', ')}>資料可疑 ${this.issues.length}</span>` : nothing}
+          ${counts.unacknowledged > 0 ? html`<span class="alert-badge ${counts.highest === 'warning' || counts.highest === 'caution' ? 'warning' : ''}" title="中央警報面板:需確認的警報">警報未確認 ${counts.unacknowledged}</span>` : nothing}
+          ${s.bnwas && s.bnwas.stage >= 2 ? html`<span class="alert-badge">BNWAS 第 ${s.bnwas.stage} 階段</span>` : nothing}
         </div>
         <span class="spacer"></span>
         ${this.banner ? html`<div class="banner ${this.banner.severity}" role="status" @click=${() => (this.banner = null)}>${this.banner.text}</div>` : nothing}
@@ -415,7 +488,13 @@ export class BrmApp extends LitElement {
         .setHeading=${this.autopilot.enabled ? this.autopilot.heading : undefined}
       ></brm-conning-bar>
 
-      <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived}></brm-track-plot>
+      <div class="middle">
+        <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived}></brm-track-plot>
+        <div class="alert-col">
+          <brm-bnwas .bnwas=${s.bnwas}></brm-bnwas>
+          <brm-alert-panel .alerts=${s.alerts ?? []} .simTime=${s.t} .soundOn=${this.soundOn} .unsupported=${!alertsSupported}></brm-alert-panel>
+        </div>
+      </div>
 
       <div class="controls">
         <brm-helm
@@ -428,7 +507,7 @@ export class BrmApp extends LitElement {
         ></brm-helm>
         <brm-telegraph .steps=${cfg.telegraph} .position=${s.telegraph}></brm-telegraph>
         <brm-thruster-lever .order=${s.thruster?.order ?? 0} .actual=${s.thruster?.actual ?? 0}></brm-thruster-lever>
-        <brm-autopilot .heading=${s.heading}></brm-autopilot>
+        <brm-autopilot .heading=${s.heading} .available=${s.autopilot?.available ?? true}></brm-autopilot>
         <brm-instructor .frozen=${flags.frozen ?? false}></brm-instructor>
       </div>
     `;

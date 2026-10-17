@@ -60,6 +60,9 @@ pnpm typecheck        # 只做 tsc --noEmit
 | `thruster` | 側推桿(−1 至 1) | `{"type":"thruster","value":0.5}` |
 | `autopilot` | 自動舵面板 | `{"type":"autopilot","args":{"enabled":true,"heading":275,"rotLimit":15}}` |
 | `freeze` / `resume` / `reset` | 教官按鈕 | `{"type":"freeze"}` |
+| `alertAcknowledge` | 中央警報面板「確認」(帶 id)/「全部確認」(不帶) | `{"type":"alertAcknowledge","args":{"id":"gyroFailure"}}` |
+| `alertSilence` | 中央警報面板「靜音 30s」(全部) | `{"type":"alertSilence"}` |
+| `bnwasReset` | BNWAS 指示「重設」 | `{"type":"bnwasReset"}` |
 
 - **收(事件框)**:C# 核心的情境引擎(`docs/design/scenario-engine.md` 第 5.2 節)另推送 `{"type":"event","event":{…SimEvent}}`;儀器頁只顯示 `visible: true` 的 `message` / `voiceScript` 事件(橫幅,20 s 後消失,點擊可關),其餘忽略。狀態新增的選填欄位 `visibility_nm`、`scenario`、`route` 由 `state-parser` 解析;有 `route` 或 `visibility_nm` 時 conning 條多一格「ROUTE」方塊(XTD 右正 → R 偏右、走廊半寬條、下一航點/距離/方位、航段航向、速限、能見度;第 7.2 節 MSC.252 最低資訊)。
 
@@ -165,6 +168,50 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 
 以 `uv run simosa-brm serve --ship FSB1 --loading full --port 8765` 測試,結果見上方指令表:`setEnvironment`(風/流/水深)、`injectFault`/`clearFault`(只記錄)、`timeScale`、`snapshot`/`restore`、`freeze`/`resume`、`reset` 附 `args`(位置/航向/速度)皆有作用;`loadScenario` 回 `ok=false`「情境載入尚未實作」;`gustiness`、`visibility_nm`、`loading`、`tugs` 照收無作用。教官站畫面會把 ack 的 `ok`/`detail` 顯示在「教官指令」面板。
 
+## 警報管理(BAM)與 BNWAS(`docs/design/sensors-alerts.md`)
+
+C# SimCore 的感測器故障層、警報管理(MSC.302(87))與 BNWAS(MSC.128(75))在網頁端的對應;Python 參考伺服器不輸出這些欄位,兩頁會標「核心未回報」並停用相關按鈕。
+
+**狀態解析**(`src/types/alerts.ts`、`src/lib/alerts.ts` 的 `applyAlertBlocks`,由 `state-parser` 呼叫;重播檢視也解析):
+
+| 欄位 | 網頁端型別 | 說明 |
+|---|---|---|
+| `alerts[]` | `AlertItem[]`(`state.alerts`,無警報時 undefined) | `id`、`number`(ALR 編號)、`priority`(emergencyAlarm/alarm/warning/caution)、`category`、`source`、`state`(activeUnacknowledged/activeSilenced/activeAcknowledged/rectifiedUnacknowledged)、`text`、`raisedAt_s`、`acknowledgedAt_s?`、`silencedUntil_s?`、`escalated`、`count`、`audible`;解析後依 `sortAlerts`(優先序 → 成立時間 → 編號,與核心相同)排序 |
+| `bnwas` | `BnwasStatus` | `mode`(off/auto/on)、`active`、`stage`(0–3)、`remaining_s?`、`dormant_s` |
+| `truth` | `TruthState` | 真值 heading/pos/cog/sog/stw/depthBelowKeel、`headingError_deg`(指示 − 真值,右正)、`positionError_m`;**只在教官站顯示** |
+| `sensors` | `SensorStatus` | `headingValid`/`positionValid`/`depthValid`/`stwValid`、`magneticHeading` |
+| `autopilot` | `AutopilotStatus` | `enabled`、`setHeading`、`rotLimit_degPerMin`、`available` |
+
+舊狀態沒有這些欄位時為 undefined、不記「資料可疑」;型別錯誤才記入 issues。頂層 heading/pos/cog/sog/stw/depthBelowKeel 一律是**指示值**。
+
+**操船台(`index.html`)**:
+
+- 中間列右側新增警報欄:上方 `<brm-bnwas>`(模式、休眠期、階段、距下一階段倒數、休眠進度條、「重設」送 `bnwasReset`;第 1 階段黃、**第 2 階段以上整格紅色閃爍**;學員端沒有模式開關,實船受鑰匙/密碼保護),下方 `<brm-alert-panel>` 中央警報面板。
+- 警報清單依優先序與時間排序;圖示依 IEC 62288 / MSC.302 的概念自繪(`src/components/alert-icon.ts`,非型式認可圖形):**alarm 紅色三角形、warning 黃橙圓形、caution 黃色方形**,緊急警報加外框;**未確認閃爍、caution 不閃**;靜音中加「喇叭 + 斜線」並顯示剩餘秒數;已解除未確認加打勾;已確認不閃。每列「確認」送 `alertAcknowledge {id}`(caution 不需確認、無按鈕),標題列「靜音 30s」送 `alertSilence`、「全部確認」送 `alertAcknowledge`。
+- **聲響**(`src/lib/alert-sound.ts`):依 `audible` 警報的最高優先序以 Web Audio 發短嗶聲(緊急警報連續、alarm 三短聲每 2 s、warning 兩短聲每 6 s、caution 無聲);核心靜音後 `audible` 變 false 即停。瀏覽器要求互動後才可發聲,第一次點擊/按鍵才建立 AudioContext。面板的「聲響 開/關」是本頁設定(預設開,存 localStorage `simosa-brm.instruments.alertSound`),不送核心。
+- 標題列顯示「警報未確認 n」與「BNWAS 第 n 階段」(第 2 階段以上)。
+- conning 條依 `sensors.*Valid` 標「無效」並淡化保持的最後值:HDG(電羅經)、STW / SOG / COG(計程儀 / GNSS)、UKC(測深儀,無效時不觸發 UKC 警報)、LAT/LON(GNSS 無效)。
+- 自動舵面板:`autopilot.available = false` 時「自動舵 不可用」並停用開啟;核心脫開自動舵(`autopilotTripped`,state.autopilot.enabled 由 true 變 false)時同步關閉本頁面板。
+
+**教官站(`instructor.html`)** 中欄下方新增兩個面板(寬度 > 1440 px 三欄、≤ 1440 px 兩欄,放不下時捲動):
+
+- `<brm-alert-monitor>` 警報 / BNWAS:現行警報(唯讀狀態 + 「代為確認」送 `alertAcknowledge {id}`、「全部確認」、「靜音 30 s」)、BNWAS 狀態與各階段次數(由事件流 `bnwasStage`/`bnwasReset` 計數)、**模式切換**「關 / 自動 / 開」送 `bnwasMode`(可填休眠期 180–720 s,空白不變更)、重設;**警報歷史**由事件流 `alertRaised/Silenced/Acknowledged/Rectified/Escalated` 推得(最新在上,含確認耗時,> 30 s 橙色、未確認紅色)。簡化教官模式側欄放 `compact` 版(現行警報 + BNWAS 列)。
+- `<brm-sensor-truth>` 真值 vs 指示值:航向(電羅經)、磁羅經、位置(GNSS,ENU 公尺)、COG、SOG、STW(計程儀)、龍骨下水深的指示/真值/差距;該感測器有相關故障、旗標無效,或差距超過門檻(航向 1°、位置 30 m、速度 0.3 kn、水深 0.3 m)時整列標紅;另列核心自動舵狀態。
+- 故障面板改以 `src/Contracts/fault-catalogue.json` 為目錄(建置時匯入;標籤、練習、警報優先序、參數):核心會改變行為的故障為按鈕(附「警報 / 警告」標記),只記錄者收在「其他故障(僅記錄)」選單;「參數注入」可填 gyroDrift `rate_degPerMin`、gpsJump/gpsOffset `distance_m`/`bearing_deg`/`ramp_s`、logFailure `bias_kn`/`factor`,送 `{"type":"injectFault","args":{"name":"gyroDrift","args":{"rate_degPerMin":-1}}}`(不填參數時仍送 `value` 字串)。
+- 時間表面板的確認快速鈕多一個「羅經比對異常」(`acknowledge {kind: gyroCheck}`,E08)。
+- 事件流:警報/BNWAS/自動舵脫開事件有中文說明(`alertEventLabel`),alarm 成立/升級與 BNWAS 第 2 階段以上紅、warning 成立與第 1 階段/自動舵脫開橙;`commandRejected` 的 `autopilotUnavailable`、`unknownAlert` 顯示原因,並標到對應的教官指令。
+- 講評摘要(核心 summary 優先):新增「警報與 BNWAS」段 —— 成立/確認/未確認/升級/靜音次數、平均與最長確認時間、BNWAS 第 1/2/3 階段次數與重設次數、每筆警報紀錄(確認耗時、升級、解除時刻);故障應變列加「警報確認 +n s」(`faultResponses[].alertAckDt_s`)。
+
+**示範模式**(`src/demo/demo-alerts.ts`,**假的**,只供離線預覽,不是核心實作):`DemoSource` 預設開啟(`DemoSim` 預設關,以維持既有測試的事件序列)。
+- 示範假警報:4–150 s「航向監視:電羅經與磁羅經差異(示範假警報)」warning(未確認 300 s 會升級為 alarm)。
+- BNWAS:模式開、休眠 180 s,開始時休眠期已過 170 s → 約 10 s 第 1 階段、25 s 第 2 階段(警報升級為 alarm)、115 s 第 3 階段,第 3 階段 30 s 後由示範**自動重設**(`bnwasReset {by: demoAutoReset}`)形成循環;舵令/車令/側推/自動舵/操舵模式/警報確認或靜音皆重設 BNWAS(與核心相同)。
+- 故障類警報(依警報目錄 001–014)與 MSC.302 狀態機:確認、靜音 30 s 後重響、已解除未確認、確認後移除;BNWAS 警報重設即解除。
+- 感測器故障改變指示值並輸出 `truth`/`sensors`/`autopilot`:gyroDrift(自動舵跟隨指示航向、真航向偏離)、gyroFreeze、gyroFailure(自動舵脫開、不可再啟用,`commandRejected {reason: autopilotUnavailable}`)、gpsJump/gpsOffset/gpsFailure、echoSounderFailure、logFailure;未知警報 id 回 `commandRejected {reason: unknownAlert}`。
+
+**與規範/核心的差異**(同設計文件第 9 節):責任轉移(responsibility transferred)與 Category A 只能在相關工作站確認未實作(任一站可確認);BNWAS 第 3 階段仍為 alarm;圖示與聲響只是 IEC 62288 / MSC.302 的概念示意,非型式認可的圖形與聲音特性。
+
+畫面以 Playwright(Chromium,1366×768 與 1920×1080,示範模式)檢查過:無水平捲動、console 無錯誤。
+
 ## 程式結構
 
 ```
@@ -179,7 +226,8 @@ src/Instruments.Web/
 │  ├─ instructor-main.ts, instructor-app.ts
 │  │                          <brm-instructor-app>:教官站 / 簡化教官模式 / 重播檢視的版面與流程
 │  ├─ styles/theme.css        日/黃昏/夜 CSS 變數(穿透 shadow DOM)
-│  ├─ types/                  state.ts(含 scenario/route/visibility_nm/steering/targets)、target.ts(TargetState、AIS 報告)、command.ts、event.ts(SimEvent、kind 列舉、
+│  ├─ types/                  state.ts(含 scenario/route/visibility_nm/steering/targets/truth/sensors/autopilot/alerts/bnwas)、alerts.ts(警報/BNWAS/真值型別)、
+│  │                          target.ts(TargetState、AIS 報告)、command.ts、event.ts(SimEvent、kind 列舉、
 │  │                          AcknowledgeKind;對應 Contracts 的 JSON Schema 與設計文件第 3.2 節)
 │  ├─ lib/                    angles(正規化、角差)、format(度/分、航向、時間)、state-parser(缺欄位防呆;含 targets[])、
 │  │                          targets(cpaAlarm 目標集合、CPA/TCPA 小表列)、steering(steeringMode 指令、由原始框取 state.steering)、
@@ -190,14 +238,17 @@ src/Instruments.Web/
 │  │                          sim-event(事件解析、文字化、嚴重度、EventStore)、voice-script(語音腳本播放)、
 │  │                          plot-overlay(航線/區域/事件疊圖)、instructor-command(教官指令與故障目錄)、
 │  │                          operation-log(學員操作推導)、debrief(本地講評摘要)、brm-markers(BRM 標記與匯出)、
-│  │                          session-record(教官站紀錄 v2)、record-replay(JSON Lines / 教官站紀錄解析,含 event/summary)
+│  │                          session-record(教官站紀錄 v2)、record-replay(JSON Lines / 教官站紀錄解析,含 event/summary)、
+│  │                          alerts(警報/BNWAS/真值解析、排序、圖示狀態、指令、歷史、事件文字)、alert-sound(Web Audio 嗶聲)
 │  ├─ net/                    sim-source.ts(來源介面,含非狀態訊息)、ws-client.ts(WebSocket + 重連 + ack/事件框)
-│  ├─ demo/                   demo-sim.ts(示範運動學;假事件、情境/航線狀態、假 summary、操舵模式、假目標船)、demo-source.ts(25 Hz 廣播 + 事件框)
+│  ├─ demo/                   demo-sim.ts(示範運動學;假事件、情境/航線狀態、假 summary、操舵模式、假目標船)、demo-source.ts(25 Hz 廣播 + 事件框)、
+│  │                          demo-alerts.ts(示範感測器故障、警報狀態機、BNWAS 循環)
 │  └─ components/             brm-conning-bar 及其各儀器(含 route-readout)、brm-track-plot(含疊圖、目標船)、brm-helm、
-│     │                       brm-telegraph、brm-thruster-lever、brm-autopilot、brm-instructor
+│     │                       brm-telegraph、brm-thruster-lever、brm-autopilot、brm-instructor、brm-alert-panel(中央警報面板)、
+│     │                       brm-bnwas(BNWAS 指示)、alert-icon(警報圖示)
 │     └─ instructor/          scenario-panel、timeline-panel、event-stream、run-control-panel、environment-panel、
 │                             fault-panel、ownship-panel、steering-panel、operation-log-view、command-log-view、brm-marker-bar、
-│                             debrief-summary(核心/本地)、replay-view
+│                             debrief-summary(核心/本地)、replay-view、alert-monitor(警報/BNWAS 監看)、sensor-truth-panel(真值 vs 指示值)
 └─ tests/                     vitest:angles、format、state-parser、command、ship-config、demo-sim、
                               ws-client(假 WebSocket)、components(happy-dom 渲染與指令事件)、
                               scenario、timeline(含設計文件 E07 範例)、assessment(含設計文件 summary 範例)、
@@ -207,7 +258,10 @@ src/Instruments.Web/
                               instructor-components(教官站元件事件、操舵模式面板、講評摘要、重播檢視、航線方塊)、
                               instructor-app(重播檢視常駐、示範模式的操舵模式指令/操作紀錄/commandRejected)、
                               core-record(C# 主控程序實際紀錄的契約一致性:header v2/parameterSet/event/summary/state.scenario+route,
-                              以及 header.scenario 與 data/scenarios YAML 經 parseScenario 結構相同)
+                              以及 header.scenario 與 data/scenarios YAML 經 parseScenario 結構相同)、
+                              alerts(警報/BNWAS/真值解析含 E08 範例、排序與圖示狀態、指令、BNWAS 倒數、歷史、summary.alerts、假 AudioContext 聲響、
+                              fault-catalogue 同步、示範警報與 BNWAS 循環)、alert-components(中央警報面板、BNWAS 指示、conning 無效標示、
+                              教官站警報監看/真值面板/講評/故障面板、兩頁示範模式整合)
                               fixtures/:E07_steering_failure.yaml、summary-E07.json(取自設計文件第 8.2、4.8 節);
                               record-E07-core.jsonl、record-E01-core.jsonl(`dotnet run --project src/SimCore.Host -- --scenario … --record … --duration 300 --timescale 10` 的縮短版:
                               header、每 5/10 s 一筆 state、全部 event、3 筆 snapshot、summary、footer;footer 的 lines/sha256 為原檔值)
@@ -217,11 +271,13 @@ src/Instruments.Web/
 
 ## 已知限制(第一版)
 
-- 自動舵的開/關與設定航向由本頁面保存(`state.schema.json` 尚無自動舵狀態欄位);核心若另有自動舵狀態,之後需加欄位同步。
-- 學員站儀器頁的操舵模式只有 FU/NFU/自動舵(舵機泵選擇與應急操舵目前只在教官站的操舵模式面板);航跡模式與第 7.2 節其他儀器(雷達、ECDIS、BNWAS、BAM、VHF)不在本版範圍。
+- 自動舵的開/關與設定航向由本頁面保存;C# 核心的 `state.autopilot` 目前只用於「不可用」標示與核心脫開時同步關閉(設定航向仍以本頁為準)。
+- 學員站儀器頁的操舵模式只有 FU/NFU/自動舵(舵機泵選擇與應急操舵目前只在教官站的操舵模式面板);航跡模式與第 7.2 節其他儀器(雷達、ECDIS、VHF)不在本版範圍;BAM 中央警報面板與 BNWAS 指示見上方「警報管理(BAM)與 BNWAS」(ALF/ALC 句型、責任轉移未實作)。
 - 鳥瞰圖有自船、目標船與情境航線/區域,尚無海圖;目標船只畫真值位置(AIS 報告值 `ais` 已解析但未另畫 AIS 位置);3D 視景另見 `src/Visual.*`。
 - 示範模式為簡化運動學,不可用於訓練或驗證。
 - UKC 警報門檻先固定 1.0 m(警告 2.0 m),之後改由公司程序參數集提供(規劃書第 9.1 節)。
 - 尚未接 USB 操控台(`src/Controls.Hid`);鍵盤與滑鼠操作為第一版替代。
 - 教官站:時間倍率與快照清單由本頁保存(狀態訊息沒有這些欄位),核心自動快照不會列出;學員操作紀錄由狀態推導,自動舵的舵令也會被記為舵令;`loadScenario` 在 Python 參考伺服器尚未實作;自船覆寫借用 `reset` 指令(C# 核心忽略 `args`);無通訊角色扮演;教官站紀錄與 BRM 標記未簽章、不含錄音錄影;本地推導的講評閾值為常數;重播檢視沒有儀器時序曲線。
 - 情境引擎(教官站側):`${params:…}` 不在教官站解析,引用的門檻顯示為「參數 key」,必要事件倒數在 `within_s` 為參數引用時需核心事件 data 帶 `deadline_t` 或 `within_s`(否則只顯示「計時中」);情境檔中的參數引用**必須加引號**(`"${params:x}"`)—— 未加引號時在 YAML 流式映射 `{ … }` 內是語法錯誤(`{`、`}` 為流式指示字元),教官站會把該情境標「有問題」;時間表項目的 `holdFor_s` / `delay_s` / `cooldown_s` 只顯示,不在教官站計時;語音音檔由 Vite 於建置時打包(新增音檔需重建),瀏覽器可能要求先有使用者互動才允許自動播放(紀錄標「被瀏覽器阻擋」,仍顯示文字);航線/區域疊圖的經緯度以情境 `origin` 平面近似換算(與核心的投影可能有公尺級差異,只供視覺參考);事件標記的位置取事件時刻的狀態抽樣(1 s)。
+
+雷達 PPI 顯示頁(`radar.html`,雷達服務 WebSocket、示範模式、EBL/VRM/PI、ARPA 表與試操船)見 [RADAR.md](RADAR.md)。

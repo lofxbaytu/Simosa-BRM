@@ -8,8 +8,11 @@ namespace SimosaBRM.SimCore.Engine;
 /// </summary>
 public sealed record EngineSnapshot
 {
-    /// <summary>2:新增 Timeline/Assessment/ParameterSetVersion/Phase/VisibilityNm(皆可 null;Version 1 快照還原時沿用引擎目前狀態)</summary>
-    public int Version { get; init; } = 2;
+    /// <summary>
+    /// 2:新增 Timeline/Assessment/ParameterSetVersion/Phase/VisibilityNm(皆可 null;Version 1 快照還原時沿用引擎目前狀態);
+    /// 3:新增 Sensors/Alerts/Bnwas(感測器層、警報管理、BNWAS;舊快照無此欄位時還原為預設:無偏差、無警報、BNWAS 依情境設定)
+    /// </summary>
+    public int Version { get; init; } = 3;
     public required string ShipId { get; init; }
     public required LoadingCondition Loading { get; init; }
     public required string ScenarioId { get; init; }
@@ -41,6 +44,12 @@ public sealed record EngineSnapshot
     public SteeringSnapshot? Steering { get; init; }
     public string? Phase { get; init; }
     public double? VisibilityNm { get; init; }
+    /// <summary>感測器層(漂移起點、凍結/保持值、GNSS 偏移;Version 3)</summary>
+    public Sensors.SensorState? Sensors { get; init; }
+    /// <summary>警報管理(Version 3)</summary>
+    public Alerts.AlertManagerState? Alerts { get; init; }
+    /// <summary>BNWAS(Version 3)</summary>
+    public Alerts.BnwasState? Bnwas { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
     public required string StateHash { get; init; }
 

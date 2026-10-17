@@ -229,7 +229,7 @@ targets:
 - 暫代模型的 squat 用 Barrass 開闊水域簡式(`Cb·V²/100`),比海報值偏保守(MMG 用 ICORELS);UKC 由常數水深計算(`IDepthProvider` 已可接水深網格 callback,但 callback 無法進快照)。
 - `restore` 只能回到記憶體內的快照歷史;從紀錄檔任意快照接續的講評功能尚未接到 Host。
 - WebSocket 以 `System.Net.HttpListener` 實作(無 ASP.NET Core 相依),無 TLS 與驗證(船上/直連區網使用)。Windows 上非管理員且未設 URL ACL 時會退回只監聽 localhost;教官筆電直連前請執行一次 `netsh http add urlacl url=http://*:8765/ user=Everyone`(安裝程式應代為設定)。
-- NMEA 多播尚未加 IEC 61162-450 TAG block;無自船 AIS(VDO)、THS、XDR、ALR。
+- NMEA 多播尚未加 IEC 61162-450 TAG block;無自船 AIS(VDO)、THS、XDR、ALF/ALC、HDG(警報以 ALR 輸出,第 9 節)。
 - 目標船(第 6 節):運動模型為簡化的一階響應(無 MMG、無風壓/淺水、不能倒退);COLREG 只對自船判定(目標間互不避碰),不含第 19 條限制能見度、不含燈號/聲號的自動邏輯(聲號只能由指令觸發);跟隨模式無拖纜動力;錨泊為確定性迴盪(非走錨模型);碰撞只偵測自船與目標外形相交(不偵測目標之間),無碰撞力學;AIS 報告率固定(不依航速/轉向縮短)且無 SOTDMA 時槽模擬;水深、岸線與固定物尚未納入目標船避讓。
 - 主機模型無起動空氣次數上限的實際阻擋(只遞減 `startsRemaining`)、臨界轉速區;換向/起動延遲已在 MMG 模式的狀態機實作,暫代模式仍為一階滯後。
 - 時間倍率只影響即時驅動;高倍率下若物理負荷過高會丟步(`RealtimeRunner.DroppedSteps`)。
@@ -284,3 +284,26 @@ targets:
 - 黃金摘要 `tests/SimCore.Tests/Golden/assessment-E07-600s.json`(暫代模型、`TimelineRecordReplayTests.Script` 600 s;含參數集 sha256,參數集檔案或腳本變更時以 `SIMOSA_UPDATE_GOLDEN=1 dotnet test --filter GoldenE07SummaryMatches` 重新產生並在提交說明)。
 - 操舵模式(規劃書第 7.2 節;設計文件 D32):指令 `steeringMode`(`value: fu|nfu|autopilot|emergency`,`args {pump: 1|2|both, direction: port|starboard|stop, heading, rotLimit}`)、狀態 `state.steering {mode, pump, nfuActive?}`、事件 `steeringModeChanged {from, to, pump}`;nfu 以推桿方向驅動舵(舵機速率)、emergency 在 `steeringGear` 故障下以降低速率(particulars `emergencyHardOverTime35_s`,無資料時隨動速率一半)再度可動、autopilot 與 `autopilot` 指令同步、`rudder` 指令把 autopilot/nfu 切回 fu;模式變更以 `steeringModeChange` 動作餵必要事件與故障應變;非預設模式進雜湊、進快照。必要事件開始計時發 `requiredEventPending {after, afterItemId, afterSeq, start_t, within_s, deadline_t, penalty}`(D33);`header.parameterSet.path` 為相對專案根目錄(D34)。
 - 尚未實作(設計文件第 0.2、10 節):時間表 `steeringMode` 動作、`blackout` 組合故障、參數集 `overrides`、Python 參考實作的 `${params:…}` 替換(`src/Tools.Calibration` 本次未改;Python 目前忽略 assessment/route/zones/timeline,E01/E07 仍可載入)。
+
+## 9. 感測器故障層、警報管理(BAM)與 BNWAS(`Sensors/`、`Alerts/`;設計文件 `docs/design/sensors-alerts.md`)
+
+規劃書第 7.2 節(電羅經/自動舵/GNSS/測深儀/計程儀/操舵故障、BNWAS、中央警報面板)、第 8.1 節 E08、第 8.3 節第 5、7 類;MSC.302(87)、MSC.128(75)。
+
+- **指示值 vs 真值**:`state` 頂層 `heading/pos/cog/sog/stw/depthBelowKeel` 為感測器指示值,`state.truth{heading, pos, cog, sog, stw, depthBelowKeel, headingError_deg, positionError_m}` 為真值,
+  `state.sensors{headingValid, positionValid, depthValid, stwValid, magneticHeading}`;無效時頂層為最後有效值。評估、航線 XTD、時間表條件一律用真值。
+- **故障**(`FaultNames.Modelled`;args 經 `injectFault {name, args}`):`gyroDrift{rate_degPerMin=1}`(無警報)、`gyroFreeze`、`gyroFailure`(alarm,自動舵脫開)、
+  `gpsJump{distance_m=500, bearing_deg=90}`、`gpsOffset{distance_m=200, bearing_deg=45, ramp_s=60}`、`gpsFailure`(alarm)、`echoSounderFailure`(warning)、
+  `logFailure{bias_kn?, factor?}`(無 args 時 STW 無效 + warning)、`autopilotFailure`(alarm)、`steeringFuOnly`(fu/自動舵下舵不動,alarm)、`steeringPumpFailure`(舵速減半,alarm)。
+- **自動舵**以電羅經指示航向操舵(gyroDrift 時跟隨錯誤航向);故障脫開發 `autopilotTripped`,故障期間啟用被拒(`commandRejected reason autopilotUnavailable`)。`state.autopilot{enabled, setHeading, rotLimit_degPerMin, available}`。
+- **警報**(`AlertManager`):14 項目錄(`AlertCatalogue`),狀態 activeUnacknowledged → activeSilenced(30 s 重響)→ activeAcknowledged → normal / rectifiedUnacknowledged;
+  warning 未確認 `alerts.escalate_s`(300 s)升級為 alarm;門檻類(`alerts.offHeading_deg`、`headingMonitor_deg`、`shallowWater_m`)未設即關閉。指令 `alertAcknowledge`/`alertSilence`(`id` 省略 = 全部);
+  `state.alerts[]`;事件 `alertRaised/alertSilenced/alertReannunciated/alertAcknowledged/alertRectified/alertEscalated`(source engine、itemId = 警報 id)。
+- **BNWAS**(`Bnwas`):情境 `bnwas{mode: off|auto|on, dormant_s 180–720, stage2_s 15, stage3_s 90}`(預設 off);指令 `bnwasMode`、`bnwasReset`;舵令/車令/轉速/側推/自動舵/操舵模式/警報確認或靜音視為駕駛台操作而重設;
+  `state.bnwas{mode, active, stage, remaining_s, dormant_s}`;事件 `bnwasStage/bnwasReset/bnwasModeChanged`;第 1 階段 caution、第 2 階段起 alarm(警報 `bnwas`)。
+- **評估**:`summary.alerts{raised, acknowledged, unacknowledged, escalations, silences, meanAckTime_s, maxAckTime_s, records[], bnwas{stage1, stage2, stage3, resets}}`;`faultResponses[].alertAckAt_s/alertAckDt_s`;
+  新指標名 `alerts.*`、`bnwas.stage2Count/stage3Count`。
+- **NMEA**:指示值;HDT/DPT 在無效時停送,GGA 品質 0、RMC V/N、VTG N、VBW V;警報 `$IIALR` 1 Hz。
+- **確定性**:無亂數、漂移封閉式;`EngineSnapshot.Version` 3 新增 `sensors/alerts/bnwas`;非預設時才追加雜湊位元組(舊情境雜湊不變)。
+- **E08**(`data/scenarios/E08_gyro_failure.yaml`):`dotnet run --project src/SimCore.Host -c Release -- --scenario E08_gyro_failure --record build/records/e08.jsonl --duration 600 --timescale 10 --no-ws --no-udp --no-nmea`
+  (31 事件,固定於 `GyroFailureScenarioTests`),`--replay build/records/e08.jsonl` 雜湊/事件/summary 一致。
+

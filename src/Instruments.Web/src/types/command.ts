@@ -23,7 +23,11 @@ export type CommandType =
   | 'acknowledge'
   | 'endExercise'
   | 'getAssessment'
-  | 'steeringMode';
+  | 'steeringMode'
+  | 'alertAcknowledge'
+  | 'alertSilence'
+  | 'bnwasMode'
+  | 'bnwasReset';
 
 export const COMMAND_TYPES: readonly CommandType[] = [
   'rudder',
@@ -47,6 +51,10 @@ export const COMMAND_TYPES: readonly CommandType[] = [
   'endExercise',
   'getAssessment',
   'steeringMode',
+  'alertAcknowledge',
+  'alertSilence',
+  'bnwasMode',
+  'bnwasReset',
 ] as const;
 
 /** 舵令來源:FU 隨動(舵輪)或 NFU 非隨動(舵柄按鈕),僅作提示,核心可忽略。 */
@@ -111,4 +119,17 @@ export interface TriggerTimelineCommand extends SimCommand {
 export interface AcknowledgeCommand extends SimCommand {
   type: 'acknowledge';
   args: { kind: string; itemId?: string; role?: string; note?: string } & Record<string, unknown>;
+}
+
+/** alertAcknowledge / alertSilence:args.id(或 value 字串)為警報 id;省略或 "all" = 全部(docs/design/sensors-alerts.md 第 3.3 節)。 */
+export interface AlertCommand extends SimCommand {
+  type: 'alertAcknowledge' | 'alertSilence';
+  args?: { id?: string } & Record<string, unknown>;
+}
+
+/** bnwasMode:value 為 off | auto | on;args.dormant_s 夾在 180–720(設計文件第 4 節)。 */
+export interface BnwasModeCommand extends SimCommand {
+  type: 'bnwasMode';
+  value: 'off' | 'auto' | 'on';
+  args?: { dormant_s?: number; stage3_s?: number } & Record<string, unknown>;
 }

@@ -18,7 +18,8 @@ export class DemoSource implements SimSource {
   private _status: ConnectionStatus = 'disconnected';
 
   constructor(options: DemoOptions = {}) {
-    this.sim = new DemoSim(options);
+    // 示範來源預設開啟示範警報與 BNWAS(中央警報面板、教官站警報監看的離線預覽)
+    this.sim = new DemoSim({ alerts: true, ...options });
   }
 
   get status(): ConnectionStatus {
@@ -89,8 +90,8 @@ export class DemoSource implements SimSource {
   }
 
   private emit(): void {
-    // 複製一份,避免元件持有的狀態被下一步覆寫
-    const state = structuredClone(this.sim.current);
+    // output() 為複本(頂層為感測器指示值,附 truth/sensors/alerts/bnwas),避免元件持有的狀態被下一步覆寫
+    const state = this.sim.output();
     for (const l of this.stateListeners) l({ state, issues: [] });
     for (const ev of this.sim.takeEvents()) this.dispatch({ type: 'event', event: ev });
   }

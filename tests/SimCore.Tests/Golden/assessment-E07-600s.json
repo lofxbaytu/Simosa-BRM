@@ -8,7 +8,7 @@
   "parameterSet": {
     "id": "simosa-company-procedures",
     "version": "2026.10.1",
-    "sha256": "3B95584E7722B6CACF1E48BDCC55C18191BDA888E606F031CFB264B1AAD688B4"
+    "sha256": "3C029944CF95BC322FDA966C577A71CE9958E54737FC41501752B06889338868"
   },
   "phases": [
     {
@@ -106,6 +106,20 @@
       "acknowledgements": []
     }
   ],
+  "alerts": {
+    "raised": 0,
+    "acknowledged": 0,
+    "unacknowledged": 0,
+    "escalations": 0,
+    "silences": 0,
+    "records": [],
+    "bnwas": {
+      "stage1": 0,
+      "stage2": 0,
+      "stage3": 0,
+      "resets": 0
+    }
+  },
   "events": {
     "total": 21,
     "byKind": {

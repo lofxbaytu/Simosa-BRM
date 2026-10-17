@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 雷達/ARPA 測試(規劃書第 14 章:陰影區、雜波、ARPA CPA/TCPA vs 解析值 CPA 誤差 <0.02 nm、確定性、WebSocket 端對端) -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>SimosaBRM.Sensors.Radar.Tests</RootNamespace>
+    <AssemblyName>SimosaBRM.Sensors.Radar.Tests</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Sensors.Radar/Sensors.Radar.csproj" />
+  </ItemGroup>
+</Project>

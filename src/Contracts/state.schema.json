@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/state.schema.json",
   "title": "OwnShipState",
-  "description": "模擬核心每個廣播週期(25 Hz)對各站(儀器、視景、雷達、教官站、講評站)送出的自船狀態。Python 參考實作與 C# SimCore 必須產生相同欄位(Python 無目標船,不輸出 targets)。角度一律以度表示、航向 0 至 360、舵角右正左負、ROT 右轉正(度/分)。",
+  "description": "模擬核心每個廣播週期(25 Hz)對各站(儀器、視景、雷達、教官站、講評站)送出的自船狀態。Python 參考實作與 C# SimCore 必須產生相同欄位(Python 無目標船,不輸出 targets)。角度一律以度表示、航向 0 至 360、舵角右正左負、ROT 右轉正(度/分)。 感測器層(docs/design/sensors-alerts.md):heading/pos/cog/sog/stw/depthBelowKeel 為指示值,真值在 truth;另有 sensors(有效性、磁羅經)、autopilot、alerts[](BAM)、bnwas(C# 產生,Python 不輸出)。",
   "type": "object",
   "required": [
     "t",
@@ -66,25 +66,28 @@
           "type": "number",
           "description": "本地 ENU 北向 (m)"
         }
-      }
+      },
+      "description": "位置(指示值:GNSS;gpsJump/gpsOffset 時偏移,gpsFailure 時保持最後值且 sensors.positionValid = false;真值見 truth.pos)"
     },
     "heading": {
       "type": "number",
       "minimum": 0,
-      "maximum": 360
+      "maximum": 360,
+      "description": "航向(度,0–360;指示值:電羅經。gyroDrift/gyroFreeze 時與真值不同,gyroFailure 時保持最後值且 sensors.headingValid = false;真值見 truth.heading)"
     },
     "cog": {
       "type": "number",
       "minimum": 0,
-      "maximum": 360
+      "maximum": 360,
+      "description": "對地航向(度;指示值:GNSS,gpsFailure 時保持最後值)"
     },
     "sog": {
       "type": "number",
-      "description": "對地速度 (kn)"
+      "description": "對地速度(kn;指示值:GNSS,gpsFailure 時保持最後值)"
     },
     "stw": {
       "type": "number",
-      "description": "對水速度 (kn),縱向"
+      "description": "對水速度(kn;指示值:計程儀,logFailure 時保持最後值或依 bias/factor 偏差;真值見 truth.stw)"
     },
     "rot": {
       "type": "number",
@@ -151,7 +154,8 @@
       }
     },
     "depthBelowKeel": {
-      "type": "number"
+      "type": "number",
+      "description": "龍骨下水深(m;指示值:測深儀,echoSounderFailure 時保持最後值且 sensors.depthValid = false;真值見 truth.depthBelowKeel)"
     },
     "waterDepth": {
       "type": "number"
@@ -369,6 +373,271 @@
         },
         "complete": {
           "type": "boolean"
+        }
+      }
+    },
+    "truth": {
+      "type": "object",
+      "description": "真值(教官站/講評用,學員端儀器不應顯示;C# SimCore 產生,Python 不輸出)。頂層 heading/pos/cog/sog/stw/depthBelowKeel 為感測器指示值,感測器故障時與此不同(docs/design/sensors-alerts.md 第 2 節)",
+      "required": [
+        "heading",
+        "pos",
+        "cog",
+        "sog",
+        "stw",
+        "depthBelowKeel",
+        "headingError_deg",
+        "positionError_m"
+      ],
+      "properties": {
+        "heading": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "pos": {
+          "type": "object",
+          "required": [
+            "lat",
+            "lon",
+            "x",
+            "y"
+          ],
+          "properties": {
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            },
+            "x": {
+              "type": "number",
+              "description": "本地 ENU 東向 (m)"
+            },
+            "y": {
+              "type": "number",
+              "description": "本地 ENU 北向 (m)"
+            }
+          },
+          "description": "位置(指示值:GNSS;gpsJump/gpsOffset 時偏移,gpsFailure 時保持最後值且 sensors.positionValid = false;真值見 truth.pos)"
+        },
+        "cog": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "sog": {
+          "type": "number",
+          "description": "kn"
+        },
+        "stw": {
+          "type": "number",
+          "description": "kn"
+        },
+        "depthBelowKeel": {
+          "type": "number",
+          "description": "m"
+        },
+        "headingError_deg": {
+          "type": "number",
+          "description": "指示航向 − 真航向(度,−180..180,右正)"
+        },
+        "positionError_m": {
+          "type": "number",
+          "minimum": 0,
+          "description": "指示位置與真位置距離(m)"
+        }
+      }
+    },
+    "sensors": {
+      "type": "object",
+      "description": "感測器有效性(false 時對應頂層欄位為最後有效值,儀器端應標示無效/可疑;NMEA 依 IEC 61162-1 停送或標無效)與磁羅經指示;Python 不輸出",
+      "required": [
+        "headingValid",
+        "positionValid",
+        "depthValid",
+        "stwValid",
+        "magneticHeading"
+      ],
+      "properties": {
+        "headingValid": {
+          "type": "boolean",
+          "description": "電羅經(gyroFailure 時 false)"
+        },
+        "positionValid": {
+          "type": "boolean",
+          "description": "GNSS(gpsFailure 時 false)"
+        },
+        "depthValid": {
+          "type": "boolean",
+          "description": "測深儀(echoSounderFailure 時 false)"
+        },
+        "stwValid": {
+          "type": "boolean",
+          "description": "計程儀(logFailure 無 bias/factor 參數時 false)"
+        },
+        "magneticHeading": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360,
+          "description": "磁羅經指示(修正自差/磁差後的真航向 = 真航向 + scenario sensors.magneticCompassError_deg;不受電羅經故障影響)"
+        }
+      }
+    },
+    "autopilot": {
+      "type": "object",
+      "description": "自動舵狀態;自動舵以電羅經指示航向操舵(gyroDrift 時跟隨錯誤航向),autopilotFailure 或 gyroFailure 時脫開(事件 autopilotTripped)且 available = false;Python 不輸出",
+      "required": [
+        "enabled",
+        "setHeading",
+        "rotLimit_degPerMin",
+        "available"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "setHeading": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360,
+          "description": "設定航向(度)"
+        },
+        "rotLimit_degPerMin": {
+          "type": "number"
+        },
+        "available": {
+          "type": "boolean",
+          "description": "可啟用(無 autopilotFailure 且 sensors.headingValid)"
+        }
+      }
+    },
+    "alerts": {
+      "type": "array",
+      "description": "警報清單(BAM,MSC.302(87);依 priority、raisedAt_s 排序;無警報時省略;Python 不輸出)。指令 alertAcknowledge / alertSilence 操作",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "priority",
+          "category",
+          "source",
+          "state",
+          "text",
+          "raisedAt_s",
+          "escalated",
+          "count",
+          "audible"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "警報 id:故障類 = 故障名稱(gyroFailure、gpsFailure、echoSounderFailure、logFailure、autopilotFailure、steeringGear、steeringFuOnly、steeringPumpFailure、mainEngine、bowThruster);門檻類 shallowWater、offHeading、headingMonitor;bnwas"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999,
+            "description": "NMEA ALR 警報編號"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "emergencyAlarm",
+              "alarm",
+              "warning",
+              "caution"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "gyro | gnss | echoSounder | log | autopilot | steering | engine | thruster | bnwas"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "activeUnacknowledged",
+              "activeSilenced",
+              "activeAcknowledged",
+              "rectifiedUnacknowledged"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "顯示文字(繁體中文)"
+          },
+          "raisedAt_s": {
+            "type": "number",
+            "description": "最近一次成立的模擬時間"
+          },
+          "acknowledgedAt_s": {
+            "type": "number"
+          },
+          "silencedUntil_s": {
+            "type": "number",
+            "description": "靜音結束時間(activeSilenced 時)"
+          },
+          "escalated": {
+            "type": "boolean",
+            "description": "曾升級(warning 未確認逾時 → alarm;BNWAS 第二階段 caution → alarm)"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "成立次數"
+          },
+          "audible": {
+            "type": "boolean",
+            "description": "目前有聲響(activeUnacknowledged 且 priority 為 emergencyAlarm/alarm/warning)"
+          }
+        }
+      }
+    },
+    "bnwas": {
+      "type": "object",
+      "description": "BNWAS(MSC.128(75))狀態;指令 bnwasMode / bnwasReset;Python 不輸出",
+      "required": [
+        "mode",
+        "active",
+        "stage",
+        "dormant_s"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "auto",
+            "on"
+          ]
+        },
+        "active": {
+          "type": "boolean",
+          "description": "作動中(on,或 auto 且自動舵啟用)"
+        },
+        "stage": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "0 休眠、1 駕駛台視覺指示、2 駕駛台聲響、3 後備值班官/船長"
+        },
+        "remaining_s": {
+          "type": "number",
+          "description": "距下一階段秒數(未作動或第三階段時省略)"
+        },
+        "dormant_s": {
+          "type": "number",
+          "minimum": 180,
+          "maximum": 720
         }
       }
     }

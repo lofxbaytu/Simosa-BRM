@@ -38,6 +38,12 @@ public sealed class Scenario
     public List<ScenarioZone> Zones { get; set; } = new();
     /// <summary>簡報(字串或物件;第 1.4 節)</summary>
     public ScenarioBriefing? Briefing { get; set; }
+    /// <summary>感測器常態參數(磁羅經誤差;設計文件 docs/design/sensors-alerts.md;Python 參考實作忽略)</summary>
+    public ScenarioSensors Sensors { get; set; } = new();
+    /// <summary>警報管理(BAM,MSC.302(87))設定:升級/靜音時間、偏航/航向監視/淺水門檻(未設定即關閉)</summary>
+    public ScenarioAlerts Alerts { get; set; } = new();
+    /// <summary>BNWAS(MSC.128(75))設定:模式、休眠期、第二/三階段延遲(預設 off)</summary>
+    public ScenarioBnwas Bnwas { get; set; } = new();
 
     /// <summary>載入時解析的參數集摘要(無引用時 null;不序列化,紀錄標頭另有 parameterSet 欄位)</summary>
     [JsonIgnore] public ParameterSetInfo? ParameterSetInfo { get; set; }
@@ -164,6 +170,18 @@ public sealed class Scenario
                 if (Geo.Polygon2D.SelfIntersects(pts)) Error($"{path}.polygon", "多邊形自交");
             }
         }
+
+        // 警報/BNWAS 設定(設計文件 sensors-alerts.md 第 3、4 節)
+        if (Alerts.EscalateS <= 0) Error("alerts.escalate_s", "escalate_s 必須為正");
+        if (Alerts.SilenceS <= 0) Error("alerts.silence_s", "silence_s 必須為正");
+        if (Alerts.OffHeadingDeg is <= 0) Error("alerts.offHeading_deg", "offHeading_deg 必須為正");
+        if (Alerts.OffHeadingDelayS < 0) Error("alerts.offHeadingDelay_s", "offHeadingDelay_s 不可為負");
+        if (Alerts.HeadingMonitorDeg is <= 0) Error("alerts.headingMonitor_deg", "headingMonitor_deg 必須為正");
+        if (Alerts.ShallowWaterM is <= 0) Error("alerts.shallowWater_m", "shallowWater_m 必須為正");
+        if (Bnwas.DormantS < ScenarioBnwas.MinDormantS || Bnwas.DormantS > ScenarioBnwas.MaxDormantS)
+            Error("bnwas.dormant_s", $"dormant_s 須在 {ScenarioBnwas.MinDormantS}–{ScenarioBnwas.MaxDormantS} s(MSC.128(75):3–12 分鐘)");
+        if (Bnwas.Stage2S <= 0) Error("bnwas.stage2_s", "stage2_s 必須為正");
+        if (Bnwas.Stage3S <= 0) Error("bnwas.stage3_s", "stage3_s 必須為正");
 
         var ruleIds = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < Assessment.HardFail.Count; i++)

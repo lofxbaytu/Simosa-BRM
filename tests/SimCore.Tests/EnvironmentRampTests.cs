@@ -84,7 +84,7 @@ public class EnvironmentRampTests
         a.ProcessPendingCommands();
         TestData.RunTo(a, 12.3);
         var snap = EngineSnapshot.FromJson(a.CreateSnapshot().ToJson());
-        Assert.Equal(2, snap.Version);
+        Assert.Equal(3, snap.Version); // Version 3:感測器/警報/BNWAS(sensors-alerts.md)
         Assert.Equal(4, snap.Timeline!.Ramps.Count);
         var b = TestData.MinimalEngine(seed: 3);
         b.Restore(snap);

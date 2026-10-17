@@ -10,8 +10,15 @@
 | `coefficients.schema.json` | 船模係數檔(由校正工具產生,C# 與 Python 共用) |
 | `scenario.schema.json` | 情境 YAML(`data/scenarios/*.yaml`);選填 `targets[]`(目標船)、`assessment`(門檻、硬性失敗、容許帶、必要事件、評分)、`timeline[]`(事件時間表)、`route`(航線)、`zones[]`(區域)、`briefing`(字串或物件)、`environment.visibility_nm`;數值欄位可寫 `"${params:<鍵>}"` 引用參數集(YAML 流式 `{ }` 內須加引號)。Python 參考實作忽略 targets/assessment/timeline/route/zones,但須先解析參數引用 |
 | `parameter-set.schema.json` | 公司程序參數集(`data/parameters/company-procedures.yaml`):`id`、`version`(YYYY.M.n)、`sources{文件編號: {title, revision, …}}`、`parameters{鍵: {value, unit, source, clause, description, min, max}}`;鍵名單位後綴須與 `unit` 一致 |
-| `fault-catalogue.json` | 故障名稱目錄(規劃書第 7.2 節):`modelled` 者引擎改變行為(`steeringGear`、`mainEngine`、`bowThruster`),其餘只記錄與廣播 |
+| `radar.schema.json` | 雷達/ARPA 感測器服務(`src/Sensors.Radar`,ws://…:8766/radar/{x\|s})的 JSON 訊息:狀態、ARPA 追蹤目標清單(1 Hz)、事件、控制指令與回應;二進位影像幀(SRAD)格式見 `docs/design/radar-arpa.md`。雷達控制不進核心紀錄與雜湊鏈 |
+| `fault-catalogue.json` | 故障名稱目錄(規劃書第 7.2 節):`modelled` 者引擎改變行為(操舵 `steeringGear/steeringFuOnly/steeringPumpFailure`、`mainEngine`、`bowThruster`、感測器 `gyroDrift/gyroFreeze/gyroFailure/gpsJump/gpsOffset/gpsFailure/echoSounderFailure/logFailure`、`autopilotFailure`),其餘只記錄與廣播;`effect`、`alert`(BAM 優先序)、`args`(injectFault 參數與預設) |
 
 紀錄檔(JSON Lines)各行型別見 `src/SimCore/README.md` 第 4 節:`header`(version 2,含 `parameterSet{id, version, path(相對專案根目錄,例如 data/parameters/company-procedures.yaml), sha256, resolved[]}`)、`input`、`state`、`event`(`SimEvent`:`kind/tick/t/targetId/message/range_nm/cpa_nm/tcpa_min` 不變,新增 `source/itemId/phase/visible/seq/data`;必要事件開始計時發 `requiredEventPending`,`data {after, afterItemId, afterSeq, start_t, within_s, deadline_t, penalty}` 供教官站倒數,`requiredEventMet/Missed` 的 `data` 含 `within_s`)、`snapshot`、`summary`(評估摘要,footer 之前)、`footer`。
+
+感測器、警報與 BNWAS(`docs/design/sensors-alerts.md`):`state` 頂層 `heading/pos/cog/sog/stw/depthBelowKeel` 為**指示值**,真值在 `state.truth`,有效性與磁羅經在 `state.sensors`;另有 `state.autopilot{enabled, setHeading, rotLimit_degPerMin, available}`、
+`state.alerts[]{id, number, priority: emergencyAlarm|alarm|warning|caution, category: A|B|C, source, state: activeUnacknowledged|activeSilenced|activeAcknowledged|rectifiedUnacknowledged, text, raisedAt_s, acknowledgedAt_s?, silencedUntil_s?, escalated, count, audible}`(無警報時省略)、
+`state.bnwas{mode: off|auto|on, active, stage 0–3, remaining_s?, dormant_s}`(C# 產生,Python 不輸出)。指令 `alertAcknowledge`/`alertSilence`(`value` 或 `args.id`,省略 = 全部)、`bnwasMode`(`value` off|auto|on、`args.dormant_s`)、`bnwasReset`;
+事件 `alertRaised/alertSilenced/alertReannunciated/alertAcknowledged/alertRectified/alertEscalated`(`itemId` = 警報 id)、`bnwasStage/bnwasReset/bnwasModeChanged`、`autopilotTripped`;`acknowledge.kind` 新增 `gyroCheck`;
+情境新增 `sensors{magneticCompassError_deg}`、`alerts{escalate_s, silence_s, offHeading_deg, offHeadingDelay_s, headingMonitor_deg, shallowWater_m}`、`bnwas{mode, dormant_s, stage2_s, stage3_s}`;`summary.alerts{…, bnwas{stage1, stage2, stage3, resets}}`、`faultResponses[].alertAckAt_s/alertAckDt_s`。NMEA 以指示值輸出,無效時 HDT/DPT 停送、GGA 品質 0、RMC V,警報 `$IIALR`。
 
 慣例:角度用度、航向 0 至 360、舵角右正左負、ROT 右轉正(度/分);核心內部以弧度與 SI 計算。

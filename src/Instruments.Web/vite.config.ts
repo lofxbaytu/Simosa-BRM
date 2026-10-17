@@ -33,6 +33,8 @@ export default defineConfig({
       input: {
         index: path.join(here, 'index.html'),
         instructor: path.join(here, 'instructor.html'),
+        // 雷達 PPI 顯示頁(Sensors.Radar WebSocket;RADAR.md)
+        radar: path.join(here, 'radar.html'),
       },
     },
   },

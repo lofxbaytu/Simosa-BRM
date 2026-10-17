@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simosa-brm/contracts/radar.schema.json",
+  "title": "RadarProtocol",
+  "description": "雷達/ARPA 感測器服務(src/Sensors.Radar,規劃書第 5.2 節 Radar、第 7.2 節 MSC.192(79))的 WebSocket 協定:ws://<host>:8766/radar/x 與 /radar/s。伺服器送出二進位影像幀(spokeFrame,格式見 docs/design/radar-arpa.md 第 4 節)與 JSON 文字框(status、tracks、event、ack);客戶端送出 JSON 控制指令(command)。單位:距離 nm(_m 後綴為公尺)、速度 kn、角度度(航向/方位 0–360,真方位;rel 前綴為相對艏向)、時間 s(_min 後綴為分);ENU x 東、y 北(m,與 state.schema.json pos.x/y 同一座標)。",
+  "oneOf": [
+    { "$ref": "#/$defs/statusMessage" },
+    { "$ref": "#/$defs/tracksMessage" },
+    { "$ref": "#/$defs/eventMessage" },
+    { "$ref": "#/$defs/ackMessage" },
+    { "$ref": "#/$defs/command" }
+  ],
+  "$defs": {
+    "radarId": { "type": "string", "enum": ["x", "s"] },
+    "spokeFrame": {
+      "description": "二進位影像幀(WebSocket binary;little-endian)。此物件描述標頭欄位(位元組偏移),非 JSON 訊息。方位線 j 的方位索引 = (firstSpoke + j) mod spokesPerRev;方位為相對艏向順時針(船首向上,天線座標);北向上真方位 = 方位 + heading_deg;航向向上用 cog_deg。距離格 i 的中心距離 = (i + 0.5) × range_m / cells。強度 0–255:增益門檻以上 0–30 dB 線性對應。",
+      "type": "object",
+      "properties": {
+        "headerBytes": { "const": 40 },
+        "magic": { "const": "SRAD", "description": "offset 0, uint32 0x44415253(位元組 53 52 41 44)" },
+        "version": { "const": 1, "description": "offset 4, uint8" },
+        "radarId": { "description": "offset 5, uint8 ASCII 'X' 或 'S'" },
+        "flags": { "description": "offset 6, uint8:bit0 發射中、bit1 航向有效(無效時只能船首向上)、bit2 性能劣化" },
+        "reserved": { "description": "offset 7, uint8 = 0" },
+        "scan": { "description": "offset 8, uint32 掃描圈序號" },
+        "firstSpoke": { "description": "offset 12, uint16 第一條方位線索引(0..spokesPerRev−1)" },
+        "spokeCount": { "description": "offset 14, uint16 本幀方位線數(≤ 32;幀不跨 2047→0)" },
+        "spokesPerRev": { "description": "offset 16, uint16 每圈方位線數(2048)" },
+        "cells": { "description": "offset 18, uint16 每線距離格數(預設 512)" },
+        "range_m": { "description": "offset 20, float32 顯示量程(m)" },
+        "heading_deg": { "description": "offset 24, float32 指示航向(電羅經,度)" },
+        "cog_deg": { "description": "offset 28, float32 對地航向(度)" },
+        "t": { "description": "offset 32, float64 模擬時間(s)" },
+        "data": { "description": "offset 40, spokeCount × cells 個 uint8 強度,依方位線順序連續排列" }
+      }
+    },
+    "statusMessage": {
+      "type": "object",
+      "description": "連線時、設定變更時與故障/航向有效性變化時送出",
+      "required": ["type", "radar", "band", "frequency_GHz", "transmitting", "standby", "failed", "degraded", "headingValid", "range_nm", "rangeScales", "pulse", "pulseLength_m", "gain", "sea", "rain", "tune", "autoTune", "rpm", "spokes", "cells", "beamwidth_deg", "antennaHeight_m", "antennaFwd_m", "antennaStbd_m", "shadowSectors", "guardZone", "cpaLimit_nm", "tcpaLimit_min", "arpaRange_nm", "maxTracks", "seaState", "rainCells", "landPolygons", "frame"],
+      "properties": {
+        "type": { "const": "status" },
+        "radar": { "$ref": "#/$defs/radarId" },
+        "band": { "type": "string", "enum": ["X", "S"] },
+        "frequency_GHz": { "type": "number" },
+        "transmitting": { "type": "boolean", "description": "發射中(非待機且無 radarFailure/blackout)" },
+        "standby": { "type": "boolean" },
+        "failed": { "type": "boolean", "description": "state.faults 含本台的失效故障(X:radarFailure/radarFailureX/blackout;S:radarFailureS/blackout)" },
+        "degraded": { "type": "boolean", "description": "state.faults 含 radarDegraded(X)/radarDegradedS(S):靈敏度 −15 dB" },
+        "headingValid": { "type": "boolean", "description": "航向輸入有效;無效時 ARPA 停止穩定化" },
+        "range_nm": { "type": "number" },
+        "rangeScales": { "type": "array", "items": { "type": "number" } },
+        "pulse": { "type": "string", "enum": ["short", "medium", "long"] },
+        "pulseLength_m": { "type": "number", "description": "cτ/2(m)" },
+        "gain": { "type": "number", "minimum": 0, "maximum": 100 },
+        "sea": { "type": "number", "minimum": 0, "maximum": 100, "description": "STC" },
+        "rain": { "type": "number", "minimum": 0, "maximum": 100, "description": "FTC" },
+        "tune": { "type": "number", "minimum": 0, "maximum": 100, "description": "最佳點 50" },
+        "autoTune": { "type": "boolean" },
+        "rpm": { "type": "number" },
+        "spokes": { "type": "integer" },
+        "cells": { "type": "integer" },
+        "beamwidth_deg": { "type": "number" },
+        "antennaHeight_m": { "type": "number", "description": "水線上" },
+        "antennaFwd_m": { "type": "number", "description": "相對船舯(船舶參考點),向艏為正" },
+        "antennaStbd_m": { "type": "number" },
+        "shadowSectors": { "type": "array", "items": { "$ref": "#/$defs/shadowSector" } },
+        "guardZone": { "$ref": "#/$defs/guardZone" },
+        "trial": { "$ref": "#/$defs/trial" },
+        "cpaLimit_nm": { "type": "number" },
+        "tcpaLimit_min": { "type": "number" },
+        "arpaRange_nm": { "type": "number", "description": "ARPA 處理量程(與顯示量程無關)" },
+        "maxTracks": { "type": "integer" },
+        "seaState": { "type": "number", "description": "目前使用的海況(Douglas;由真風速推估或環境覆寫)" },
+        "rainCells": { "type": "integer" },
+        "landPolygons": { "type": "integer" },
+        "frame": {
+          "type": "object",
+          "required": ["magic", "version", "headerBytes"],
+          "properties": { "magic": { "const": "SRAD" }, "version": { "type": "integer" }, "headerBytes": { "type": "integer" } }
+        }
+      }
+    },
+    "shadowSector": {
+      "type": "object",
+      "required": ["from", "to", "attenuation_dB"],
+      "properties": { "from": { "type": "number" }, "to": { "type": "number" }, "attenuation_dB": { "type": "number" } },
+      "description": "相對艏向(度),自 from 順時針至 to"
+    },
+    "guardZone": {
+      "type": "object",
+      "required": ["enabled", "inner_nm", "outer_nm", "from", "to", "relative"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "inner_nm": { "type": "number" },
+        "outer_nm": { "type": "number" },
+        "from": { "type": "number", "description": "方位(度),from→to 順時針;0 與 360 表示全周" },
+        "to": { "type": "number" },
+        "relative": { "type": "boolean", "description": "true:相對艏向;false:真方位" }
+      }
+    },
+    "trial": {
+      "type": "object",
+      "required": ["course", "speed", "delay_min"],
+      "properties": { "course": { "type": "number" }, "speed": { "type": "number" }, "delay_min": { "type": "number" } }
+    },
+    "ownShip": {
+      "type": "object",
+      "required": ["x", "y", "lat", "lon", "heading", "cog", "sog"],
+      "description": "ARPA 使用的自船指示值(CCRP = 船舶參考點)",
+      "properties": {
+        "x": { "type": "number" }, "y": { "type": "number" }, "lat": { "type": "number" }, "lon": { "type": "number" },
+        "heading": { "type": "number" }, "cog": { "type": "number" }, "sog": { "type": "number" }
+      }
+    },
+    "pastPosition": {
+      "type": "object",
+      "required": ["t", "x", "y", "lat", "lon"],
+      "properties": { "t": { "type": "number" }, "x": { "type": "number" }, "y": { "type": "number" }, "lat": { "type": "number" }, "lon": { "type": "number" } }
+    },
+    "track": {
+      "type": "object",
+      "description": "ARPA 追蹤目標。course_deg 至 trialTcpa_min 只在 state = tracking 時提供(擷取中與失追時省略);lost 的位置為失追時刻的位置",
+      "required": ["id", "label", "state", "acquisition", "age_s", "stable", "manoeuvring", "dangerous", "swapRisk", "misses", "x", "y", "lat", "lon", "range_nm", "bearing_deg", "relBearing_deg"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "label": { "type": "string", "description": "兩位數編號(NMEA TTM 目標編號)" },
+        "state": { "type": "string", "enum": ["acquiring", "tracking", "lost"] },
+        "acquisition": { "type": "string", "enum": ["manual", "auto"] },
+        "age_s": { "type": "number", "description": "自第一次量測起的追蹤時間" },
+        "stable": { "type": "boolean", "description": "追蹤 ≥ 3 分鐘(MSC.192(79) 規定精度)" },
+        "manoeuvring": { "type": "boolean", "description": "偵測到目標操船(濾波器提高過程雜訊中)" },
+        "dangerous": { "type": "boolean", "description": "CPA < cpaLimit_nm 且 0 ≤ TCPA ≤ tcpaLimit_min" },
+        "swapRisk": { "type": "boolean", "description": "與另一追蹤目標接近或共用回波,可能交換" },
+        "misses": { "type": "integer", "description": "連續漏掃描次數" },
+        "x": { "type": "number" }, "y": { "type": "number" },
+        "lat": { "type": "number" }, "lon": { "type": "number" },
+        "range_nm": { "type": "number" },
+        "bearing_deg": { "type": "number", "description": "真方位" },
+        "relBearing_deg": { "type": "number" },
+        "course_deg": { "type": "number", "description": "真向量:對地航向" },
+        "speed_kn": { "type": "number", "description": "真向量:對地速度" },
+        "relCourse_deg": { "type": "number", "description": "相對向量方向" },
+        "relSpeed_kn": { "type": "number" },
+        "cpa_nm": { "type": "number" },
+        "tcpa_min": { "type": "number", "description": "負值 = 已通過" },
+        "bcr_nm": { "type": "number", "description": "艏越距離(正 = 艏前通過、負 = 艉後通過;無交會時省略);與 state.schema.json targets[].bcr_nm 同定義" },
+        "bct_min": { "type": "number" },
+        "trialCpa_nm": { "type": "number", "description": "試操船啟用時" },
+        "trialTcpa_min": { "type": "number" },
+        "past": { "type": "array", "items": { "$ref": "#/$defs/pastPosition" }, "description": "過去位置(每 30 s,最多 10 點)" }
+      }
+    },
+    "tracksMessage": {
+      "type": "object",
+      "description": "追蹤清單,模擬時間 1 Hz",
+      "required": ["type", "radar", "t", "scan", "transmitting", "ownShip", "cpaLimit_nm", "tcpaLimit_min", "targets"],
+      "properties": {
+        "type": { "const": "tracks" },
+        "radar": { "$ref": "#/$defs/radarId" },
+        "t": { "type": "number" },
+        "scan": { "type": "integer" },
+        "transmitting": { "type": "boolean" },
+        "ownShip": { "$ref": "#/$defs/ownShip" },
+        "cpaLimit_nm": { "type": "number" },
+        "tcpaLimit_min": { "type": "number" },
+        "trial": { "$ref": "#/$defs/trial" },
+        "targets": { "type": "array", "items": { "$ref": "#/$defs/track" } }
+      }
+    },
+    "eventMessage": {
+      "type": "object",
+      "required": ["type", "radar", "event"],
+      "properties": {
+        "type": { "const": "event" },
+        "radar": { "$ref": "#/$defs/radarId" },
+        "event": {
+          "type": "object",
+          "required": ["kind", "t", "message"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["acquireStarted", "tracking", "newTarget", "acquireFailed", "targetLost", "deleted", "cancelled", "dangerousTarget", "radarFailure", "radarRestored", "radarDegraded", "headingLost"] },
+            "t": { "type": "number" },
+            "targetId": { "type": "integer" },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    },
+    "ackMessage": {
+      "type": "object",
+      "required": ["type", "radar", "cmd", "ok"],
+      "properties": {
+        "type": { "const": "ack" },
+        "radar": { "$ref": "#/$defs/radarId" },
+        "cmd": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "error": { "type": "string" },
+        "reqId": { "description": "回傳指令中的 reqId(任意 JSON 值)" },
+        "id": { "type": "integer", "description": "acquire/cancel 的目標編號" },
+        "value": { "type": "number", "description": "實際採用的值(例如量程換成最近的標準量程)" }
+      }
+    },
+    "command": {
+      "type": "object",
+      "description": "客戶端 → 雷達控制指令。成功的設定指令會廣播新的 status;getStatus 只回 status;getTracks 回 ack + tracks",
+      "required": ["cmd"],
+      "properties": {
+        "cmd": { "type": "string", "enum": ["range", "gain", "sea", "rain", "tune", "standby", "transmit", "acquire", "cancel", "guardZone", "trialManoeuvre", "cpaLimits", "environment", "getStatus", "getTracks"] },
+        "reqId": { "description": "任意值,原樣回傳於 ack" },
+        "value": { "type": "number", "description": "range(nm,換成最近的標準量程)、gain/sea/rain/tune(0–100)" },
+        "auto": { "type": "boolean", "description": "tune:自動調諧" },
+        "bearing": { "type": "number", "description": "acquire:方位(度;預設真方位)" },
+        "range": { "type": "number", "description": "acquire:距離(nm)" },
+        "relative": { "type": "boolean", "description": "acquire:bearing 為相對艏向;guardZone:方位為相對" },
+        "id": { "description": "cancel:目標編號或 \"all\"" },
+        "enabled": { "type": "boolean" },
+        "inner_nm": { "type": "number" },
+        "outer_nm": { "type": "number" },
+        "from": { "type": "number" },
+        "to": { "type": "number" },
+        "course": { "type": "number", "description": "trialManoeuvre:試操船航向(度)" },
+        "speed": { "type": "number", "description": "trialManoeuvre:試操船速度(kn)" },
+        "delay": { "type": "number", "description": "trialManoeuvre:延遲(分)" },
+        "active": { "type": "boolean", "description": "trialManoeuvre:false 關閉試操船" },
+        "cpa_nm": { "type": "number" },
+        "tcpa_min": { "type": "number" },
+        "seaState": { "type": ["number", "null"], "description": "environment:海況覆寫(null = 依真風速)" },
+        "rainCells": { "type": "array", "items": { "$ref": "#/$defs/rainCell" }, "description": "environment:取代雨區(教官)" }
+      }
+    },
+    "rainCell": {
+      "type": "object",
+      "properties": {
+        "lat": { "type": "number" }, "lon": { "type": "number" },
+        "x": { "type": "number" }, "y": { "type": "number" },
+        "radius_m": { "type": "number" },
+        "rate_mmh": { "type": "number", "description": "降雨率(mm/h);Z = 200 R^1.6" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "description": "雷達環境檔(data/areas/*.json 與 --environment):陸地多邊形、雨區、海況覆寫。座標 points 為 [lat, lon];pointsXY 為本地 ENU [x, y](m)",
+      "properties": {
+        "id": { "type": "string" },
+        "description": { "type": "string" },
+        "source": { "type": "string" },
+        "land": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "height_m": { "type": "number", "description": "地形高度(雷達地平線)" },
+              "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } },
+              "pointsXY": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } }
+            }
+          }
+        },
+        "rainCells": { "type": "array", "items": { "$ref": "#/$defs/rainCell" } },
+        "seaState": { "type": "number" }
+      }
+    }
+  }
+}

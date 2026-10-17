@@ -147,6 +147,12 @@ export interface FaultDefinition {
   exercise?: string;
   /** 核心是否真的改變行為(SimCore FaultNames);否則只記錄與廣播 */
   modelled: boolean;
+  /** 故障成立時的 BAM 警報優先序(fault-catalogue.json alert;無警報時省略) */
+  alert?: string;
+  /** injectFault {name, args} 可給的參數與預設值(null = 無預設;fault-catalogue.json args) */
+  args?: Record<string, number | null>;
+  /** 行為說明(fault-catalogue.json effect) */
+  effect?: string;
 }
 
 /** 內建故障目錄(規劃書第 7.2 節故障欄);前三項名稱來自 SimCore FaultNames.cs,其餘為教官站自定。 */
@@ -194,18 +200,65 @@ export function mergeFaultCatalogue(fromCore: Record<string, string>, defaults: 
 }
 
 const FAULT_NAMES_CS = import.meta.glob('../../../SimCore/Engine/FaultNames.cs', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const FAULT_CATALOGUE_JSON = import.meta.glob('../../../Contracts/fault-catalogue.json', { import: 'default', eager: true }) as Record<string, unknown>;
 
-/** 故障目錄與名稱來源(SimCore FaultNames.cs 讀得到時以其為準)。 */
-export function faultCatalogue(): { faults: FaultDefinition[]; source: 'simcore' | 'builtin' } {
+/**
+ * 解析 src/Contracts/fault-catalogue.json(故障目錄的單一來源:名稱、標籤、練習、modelled、alert、args、effect)。
+ * 格式不符的項目略過;不是物件或沒有 faults[] 時回傳空陣列。
+ */
+export function parseFaultCatalogueJson(raw: unknown): FaultDefinition[] {
+  if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as Record<string, unknown>)['faults'])) return [];
+  const out: FaultDefinition[] = [];
+  for (const f of (raw as { faults: unknown[] }).faults) {
+    if (typeof f !== 'object' || f === null) continue;
+    const r = f as Record<string, unknown>;
+    const name = typeof r['name'] === 'string' ? r['name'].trim() : '';
+    if (!name) continue;
+    const def: FaultDefinition = { name, label: typeof r['label'] === 'string' && r['label'] ? r['label'] : name, modelled: r['modelled'] === true };
+    if (typeof r['exercise'] === 'string' && r['exercise']) def.exercise = r['exercise'];
+    if (typeof r['alert'] === 'string' && r['alert']) def.alert = r['alert'];
+    if (typeof r['effect'] === 'string' && r['effect']) def.effect = r['effect'];
+    if (typeof r['args'] === 'object' && r['args'] !== null && !Array.isArray(r['args'])) {
+      const args: Record<string, number | null> = {};
+      for (const [k, v] of Object.entries(r['args'] as Record<string, unknown>)) args[k] = typeof v === 'number' && Number.isFinite(v) ? v : null;
+      if (Object.keys(args).length > 0) def.args = args;
+    }
+    out.push(def);
+  }
+  return out;
+}
+
+/**
+ * 故障目錄與名稱來源:
+ *  - contracts:src/Contracts/fault-catalogue.json 讀得到時以其為準(標籤、警報、參數);SimCore FaultNames.cs 有的名稱也標 modelled,
+ *    FaultNames.cs 有而目錄沒有的名稱補到尾端;
+ *  - simcore:只讀到 FaultNames.cs(合併內建預設);
+ *  - builtin:都讀不到,用內建 DEFAULT_FAULTS。
+ */
+export function faultCatalogue(): { faults: FaultDefinition[]; source: 'contracts' | 'simcore' | 'builtin' } {
   const text = Object.values(FAULT_NAMES_CS)[0];
   const fromCore = text ? parseFaultNamesCs(text) : {};
+  const fromJson = parseFaultCatalogueJson(Object.values(FAULT_CATALOGUE_JSON)[0]);
+  if (fromJson.length > 0) {
+    const coreNames = Object.keys(fromCore);
+    const list = fromJson.map((d) => (coreNames.includes(d.name) ? { ...d, modelled: true } : d));
+    for (const name of coreNames) if (!list.some((d) => d.name === name)) list.push({ name, label: fromCore[name] || name, modelled: true });
+    return { faults: list, source: 'contracts' };
+  }
   if (Object.keys(fromCore).length === 0) return { faults: [...DEFAULT_FAULTS], source: 'builtin' };
   return { faults: mergeFaultCatalogue(fromCore), source: 'simcore' };
 }
 
-export function injectFaultCommand(name: string): SimCommand {
+/**
+ * injectFault:沒有參數時送 value 字串(兩核心皆相容);有參數時送 args {name, args}(C# 核心;感測器故障的漂移率、跳點距離等,
+ * sensors-alerts.md 第 2.2 節)。非有限數值的參數略過。
+ */
+export function injectFaultCommand(name: string, args?: Record<string, number | undefined>): SimCommand {
   if (!name.trim()) throw new RangeError('故障名稱不可為空');
-  return { type: 'injectFault', value: name.trim() };
+  const clean: Record<string, number> = {};
+  for (const [k, v] of Object.entries(args ?? {})) if (typeof v === 'number' && Number.isFinite(v)) clean[k] = v;
+  if (Object.keys(clean).length === 0) return { type: 'injectFault', value: name.trim() };
+  return { type: 'injectFault', args: { name: name.trim(), args: clean } };
 }
 
 /** clearFault:給名稱清除該項;不給名稱時 C# 核心清除全部(Python 參考伺服器則無作用)。 */

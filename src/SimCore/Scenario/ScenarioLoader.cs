@@ -14,8 +14,16 @@ public static class ScenarioLoader
 {
     public const string DefaultParameterSetPath = "data/parameters/company-procedures.yaml";
 
-    /// <summary>最近一次 Load/FromYaml 的參數解析清單(無引用時為空)。</summary>
-    public static IReadOnlyList<ParameterRef> LastResolvedParameters { get; private set; } = Array.Empty<ParameterRef>();
+    /// <summary>
+    /// 本執行緒最近一次 Load/FromYaml 的參數解析清單(無引用時為空)。以執行緒區域儲存:平行執行的測試(或多執行緒載入)不會讀到別人的結果。
+    /// </summary>
+    public static IReadOnlyList<ParameterRef> LastResolvedParameters
+    {
+        get => _lastResolved ?? Array.Empty<ParameterRef>();
+        private set => _lastResolved = value;
+    }
+
+    [ThreadStatic] private static IReadOnlyList<ParameterRef>? _lastResolved;
 
     public static Scenario Load(string path, ParameterSet? parameters = null)
     {

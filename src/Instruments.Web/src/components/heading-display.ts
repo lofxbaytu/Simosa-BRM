@@ -54,6 +54,18 @@ export class HeadingDisplay extends LitElement {
       .tick.minor {
         stroke: var(--ob-scale-minor);
       }
+      .invalid-tag {
+        background: var(--ob-alarm);
+        color: var(--ob-alarm-text);
+        border-radius: 3px;
+        padding: 0 4px;
+        font-weight: 700;
+      }
+      .value.stale {
+        opacity: 0.45;
+        text-decoration: line-through;
+        text-decoration-thickness: 2px;
+      }
     `,
   ];
 
@@ -64,14 +76,16 @@ export class HeadingDisplay extends LitElement {
   @property({ type: Number }) cog: number | undefined = undefined;
   /** 感測器資料可疑(由解析器回報缺欄位) */
   @property({ type: Boolean }) suspect = false;
+  /** 電羅經無效(state.sensors.headingValid = false):顯示保持的最後值並標「無效」(sensors-alerts.md 第 2.1 節) */
+  @property({ type: Boolean }) invalid = false;
 
   override render() {
     const h = normalizeHeading(this.heading);
     return html`
       <div class="tile">
-        <div class="tile-title"><span>HDG</span><span class="zh">航向 ${this.suspect ? html`<span class="warning">可疑</span>` : nothing}</span></div>
+        <div class="tile-title"><span>HDG</span><span class="zh">航向 ${this.invalid ? html`<span class="invalid-tag" title="電羅經無效:顯示最後有效值">無效</span>` : this.suspect ? html`<span class="warning">可疑</span>` : nothing}</span></div>
         <div class="hdg">
-          <span class="value big">${formatHeading(h)}</span>
+          <span class="value big ${this.invalid ? 'stale' : ''}">${formatHeading(h)}</span>
           <span class="unit">${formatHeadingDecimal(h)}</span>
         </div>
         <div class="tape">${this.renderTape(h)}</div>

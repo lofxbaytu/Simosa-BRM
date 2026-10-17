@@ -1,6 +1,6 @@
 # E09 全船失電:高雄第二港口進港段,引水人在船,距碼頭約 1.5 nm(規劃書第 8.1 節 E09;schema:src/Contracts/scenario.schema.json;情境引擎設計第 8.3 節)
 # FSB1 滿載自第二港口防波堤口進港,沿 3 段航道(走廊半寬 50 m)以 SAH 6 kn 接近油碼頭;港內退潮流 0.6 kn 逆向、西南風 12 kn。
-# 時間表(以既有動作組合,不改引擎):T+120 s 全船失電(injectFault mainEngine + steeringGear 為 modelled;blackout/gyroFailure/radarFailure 只記錄,供儀器端反應;階段 emergency)
+# 時間表(以既有動作組合,不改引擎):T+120 s 全船失電(injectFault mainEngine + steeringGear + gyroFailure 為 modelled(gyroFailure 由感測器層處理:指示航向無效並發警報,docs/design/sensors-alerts.md);radarFailure 由雷達服務停止 X 頻;blackout 只記錄;階段 emergency)
 #          → 45 s 後應急發電機供電(clearFault steeringGear:操舵恢復)→ 失電後 6 分鐘主機恢復(clearFault mainEngine,階段 degraded)
 #          → 教官確認「儀器重啟完成」後清除只記錄的故障並回 normal。60 s 內無相關動作(必要事件 blackoutFirstAction 逾時)則引水人催促下錨;失電後 90 s VTS 詢問狀況。
 # 評估:失電首個相關動作 ≤ 60 s(車令 STOP/操舵模式切換,或備援的 acknowledge checklist)、下錨決策 acknowledge anchorReady ≤ 180 s、向 VTS 報告 ≤ 180 s、

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 雷達/ARPA 感測器類別庫(規劃書第 5.2 節 Radar、第 7.2 節 MSC.192(79)):影像產生、ARPA 追蹤、幀格式、WebSocket/NMEA 輸出;
+       以 ProjectReference 取得 SimCore 契約型別與 NMEA 句型工具(唯讀使用,不修改) -->
+  <PropertyGroup>
+    <RootNamespace>SimosaBRM.Sensors.Radar</RootNamespace>
+    <AssemblyName>SimosaBRM.Sensors.Radar</AssemblyName>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SimCore/SimCore.csproj" />
+    <ProjectReference Include="../Gateway.Nmea/Gateway.Nmea.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SimosaBRM.Sensors.Radar.Tests" />
+  </ItemGroup>
+</Project>

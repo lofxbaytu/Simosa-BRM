@@ -2,7 +2,8 @@
 //  - full(預設):訪船船長直連時用。連線狀態與自船摘要(共用 conning 條)、情境選擇與載入、時間表面板
 //    (手動觸發、確認鈕、必要事件倒數)、執行控制(凍結/恢復/重設/結束練習、時間倍率、快照/還原)、環境即時改變
 //    (含漸變)、故障注入、自船覆寫、操舵模式(FU/NFU/自動舵/應急,送 steeringMode)、鳥瞰航跡圖(疊航線/區域)、核心事件流、學員操作紀錄(由狀態推導)、
-//    教官指令與核心回應、BRM 快速標記(第 8.2 節五大類)。
+//    教官指令與核心回應、BRM 快速標記(第 8.2 節五大類)、警報與 BNWAS 監看(代為確認、BNWAS 模式)、真值 vs 指示值比較
+//    (docs/design/sensors-alerts.md)。
 //    核心推送的事件框 {"type":"event"} 與評估框 {"type":"assessment"}(設計文件 docs/design/scenario-engine.md 第 5.2 節)
 //    經 onMessage 收下;語音腳本事件由 VoiceScriptPlayer 播放(簡化模式自動、完整模式按「播放」)。
 //  - simple(?mode=simple):船上簡化教官模式(第 9.1 節 R13):選擇練習 → 簡報 → 開始(含精簡版操舵面板)→ 凍結/結束 →
@@ -40,7 +41,8 @@ import { eventMarks, overlayFromScenario, type PlotOverlay } from './lib/plot-ov
 import { CpaAlarmTracker } from './lib/targets.js';
 import { parseSteering } from './lib/steering.js';
 import { PLAYED_BY_LABEL } from './lib/timeline.js';
-import { ROLE_LABEL } from './lib/sim-event.js';
+import { REJECT_REASON_LABEL, ROLE_LABEL } from './lib/sim-event.js';
+import { alertCounts } from './lib/alerts.js';
 import { instructorStyles } from './components/instructor/instructor-shared.js';
 import type { BrmMarkDetail } from './components/instructor/brm-marker-bar.js';
 import type { SnapshotEntry } from './components/instructor/run-control-panel.js';
@@ -59,6 +61,8 @@ import './components/instructor/brm-marker-bar.js';
 import './components/instructor/debrief-summary.js';
 import './components/instructor/replay-view.js';
 import './components/instructor/event-stream.js';
+import './components/instructor/alert-monitor.js';
+import './components/instructor/sensor-truth-panel.js';
 import { requiredCountdowns } from './components/instructor/timeline-panel.js';
 
 export type PageMode = 'full' | 'simple' | 'replay';
@@ -242,7 +246,7 @@ export class InstructorApp extends LitElement {
       }
       .center .bottom {
         display: grid;
-        grid-template-columns: 1.2fr 1fr 0.9fr 0.9fr;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         /* 列高依面板內容(不平均分配),放不下時整列捲動,面板不會互相疊上 */
         grid-auto-rows: max-content;
         align-content: start;
@@ -348,7 +352,7 @@ export class InstructorApp extends LitElement {
       .simple .stage.running .side {
         display: grid;
         /* 標記鈕、操舵面板、時間表依內容高度;操作紀錄吃剩餘高度,1366×768 放不下時側欄捲動 */
-        grid-template-rows: max-content max-content max-content minmax(90px, 1fr);
+        grid-template-rows: max-content max-content max-content max-content minmax(90px, 1fr);
         gap: 10px;
         min-height: 0;
         overflow-y: auto;
@@ -634,7 +638,7 @@ export class InstructorApp extends LitElement {
     const entry = [...this.commandLog].reverse().find((e) => !e.ack && e.command.type === cmdType);
     if (!entry) return;
     const reason = ev.data?.['reason'];
-    entry.ack = { ok: false, detail: reason === 'emergencySteering' ? '應急操舵中不可自動舵' : typeof reason === 'string' ? reason : eventLabel(ev), tick: ev.tick };
+    entry.ack = { ok: false, detail: typeof reason === 'string' ? REJECT_REASON_LABEL[reason] ?? reason : eventLabel(ev), tick: ev.tick };
     this.commandLog = [...this.commandLog];
   }
 
@@ -682,6 +686,12 @@ export class InstructorApp extends LitElement {
   /** 核心是否支援情境引擎(C# 核心廣播 state.scenario;Python 參考伺服器不會)。 */
   private get engineUnsupported(): boolean {
     return this.sourceMode === 'live' && this.hasReceived && this.shipState.scenario === undefined && this.events.length === 0;
+  }
+
+  /** 核心是否不回報警報/BNWAS(C# 核心有 sensors/bnwas 欄位;Python 參考伺服器沒有;無警報時 alerts 省略) */
+  private get alertsUnsupported(): boolean {
+    const s = this.shipState;
+    return this.sourceMode === 'live' && this.hasReceived && s.sensors === undefined && s.bnwas === undefined && (s.alerts?.length ?? 0) === 0;
   }
 
   /** 參數集版次警示:情境檔引用參數但核心未回報版次、核心情境 id 與選擇不同、summary 與狀態版次不一致。 */
@@ -900,6 +910,7 @@ export class InstructorApp extends LitElement {
     const pillClass = this.stale ? 'stale' : this.status;
     const pillText = this.stale ? '資料逾時' : STATUS_LABEL[this.status];
     const live = this.pageMode !== 'replay';
+    const alerts = alertCounts(s.alerts);
     return html`
       <header>
         <span class="title">${MODE_TITLE[this.pageMode]}</span>
@@ -917,6 +928,8 @@ export class InstructorApp extends LitElement {
               ${s.scenario?.ended ? html`<span class="caution">練習已結束</span>` : nothing}
               ${this.parameterSetWarning() ? html`<span class="warn-badge param-warning" title=${this.parameterSetWarning()}>參數集不一致</span>` : nothing}
               ${this.issues.length > 0 ? html`<span class="warning" title=${this.issues.join(', ')}>資料可疑 ${this.issues.length}</span>` : nothing}
+              ${alerts.unacknowledged > 0 ? html`<span class="${alerts.highest === 'warning' || alerts.highest === 'caution' ? 'warn-badge' : 'alarm'} alert-badge" title="駕駛台警報需確認">警報未確認 ${alerts.unacknowledged}</span>` : nothing}
+              ${s.bnwas && s.bnwas.stage >= 1 ? html`<span class="${s.bnwas.stage >= 2 ? 'alarm' : 'caution'} bnwas-badge">BNWAS 第 ${s.bnwas.stage} 階段</span>` : nothing}
             </div>`
           : nothing}
         <span class="spacer"></span>
@@ -970,6 +983,8 @@ export class InstructorApp extends LitElement {
           <div class="col center">
             <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${this.alarmTargets} target-table></brm-track-plot>
             <div class="bottom">
+              <brm-alert-monitor .alerts=${s.alerts ?? []} .bnwas=${s.bnwas} .events=${this.events} .simTime=${s.t} .unsupported=${this.alertsUnsupported}></brm-alert-monitor>
+              <brm-sensor-truth .state=${this.hasReceived ? s : null}></brm-sensor-truth>
               <brm-environment-panel .state=${this.hasReceived ? s : null}></brm-environment-panel>
               <brm-fault-panel .active=${s.faults ?? []}></brm-fault-panel>
               <brm-ownship-panel .state=${this.hasReceived ? s : null}></brm-ownship-panel>
@@ -1036,12 +1051,15 @@ export class InstructorApp extends LitElement {
               ${s.flags?.aground ? html`<span class="v alarm">擱淺</span>` : nothing}
               ${(s.faults ?? []).map((f) => html`<span class="alarm">故障:${f}</span>`)}
               ${s.scenario?.phase && s.scenario.phase !== 'normal' ? html`<span class="v warning">階段 ${s.scenario.phase}</span>` : nothing}
+              ${alertCounts(s.alerts).unacknowledged > 0 ? html`<span class="v alarm">警報未確認 ${alertCounts(s.alerts).unacknowledged}</span>` : nothing}
+              ${s.bnwas && s.bnwas.stage >= 1 ? html`<span class="v ${s.bnwas.stage >= 2 ? 'alarm' : 'caution'}">BNWAS ${s.bnwas.stage}</span>` : nothing}
             </div>
             ${this.lastVoice ? html`<div class="voice-banner">${this.voicePlaying ? '▶ ' : ''}${this.lastVoice}</div>` : nothing}
             <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${this.alarmTargets}></brm-track-plot>
             <div class="side">
               <brm-marker-bar large .markers=${this.markers}></brm-marker-bar>
               <brm-steering-panel compact .state=${this.hasReceived ? s : null}></brm-steering-panel>
+              <brm-alert-monitor compact .alerts=${s.alerts ?? []} .bnwas=${s.bnwas} .events=${this.events} .simTime=${s.t} .unsupported=${this.alertsUnsupported}></brm-alert-monitor>
               <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>
               <brm-operation-log .events=${this.opEvents} .max=${50}></brm-operation-log>
             </div>

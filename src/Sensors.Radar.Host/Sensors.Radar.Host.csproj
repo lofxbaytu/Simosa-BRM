@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 雷達感測器主控程式:訂閱 SimCore.Host 狀態(ws://127.0.0.1:8765),提供 ws://0.0.0.0:8766/radar/{x|s} 與 NMEA TTM/TLL(UDP) -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SimosaBRM.Sensors.Radar.Host</RootNamespace>
+    <AssemblyName>SimosaBRM.Sensors.Radar.Host</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sensors.Radar/Sensors.Radar.csproj" />
+  </ItemGroup>
+</Project>

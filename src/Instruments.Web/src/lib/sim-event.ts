@@ -5,6 +5,7 @@
 
 import type { SimEvent, SimEventKind, SimEventSource, VoiceScriptData } from '../types/event.js';
 import { formatHeading } from './format.js';
+import { alertEventLabel, alertEventSeverity } from './alerts.js';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -113,6 +114,8 @@ export function eventFromFrame(frame: Record<string, unknown>, dt = 0.02): SimEv
 export type EventSeverity = 'info' | 'warning' | 'alarm';
 
 export function eventSeverity(e: SimEvent): EventSeverity {
+  const alertSev = alertEventSeverity(e);
+  if (alertSev) return alertSev;
   switch (e.kind) {
     case 'collision':
     case 'grounding':
@@ -154,7 +157,15 @@ export const ACK_KIND_LABEL: Readonly<Record<string, string>> = {
   checklist: '檢查表',
   steeringMode: '切換操舵模式',
   anchorReady: '備錨',
+  gyroCheck: '羅經比對異常',
   other: '其他',
+};
+
+/** commandRejected 的 reason 顯示文字(D35、sensors-alerts.md 第 2.3、3.3 節)。 */
+export const REJECT_REASON_LABEL: Readonly<Record<string, string>> = {
+  emergencySteering: '應急操舵中不可自動舵',
+  autopilotUnavailable: '自動舵不可用(電羅經或自動舵失效)',
+  unknownAlert: '未知的警報 id',
 };
 
 /** 操舵模式顯示名稱(state.steering.mode / steeringMode 指令 value)。 */
@@ -221,6 +232,8 @@ export function voiceScriptData(e: SimEvent): VoiceScriptData | null {
 
 /** 事件的一句話(繁體中文;既有交通事件也涵蓋)。 */
 export function eventLabel(e: SimEvent): string {
+  const alertText = alertEventLabel(e);
+  if (alertText !== null) return alertText;
   const target = e.targetId ? ` ${e.targetId}` : '';
   const item = e.itemId ? ` ${e.itemId}` : '';
   switch (e.kind as SimEventKind) {
@@ -342,7 +355,7 @@ export function eventLabel(e: SimEvent): string {
     case 'steeringModeChanged':
       return `操舵模式 ${STEERING_MODE_LABEL[ds(e, 'from')] ?? ds(e, 'from') ?? '?'} → ${STEERING_MODE_LABEL[ds(e, 'to')] ?? ds(e, 'to') ?? '?'}${ds(e, 'pump') ? `(泵 ${ds(e, 'pump')})` : ''}`;
     case 'commandRejected':
-      return `指令被拒 ${ds(e, 'command')}${ds(e, 'reason') === 'emergencySteering' ? '(應急操舵中不可自動舵)' : ds(e, 'reason') ? `(${ds(e, 'reason')})` : ''}`;
+      return `指令被拒 ${ds(e, 'command')}${REJECT_REASON_LABEL[ds(e, 'reason')] ? `(${REJECT_REASON_LABEL[ds(e, 'reason')]})` : ds(e, 'reason') ? `(${ds(e, 'reason')})` : ''}`;
     default:
       return `${e.kind}${item}${target}${e.message ? ` ${e.message}` : ''}`;
   }

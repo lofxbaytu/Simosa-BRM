@@ -10,7 +10,8 @@ using Xunit;
 namespace SimosaBRM.SimCore.Tests;
 
 /// <summary>
-/// E09 全船失電(規劃書第 8.1 節 E09;情境引擎設計第 8.3 節):以時間表組合 mainEngine + steeringGear(modelled)與 blackout/gyroFailure/radarFailure(只記錄)實作,不改引擎。
+/// E09 全船失電(規劃書第 8.1 節 E09;情境引擎設計第 8.3 節):以時間表組合 mainEngine + steeringGear(modelled)與 blackout/gyroFailure/radarFailure 實作,不改引擎。
+/// 感測器層加入後 gyroFailure 也是 modelled(指示航向無效、警報 gyroFailure;sensors-alerts.md),blackout/radarFailure 仍只記錄。
 /// 固定:載入/驗證無錯誤、無人操作時的事件時刻(失電 T+120、應急電力 +45 s、主機 +360 s)、必要事件逾時與引水人催促、紀錄→重播雜湊/事件/summary 一致;
 /// 有人操作(車鐘 STOP、下錨決策、VTS 報告、教官確認儀器重啟)時必要事件 met 且階段回 normal。
 /// </summary>
@@ -100,7 +101,11 @@ public class BlackoutScenarioTests
         Assert.Equal(5, injected.Count);
         Assert.All(injected, e => { Assert.Equal(InjectAtS, e.T); Assert.Equal("blackout", e.ItemId); Assert.Equal(SimEventSources.Timeline, e.Source); });
         Assert.Equal(new[] { FaultNames.MainEngine, FaultNames.SteeringGear }, injected.Take(2).Select(e => e.DataString("fault")));
-        Assert.Equal(2, injected.Count(e => ScenarioValidator.ModelledFaults.Contains(e.DataString("fault"))));
+        Assert.Equal(3, injected.Count(e => ScenarioValidator.ModelledFaults.Contains(e.DataString("fault")))); // mainEngine、steeringGear、gyroFailure(感測器層)
+        // 失電的警報:主機、舵機、電羅經(BAM;sensors-alerts.md 第 3 節),依警報目錄順序在注入後下一步成立
+        var raised = events.Where(e => e.Kind == SimEventKinds.AlertRaised).ToList();
+        Assert.Equal(new[] { FaultNames.GyroFailure, FaultNames.SteeringGear, FaultNames.MainEngine }, raised.Take(3).Select(e => e.ItemId));
+        Assert.All(raised.Take(3), e => Assert.Equal(InjectAtS + engine.Dt, e.T, 9));
         Assert.Equal(new[] { "blackout", "gyroFailure", "radarFailure" }, injected.Skip(2).Select(e => e.DataString("fault")));
 
         var cleared = events.Where(e => e.Kind == SimEventKinds.FaultCleared).ToList();
@@ -120,7 +125,7 @@ public class BlackoutScenarioTests
         Assert.Equal("degraded", engine.Phase);
 
         var triggered = events.Where(e => e.Kind == SimEventKinds.TimelineTriggered).Select(e => (e.ItemId, e.T)).ToList();
-        Assert.Equal(new[] { ("pilotBrief", 30.0), ("blackout", InjectAtS), ("emergencyPower", 165.0), ("pilotPrompt", 182.0), ("vtsCall", 210.0), ("engineRestored", 480.0) }, triggered);
+        Assert.Equal(new (string?, double)[] { ("pilotBrief", 30.0), ("blackout", InjectAtS), ("emergencyPower", 165.0), ("pilotPrompt", 182.0), ("vtsCall", 210.0), ("engineRestored", 480.0) }, triggered);
         Assert.Contains(events, e => e.Kind == SimEventKinds.VoiceScript && e.ItemId == "blackout" && e.DataString("text")!.StartsWith("機艙:全船失電"));
         Assert.Contains(events, e => e.Kind == SimEventKinds.Message && e.ItemId == "emergencyPower" && e.Message!.Contains("操舵恢復"));
         Assert.Equal(3, events.Count(e => e.Kind == SimEventKinds.RequiredEventPending && e.T == InjectAtS));
@@ -186,7 +191,7 @@ public class BlackoutScenarioTests
         }
 
         var met = events.Where(e => e.Kind == SimEventKinds.RequiredEventMet).Select(e => (e.ItemId, e.T)).ToList();
-        Assert.Equal(new[] { ("blackoutFirstAction", 135.0), ("anchorDecision", 170.0), ("notifyVts", 230.0) }, met);
+        Assert.Equal(new (string?, double)[] { ("blackoutFirstAction", 135.0), ("anchorDecision", 170.0), ("notifyVts", 230.0) }, met);
         Assert.DoesNotContain(events, e => e.Kind == SimEventKinds.RequiredEventMissed);
         Assert.DoesNotContain(events, e => e.Kind == SimEventKinds.TimelineTriggered && e.ItemId == "pilotPrompt"); // 有反應則不催促
         Assert.Contains(events, e => e.Kind == SimEventKinds.TimelineManual && e.ItemId == "instrumentsRestored" && e.DataBool("ok") == true);

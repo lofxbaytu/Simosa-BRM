@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/command.schema.json",
   "title": "SimCommand",
-  "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。情境引擎新增 triggerTimeline、acknowledge、endExercise、getAssessment(查詢:主控程序直接回覆 {\"type\":\"assessment\",\"final\",\"summary\"},不進引擎佇列、不寫 input 行);steeringMode 為操舵模式選擇(value: fu|nfu|autopilot|emergency;args.pump 1|2|both;nfu 以 args.direction port|starboard|stop 推舵;autopilot 等同 autopilot{enabled:true},可帶 heading/rotLimit;emergency 在 steeringGear 故障下讓舵以降低速率再度可動,且 emergency 模式下 autopilot{enabled:true}/steeringMode autopilot 被拒並發事件 commandRejected {command,reason:emergencySteering};進出 nfu 時舵令同步到目前舵角、不明 direction 視同 stop;模式變更發事件 steeringModeChanged {from,to,pump});setEnvironment args 加 visibility_nm、ramp_s(漸變秒數);injectFault 可為 value 字串或 args {name, args}。WebSocket 另推送 {\"type\":\"event\",\"event\":SimEvent} 與 {\"type\":\"assessment\",…} 框。",
+  "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。情境引擎新增 triggerTimeline、acknowledge、endExercise、getAssessment(查詢:主控程序直接回覆 {\"type\":\"assessment\",\"final\",\"summary\"},不進引擎佇列、不寫 input 行);steeringMode 為操舵模式選擇(value: fu|nfu|autopilot|emergency;args.pump 1|2|both;nfu 以 args.direction port|starboard|stop 推舵;autopilot 等同 autopilot{enabled:true},可帶 heading/rotLimit;emergency 在 steeringGear 故障下讓舵以降低速率再度可動,且 emergency 模式下 autopilot{enabled:true}/steeringMode autopilot 被拒並發事件 commandRejected {command,reason:emergencySteering};進出 nfu 時舵令同步到目前舵角、不明 direction 視同 stop;模式變更發事件 steeringModeChanged {from,to,pump});setEnvironment args 加 visibility_nm、ramp_s(漸變秒數);injectFault 可為 value 字串或 args {name, args}。WebSocket 另推送 {\"type\":\"event\",\"event\":SimEvent} 與 {\"type\":\"assessment\",…} 框。 警報與 BNWAS(docs/design/sensors-alerts.md):alertAcknowledge / alertSilence(value 或 args.id = 警報 id,省略或 \"all\" = 全部;未知 id 發 commandRejected {reason: unknownAlert})、bnwasMode(value off|auto|on;args.dormant_s 180–720、stage3_s)、bnwasReset;舵令/車令/轉速/側推/自動舵/操舵模式/警報確認或靜音皆視為駕駛台操作而重設 BNWAS。autopilot{enabled:true}/steeringMode autopilot 在 autopilotFailure 或 gyroFailure 時被拒(commandRejected {reason: autopilotUnavailable})。injectFault 感測器故障的 args:gyroDrift{rate_degPerMin=1}、gpsJump{distance_m=500, bearing_deg=90}、gpsOffset{distance_m=200, bearing_deg=45, ramp_s=60}、logFailure{bias_kn?, factor?}。",
   "type": "object",
   "required": [
     "type"
@@ -31,13 +31,17 @@
         "acknowledge",
         "endExercise",
         "getAssessment",
-        "steeringMode"
+        "steeringMode",
+        "alertAcknowledge",
+        "alertSilence",
+        "bnwasMode",
+        "bnwasReset"
       ]
     },
     "value": {},
     "args": {
       "type": "object",
-      "description": "targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate;setEnvironment:wind{trueSpeed,trueDir,gustiness}、current{set,drift}、waterDepth、visibility_nm、ramp_s;injectFault:{name, args};triggerTimeline:{id, force};acknowledge:{kind: verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|other, itemId?, role?, note?};endExercise:{reason?};steeringMode:{pump?: 1|2|both, direction?: port|starboard|stop(僅 nfu), heading?, rotLimit?(僅 autopilot)}(模式在 value)"
+      "description": "targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate;setEnvironment:wind{trueSpeed,trueDir,gustiness}、current{set,drift}、waterDepth、visibility_nm、ramp_s;injectFault:{name, args};triggerTimeline:{id, force};acknowledge:{kind: verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|gyroCheck|other, itemId?, role?, note?};endExercise:{reason?};steeringMode:{pump?: 1|2|both, direction?: port|starboard|stop(僅 nfu), heading?, rotLimit?(僅 autopilot)}(模式在 value);alertAcknowledge / alertSilence:{id?};bnwasMode:{dormant_s?, stage3_s?}(模式在 value);injectFault 感測器故障 args 見 description"
     }
   },
   "examples": [
@@ -212,6 +216,25 @@
     {
       "type": "steeringMode",
       "value": "emergency"
+    },
+    {
+      "type": "alertAcknowledge",
+      "args": {
+        "id": "gyroFailure"
+      }
+    },
+    {
+      "type": "alertSilence"
+    },
+    {
+      "type": "bnwasMode",
+      "value": "on",
+      "args": {
+        "dormant_s": 540
+      }
+    },
+    {
+      "type": "bnwasReset"
     }
   ]
 }

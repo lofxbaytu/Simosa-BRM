@@ -84,6 +84,28 @@ public static class SimEventKinds
     public const string CommandRejected = "commandRejected";
     // engine
     public const string Grounding = "grounding";
+    /// <summary>自動舵因故障/航向無效自動脫開(data {reason: autopilotFailure|headingInvalid, fault});模式回 fu、舵停在原處</summary>
+    public const string AutopilotTripped = "autopilotTripped";
+    // 警報管理(BAM,MSC.302(87);itemId = 警報 id;data {id, priority, category, source, state, count, raisedAt_s, ackTime_s?, silencedUntil_s?, …})
+    /// <summary>警報成立(data.repeat:rectifiedUnacknowledged 期間再成立)</summary>
+    public const string AlertRaised = "alertRaised";
+    /// <summary>警報確認(data.ackTime_s = 確認 − 最近一次成立;rectifiedUnacknowledged 確認後 state = normal)</summary>
+    public const string AlertAcknowledged = "alertAcknowledged";
+    /// <summary>警報靜音(data.silencedUntil_s)</summary>
+    public const string AlertSilenced = "alertSilenced";
+    /// <summary>靜音期滿仍未確認,重新響起</summary>
+    public const string AlertReannunciated = "alertReannunciated";
+    /// <summary>警報條件解除(data.state = normal 或 rectifiedUnacknowledged)</summary>
+    public const string AlertRectified = "alertRectified";
+    /// <summary>警報升級(data {from, to, reason: unacknowledged|source, after_s?})</summary>
+    public const string AlertEscalated = "alertEscalated";
+    // BNWAS(MSC.128(75))
+    /// <summary>BNWAS 階段變更(data {stage, from, reason: dormantElapsed|notReset|inactive})</summary>
+    public const string BnwasStage = "bnwasStage";
+    /// <summary>BNWAS 重設(data {fromStage, by:指令名})</summary>
+    public const string BnwasReset = "bnwasReset";
+    /// <summary>BNWAS 模式變更(data {from, to, fromStage, dormant_s, stage2_s, stage3_s})</summary>
+    public const string BnwasModeChanged = "bnwasModeChanged";
     // assessment
     public const string RouteLegChanged = "routeLegChanged";
     public const string RouteCompleted = "routeCompleted";
@@ -117,4 +139,8 @@ public static class CommandRejectReasons
 {
     /// <summary>應急操舵中不能啟用自動舵(需先 steeringMode fu;D35)</summary>
     public const string EmergencySteering = "emergencySteering";
+    /// <summary>自動舵不可用(autopilotFailure 故障中,或電羅經失效使指示航向無效)</summary>
+    public const string AutopilotUnavailable = "autopilotUnavailable";
+    /// <summary>alertAcknowledge / alertSilence 的 id 不在警報目錄</summary>
+    public const string UnknownAlert = "unknownAlert";
 }

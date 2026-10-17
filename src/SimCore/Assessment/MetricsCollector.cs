@@ -45,6 +45,28 @@ public sealed class MetricsState
     public int Groundings { get; set; }
     public double? UkcLimitM { get; set; }
     public string? UkcLimitSource { get; set; }
+    // 警報與 BNWAS(規劃書第 8.3 節第 5、7 類:警報確認時間;BNWAS 第二/三階段次數)
+    public List<AlertMetricRecord> Alerts { get; set; } = new();
+    public int AlertEscalations { get; set; }
+    public int AlertSilences { get; set; }
+    public int BnwasStage1 { get; set; }
+    public int BnwasStage2 { get; set; }
+    public int BnwasStage3 { get; set; }
+    public int BnwasResets { get; set; }
+}
+
+/// <summary>每次警報成立的確認紀錄(summary.alerts.records[])。</summary>
+public sealed class AlertMetricRecord
+{
+    [System.Text.Json.Serialization.JsonPropertyName("id")] public string Id { get; set; } = "";
+    [System.Text.Json.Serialization.JsonPropertyName("priority")] public string Priority { get; set; } = "";
+    [System.Text.Json.Serialization.JsonPropertyName("raisedAt_s")] public double RaisedAtS { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("acknowledgedAt_s")] public double? AcknowledgedAtS { get; set; }
+    /// <summary>確認時間(確認 − 成立,秒;未確認 null)</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("ackTime_s")] public double? AckTimeS { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("rectifiedAt_s")] public double? RectifiedAtS { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("escalated")] public bool Escalated { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("silences")] public int Silences { get; set; }
 }
 
 public sealed class TelegraphSpanState
@@ -75,6 +97,74 @@ public sealed class MetricsCollector
     }
 
     public void OnFreeze() => State.Freezes++;
+
+    /// <summary>
+    /// 警報/BNWAS 事件(引擎 source = engine):alertRaised 開一筆紀錄(每次成立一筆)、alertAcknowledged 填確認時間、
+    /// alertEscalated/alertSilenced 計數、alertRectified 記解除時刻;bnwasStage 計各階段次數、bnwasReset 計重設(階段 ≥ 1 時)。
+    /// </summary>
+    public void OnAlertEvent(SimEvent e)
+    {
+        var st = State;
+        AlertMetricRecord? Open(string? id) => st.Alerts.LastOrDefault(r => r.Id == id && r.AcknowledgedAtS is null);
+        switch (e.Kind)
+        {
+            case SimEventKinds.AlertRaised:
+                st.Alerts.Add(new AlertMetricRecord { Id = e.ItemId ?? "", Priority = e.DataString("priority") ?? "", RaisedAtS = e.T });
+                break;
+            case SimEventKinds.AlertAcknowledged:
+                if (Open(e.ItemId) is { } rec)
+                {
+                    rec.AcknowledgedAtS = e.T;
+                    rec.AckTimeS = e.T - rec.RaisedAtS;
+                }
+                break;
+            case SimEventKinds.AlertSilenced:
+                st.AlertSilences++;
+                if (Open(e.ItemId) is { } sr) sr.Silences++;
+                break;
+            case SimEventKinds.AlertEscalated:
+                st.AlertEscalations++;
+                if (Open(e.ItemId) is { } er) { er.Escalated = true; er.Priority = e.DataString("to") ?? er.Priority; }
+                break;
+            case SimEventKinds.AlertRectified:
+                if (st.Alerts.LastOrDefault(r => r.Id == e.ItemId && r.RectifiedAtS is null) is { } rr) rr.RectifiedAtS = e.T;
+                break;
+            case SimEventKinds.BnwasStage:
+                switch ((int)(e.DataNumber("stage") ?? 0))
+                {
+                    case 1: st.BnwasStage1++; break;
+                    case 2: st.BnwasStage2++; break;
+                    case 3: st.BnwasStage3++; break;
+                }
+                break;
+            case SimEventKinds.BnwasReset:
+                if (e.DataNumber("fromStage") is > 0) st.BnwasResets++;
+                break;
+        }
+    }
+
+    /// <summary>summary.alerts(BNWAS 次數併入 bnwas 子區塊)。</summary>
+    public SummaryAlerts AlertSummary()
+    {
+        var st = State;
+        var acked = st.Alerts.Where(r => r.AckTimeS is not null).Select(r => r.AckTimeS!.Value).ToList();
+        return new SummaryAlerts
+        {
+            Raised = st.Alerts.Count,
+            Acknowledged = acked.Count,
+            Unacknowledged = st.Alerts.Count - acked.Count,
+            Escalations = st.AlertEscalations,
+            Silences = st.AlertSilences,
+            MeanAckTimeS = acked.Count > 0 ? acked.Average() : null,
+            MaxAckTimeS = acked.Count > 0 ? acked.Max() : null,
+            Records = st.Alerts.Select(r => new AlertMetricRecord
+            {
+                Id = r.Id, Priority = r.Priority, RaisedAtS = r.RaisedAtS, AcknowledgedAtS = r.AcknowledgedAtS, AckTimeS = r.AckTimeS,
+                RectifiedAtS = r.RectifiedAtS, Escalated = r.Escalated, Silences = r.Silences,
+            }).ToArray(),
+            Bnwas = new SummaryBnwas { Stage1 = st.BnwasStage1, Stage2 = st.BnwasStage2, Stage3 = st.BnwasStage3, Resets = st.BnwasResets },
+        };
+    }
     public void OnGrounding() => State.Groundings++;
 
     /// <summary>學員指令觀察(引擎於套用指令時呼叫)。</summary>

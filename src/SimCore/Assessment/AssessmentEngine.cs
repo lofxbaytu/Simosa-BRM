@@ -102,6 +102,7 @@ public sealed class AssessmentEngine
         if (e.Kind == TrafficEventKinds.Collision) Encounters.OnCollision();
         if (e.Kind == SimEventKinds.Grounding) Metrics.OnGrounding();
         if (e.Kind == SimEventKinds.Frozen) Metrics.OnFreeze();
+        Metrics.OnAlertEvent(e);
         if (Rules.Ended) return;
         // 必要事件:after 起算(發 requiredEventPending,附已解析的 within_s 與期限 deadline_t,供教官站倒數)、expect 達成
         foreach (var rule in _a.Required)
@@ -367,6 +368,12 @@ public sealed class AssessmentEngine
             case "manoeuvring.maxOverSpeed_kn": return m.MaxOverSpeedKn;
             case "manoeuvring.autopilotTime_s": return m.AutopilotTimeS;
             case "manoeuvring.autopilotSwitches": return m.AutopilotSwitches;
+            case "alerts.meanAckTime_s": return Metrics.AlertSummary().MeanAckTimeS;
+            case "alerts.maxAckTime_s": return Metrics.AlertSummary().MaxAckTimeS;
+            case "alerts.unacknowledged": return Metrics.AlertSummary().Unacknowledged;
+            case "alerts.escalations": return m.AlertEscalations;
+            case "bnwas.stage2Count": return m.BnwasStage2;
+            case "bnwas.stage3Count": return m.BnwasStage3;
             case "general.duration_s": return sit.Time;
             case "general.distance_nm": return m.DistanceM / Units.MetresPerNauticalMile;
             case "general.avgSog_kn": return m.Samples > 0 ? m.SumSogKn / m.Samples : null;
@@ -437,6 +444,7 @@ public sealed class AssessmentEngine
             Ukc = Metrics.Ukc(),
             Manoeuvring = Metrics.Manoeuvring(tick),
             FaultResponses = Faults.State.Records.ToArray(),
+            Alerts = Metrics.AlertSummary(),
             Events = new SummaryEvents { Total = byKind.Values.Sum(), ByKind = byKind },
             Assessment = new SummaryAssessment
             {

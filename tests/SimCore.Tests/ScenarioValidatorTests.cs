@@ -81,7 +81,7 @@ public class ScenarioValidatorTests
         HasWarning("timeline:\n  - { id: a, when: { type: time, atLeast: 99999 }, actions: [ { phase: x } ] }", "晚於");
         HasWarning("timeline:\n  - { id: a, repeat: always, when: { type: time, atLeast: 10 }, actions: [ { phase: x } ] }", "cooldown");
         HasWarning("timeline:\n  - { id: a, when: { type: time, atLeast: 10 }, actions: [ { voiceScript: { role: ecr, channel: phone, text: hi, file: missing.ogg } } ] }", "語音檔");
-        HasWarning("timeline:\n  - { id: a, when: { type: time, atLeast: 10 }, actions: [ { injectFault: gyroDrift } ] }", "只記錄");
+        HasWarning("timeline:\n  - { id: a, when: { type: time, atLeast: 10 }, actions: [ { injectFault: radarFailure } ] }", "只記錄"); // gyroDrift 已 modelled(感測器層),改以仍只記錄的 radarFailure 檢查
         HasWarning("timeline:\n  - { id: a, when: { type: time, atLeast: 10 }, actions: [ { injectFault: unknownThing } ] }", "故障目錄");
     }
 

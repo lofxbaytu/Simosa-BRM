@@ -41,15 +41,17 @@ export class DepthReadout extends LitElement {
   @property({ type: Number }) warnBelow = 2.0;
   /** 尚未收到資料時為 false:只顯示佔位,不觸發警報 */
   @property({ type: Boolean }) valid = true;
+  /** 測深儀無效(sensors.depthValid = false):顯示最後有效值並標「無效」,不以此觸發 UKC 警報 */
+  @property({ type: Boolean }) sensorInvalid = false;
 
   override render() {
-    const alarm = this.valid && (this.aground || this.ukc <= this.alarmBelow);
-    const warn = this.valid && !alarm && this.ukc <= this.warnBelow;
+    const alarm = this.valid && (this.aground || (!this.sensorInvalid && this.ukc <= this.alarmBelow));
+    const warn = this.valid && !this.sensorInvalid && !alarm && this.ukc <= this.warnBelow;
     return html`
       <div class="tile">
-        <div class="tile-title"><span>UKC</span><span class="zh">龍骨下水深 m</span></div>
+        <div class="tile-title"><span>UKC</span><span class="zh">龍骨下水深 m${this.sensorInvalid ? html` <span class="alarm" title="測深儀無效:顯示最後有效值">無效</span>` : nothing}</span></div>
         <div class="main ${alarm ? 'alarm' : ''}">
-          <span class="value big ${warn ? 'warning' : ''}">${this.valid ? formatMeters(this.ukc) : '--.-'}</span>
+          <span class="value big ${warn ? 'warning' : ''}" style=${this.sensorInvalid ? 'opacity:0.45;text-decoration:line-through' : ''}>${this.valid ? formatMeters(this.ukc) : '--.-'}</span>
           ${this.aground ? html`<span class="label" style="color: inherit">擱淺</span>` : nothing}
         </div>
         <div class="rows">

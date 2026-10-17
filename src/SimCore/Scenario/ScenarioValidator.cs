@@ -13,7 +13,7 @@ namespace SimosaBRM.SimCore.Scenario;
 public static class ScenarioValidator
 {
     /// <summary>引擎會改變行為的故障名稱;其餘只記錄(情境引擎設計第 1.1.4 節)。</summary>
-    public static readonly string[] ModelledFaults = { Engine.FaultNames.SteeringGear, Engine.FaultNames.MainEngine, Engine.FaultNames.BowThruster };
+    public static readonly string[] ModelledFaults = Engine.FaultNames.Modelled;
 
     /// <summary>故障目錄(與 src/Contracts/fault-catalogue.json、教官站 DEFAULT_FAULTS 一致)。</summary>
     public static readonly string[] FaultCatalogue =

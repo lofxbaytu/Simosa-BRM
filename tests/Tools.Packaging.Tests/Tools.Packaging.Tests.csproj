@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 更新包/紀錄包/直連同步測試(規劃書第 14 章「船上部署」「SMS 更新流程」驗收列;Linux 以 PEM 金鑰執行) -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>SimosaBRM.Packaging.Tests</RootNamespace>
+    <AssemblyName>SimosaBRM.Packaging.Tests</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Tools.Packaging/Tools.Packaging.csproj" />
+    <ProjectReference Include="../../src/Tools.Packaging.Cli/Tools.Packaging.Cli.csproj" />
+  </ItemGroup>
+</Project>

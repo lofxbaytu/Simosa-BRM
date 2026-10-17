@@ -14,6 +14,9 @@ import type { DebriefSummary } from '../../lib/debrief.js';
 import { BAND_STATE_LABEL, HARD_FAIL_RULE_LABEL, REQUIRED_STATE_LABEL, type AssessmentSummary, type SummaryBand, type SummaryRequired } from '../../lib/assessment.js';
 import { ACK_KIND_LABEL, ROLE_LABEL } from '../../lib/sim-event.js';
 import type { RequiredCountdown } from './timeline-panel.js';
+import { ALERT_PRIORITY_LABEL, ALERT_TEXT } from '../../lib/alerts.js';
+import type { AlertPriority } from '../../types/alerts.js';
+import type { SummaryAlerts } from '../../lib/assessment.js';
 
 function fix(v: number | undefined, digits = 1, unit = ''): string {
   if (v === undefined) return '--';
@@ -245,6 +248,7 @@ export class DebriefSummaryView extends LitElement {
                   secs(f.injectedAt_s),
                   f.withinFirstAction === false ? 'over' : f.withinFirstAction ? 'ok' : '',
                   [
+                    f.alertAckDt_s !== undefined ? `警報確認 +${fix(f.alertAckDt_s, 1, 's')}` : '',
                     ...f.acknowledgements.map((k) => `${ACK_KIND_LABEL[k.kind] ?? k.kind}${k.role ? `(${ROLE_LABEL[k.role] ?? k.role})` : ''} +${fix(k.dt_s, 0, 's')}`),
                     f.cleared_s !== undefined ? `清除 ${shortTime(f.cleared_s)}` : '',
                   ]
@@ -254,6 +258,7 @@ export class DebriefSummaryView extends LitElement {
               )}
             </tbody></table>`
         : nothing}
+      ${c.alerts ? this.renderAlerts(c.alerts) : nothing}
       <div class="section"><span>總覽</span></div>
       <table aria-label="核心講評摘要">
         <tbody>
@@ -295,6 +300,29 @@ export class DebriefSummaryView extends LitElement {
         : nothing}
       <div class="advisory">${c.advisory ? '自動評分僅輔助,最終由評估員判定(規劃書第 8.3 節、附錄 A-I/12)' : ''}${ps?.path ? ` · 參數集 ${ps.path}` : ''}</div>
     `;
+  }
+
+  /** 警報確認時間與 BNWAS 階段次數(summary.alerts;規劃書第 8.3 節第 5、7 類)。 */
+  private renderAlerts(al: SummaryAlerts) {
+    const bn = al.bnwas;
+    const prLabel = (p: string | undefined) => (p && p in ALERT_PRIORITY_LABEL ? ALERT_PRIORITY_LABEL[p as AlertPriority] : p ?? '');
+    return html`<div class="section"><span>警報與 BNWAS</span></div>
+      <table aria-label="警報與 BNWAS">
+        <tbody>
+          ${this.row('警報成立 / 確認', `${al.raised ?? 0} / ${al.acknowledged ?? 0}`, `未確認 ${al.unacknowledged ?? 0} · 升級 ${al.escalations ?? 0} · 靜音 ${al.silences ?? 0}`, (al.unacknowledged ?? 0) > 0 || (al.escalations ?? 0) > 0 ? 'over' : '')}
+          ${this.row('平均確認時間', fix(al.meanAckTime_s, 1, 's'), `最長 ${fix(al.maxAckTime_s, 1, 's')}`, (al.maxAckTime_s ?? 0) > 30 ? 'over' : '')}
+          ${this.row('BNWAS 階段', `1:${bn.stage1 ?? 0} · 2:${bn.stage2 ?? 0} · 3:${bn.stage3 ?? 0}`, `重設 ${bn.resets ?? 0} 次`, (bn.stage3 ?? 0) > 0 ? 'alarm' : (bn.stage2 ?? 0) > 0 ? 'over' : '')}
+          ${al.records.map((r) =>
+            this.row(
+              `${ALERT_TEXT[r.id] ?? r.id}`,
+              r.ackTime_s !== undefined ? `確認 +${fix(r.ackTime_s, 1, 's')}` : '未確認',
+              secs(r.raisedAt_s),
+              r.ackTime_s === undefined ? 'alarm' : r.ackTime_s > 30 ? 'over' : 'ok',
+              [prLabel(r.priority), r.escalated ? '已升級' : '', r.silences > 0 ? `靜音 ${r.silences}` : '', r.rectifiedAt_s !== undefined ? `解除 ${shortTime(r.rectifiedAt_s)}` : ''].filter(Boolean).join(' · '),
+            ),
+          )}
+        </tbody>
+      </table>`;
   }
 
   private bandRow(b: SummaryBand) {

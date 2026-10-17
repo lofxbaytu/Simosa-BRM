@@ -19,6 +19,7 @@ import {
 } from '../types/state.js';
 import type { TargetAisReport, TargetState } from '../types/target.js';
 import { normalizeHeading } from './angles.js';
+import { applyAlertBlocks } from './alerts.js';
 
 export interface ParseResult {
   state: OwnShipState;
@@ -281,6 +282,9 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
   } else if (raw['targets'] !== undefined && raw['targets'] !== null) {
     issues.push('targets');
   }
+
+  // 感測器真值/有效性、自動舵、警報與 BNWAS(docs/design/sensors-alerts.md;C# SimCore 才有,省略時不記問題)
+  applyAlertBlocks(raw, state, issues);
 
   return { state, issues };
 }

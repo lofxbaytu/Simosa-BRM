@@ -23,6 +23,8 @@ public sealed record AssessmentSummary
     [JsonPropertyName("ukc")] public required SummaryUkc Ukc { get; init; }
     [JsonPropertyName("manoeuvring")] public required SummaryManoeuvring Manoeuvring { get; init; }
     [JsonPropertyName("faultResponses")] public required IReadOnlyList<FaultResponseRecord> FaultResponses { get; init; }
+    /// <summary>警報確認時間與 BNWAS 階段次數(規劃書第 8.3 節第 5、7 類;sensors-alerts.md 第 5 節)</summary>
+    [JsonPropertyName("alerts")] public required SummaryAlerts Alerts { get; init; }
     [JsonPropertyName("events")] public required SummaryEvents Events { get; init; }
     [JsonPropertyName("assessment")] public required SummaryAssessment Assessment { get; init; }
 
@@ -128,6 +130,30 @@ public sealed record TelegraphSpan
     [JsonPropertyName("from_s")] public required double FromS { get; init; }
     [JsonPropertyName("to_s")] public required double ToS { get; init; }
     [JsonPropertyName("duration_s")] public required double DurationS { get; init; }
+}
+
+/// <summary>警報指標(summary.alerts)。</summary>
+public sealed record SummaryAlerts
+{
+    /// <summary>警報成立次數(再成立另計一次)</summary>
+    [JsonPropertyName("raised")] public required int Raised { get; init; }
+    [JsonPropertyName("acknowledged")] public required int Acknowledged { get; init; }
+    [JsonPropertyName("unacknowledged")] public required int Unacknowledged { get; init; }
+    [JsonPropertyName("escalations")] public required int Escalations { get; init; }
+    [JsonPropertyName("silences")] public required int Silences { get; init; }
+    [JsonPropertyName("meanAckTime_s")] public double? MeanAckTimeS { get; init; }
+    [JsonPropertyName("maxAckTime_s")] public double? MaxAckTimeS { get; init; }
+    [JsonPropertyName("records")] public required IReadOnlyList<AlertMetricRecord> Records { get; init; }
+    [JsonPropertyName("bnwas")] public required SummaryBnwas Bnwas { get; init; }
+}
+
+/// <summary>BNWAS 階段次數(summary.alerts.bnwas):stage1/2/3 為進入該階段的次數,resets 為階段 ≥ 1 時的重設次數。</summary>
+public sealed record SummaryBnwas
+{
+    [JsonPropertyName("stage1")] public required int Stage1 { get; init; }
+    [JsonPropertyName("stage2")] public required int Stage2 { get; init; }
+    [JsonPropertyName("stage3")] public required int Stage3 { get; init; }
+    [JsonPropertyName("resets")] public required int Resets { get; init; }
 }
 
 public sealed record SummaryEvents
@@ -272,6 +298,9 @@ public sealed class FaultResponseRecord
     [JsonPropertyName("cleared_s")] public double? ClearedS { get; set; }
     [JsonPropertyName("withinFirstAction")] public bool? WithinFirstAction { get; set; }
     [JsonPropertyName("withinNotifyEcr")] public bool? WithinNotifyEcr { get; set; }
+    /// <summary>此故障對應警報(警報 id = 故障名稱)的第一次確認時刻與距注入的秒數(無警報或未確認時省略;第 8.3 節第 5 類)</summary>
+    [JsonPropertyName("alertAckAt_s")] public double? AlertAckAtS { get; set; }
+    [JsonPropertyName("alertAckDt_s")] public double? AlertAckDtS { get; set; }
 }
 
 public sealed record FaultAction

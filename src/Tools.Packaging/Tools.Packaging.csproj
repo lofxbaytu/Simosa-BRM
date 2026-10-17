@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 簽章更新包、紀錄包與兩筆電直連同步(規劃書第 5.5、9.1 節;R13、R14;設計文件 docs/design/packaging-sync.md) -->
+  <PropertyGroup>
+    <RootNamespace>SimosaBRM.Packaging</RootNamespace>
+    <AssemblyName>SimosaBRM.Packaging</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Windows 上以 DPAPI 保護裝置私鑰(其他平台不呼叫) -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SimCore/SimCore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SimosaBRM.Packaging.Tests" />
+  </ItemGroup>
+</Project>

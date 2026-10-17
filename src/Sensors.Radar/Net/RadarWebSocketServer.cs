@@ -1,0 +1,211 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.WebSockets;
+using System.Text;
+using System.Threading.Channels;
+
+namespace SimosaBRM.Sensors.Radar.Net;
+
+/// <summary>收到的控制指令(由處理執行緒取出並交給對應的 <see cref="RadarUnit"/>,維持單執行緒確定性)。</summary>
+public readonly record struct RadarCommandRequest(string RadarId, Guid ClientId, string Json);
+
+/// <summary>
+/// 雷達 WebSocket 伺服器(System.Net.HttpListener,無額外套件):路徑 /radar/x 與 /radar/s。
+/// 送出:二進位影像幀(每客戶端容量 8、慢速客戶端丟最舊幀)與 JSON 文字框(status/tracks/event/ack,容量 256)。
+/// 接收:JSON 控制指令(放入 <see cref="Commands"/> 佇列)。先嘗試所有介面,失敗時退回 localhost(與 SimCore.Host 相同作法)。
+/// </summary>
+public sealed class RadarWebSocketServer : IAsyncDisposable
+{
+    private sealed class Client
+    {
+        public required WebSocket Socket { get; init; }
+        public required string RadarId { get; init; }
+        public Channel<byte[]> Frames { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(8) { FullMode = BoundedChannelFullMode.DropOldest });
+        public Channel<byte[]> Json { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest });
+    }
+
+    private readonly HttpListener _listener = new();
+    private readonly ConcurrentDictionary<Guid, Client> _clients = new();
+    private readonly CancellationTokenSource _cts = new();
+    private readonly HashSet<string> _radars;
+    private readonly bool _allInterfaces;
+    private Task? _acceptLoop;
+
+    public int Port { get; }
+    public string? Prefix { get; private set; }
+    public ConcurrentQueue<RadarCommandRequest> Commands { get; } = new();
+    public event Action<string>? Log;
+    /// <summary>客戶端連線(radarId, clientId);主控程式據以送出 status。</summary>
+    public event Action<string, Guid>? ClientConnected;
+
+    public RadarWebSocketServer(int port, IEnumerable<string> radarIds, bool allInterfaces = true)
+    {
+        Port = port;
+        _radars = new HashSet<string>(radarIds, StringComparer.OrdinalIgnoreCase);
+        _allInterfaces = allInterfaces;
+    }
+
+    public int ClientCount(string radarId) => _clients.Values.Count(c => string.Equals(c.RadarId, radarId, StringComparison.OrdinalIgnoreCase));
+
+    public void Start()
+    {
+        var wildcard = $"http://*:{Port}/radar/";
+        var local = $"http://localhost:{Port}/radar/";
+        if (_allInterfaces)
+        {
+            try
+            {
+                _listener.Prefixes.Add(wildcard);
+                _listener.Start();
+                Prefix = wildcard;
+            }
+            catch (HttpListenerException ex)
+            {
+                _listener.Prefixes.Clear();
+                _listener.Prefixes.Add(local);
+                _listener.Start();
+                Prefix = local;
+                Log?.Invoke($"無法監聽 {wildcard}({ex.Message});改為只監聽 {local}。遠端站別需設定 URL ACL:netsh http add urlacl url={wildcard} user=Everyone");
+            }
+        }
+        else
+        {
+            _listener.Prefixes.Add(local);
+            _listener.Start();
+            Prefix = local;
+        }
+        _acceptLoop = Task.Run(AcceptLoopAsync);
+    }
+
+    public void PublishFrame(string radarId, byte[] frame)
+    {
+        foreach (var c in _clients.Values)
+            if (string.Equals(c.RadarId, radarId, StringComparison.OrdinalIgnoreCase)) c.Frames.Writer.TryWrite(frame);
+    }
+
+    public void PublishJson(string radarId, byte[] json)
+    {
+        foreach (var c in _clients.Values)
+            if (string.Equals(c.RadarId, radarId, StringComparison.OrdinalIgnoreCase)) c.Json.Writer.TryWrite(json);
+    }
+
+    public void SendJson(Guid clientId, byte[] json)
+    {
+        if (_clients.TryGetValue(clientId, out var c)) c.Json.Writer.TryWrite(json);
+    }
+
+    private async Task AcceptLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            HttpListenerContext ctx;
+            try { ctx = await _listener.GetContextAsync().ConfigureAwait(false); }
+            catch (Exception) when (_cts.IsCancellationRequested) { break; }
+            catch (HttpListenerException) { continue; }
+            catch (ObjectDisposedException) { break; }
+            var path = ctx.Request.Url?.AbsolutePath.TrimEnd('/') ?? "";
+            var id = path.StartsWith("/radar/", StringComparison.OrdinalIgnoreCase) ? path["/radar/".Length..].ToLowerInvariant() : "";
+            if (!_radars.Contains(id) || !ctx.Request.IsWebSocketRequest)
+            {
+                var body = Encoding.UTF8.GetBytes($"Simosa BRM radar endpoint. WebSocket paths: {string.Join(", ", _radars.Select(r => "/radar/" + r))}\n");
+                ctx.Response.StatusCode = _radars.Contains(id) ? 200 : 404;
+                ctx.Response.ContentType = "text/plain; charset=utf-8";
+                ctx.Response.ContentLength64 = body.Length;
+                try { await ctx.Response.OutputStream.WriteAsync(body).ConfigureAwait(false); } catch (Exception) { }
+                ctx.Response.Close();
+                continue;
+            }
+            _ = Task.Run(() => HandleClientAsync(ctx, id));
+        }
+    }
+
+    private async Task HandleClientAsync(HttpListenerContext ctx, string radarId)
+    {
+        WebSocket socket;
+        try { socket = (await ctx.AcceptWebSocketAsync(subProtocol: null).ConfigureAwait(false)).WebSocket; }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"WebSocket 握手失敗:{ex.Message}");
+            ctx.Response.StatusCode = 500;
+            ctx.Response.Close();
+            return;
+        }
+        var id = Guid.NewGuid();
+        var client = new Client { Socket = socket, RadarId = radarId };
+        _clients[id] = client;
+        Log?.Invoke($"雷達 {radarId.ToUpperInvariant()} 客戶端連線 {ctx.Request.RemoteEndPoint}(共 {ClientCount(radarId)})");
+        ClientConnected?.Invoke(radarId, id);
+        var sender = SendLoopAsync(client);
+        var receiver = ReceiveLoopAsync(client, id);
+        await Task.WhenAny(sender, receiver).ConfigureAwait(false);
+        client.Frames.Writer.TryComplete();
+        client.Json.Writer.TryComplete();
+        _clients.TryRemove(id, out _);
+        try
+        {
+            if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception) { }
+        socket.Dispose();
+        Log?.Invoke($"雷達 {radarId.ToUpperInvariant()} 客戶端離線(共 {ClientCount(radarId)})");
+    }
+
+    private async Task SendLoopAsync(Client c)
+    {
+        try
+        {
+            while (c.Socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
+            {
+                while (c.Json.Reader.TryRead(out var js))
+                    await c.Socket.SendAsync(js, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+                if (c.Frames.Reader.TryRead(out var frame))
+                {
+                    await c.Socket.SendAsync(frame, WebSocketMessageType.Binary, true, _cts.Token).ConfigureAwait(false);
+                    continue;
+                }
+                var a = c.Frames.Reader.WaitToReadAsync(_cts.Token).AsTask();
+                var b = c.Json.Reader.WaitToReadAsync(_cts.Token).AsTask();
+                var done = await Task.WhenAny(a, b).ConfigureAwait(false);
+                if (!await done.ConfigureAwait(false) && c.Frames.Reader.Completion.IsCompleted && c.Json.Reader.Completion.IsCompleted) break;
+            }
+        }
+        catch (Exception) { }
+    }
+
+    private async Task ReceiveLoopAsync(Client c, Guid id)
+    {
+        var buffer = new byte[16 * 1024];
+        var message = new MemoryStream();
+        try
+        {
+            while (c.Socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
+            {
+                var result = await c.Socket.ReceiveAsync(buffer, _cts.Token).ConfigureAwait(false);
+                if (result.MessageType == WebSocketMessageType.Close) break;
+                message.Write(buffer, 0, result.Count);
+                if (!result.EndOfMessage) continue;
+                if (result.MessageType == WebSocketMessageType.Text && message.Length < 1 << 20)
+                    Commands.Enqueue(new RadarCommandRequest(c.RadarId, id, Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length)));
+                message.SetLength(0);
+            }
+        }
+        catch (Exception) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        try { _listener.Stop(); } catch (Exception) { }
+        foreach (var c in _clients.Values)
+        {
+            try { c.Socket.Abort(); } catch (Exception) { }
+        }
+        if (_acceptLoop is not null)
+        {
+            try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { }
+        }
+        _listener.Close();
+        _cts.Dispose();
+    }
+}

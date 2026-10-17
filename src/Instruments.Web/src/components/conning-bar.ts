@@ -59,11 +59,13 @@ export class ConningBar extends LitElement {
     const step = telegraphStep(cfg, s.telegraph);
     const headingSuspect = this.noData || this.issues.includes('heading');
     const withRoute = s.route !== undefined || s.visibility_nm !== undefined;
+    // 感測器有效性(sensors-alerts.md 第 2.1 節):無效時各方塊標「無效」並淡化保持的最後值
+    const sen = s.sensors;
     return html`
       <div class="bar ${withRoute ? 'with-route' : ''}">
-        <brm-heading .heading=${s.heading} .setHeading=${this.setHeading} .cog=${s.cog} .suspect=${headingSuspect}></brm-heading>
+        <brm-heading .heading=${s.heading} .setHeading=${this.setHeading} .cog=${s.cog} .suspect=${headingSuspect} .invalid=${sen ? !sen.headingValid : false}></brm-heading>
         <brm-rot .rot=${s.rot} .range=${30}></brm-rot>
-        <brm-speed .stw=${s.stw} .sog=${s.sog} .cog=${s.cog} .drift=${s.drift}></brm-speed>
+        <brm-speed .stw=${s.stw} .sog=${s.sog} .cog=${s.cog} .drift=${s.drift} .stwInvalid=${sen ? !sen.stwValid : false} .gnssInvalid=${sen ? !sen.positionValid : false}></brm-speed>
         <brm-rudder .rudder=${s.rudder} .order=${s.rudderOrder} .max=${cfg.rudderMax_deg} .normalMax=${cfg.rudderNormalMax_deg}></brm-rudder>
         <brm-engine
           .rpm=${s.rpm}
@@ -83,10 +85,11 @@ export class ConningBar extends LitElement {
           .draftAft=${s.draft?.aft}
           .aground=${s.flags?.aground ?? false}
           .valid=${!this.noData}
+          .sensorInvalid=${sen ? !sen.depthValid : false}
         ></brm-depth>
         <brm-wind .trueDir=${s.wind.trueDir} .trueSpeed=${s.wind.trueSpeed} .relDir=${s.wind.relDir} .relSpeed=${s.wind.relSpeed} .heading=${s.heading}></brm-wind>
         <brm-current .set=${s.current.set} .drift=${s.current.drift} .heading=${s.heading}></brm-current>
-        <brm-clock .simTime=${s.t} .tick=${s.tick} .lat=${s.pos.lat} .lon=${s.pos.lon} .frozen=${s.flags?.frozen ?? false}></brm-clock>
+        <brm-clock .simTime=${s.t} .tick=${s.tick} .lat=${s.pos.lat} .lon=${s.pos.lon} .frozen=${s.flags?.frozen ?? false} .posInvalid=${sen ? !sen.positionValid : false}></brm-clock>
         ${withRoute ? html`<brm-route .route=${s.route} .visibility=${s.visibility_nm}></brm-route>` : ''}
       </div>
     `;

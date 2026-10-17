@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
+using SimosaBRM.SimCore.Alerts;
 using SimosaBRM.SimCore.Assessment;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Environment;
@@ -9,6 +10,7 @@ using SimosaBRM.SimCore.Geo;
 using SimosaBRM.SimCore.Parameters;
 using SimosaBRM.SimCore.Physics;
 using SimosaBRM.SimCore.Scenario;
+using SimosaBRM.SimCore.Sensors;
 using SimosaBRM.SimCore.Ship;
 using SimosaBRM.SimCore.Traffic;
 
@@ -67,6 +69,12 @@ public sealed class SimulationEngine
     private SteeringMode _steeringMode = SteeringMode.Fu;
     private string _steeringPump = SteeringPumps.One;
     private int _nfuDirection;
+    // 感測器層、警報管理(BAM)、BNWAS(設計文件 docs/design/sensors-alerts.md);Initialize 時依情境重建
+    private SensorModel _sensors = null!;
+    private AlertManager _alerts = null!;
+    private Bnwas _bnwas = null!;
+    /// <summary>BNWAS 事件的 source(指令觸發的重設/模式變更沿用指令來源;階段變更為 engine)</summary>
+    private string _bnwasSource = SimEventSources.Engine;
 
     public EngineOptions Options { get; }
     public ShipParticulars Ship { get; private set; }
@@ -124,6 +132,14 @@ public sealed class SimulationEngine
     /// <summary>進行中的環境漸變</summary>
     public IReadOnlyList<EnvironmentRamp> Ramps => _ramps.Ramps;
     public int StepsPerSecond => _stepsPerSecond;
+    /// <summary>感測器層(指示值 = 真值 + 故障;state 頂層 heading/pos/stw/depthBelowKeel 為指示值,truth 區塊為真值)</summary>
+    public SensorModel Sensors => _sensors;
+    /// <summary>警報管理(BAM,MSC.302(87))</summary>
+    public AlertManager Alerts => _alerts;
+    /// <summary>BNWAS(MSC.128(75))</summary>
+    public Bnwas Bnwas => _bnwas;
+    /// <summary>自動舵可啟用:無 autopilotFailure,且電羅經未失效(指示航向有效)</summary>
+    public bool AutopilotAvailable => !_faults.Contains(FaultNames.AutopilotFailure) && !_faults.Contains(FaultNames.GyroFailure);
 
     /// <summary>狀態鏈雜湊:h_n = SHA-256(h_{n−1} ‖ tick ‖ 狀態向量 ‖ 致動器 ‖ 陣風係數 ‖ 主機狀態機 ‖ 各目標船 x,y,ψ,V,r)。</summary>
     public string StateHash => Convert.ToHexString(_hash);
@@ -253,6 +269,10 @@ public sealed class SimulationEngine
         _nfuDirection = 0;
         _deferredEvents.Clear();
         _raising = false;
+        _sensors = new SensorModel(sc.Sensors, _faults, Options.Dt);
+        _alerts = new AlertManager(sc.Alerts, Options.Dt, _stepsPerSecond, RaiseAlert);
+        _bnwas = new Bnwas(sc.Bnwas, Options.Dt, _stepsPerSecond, RaiseBnwas);
+        _bnwasSource = SimEventSources.Engine;
         _startsRemaining = Ship.Engine.MaxConsecutiveStarts;
         AttachTraffic(TrafficManager.FromScenario(sc, _projection, Options.Dt));
 
@@ -316,6 +336,14 @@ public sealed class SimulationEngine
             Kind = kind, Tick = Tick, T = Time, Source = source, ItemId = itemId, TargetId = targetId, Message = message, Visible = visible,
             Data = data is null ? null : data is JsonElement je ? je : SimEvent.DataOf(data),
         };
+
+    /// <summary>警報事件(source = engine、itemId = 警報 id、學員站可見)。</summary>
+    private void RaiseAlert(string kind, AlertRecord rec, string? message, object data)
+        => Raise(NewEvent(kind, SimEventSources.Engine, rec.Id, null, message, data, visible: true));
+
+    /// <summary>BNWAS 事件(source 見 <see cref="_bnwasSource"/>、學員站可見)。</summary>
+    private void RaiseBnwas(string kind, string? message, object data)
+        => Raise(NewEvent(kind, _bnwasSource, null, null, message, data, visible: true));
 
     internal void RaiseTimelineEvent(string kind, string? itemId, string? message, JsonElement? data, bool visible)
         => Raise(NewEvent(kind, SimEventSources.Timeline, itemId, null, message, data, visible));
@@ -457,6 +485,10 @@ public sealed class SimulationEngine
     private void ApplyCore(SimCommand cmd, string source, string? itemId)
     {
         var fromInstructor = source == SimEventSources.Instructor;
+        // 駕駛台操作重設 BNWAS(MSC.128(75) 4.1.4:任何可辨識的值班官操作);時間表動作不是駕駛台上的人為操作,不重設
+        if (fromInstructor && cmd.Type is SimCommandType.Rudder or SimCommandType.Telegraph or SimCommandType.Rpm or SimCommandType.Thruster
+                or SimCommandType.Autopilot or SimCommandType.SteeringMode or SimCommandType.AlertAcknowledge or SimCommandType.AlertSilence)
+            ResetBnwas(ContractJson.EnumName(cmd.Type), source, explicitReset: false);
         switch (cmd.Type)
         {
             case SimCommandType.Rudder:
@@ -508,6 +540,12 @@ public sealed class SimulationEngine
                     RejectCommand(cmd, source, itemId, CommandRejectReasons.EmergencySteering);
                     break;
                 }
+                // 自動舵失效或電羅經失效(無航向輸入)時不能啟用;狀態不變(設計文件 sensors-alerts.md 第 2.3 節)
+                if (!AutopilotAvailable && cmd.ArgAsBool("enabled") == true)
+                {
+                    RejectCommand(cmd, source, itemId, CommandRejectReasons.AutopilotUnavailable);
+                    break;
+                }
                 var wasEnabled = Autopilot.Enabled;
                 var oldHeading = Autopilot.HeadingRad;
                 if (cmd.ArgAsBool("enabled") is { } enabled) Autopilot.Enabled = enabled;
@@ -533,6 +571,11 @@ public sealed class SimulationEngine
                 if (mode == SteeringMode.Autopilot && _steeringMode == SteeringMode.Emergency)
                 {
                     RejectCommand(cmd, source, itemId, CommandRejectReasons.EmergencySteering);
+                    break;
+                }
+                if (mode == SteeringMode.Autopilot && !AutopilotAvailable)
+                {
+                    RejectCommand(cmd, source, itemId, CommandRejectReasons.AutopilotUnavailable);
                     break;
                 }
                 var pump = SteeringPumps.Normalize(cmd.Arg("pump"));
@@ -595,8 +638,11 @@ public sealed class SimulationEngine
                 if (cmd.FaultName() is { } f && f.Length > 0)
                 {
                     var already = _faults.Contains(f);
+                    // 感測器層先記下注入時的指示值(凍結/保持值、漂移起點),再把名稱加入 faults[]
+                    if (FaultNames.Modelled.Contains(f)) _sensors.OnFaultInjected(f, cmd.Arg("args"), Tick, TruthSample(), already);
                     if (!already) _faults.Add(f);
                     Raise(NewEvent(SimEventKinds.FaultInjected, source, itemId, null, f, new { fault = f, args = cmd.Arg("args"), alreadyActive = already }));
+                    if (Autopilot.Enabled && !AutopilotAvailable) TripAutopilot(f);
                 }
                 break;
 
@@ -605,12 +651,17 @@ public sealed class SimulationEngine
                 var cf = cmd.FaultName();
                 if (cf is not null && !string.Equals(cf, "all", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (_faults.Remove(cf)) Raise(NewEvent(SimEventKinds.FaultCleared, source, itemId, null, cf, new { fault = cf }));
+                    if (_faults.Remove(cf))
+                    {
+                        _sensors.OnFaultCleared(cf);
+                        Raise(NewEvent(SimEventKinds.FaultCleared, source, itemId, null, cf, new { fault = cf }));
+                    }
                 }
                 else
                 {
                     var all = _faults.ToArray();
                     _faults.Clear();
+                    foreach (var name in all) _sensors.OnFaultCleared(name);
                     foreach (var name in all) Raise(NewEvent(SimEventKinds.FaultCleared, source, itemId, null, name, new { fault = name }));
                 }
                 break;
@@ -652,7 +703,93 @@ public sealed class SimulationEngine
 
             case SimCommandType.GetAssessment:
                 break; // 查詢由主控程序直接回覆;引擎不處理
+
+            case SimCommandType.AlertAcknowledge:
+            {
+                var id = AlertIdOf(cmd);
+                if (_alerts.Acknowledge(Tick, id) < 0) RejectCommand(cmd, source, itemId, CommandRejectReasons.UnknownAlert);
+                break;
+            }
+
+            case SimCommandType.AlertSilence:
+            {
+                var id = AlertIdOf(cmd);
+                if (_alerts.Silence(Tick, id) < 0) RejectCommand(cmd, source, itemId, CommandRejectReasons.UnknownAlert);
+                break;
+            }
+
+            case SimCommandType.BnwasMode:
+            {
+                var name = cmd.Value is { ValueKind: JsonValueKind.String } ? cmd.ValueAsString() : cmd.ArgAsString("mode");
+                if (name is null || !Enum.TryParse<BnwasMode>(name, ignoreCase: true, out var bm)) break;
+                _bnwasSource = source;
+                try { _bnwas.SetMode(bm, cmd.ArgAsDouble("dormant_s"), cmd.ArgAsDouble("stage3_s"), Tick); }
+                finally { _bnwasSource = SimEventSources.Engine; }
+                break;
+            }
+
+            case SimCommandType.BnwasReset:
+                ResetBnwas("bnwasReset", source, explicitReset: true);
+                break;
         }
+    }
+
+    /// <summary>警報指令的 id(value 字串或 args.id;省略 = 全部)。</summary>
+    private static string? AlertIdOf(SimCommand cmd)
+        => cmd.Value is { ValueKind: JsonValueKind.String } ? cmd.ValueAsString() : cmd.ArgAsString("id");
+
+    private void ResetBnwas(string by, string source, bool explicitReset)
+    {
+        _bnwasSource = source;
+        try { _bnwas.Reset(Tick, Autopilot.Enabled, by, explicitReset); }
+        finally { _bnwasSource = SimEventSources.Engine; }
+    }
+
+    /// <summary>
+    /// 自動舵因故障/航向無效脫開(autopilotFailure、gyroFailure):發 autopilotTripped {reason, fault},舵令同步到目前舵角(舵停在原處)並切回 fu
+    /// (steeringModeChanged,source = engine;不視為學員動作)。
+    /// </summary>
+    private void TripAutopilot(string fault)
+    {
+        var reason = fault == FaultNames.AutopilotFailure ? "autopilotFailure" : "headingInvalid";
+        Raise(NewEvent(SimEventKinds.AutopilotTripped, SimEventSources.Engine, null, null, reason, new { reason, fault }, visible: true));
+        HoldRudder();
+        SetSteeringMode(SteeringMode.Fu, null, SimEventSources.Engine, null, observe: false);
+    }
+
+    /// <summary>目前的真值取樣(對外單位;感測器故障注入時記錄保持值用)。</summary>
+    private SensorTruth TruthSample()
+    {
+        var m = Motion;
+        var sample = Environment.SampleAt(m.X, m.Y);
+        var (velE, velN) = EnvironmentMath.GroundVelocity(m.U, m.V, m.Psi, sample.CurrentEastMps, sample.CurrentNorthMps);
+        var (sogMps, cogRad) = EnvironmentMath.CogSog(velE, velN, m.Psi);
+        var ukc = EnvironmentMath.UnderKeelClearance(sample.WaterDepthM, Ship.GetLoading(Loading).MaxDraft_m, SquatAt(sample.WaterDepthM));
+        return new SensorTruth(Units.RadToDeg(m.Psi), m.X, m.Y, Units.NormalizeHeadingDeg(Units.RadToDeg(cogRad)), Units.MpsToKn(sogMps), Units.MpsToKn(m.U), ukc);
+    }
+
+    /// <summary>電羅經是否受故障影響(否則自動舵直接用 Motion.Psi,與舊版位元一致)。</summary>
+    private bool GyroAffected => _sensors.State.GyroDriftStartTick >= 0 || _sensors.State.GyroDriftBaseDeg != 0
+                                 || _faults.Contains(FaultNames.GyroFreeze) || _faults.Contains(FaultNames.GyroFailure);
+
+    /// <summary>自動舵看到的航向(弧度):電羅經指示值(規劃書第 8.1 節 E08:漂移時自動舵跟隨錯誤航向)。</summary>
+    private double IndicatedHeadingRad()
+        => GyroAffected ? Units.DegToRad(_sensors.GyroHeading(Units.RadToDeg(Motion.Psi), Tick).Deg) : Motion.Psi;
+
+    /// <summary>警報條件輸入(指示值)並更新警報狀態機。</summary>
+    private void UpdateAlerts()
+    {
+        var truthDeg = Units.RadToDeg(Motion.Psi);
+        var (hdg, hdgValid) = _sensors.GyroHeading(truthDeg, Tick);
+        double dbk = 0;
+        var depthValid = false;
+        if (Scenario.Alerts.ShallowWaterM is not null)
+        {
+            depthValid = !_faults.Contains(FaultNames.EchoSounderFailure);
+            dbk = depthValid ? UnderKeelClearance() : 0;
+        }
+        _alerts.Update(Tick, new AlertInputs(_faults, _sensors.LogInvalid, Autopilot.Enabled,
+            Units.NormalizeHeadingDeg(Units.RadToDeg(Autopilot.HeadingRad)), hdg, hdgValid, _sensors.MagneticHeading(truthDeg), dbk, depthValid, _bnwas.State.Stage));
     }
 
     /// <summary>
@@ -693,6 +830,13 @@ public sealed class SimulationEngine
     /// (particulars hardOverTime35_onePump_s / _twoPumps_s 相對 <see cref="ShipParticulars.RudderParticulars.HardOverTime35Seconds"/>;無資料時不變)。
     /// </summary>
     private double RudderRateForStep()
+    {
+        // 舵機泵失效:所有模式速率減半(fault-catalogue steeringPumpFailure)
+        var pumpFactor = _faults.Contains(FaultNames.SteeringPumpFailure) ? 0.5 : 1.0;
+        return pumpFactor * RudderRateNominal();
+    }
+
+    private double RudderRateNominal()
     {
         if (_steeringMode == SteeringMode.Emergency) return EmergencyRudderRateDegPerSec;
         var nominal = Ship.Rudder.HardOverTime35Seconds;
@@ -898,13 +1042,16 @@ public sealed class SimulationEngine
                 Raise(NewEvent(SimEventKinds.EnvironmentRampDone, SimEventSources.Timeline, null, null, ContractJson.EnumName(r.Channel),
                     new { channel = ContractJson.EnumName(r.Channel), to = RampSet.External(r.Channel, r.To) }));
 
+        // 自動舵以電羅經「指示航向」計算舵令(gyroDrift 時跟隨錯誤航向);ROT 取迴轉率陀螺(真值)
         if (Autopilot.Enabled)
-            _act.RudderOrderDeg = Autopilot.RudderOrderDeg(Motion.Psi, Motion.R, _act.Parameters.RudderMaxDeg);
+            _act.RudderOrderDeg = Autopilot.RudderOrderDeg(IndicatedHeadingRad(), Motion.R, _act.Parameters.RudderMaxDeg);
 
         // 致動器(含主機換向狀態機)先推進;MMG 模式回傳 RK4 各階段的舵角/轉速/側推,與 Python 參考實作的耦合積分一致
         // 舵機故障:舵卡住;切到 emergency(應急操舵)後舵以降低的速率再度可動(規劃書第 7.2 節操舵模式)
         var controls = _act.Step(Options.Dt,
-            rudderJammed: _faults.Contains(FaultNames.SteeringGear) && _steeringMode != SteeringMode.Emergency,
+            // FU 失效:隨動迴路(fu 與自動舵)無法動舵,NFU 與應急操舵可動
+            rudderJammed: (_faults.Contains(FaultNames.SteeringGear) && _steeringMode != SteeringMode.Emergency)
+                          || (_faults.Contains(FaultNames.SteeringFuOnly) && _steeringMode is SteeringMode.Fu or SteeringMode.Autopilot),
             engineFailed: _faults.Contains(FaultNames.MainEngine),
             thrusterFailed: _faults.Contains(FaultNames.BowThruster),
             rudderRateDegPerSec: RudderRateForStep());
@@ -923,6 +1070,10 @@ public sealed class SimulationEngine
         // 目標船:與自船同 dt,依自船推進後的狀態更新(跟隨、COLREG、會遇指標、碰撞)
         if (_traffic.Targets.Count > 0)
             _traffic.Step(OwnKinematics(), sample, Tick);
+
+        // BNWAS 與警報管理(每步;評估步之前,使同一 tick 的評估看得到警報事件)
+        _bnwas.Update(Tick, Autopilot.Enabled);
+        UpdateAlerts();
 
         // 評估步(每秒):Route/Zone → Metrics → Encounter/FaultResponse → Timeline → Assessment
         if (Tick % _stepsPerSecond == 0 && _assessment is not null && _timeline is not null)
@@ -954,6 +1105,9 @@ public sealed class SimulationEngine
         if (hashSteering) size += 24;
         if (_hashScenarioEngine)
             size += 16 + Scenario.Timeline.Count * TimelineEngine.HashLongsPerItem * 8 + _ramps.Count * 24 + 8;
+        // 感測器/警報/BNWAS 只在非預設時追加(無感測器故障、無警報、BNWAS off 的情境雜湊與舊版相同)
+        var hashBridge = !_sensors.State.IsNominal || !_alerts.State.IsEmpty || !_bnwas.IsDefault;
+        if (hashBridge) size += 8 + SensorModel.HashLongs * 8 + _alerts.HashSize + Bnwas.HashLongs * 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
@@ -991,6 +1145,13 @@ public sealed class SimulationEngine
             }
             BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _assessment?.Route?.State.LegIndex ?? -1); o += 8;
         }
+        if (hashBridge)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], 0x53454E53_414C5254); o += 8; // 區塊標記("SENSALRT")
+            o += _sensors.WriteHash(buf[o..]);
+            o += _alerts.WriteHash(buf[o..]);
+            o += _bnwas.WriteHash(buf[o..]);
+        }
         SHA256.HashData(buf[..o], _hash);
     }
 
@@ -1026,6 +1187,9 @@ public sealed class SimulationEngine
         RescoreAssessment = _rescore?.CreateSnapshot(),
         ParameterSetVersion = ParameterSet?.Version,
         Steering = new SteeringSnapshot(_steeringMode, _steeringPump, _nfuDirection),
+        Sensors = _sensors.CreateSnapshot(),
+        Alerts = _alerts.CreateSnapshot(),
+        Bnwas = _bnwas.CreateSnapshot(),
         Phase = Phase,
         VisibilityNm = Environment.VisibilityNm,
         StateHash = StateHash,
@@ -1123,6 +1287,10 @@ public sealed class SimulationEngine
         Autopilot.Enabled = _steeringMode == SteeringMode.Autopilot;
         _faults.Clear();
         _faults.AddRange(s.Faults);
+        // Version 3:感測器/警報/BNWAS;舊快照沒有時還原為預設(無偏差、無警報、BNWAS 依情境設定)
+        _sensors.Restore(s.Sensors);
+        _alerts.Restore(s.Alerts);
+        _bnwas.Restore(s.Bnwas, Scenario.Bnwas);
         Aground = s.Aground;
         _startsRemaining = s.StartsRemaining;
         if (s.Traffic is { } ts) _traffic.Restore(ts, _projection);
@@ -1201,6 +1369,12 @@ public sealed class SimulationEngine
         var squat = SquatAt(sample.WaterDepthM);
         var ukc = EnvironmentMath.UnderKeelClearance(sample.WaterDepthM, lc.MaxDraft_m, squat);
         var drift = Math.Abs(m.U) > 0.05 ? Units.RadToDeg(Math.Atan2(-m.V, m.U)) : 0.0;
+        // 感測器層:頂層 heading/pos/cog/sog/stw/depthBelowKeel 為指示值,truth 為真值(設計文件 sensors-alerts.md 第 2 節)
+        var truthHeading = Units.NormalizeHeadingDeg(Units.RadToDeg(m.Psi));
+        var truthCog = Units.NormalizeHeadingDeg(Units.RadToDeg(cogRad));
+        var truthSog = Units.MpsToKn(sogMps);
+        var ind = _sensors.Read(new SensorTruth(Units.RadToDeg(m.Psi), m.X, m.Y, truthCog, truthSog, stwKn, ukc), Tick);
+        var (indLat, indLon) = ind.X == m.X && ind.Y == m.Y ? (lat, lon) : _projection.ToGeodetic(ind.X, ind.Y);
         var engineState = _faults.Contains(FaultNames.MainEngine) ? EngineRunState.Failed
             : _act.Parameters.EngineStateMachine ? _act.EngineMode switch
             {
@@ -1217,11 +1391,11 @@ public sealed class SimulationEngine
             T = Time,
             Tick = Tick,
             ShipId = Ship.Id,
-            Pos = new GeoPosition { Lat = lat, Lon = lon, X = m.X, Y = m.Y },
-            Heading = Units.NormalizeHeadingDeg(Units.RadToDeg(m.Psi)),
-            Cog = Units.NormalizeHeadingDeg(Units.RadToDeg(cogRad)),
-            Sog = Units.MpsToKn(sogMps),
-            Stw = stwKn,
+            Pos = new GeoPosition { Lat = indLat, Lon = indLon, X = ind.X, Y = ind.Y },
+            Heading = ind.HeadingDeg,
+            Cog = ind.CogDeg,
+            Sog = ind.SogKn,
+            Stw = ind.StwKn,
             Rot = Units.RadPerSecToDegPerMin(m.R),
             U = m.U,
             V = m.V,
@@ -1233,7 +1407,7 @@ public sealed class SimulationEngine
             RpmOrder = _act.RpmOrder,
             Telegraph = _telegraph,
             Thruster = _act.Parameters.HasBowThruster ? new ThrusterState { Order = _act.ThrusterOrder, Actual = _act.ThrusterActual } : null,
-            DepthBelowKeel = ukc,
+            DepthBelowKeel = ind.DepthBelowKeelM,
             WaterDepth = sample.WaterDepthM,
             Squat = squat,
             Wind = new WindState
@@ -1269,6 +1443,29 @@ public sealed class SimulationEngine
                 Ended = Ended,
             },
             Route = _assessment?.Route?.Status(),
+            Truth = new TruthState
+            {
+                Heading = truthHeading,
+                Pos = new GeoPosition { Lat = lat, Lon = lon, X = m.X, Y = m.Y },
+                Cog = truthCog,
+                Sog = truthSog,
+                Stw = stwKn,
+                DepthBelowKeel = ukc,
+                HeadingErrorDeg = Units.WrapDeg180(ind.HeadingDeg - truthHeading),
+                PositionErrorM = Math.Sqrt((ind.X - m.X) * (ind.X - m.X) + (ind.Y - m.Y) * (ind.Y - m.Y)),
+            },
+            Sensors = new SensorStatus
+            {
+                HeadingValid = ind.HeadingValid, PositionValid = ind.PositionValid, DepthValid = ind.DepthValid, StwValid = ind.StwValid,
+                MagneticHeading = ind.MagneticHeadingDeg,
+            },
+            Autopilot = new AutopilotStatus
+            {
+                Enabled = Autopilot.Enabled, SetHeading = Units.NormalizeHeadingDeg(Units.RadToDeg(Autopilot.HeadingRad)),
+                RotLimitDegPerMin = Autopilot.RotLimitDegPerMin, Available = AutopilotAvailable,
+            },
+            Alerts = _alerts.BuildStates(),
+            Bnwas = _bnwas.BuildStatus(Tick, Autopilot.Enabled),
         };
     }
 }

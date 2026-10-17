@@ -47,6 +47,17 @@ public sealed class FaultResponseTracker
                     if (rec.ClearedS is null && (name is null || rec.Fault == name)) rec.ClearedS = e.T;
                 break;
             }
+            case SimEventKinds.AlertAcknowledged:
+            {
+                // 故障類警報 id = 故障名稱:記錄該故障(最近一次、尚未記錄者)的警報確認時間
+                var rec = State.Records.LastOrDefault(r => r.Fault == e.ItemId && r.AlertAckAtS is null && r.InjectedAtS <= e.T);
+                if (rec is not null)
+                {
+                    rec.AlertAckAtS = e.T;
+                    rec.AlertAckDtS = e.T - rec.InjectedAtS;
+                }
+                break;
+            }
             case SimEventKinds.Acknowledge:
             {
                 var kind = e.DataString("kind") ?? "other";

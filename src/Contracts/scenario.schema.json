@@ -351,6 +351,76 @@
           "$ref": "#/$defs/briefing"
         }
       ]
+    },
+    "sensors": {
+      "type": "object",
+      "description": "感測器常態參數(docs/design/sensors-alerts.md 第 2 節;Python 參考實作忽略)",
+      "properties": {
+        "magneticCompassError_deg": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "磁羅經修正後剩餘誤差(度;磁羅經指示 = 真航向 + 此值;預設 0)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "alerts": {
+      "type": "object",
+      "description": "警報管理(BAM,MSC.302(87);sensors-alerts.md 第 3 節):故障類警報一律啟用;門檻類(偏航、航向監視、淺水)未設定即關閉(Python 參考實作忽略)",
+      "properties": {
+        "escalate_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "warning 未確認升級為 alarm 的秒數(預設 300)"
+        },
+        "silence_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "靜音後重響秒數(預設 30)"
+        },
+        "offHeading_deg": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "自動舵偏航警報門檻(|設定航向 − 指示航向|;未設 = 關閉)"
+        },
+        "offHeadingDelay_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "偏航持續秒數(預設 10)"
+        },
+        "headingMonitor_deg": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "航向監視(電羅經 vs 磁羅經)差異門檻(未設 = 關閉)"
+        },
+        "shallowWater_m": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "測深儀淺水警報(指示龍骨下水深 < 此值;未設 = 關閉)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "bnwas": {
+      "type": "object",
+      "description": "BNWAS(MSC.128(75);sensors-alerts.md 第 4 節;預設 off;Python 參考實作忽略)。YAML 的 on/off 請加引號",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "auto",
+            "on"
+          ],
+          "description": "auto = 自動舵啟用時作動"
+        },
+        "dormant_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "休眠期 180–720 s(預設 720)"
+        },
+        "stage2_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "第一 → 第二階段(預設 15 s)"
+        },
+        "stage3_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "第二 → 第三階段(預設 90 s)"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "examples": [
@@ -1588,6 +1658,7 @@
                     "checklist",
                     "steeringMode",
                     "anchorReady",
+                    "gyroCheck",
                     "other"
                   ]
                 }

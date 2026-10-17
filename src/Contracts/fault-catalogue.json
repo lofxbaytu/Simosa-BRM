@@ -2,31 +2,39 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/fault-catalogue.json",
   "title": "FaultCatalogue",
-  "description": "故障名稱目錄(規劃書第 7.2 節;情境引擎設計第 1.1.4 節)。modelled 者引擎會改變行為(FaultNames.cs),其餘只進 faults[]、廣播與記錄,由儀器端自行反應;教官站 DEFAULT_FAULTS 與情境 timeline injectFault 以此為準。",
+  "description": "故障名稱目錄(規劃書第 7.2 節;情境引擎設計第 1.1.4 節;感測器/警報見 docs/design/sensors-alerts.md)。modelled 者引擎會改變行為(FaultNames.cs Modelled;感測器類改變 state 頂層的指示值與 NMEA,真值在 state.truth),其餘只進 faults[]、廣播與記錄,由儀器端自行反應;alert 為故障成立時 BAM 警報的優先序(警報 id = 故障名稱;logFailure 只在無效模式);args 為 injectFault {name, args} 可給的參數與預設值(null = 無預設);教官站 DEFAULT_FAULTS 與情境 timeline injectFault 以此為準。",
   "faults": [
     {
       "name": "steeringGear",
       "label": "舵機故障(舵卡在固定角)",
       "modelled": true,
-      "exercise": "E07"
+      "exercise": "E07",
+      "effect": "舵卡在目前角(emergency 應急操舵以降低速率可動)",
+      "alert": "alarm"
     },
     {
       "name": "steeringFuOnly",
       "label": "FU 失效只剩 NFU",
-      "modelled": false,
-      "exercise": "E07"
+      "modelled": true,
+      "exercise": "E07",
+      "effect": "fu 與自動舵模式下舵停在原處;nfu、emergency 可動舵",
+      "alert": "alarm"
     },
     {
       "name": "steeringPumpFailure",
       "label": "舵機泵失效(舵速減半)",
-      "modelled": false,
-      "exercise": "E07"
+      "modelled": true,
+      "exercise": "E07",
+      "effect": "舵機速率減半(所有模式)",
+      "alert": "alarm"
     },
     {
       "name": "mainEngine",
       "label": "主機停車",
       "modelled": true,
-      "exercise": "E09/E10"
+      "exercise": "E09/E10",
+      "effect": "轉速衰減至 0,engine.state = failed",
+      "alert": "alarm"
     },
     {
       "name": "engineStartFailure",
@@ -38,49 +46,73 @@
       "name": "bowThruster",
       "label": "側推失效",
       "modelled": true,
-      "exercise": "F02"
+      "exercise": "F02",
+      "effect": "側推不可用",
+      "alert": "warning"
     },
     {
       "name": "gyroDrift",
       "label": "電羅經漂移",
-      "modelled": false,
-      "exercise": "E08"
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "指示航向以 rate_degPerMin 累積誤差;自動舵跟隨指示航向;無警報",
+      "args": {
+        "rate_degPerMin": 1.0
+      }
     },
     {
       "name": "gyroFreeze",
       "label": "電羅經凍結",
-      "modelled": false,
-      "exercise": "E08"
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "指示航向停在注入時的值;無警報(航向監視可偵測)"
     },
     {
       "name": "gyroFailure",
       "label": "電羅經失效",
-      "modelled": false,
-      "exercise": "E08"
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "指示航向無效(保持最後值,sensors.headingValid=false,HDT 停送)、自動舵脫開且不可啟用",
+      "alert": "alarm"
     },
     {
       "name": "autopilotFailure",
       "label": "自動舵失效",
-      "modelled": false,
-      "exercise": "E08"
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "自動舵脫開且不可啟用",
+      "alert": "alarm"
     },
     {
       "name": "gpsJump",
       "label": "GNSS 跳點",
-      "modelled": false,
-      "exercise": "E08"
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "指示位置一次跳 distance_m/bearing_deg,持續到清除",
+      "args": {
+        "distance_m": 500,
+        "bearing_deg": 90
+      }
     },
     {
       "name": "gpsOffset",
       "label": "GNSS 偏移",
-      "modelled": false,
-      "exercise": "E08"
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "指示位置於 ramp_s 內漸進偏移到 distance_m/bearing_deg",
+      "args": {
+        "distance_m": 200,
+        "bearing_deg": 45,
+        "ramp_s": 60
+      }
     },
     {
       "name": "gpsFailure",
       "label": "GNSS 失效",
-      "modelled": false,
-      "exercise": "E08"
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "位置/COG/SOG 無效(保持最後值,GGA 品質 0、RMC V)",
+      "alert": "alarm"
     },
     {
       "name": "radarFailure",
@@ -115,14 +147,22 @@
     {
       "name": "echoSounderFailure",
       "label": "測深儀失效",
-      "modelled": false,
-      "exercise": ""
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "龍骨下水深無效(保持最後值,DPT 停送)",
+      "alert": "warning"
     },
     {
       "name": "logFailure",
       "label": "計程儀失效",
-      "modelled": false,
-      "exercise": ""
+      "modelled": true,
+      "exercise": "E08",
+      "effect": "無 args:STW 無效(保持最後值,VBW 對水 V、警報);bias_kn/factor:STW = 真值×factor+bias(無警報)",
+      "alert": "warning",
+      "args": {
+        "bias_kn": null,
+        "factor": null
+      }
     },
     {
       "name": "vhfFailure",

@@ -33,6 +33,14 @@ public enum SimCommandType
     GetAssessment,
     /// <summary>操舵模式(value: fu|nfu|autopilot|emergency;args:pump 1|2|both、nfu 的 direction port|starboard|stop、autopilot 的 heading/rotLimit;規劃書第 7.2 節)</summary>
     SteeringMode,
+    /// <summary>警報確認(value 或 args.id:警報 id,省略或 "all" = 全部;BAM MSC.302(87));視為駕駛台操作(BNWAS 重設)</summary>
+    AlertAcknowledge,
+    /// <summary>警報靜音 silence_s(value 或 args.id,省略或 "all" = 全部);視為駕駛台操作</summary>
+    AlertSilence,
+    /// <summary>BNWAS 模式(value: off|auto|on;args.dormant_s 180–720、args.stage3_s;MSC.128(75) 保護的模式開關,由教官站操作)</summary>
+    BnwasMode,
+    /// <summary>BNWAS 重設鍵</summary>
+    BnwasReset,
 }
 
 /// <summary>
@@ -65,7 +73,7 @@ public sealed record SimCommand
     /// <summary>手動觸發時間表項目(force = 略過條件/once 限制)。</summary>
     public static SimCommand TriggerTimeline(string id, bool force = false)
         => new() { Type = SimCommandType.TriggerTimeline, Args = Obj(new { id, force }) };
-    /// <summary>確認/通知紀錄:kind 為 verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|other。</summary>
+    /// <summary>確認/通知紀錄:kind 為 verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|gyroCheck|other。</summary>
     public static SimCommand Acknowledge(string kind, string? itemId = null, string? role = null, string? note = null)
         => new() { Type = SimCommandType.Acknowledge, Args = Obj(new { kind, itemId, role, note }) };
     public static SimCommand EndExercise(string? reason = null)
@@ -76,6 +84,17 @@ public sealed record SimCommand
     /// </summary>
     public static SimCommand SteeringMode(SteeringMode mode, string? pump = null, string? direction = null, double? heading = null)
         => new() { Type = SimCommandType.SteeringMode, Value = Str(ContractJson.EnumName(mode)), Args = pump is null && direction is null && heading is null ? null : Obj(new { pump, direction, heading }) };
+
+    /// <summary>警報確認(<paramref name="id"/> 省略 = 全部)。</summary>
+    public static SimCommand AlertAcknowledge(string? id = null)
+        => new() { Type = SimCommandType.AlertAcknowledge, Args = id is null ? null : Obj(new { id }) };
+    /// <summary>警報靜音(<paramref name="id"/> 省略 = 全部)。</summary>
+    public static SimCommand AlertSilence(string? id = null)
+        => new() { Type = SimCommandType.AlertSilence, Args = id is null ? null : Obj(new { id }) };
+    /// <summary>BNWAS 模式(off|auto|on;休眠期 180–720 s)。</summary>
+    public static SimCommand BnwasMode(Scenario.BnwasMode mode, double? dormantS = null)
+        => new() { Type = SimCommandType.BnwasMode, Value = Str(ContractJson.EnumName(mode)), Args = dormantS is null ? null : Obj(new { dormant_s = dormantS }) };
+    public static SimCommand BnwasReset() => new() { Type = SimCommandType.BnwasReset };
 
     /// <summary>目標船控制:<paramref name="args"/> 為匿名物件或字典,鍵名見 README「targetControl」。</summary>
     public static SimCommand TargetControl(object args) => new() { Type = SimCommandType.TargetControl, Args = Obj(args) };
