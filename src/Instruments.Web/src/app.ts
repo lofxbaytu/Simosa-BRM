@@ -13,6 +13,8 @@ import { getShipConfig, isShipId, type ShipDisplayConfig } from './lib/ship-conf
 import { TrackHistory } from './lib/track-history.js';
 import { COMMAND_EVENT, tileStyles, type CommandEvent } from './components/shared.js';
 import type { AutopilotChangedDetail, AutopilotPanel } from './components/autopilot-panel.js';
+import type { SimEvent } from './types/event.js';
+import { eventFromFrame, eventLabel } from './lib/sim-event.js';
 import './components/conning-bar.js';
 import './components/track-plot.js';
 import './components/helm-wheel.js';
@@ -32,6 +34,8 @@ const THEMES: ReadonlyArray<{ id: Theme; label: string }> = [
 const THEME_KEY = 'simosa-brm.instruments.theme';
 /** 連線中但超過此時間沒有狀態 → 顯示資料逾時 */
 const STALE_MS = 2000;
+/** 學員可見的訊息/語音橫幅顯示秒數(設計文件第 6 節 W11;visible: true 的 message/voiceScript 事件) */
+const BANNER_MS = 20000;
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
   connected: '已連線',
@@ -136,6 +140,31 @@ export class BrmApp extends LitElement {
       .alarms .alarm {
         font-weight: 700;
       }
+      .banner {
+        position: fixed;
+        left: 50%;
+        top: 48px;
+        transform: translateX(-50%);
+        z-index: 10;
+        font-size: 18px;
+        font-weight: 600;
+        padding: 8px 20px;
+        border-radius: 8px;
+        background: var(--ob-accent-soft);
+        border: 1px solid var(--ob-accent);
+        color: var(--ob-text);
+        box-shadow: var(--ob-shadow);
+        max-width: 70vw;
+        cursor: pointer;
+      }
+      .banner.warning {
+        border-color: var(--ob-warning);
+      }
+      .banner.alarm {
+        background: var(--ob-alarm);
+        color: var(--ob-alarm-text);
+        border-color: var(--ob-alarm);
+      }
       .controls {
         display: grid;
         grid-template-columns: 2.2fr 1.3fr 1.3fr 1.5fr 1fr;
@@ -191,6 +220,8 @@ export class BrmApp extends LitElement {
   @state() private demoShip: ShipId = 'FSB1';
   @state() private wsUrl = DEFAULT_WS_URL;
   @state() private hasReceived = false;
+  @state() private banner: { text: string; severity: string } | null = null;
+  private bannerTimer: ReturnType<typeof setTimeout> | null = null;
 
   @query('brm-autopilot') private autopilotPanel?: AutopilotPanel;
 
@@ -225,6 +256,7 @@ export class BrmApp extends LitElement {
     super.disconnectedCallback();
     this.stopSource();
     if (this.staleTimer) clearInterval(this.staleTimer);
+    if (this.bannerTimer) clearTimeout(this.bannerTimer);
     this.removeEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.removeEventListener('autopilot-changed', this.onAutopilotChanged as EventListener);
     this.removeEventListener('sim-reset', this.onReset);
@@ -257,7 +289,23 @@ export class BrmApp extends LitElement {
         this.statusDetail = detail ?? '';
       }),
     );
+    if (source.onMessage) this.unsubscribe.push(source.onMessage((msg) => this.onMessage(msg)));
     source.start();
+  }
+
+  /** 核心事件框:只顯示 visible: true 的 message/voiceScript(學員站不顯示教官用事件)。 */
+  private onMessage(msg: Record<string, unknown>): void {
+    const ev = eventFromFrame(msg);
+    if (!ev || !ev.visible) return;
+    if (ev.kind !== 'message' && ev.kind !== 'voiceScript') return;
+    this.showBanner(ev);
+  }
+
+  private showBanner(ev: SimEvent): void {
+    const severity = typeof ev.data?.['severity'] === 'string' ? (ev.data['severity'] as string) : 'info';
+    this.banner = { text: eventLabel(ev), severity };
+    if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    this.bannerTimer = setTimeout(() => (this.banner = null), BANNER_MS);
   }
 
   private stopSource(): void {
@@ -337,9 +385,11 @@ export class BrmApp extends LitElement {
           ${flags.aground ? html`<span class="alarm">擱淺</span>` : nothing}
           ${flags.collision ? html`<span class="alarm">碰撞</span>` : nothing}
           ${faults.map((f) => html`<span class="alarm">故障:${f}</span>`)}
+          ${s.visibility_nm !== undefined && s.visibility_nm < 2 ? html`<span class="warning">能見度 ${s.visibility_nm.toFixed(1)} nm</span>` : nothing}
           ${this.issues.length > 0 ? html`<span class="warning" title=${this.issues.join(', ')}>資料可疑 ${this.issues.length}</span>` : nothing}
         </div>
         <span class="spacer"></span>
+        ${this.banner ? html`<div class="banner ${this.banner.severity}" role="status" @click=${() => (this.banner = null)}>${this.banner.text}</div>` : nothing}
         ${this.mode === 'demo'
           ? html`<label class="label">船 <select .value=${this.demoShip} @change=${(e: Event) => this.setDemoShip((e.target as HTMLSelectElement).value as ShipId)}>
                 <option value="FSB1">FSB1 中塑油品壹號</option>

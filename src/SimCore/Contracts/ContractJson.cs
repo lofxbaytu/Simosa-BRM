@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -28,7 +29,27 @@ public static class ContractJson
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         };
         o.Converters.Add(new JsonStringEnumConverter(ContractEnumNamingPolicy.Instance));
+        o.Converters.Add(new LenientStringConverter());
         return o;
+    }
+
+    /// <summary>
+    /// 字串欄位容許 JSON 數值/布林(以原文讀入):情境 YAML 經通用節點樹轉 JSON 時,未加引號的純量(例如 imo: 9123456)
+    /// 會成為數值,與 YamlDotNet 直接反序列化的寬鬆行為一致。寫出不變。
+    /// </summary>
+    private sealed class LenientStringConverter : JsonConverter<string>
+    {
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType switch
+        {
+            JsonTokenType.String => reader.GetString(),
+            JsonTokenType.Null => null,
+            JsonTokenType.Number => reader.HasValueSequence ? System.Text.Encoding.UTF8.GetString(reader.ValueSequence.ToArray()) : System.Text.Encoding.UTF8.GetString(reader.ValueSpan),
+            JsonTokenType.True => "true",
+            JsonTokenType.False => "false",
+            _ => throw new JsonException($"無法把 {reader.TokenType} 讀為字串"),
+        };
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) => writer.WriteStringValue(value);
     }
 
     /// <summary>

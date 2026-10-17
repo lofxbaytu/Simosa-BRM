@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/command.schema.json",
   "title": "SimCommand",
-  "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。",
+  "description": "各站送往模擬核心的指令(gRPC/WebSocket JSON)。情境引擎新增 triggerTimeline、acknowledge、endExercise、getAssessment(查詢:主控程序直接回覆 {\"type\":\"assessment\",\"final\",\"summary\"},不進引擎佇列、不寫 input 行);setEnvironment args 加 visibility_nm、ramp_s(漸變秒數);injectFault 可為 value 字串或 args {name, args}。WebSocket 另推送 {\"type\":\"event\",\"event\":SimEvent} 與 {\"type\":\"assessment\",…} 框。",
   "type": "object",
   "required": [
     "type"
@@ -26,13 +26,17 @@
         "clearFault",
         "snapshot",
         "restore",
-        "targetControl"
+        "targetControl",
+        "triggerTimeline",
+        "acknowledge",
+        "endExercise",
+        "getAssessment"
       ]
     },
     "value": {},
     "args": {
       "type": "object",
-      "description": "targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate"
+      "description": "targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate;setEnvironment:wind{trueSpeed,trueDir,gustiness}、current{set,drift}、waterDepth、visibility_nm、ramp_s;injectFault:{name, args};triggerTimeline:{id, force};acknowledge:{kind: verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|other, itemId?, role?, note?};endExercise:{reason?}"
     }
   },
   "examples": [
@@ -150,6 +154,51 @@
         "id": "T9",
         "remove": true
       }
+    },
+    {
+      "type": "setEnvironment",
+      "args": {
+        "wind": {
+          "trueSpeed": 20,
+          "trueDir": 10
+        },
+        "visibility_nm": 2,
+        "ramp_s": 180
+      }
+    },
+    {
+      "type": "injectFault",
+      "args": {
+        "name": "steeringGear",
+        "args": {
+          "jamAt_deg": 15
+        }
+      }
+    },
+    {
+      "type": "triggerTimeline",
+      "args": {
+        "id": "emergencySteering",
+        "force": false
+      }
+    },
+    {
+      "type": "acknowledge",
+      "args": {
+        "kind": "notifyEcr",
+        "itemId": "steeringFail",
+        "role": "master",
+        "note": "已電話通知機控室"
+      }
+    },
+    {
+      "type": "endExercise",
+      "args": {
+        "reason": "到達泊位"
+      }
+    },
+    {
+      "type": "getAssessment"
     }
   ]
 }

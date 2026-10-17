@@ -1,5 +1,3 @@
-using System.Text.Json.Serialization;
-
 namespace SimosaBRM.SimCore.Traffic;
 
 /// <summary>交通事件種類(紀錄檔 <c>event</c> 行;規劃書第 5.3 節衍生事件、第 8.3 節避碰指標)。</summary>
@@ -25,16 +23,8 @@ public static class TrafficEventKinds
     public const string Control = "targetControl";
 }
 
-/// <summary>交通事件(紀錄與教官站用;JSON 名稱固定)。</summary>
-public sealed record TrafficEvent
+/// <summary>交通事件:<see cref="Engine.SimEvent"/> 的語意標記,Source 固定為 traffic;JSON 欄位與舊版完全相同(新欄位選填)。</summary>
+public sealed record TrafficEvent : Engine.SimEvent
 {
-    [JsonPropertyName("kind")] public required string Kind { get; init; }
-    [JsonPropertyName("tick")] public required long Tick { get; init; }
-    /// <summary>模擬時間(秒)</summary>
-    [JsonPropertyName("t")] public required double T { get; init; }
-    [JsonPropertyName("targetId")] public string? TargetId { get; init; }
-    [JsonPropertyName("message")] public string? Message { get; init; }
-    [JsonPropertyName("range_nm")] public double? RangeNm { get; init; }
-    [JsonPropertyName("cpa_nm")] public double? CpaNm { get; init; }
-    [JsonPropertyName("tcpa_min")] public double? TcpaMin { get; init; }
+    public TrafficEvent() => Source = Engine.SimEventSources.Traffic;
 }

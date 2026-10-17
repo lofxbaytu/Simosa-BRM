@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simosa-brm/contracts/fault-catalogue.json",
+  "title": "FaultCatalogue",
+  "description": "故障名稱目錄(規劃書第 7.2 節;情境引擎設計第 1.1.4 節)。modelled 者引擎會改變行為(FaultNames.cs),其餘只進 faults[]、廣播與記錄,由儀器端自行反應;教官站 DEFAULT_FAULTS 與情境 timeline injectFault 以此為準。",
+  "faults": [
+    {
+      "name": "steeringGear",
+      "label": "舵機故障(舵卡在固定角)",
+      "modelled": true,
+      "exercise": "E07"
+    },
+    {
+      "name": "steeringFuOnly",
+      "label": "FU 失效只剩 NFU",
+      "modelled": false,
+      "exercise": "E07"
+    },
+    {
+      "name": "steeringPumpFailure",
+      "label": "舵機泵失效(舵速減半)",
+      "modelled": false,
+      "exercise": "E07"
+    },
+    {
+      "name": "mainEngine",
+      "label": "主機停車",
+      "modelled": true,
+      "exercise": "E09/E10"
+    },
+    {
+      "name": "engineStartFailure",
+      "label": "起動失敗",
+      "modelled": false,
+      "exercise": "E14"
+    },
+    {
+      "name": "bowThruster",
+      "label": "側推失效",
+      "modelled": true,
+      "exercise": "F02"
+    },
+    {
+      "name": "gyroDrift",
+      "label": "電羅經漂移",
+      "modelled": false,
+      "exercise": "E08"
+    },
+    {
+      "name": "gyroFreeze",
+      "label": "電羅經凍結",
+      "modelled": false,
+      "exercise": "E08"
+    },
+    {
+      "name": "gyroFailure",
+      "label": "電羅經失效",
+      "modelled": false,
+      "exercise": "E08"
+    },
+    {
+      "name": "autopilotFailure",
+      "label": "自動舵失效",
+      "modelled": false,
+      "exercise": "E08"
+    },
+    {
+      "name": "gpsJump",
+      "label": "GNSS 跳點",
+      "modelled": false,
+      "exercise": "E08"
+    },
+    {
+      "name": "gpsOffset",
+      "label": "GNSS 偏移",
+      "modelled": false,
+      "exercise": "E08"
+    },
+    {
+      "name": "gpsFailure",
+      "label": "GNSS 失效",
+      "modelled": false,
+      "exercise": "E08"
+    },
+    {
+      "name": "radarFailure",
+      "label": "雷達失效",
+      "modelled": false,
+      "exercise": "E03"
+    },
+    {
+      "name": "radarDegraded",
+      "label": "雷達效能下降",
+      "modelled": false,
+      "exercise": "E03"
+    },
+    {
+      "name": "aisFailure",
+      "label": "自船 AIS 失效",
+      "modelled": false,
+      "exercise": ""
+    },
+    {
+      "name": "ecdisFreeze",
+      "label": "ECDIS 凍結",
+      "modelled": false,
+      "exercise": "E15"
+    },
+    {
+      "name": "ecdisAlarmFlood",
+      "label": "ECDIS 警報氾濫",
+      "modelled": false,
+      "exercise": "E15"
+    },
+    {
+      "name": "echoSounderFailure",
+      "label": "測深儀失效",
+      "modelled": false,
+      "exercise": ""
+    },
+    {
+      "name": "logFailure",
+      "label": "計程儀失效",
+      "modelled": false,
+      "exercise": ""
+    },
+    {
+      "name": "vhfFailure",
+      "label": "VHF 失效",
+      "modelled": false,
+      "exercise": "E07/E09"
+    },
+    {
+      "name": "ecrPhoneFailure",
+      "label": "機控室電話失效",
+      "modelled": false,
+      "exercise": "E07/E09"
+    },
+    {
+      "name": "blackout",
+      "label": "全船失電",
+      "modelled": false,
+      "exercise": "E09"
+    },
+    {
+      "name": "fireAlarmEngineRoom",
+      "label": "機艙火警",
+      "modelled": false,
+      "exercise": "E19"
+    },
+    {
+      "name": "cargoHeatingFailure",
+      "label": "貨物加熱系統故障",
+      "modelled": false,
+      "exercise": "E21"
+    }
+  ]
+}

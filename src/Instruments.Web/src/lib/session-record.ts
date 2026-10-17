@@ -3,7 +3,9 @@
 // 存成一個 JSON 供下載與重播檢視(規劃書第 5.5 節紀錄包的第一版雛型,尚未簽章)。
 
 import type { SimCommand } from '../types/command.js';
+import type { SimEvent } from '../types/event.js';
 import type { OwnShipState } from '../types/state.js';
+import type { AssessmentSummary } from './assessment.js';
 import type { BrmMarker } from './brm-markers.js';
 import type { DebriefSummary } from './debrief.js';
 import type { OperationEvent } from './operation-log.js';
@@ -23,7 +25,8 @@ export interface CommandLogEntry {
 
 export interface SessionRecord {
   format: typeof SESSION_RECORD_FORMAT;
-  version: 1;
+  /** 1:第一版;2:新增 events(核心事件)與 coreSummary(核心 summary) */
+  version: 1 | 2;
   createdUtc: string;
   mode: 'full' | 'simple';
   source: string;
@@ -35,7 +38,12 @@ export interface SessionRecord {
   operations: OperationEvent[];
   markers: BrmMarker[];
   commands: CommandLogEntry[];
+  /** 本地推導(debrief.ts) */
   summary: DebriefSummary | null;
+  /** 核心推送/查詢得到的事件(版本 2;舊紀錄無) */
+  events?: SimEvent[];
+  /** 核心 summary(版本 2;Python 伺服器/離線時為 null)。存原始物件(summary.raw),讀回時再解析 */
+  coreSummary?: Record<string, unknown> | null;
 }
 
 /** 以固定間隔抽樣狀態(預設 1 Hz;2 小時約 7,200 筆),並保留事件所需的完整序列給講評累計器(由呼叫者另外餵)。 */
@@ -74,12 +82,14 @@ export interface SessionRecordInput {
   markers: readonly BrmMarker[];
   commands: readonly CommandLogEntry[];
   summary: DebriefSummary | null;
+  events?: readonly SimEvent[];
+  coreSummary?: AssessmentSummary | null;
 }
 
 export function buildSessionRecord(input: SessionRecordInput, now = new Date()): SessionRecord {
   return {
     format: SESSION_RECORD_FORMAT,
-    version: 1,
+    version: 2,
     createdUtc: now.toISOString(),
     mode: input.mode,
     source: input.source,
@@ -91,6 +101,8 @@ export function buildSessionRecord(input: SessionRecordInput, now = new Date()):
     markers: [...input.markers],
     commands: [...input.commands],
     summary: input.summary,
+    events: [...(input.events ?? [])],
+    coreSummary: input.coreSummary ? input.coreSummary.raw : null,
   };
 }
 

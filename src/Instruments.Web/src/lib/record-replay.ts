@@ -1,14 +1,20 @@
 // 重播檢視(講評站雛型,規劃書第 9.2 節)的紀錄解析:
-//  - SimCore 的 JSON Lines 紀錄(src/SimCore/README.md 第 4 節;每行 kind = header | input | state | snapshot | footer);
-//  - 教官站自己的 SessionRecord JSON(session-record.ts;含 BRM 標記)。
+//  - SimCore 的 JSON Lines 紀錄(src/SimCore/README.md 第 4 節;每行 kind = header | input | state | snapshot | event | summary | footer);
+//  - 教官站自己的 SessionRecord JSON(session-record.ts;含 BRM 標記、核心事件與核心 summary)。
 // 解析後提供依時間查狀態(二分搜尋)與航跡點,供時間軸拖曳檢視;不需核心連線。
+// 未知的 kind 只計數(不逐行列為錯誤),舊紀錄(無 event/summary 行、header 無 parameterSet)仍可載入。
+// 倒帶(restore/reset):核心紀錄在倒帶後 state 的 tick/t 會倒退;解析時依 tick 遞減切分,倒帶時丟棄 t > 倒帶點的舊分支狀態與事件
+// (只保留練習最終的歷史),倒帶點記在 rewinds[];不對 states 做全域排序(設計文件 D31)。
 
 import type { SimCommand } from '../types/command.js';
+import type { SimEvent } from '../types/event.js';
 import type { OwnShipState } from '../types/state.js';
+import { parseAssessmentSummary, parseRecordParameterSet, type AssessmentSummary, type RecordParameterSet } from './assessment.js';
 import type { BrmMarker } from './brm-markers.js';
 import { isValidCommand } from './command.js';
 import { parseState } from './state-parser.js';
 import { isSessionRecord } from './session-record.js';
+import { parseSimEvent } from './sim-event.js';
 import type { TrackPoint } from './track-history.js';
 import { BrmMarkerStore } from './brm-markers.js';
 import type { OperationEvent } from './operation-log.js';
@@ -25,7 +31,10 @@ export interface ReplayHeader {
   dynamics?: string;
   scenarioId?: string;
   scenarioName?: string;
+  /** header.scenario:解析後的完整情境(version 2 含 timeline/route/zones/assessment/briefing) */
   scenario?: unknown;
+  /** header.parameterSet(version 2;無參數集時省略) */
+  parameterSet?: RecordParameterSet;
 }
 
 export interface ReplayInput {
@@ -45,17 +54,36 @@ export interface ReplayFooter {
   sha256?: string;
 }
 
+/** 倒帶點:自 from(倒帶前最後一筆狀態的 t)回到 t */
+export interface ReplayRewind {
+  t: number;
+  from: number;
+  /** 倒帶時丟棄的舊分支狀態數 */
+  droppedStates: number;
+  /** 倒帶時丟棄的舊分支事件數 */
+  droppedEvents: number;
+}
+
 export interface ReplayData {
   source: 'simcore-jsonl' | 'instructor-json';
   header: ReplayHeader;
+  /** 練習最終歷史的狀態(依時間遞增;倒帶的舊分支已丟棄) */
   states: OwnShipState[];
+  /** 倒帶點(restore/reset;依發生順序) */
+  rewinds: ReplayRewind[];
   inputs: ReplayInput[];
   snapshots: Array<{ tick: number; t: number }>;
   markers: BrmMarker[];
   operations: OperationEvent[];
+  /** 核心事件(event 行;教官站紀錄的 events) */
+  events: SimEvent[];
+  /** 核心 summary(最後一行 summary;教官站紀錄的 coreSummary);舊紀錄為 null */
+  summary: AssessmentSummary | null;
   footer: ReplayFooter | null;
   /** 解析時略過的行與原因 */
   errors: string[];
+  /** 未知 kind 的行數(kind → 次數) */
+  unknownKinds: Record<string, number>;
   tStart: number;
   tEnd: number;
 }
@@ -98,7 +126,23 @@ export function parseReplay(text: string): ReplayData {
 }
 
 function empty(source: ReplayData['source'], errors: string[]): ReplayData {
-  return { source, header: { dt: DEFAULT_DT }, states: [], inputs: [], snapshots: [], markers: [], operations: [], footer: null, errors, tStart: 0, tEnd: 0 };
+  return { source, header: { dt: DEFAULT_DT }, states: [], rewinds: [], inputs: [], snapshots: [], markers: [], operations: [], events: [], summary: null, footer: null, errors, unknownKinds: {}, tStart: 0, tEnd: 0 };
+}
+
+/**
+ * 依序加入一筆狀態;tick(或 t)比前一筆小即為倒帶:丟棄 t > 倒帶點的舊分支狀態與事件(倒帶後核心從快照 tick 重新推進,
+ * 快照 tick 當下的狀態與之前的歷史仍然有效),並記錄倒帶點。
+ */
+function pushState(data: ReplayData, s: OwnShipState): void {
+  const prev = data.states[data.states.length - 1];
+  if (prev && (Number.isFinite(s.tick) && Number.isFinite(prev.tick) ? s.tick < prev.tick : s.t < prev.t)) {
+    const nStates = data.states.length;
+    const nEvents = data.events.length;
+    data.states = data.states.filter((x) => x.t <= s.t);
+    data.events = data.events.filter((e) => e.t <= s.t);
+    data.rewinds.push({ t: s.t, from: prev.t, droppedStates: nStates - data.states.length, droppedEvents: nEvents - data.events.length });
+  }
+  data.states.push(s);
 }
 
 function finishTimes(data: ReplayData): ReplayData {
@@ -144,7 +188,29 @@ export function parseJsonLines(text: string): ReplayData {
           if (typeof sc['id'] === 'string') h.scenarioId = sc['id'];
           if (typeof sc['name'] === 'string') h.scenarioName = sc['name'];
         }
+        const ps = parseRecordParameterSet(obj['parameterSet']);
+        if (ps) h.parameterSet = ps;
         data.header = h;
+        break;
+      }
+      case 'event': {
+        const ev = parseSimEvent(obj['event'], data.header.dt);
+        if (!ev) {
+          data.errors.push(`第 ${i + 1} 行:event 無法解析`);
+          return;
+        }
+        if (typeof obj['tick'] === 'number' && !Number.isFinite(ev.tick)) ev.tick = obj['tick'];
+        data.events.push(ev);
+        break;
+      }
+      case 'summary': {
+        const sum = parseAssessmentSummary(obj['summary']);
+        if (!sum) {
+          data.errors.push(`第 ${i + 1} 行:summary 無法解析`);
+          return;
+        }
+        // 取最後一行(endExercise 時寫一行、Close 時再寫 final 一行)
+        data.summary = sum;
         break;
       }
       case 'input': {
@@ -164,7 +230,7 @@ export function parseJsonLines(text: string): ReplayData {
           return;
         }
         prev = parsed.state;
-        data.states.push(parsed.state);
+        pushState(data, parsed.state);
         break;
       }
       case 'snapshot': {
@@ -186,12 +252,12 @@ export function parseJsonLines(text: string): ReplayData {
         data.footer = f;
         break;
       }
-      default:
-        data.errors.push(`第 ${i + 1} 行:未知的 kind ${String(obj['kind'])}`);
+      default: {
+        const kind = String(obj['kind']);
+        data.unknownKinds[kind] = (data.unknownKinds[kind] ?? 0) + 1;
+      }
     }
   });
-  // 輸入事件的時間若有對應狀態(同 tick 或之後第一筆),用該狀態的 t 較準(header.dt 之外的重設不影響)
-  data.states.sort((a, b) => a.t - b.t);
   return finishTimes(data);
 }
 
@@ -226,7 +292,7 @@ export function parseSessionJson(text: string): ReplayData {
       return;
     }
     prev = parsed.state;
-    data.states.push(parsed.state);
+    pushState(data, parsed.state);
   });
   for (const c of obj.commands ?? []) {
     if (!isValidCommand(c.command)) continue;
@@ -242,7 +308,39 @@ export function parseSessionJson(text: string): ReplayData {
   store.load(obj.markers ?? []);
   data.markers = [...store.all()];
   data.operations = Array.isArray(obj.operations) ? obj.operations.filter((o) => typeof o === 'object' && o !== null && typeof o.t === 'number') : [];
+  if (Array.isArray(obj.events)) {
+    // 教官站紀錄的事件在狀態之後才整批加入:倒帶點之前的舊分支事件(t > 倒帶點且早於倒帶發生)一併丟棄
+    const events = obj.events.map((e) => parseSimEvent(e, DEFAULT_DT)).filter((e): e is SimEvent => e !== null);
+    data.events = dropRewoundEvents(events, data.rewinds);
+  }
+  if (obj.coreSummary) data.summary = parseAssessmentSummary(obj.coreSummary);
   return finishTimes(data);
+}
+
+/** 依倒帶點(依發生順序)逐段丟棄舊分支事件:事件依檔案順序,倒帶前 t > 倒帶點者屬舊分支。 */
+function dropRewoundEvents(events: readonly SimEvent[], rewinds: readonly ReplayRewind[]): SimEvent[] {
+  if (rewinds.length === 0) return [...events];
+  let out: SimEvent[] = [];
+  let ri = 0;
+  for (const e of events) {
+    // 事件 t 回到倒帶點之下(或等於)且前一筆更晚 → 到達下一個倒帶點
+    while (ri < rewinds.length && out.length > 0 && e.t < out[out.length - 1]!.t && e.t <= rewinds[ri]!.from) {
+      const r = rewinds[ri]!;
+      out = out.filter((x) => x.t <= r.t);
+      ri++;
+    }
+    out.push(e);
+  }
+  return out;
+}
+
+/** t 時刻(含)之前最後一筆事件的索引(事件依時間遞增;倒帶分支已於解析時丟棄);沒有回傳 -1。 */
+export function eventIndexAt(events: readonly SimEvent[], t: number): number {
+  let idx = -1;
+  for (let i = 0; i < events.length; i++) {
+    if (events[i]!.t <= t) idx = i;
+  }
+  return idx;
 }
 
 /** 二分搜尋:t 時刻(含)之前最後一筆狀態的索引;t 早於第一筆時回傳 0;沒有狀態回傳 -1。 */

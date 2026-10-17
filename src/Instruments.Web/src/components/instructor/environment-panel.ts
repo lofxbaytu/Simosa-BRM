@@ -1,5 +1,5 @@
 // 環境即時改變(規劃書第 9.1 節):真風速/向、陣風、流向/流速、水深、能見度;分組套用,送 setEnvironment。
-// 核心尚未支援的欄位(陣風僅 C#、能見度皆未實作)標示但仍送出。
+// 漸變秒數 ramp_s(設計文件第 3.5 節)附在每次套用上(0 = 立即)。只有 C# 核心支援的欄位(陣風、能見度、漸變)標示但仍送出。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -16,6 +16,8 @@ interface EnvForm {
   curDrift: number;
   depth: number;
   visibility: number;
+  /** 漸變秒數(0 = 立即) */
+  ramp: number;
 }
 
 @customElement('brm-environment-panel')
@@ -53,7 +55,7 @@ export class EnvironmentPanel extends LitElement {
 
   @property({ attribute: false }) state: OwnShipState | null = null;
 
-  @state() private form: EnvForm = { windSpeed: 0, windDir: 0, gust: 0, curSet: 0, curDrift: 0, depth: 20, visibility: 10 };
+  @state() private form: EnvForm = { windSpeed: 0, windDir: 0, gust: 0, curSet: 0, curDrift: 0, depth: 20, visibility: 10, ramp: 0 };
   private seeded = false;
 
   override updated(): void {
@@ -74,6 +76,7 @@ export class EnvironmentPanel extends LitElement {
       curSet: Math.round(s.current.set),
       curDrift: round1(s.current.drift),
       depth: s.waterDepth !== undefined ? round1(s.waterDepth) : this.form.depth,
+      visibility: s.visibility_nm !== undefined ? round1(s.visibility_nm) : this.form.visibility,
     };
   }
 
@@ -83,7 +86,7 @@ export class EnvironmentPanel extends LitElement {
   }
 
   private apply(change: EnvironmentChange): void {
-    const cmd = setEnvironmentCommand(change);
+    const cmd = setEnvironmentCommand(this.form.ramp > 0 ? { ...change, ramp_s: this.form.ramp } : change);
     if (cmd) dispatchCommand(this, cmd);
   }
 
@@ -112,7 +115,7 @@ export class EnvironmentPanel extends LitElement {
       <div class="panel">
         <div class="panel-title">
           <span>環境 ENVIRONMENT</span>
-          <span class="zh">${s ? `現在 風 ${round1(s.wind.trueSpeed)} kn/${Math.round(s.wind.trueDir)}° · 流 ${Math.round(s.current.set)}°/${round1(s.current.drift)} kn · 水深 ${s.waterDepth !== undefined ? round1(s.waterDepth) : '--'} m` : '等待狀態'}</span>
+          <span class="zh">${s ? `現在 風 ${round1(s.wind.trueSpeed)} kn/${Math.round(s.wind.trueDir)}° · 流 ${Math.round(s.current.set)}°/${round1(s.current.drift)} kn · 水深 ${s.waterDepth !== undefined ? round1(s.waterDepth) : '--'} m${s.visibility_nm !== undefined ? ` · 能見度 ${round1(s.visibility_nm)} nm` : ''}` : '等待狀態'}</span>
         </div>
         <div class="group">
           <label>真風 kn / 來向°${this.tag('wind')}</label>
@@ -136,6 +139,10 @@ export class EnvironmentPanel extends LitElement {
           <label>能見度 nm${this.tag('visibility')}</label>
           <input class="visibility one" type="number" min="0" max="30" step="0.1" .value=${String(f.visibility)} @input=${(e: Event) => this.set('visibility', e)} />
           <button class="apply-visibility" @click=${this.applyVisibility}>套用</button>
+
+          <label>漸變 s${this.tag('ramp')}</label>
+          <input class="ramp one" type="number" min="0" max="3600" step="10" .value=${String(f.ramp)} @input=${(e: Event) => this.set('ramp', e)} />
+          <span class="hint">${f.ramp > 0 ? `套用時 ${f.ramp} s 線性漸變` : '0 = 立即'}</span>
         </div>
         <div class="btn-row">
           <button @click=${this.fillFromState} ?disabled=${!s}>帶入目前值</button>

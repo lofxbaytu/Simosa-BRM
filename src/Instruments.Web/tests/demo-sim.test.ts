@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { DEMO_DT, DemoSim } from '../src/demo/demo-sim.js';
+import { DEMO_DT, DEMO_PARAMETER_SET_VERSION, DemoSim } from '../src/demo/demo-sim.js';
+import { DemoSource } from '../src/demo/demo-source.js';
+import { parseAssessmentSummary } from '../src/lib/assessment.js';
 import { headingDifference } from '../src/lib/angles.js';
 import { parseState } from '../src/lib/state-parser.js';
 
@@ -128,5 +130,100 @@ describe('示範模式運動學', () => {
     sim.step();
     expect(sim.current.depthBelowKeel).toBeLessThanOrEqual(0);
     expect(sim.current.flags?.aground).toBe(true);
+  });
+});
+
+describe('示範模式的情境引擎預覽(假事件、情境/航線狀態、假 summary)', () => {
+  it('狀態含 scenario/route/visibility_nm;30 s 與 60 s 的假時間表事件;XTD 右正', () => {
+    const sim = new DemoSim({ shipId: 'FSB1', initialHeading: 0, initialSpeed_kn: 8, current: { set: 0, drift: 0 } });
+    expect(sim.current.visibility_nm).toBe(10);
+    expect(sim.current.scenario).toMatchObject({ id: 'demo', phase: 'normal', parameterSetVersion: DEMO_PARAMETER_SET_VERSION, timelineFired: 0, timelinePending: 0 });
+    expect(sim.current.route).toMatchObject({ legIndex: 0, nextWaypoint: 'WP2', xtd_m: 0, xtdLimit_m: 50, legCourse_deg: 0 });
+    expect(parseState(JSON.parse(JSON.stringify(sim.current)))!.issues).toEqual([]);
+    run(sim, 31);
+    const events = sim.takeEvents();
+    expect(events.map((e) => e.kind)).toEqual(['timelineTriggered', 'message']);
+    expect(events[0]!.itemId).toBe('demoBrief');
+    expect(events[0]!.source).toBe('timeline');
+    expect(events[0]!.seq).toBe(0);
+    expect(sim.current.scenario?.timelineFired).toBe(1);
+    sim.apply({ type: 'rudder', value: 20 });
+    run(sim, 30);
+    const more = sim.takeEvents();
+    expect(more.map((e) => e.kind)).toEqual(['timelineTriggered', 'voiceScript']);
+    expect(more[1]!.data).toMatchObject({ role: 'ecr', channel: 'phone' });
+    run(sim, 120); // 右轉一段時間後偏到航線右側:XTD 右正
+    expect(headingDifference(0, sim.current.heading)).toBeGreaterThan(20);
+    expect(sim.current.route!.xtd_m).toBeGreaterThan(10);
+  });
+
+  it('故障注入/確認/手動觸發/凍結/結束練習各產生事件;endExercise 後 summary 定稿', () => {
+    const sim = new DemoSim({ shipId: 'FSB2', initialHeading: 90, initialSpeed_kn: 6 });
+    run(sim, 10);
+    sim.takeEvents();
+    sim.apply({ type: 'injectFault', value: 'steeringGear' });
+    sim.apply({ type: 'injectFault', args: { name: 'steeringGear' } });
+    run(sim, 5);
+    sim.apply({ type: 'acknowledge', args: { kind: 'notifyEcr', role: 'master' } });
+    sim.apply({ type: 'triggerTimeline', args: { id: 'demoBrief' } });
+    sim.apply({ type: 'triggerTimeline', args: { id: 'demoBrief' } });
+    sim.apply({ type: 'triggerTimeline', args: { id: 'demoBrief', force: true } });
+    sim.apply({ type: 'freeze' });
+    sim.apply({ type: 'resume' });
+    sim.apply({ type: 'clearFault', value: 'steeringGear' });
+    sim.apply({ type: 'endExercise', args: { reason: '測試' } });
+    const kinds = sim.takeEvents().map((e) => `${e.source}:${e.kind}`);
+    expect(kinds).toEqual([
+      'instructor:faultInjected',
+      'instructor:phaseChanged',
+      'instructor:faultInjected',
+      'instructor:acknowledge',
+      'instructor:timelineManual',
+      'timeline:timelineTriggered',
+      'timeline:message',
+      'instructor:timelineManual',
+      'instructor:timelineManual',
+      'timeline:timelineTriggered',
+      'timeline:message',
+      'instructor:frozen',
+      'instructor:resumed',
+      'instructor:faultCleared',
+      'instructor:exerciseEnded',
+    ]);
+    expect(sim.current.scenario?.phase).toBe('degraded');
+    expect(sim.current.scenario?.ended).toBe(true);
+    expect(sim.isFrozen).toBe(true);
+    const summary = parseAssessmentSummary(sim.assessmentSummary())!;
+    expect(summary.final).toBe(true);
+    expect(summary.parameterSet?.version).toBe(DEMO_PARAMETER_SET_VERSION);
+    expect(summary.faultResponses[0]).toMatchObject({ fault: 'steeringGear', source: 'instructor' });
+    expect(summary.faultResponses[0]!.acknowledgements[0]).toMatchObject({ kind: 'notifyEcr', role: 'master', dt_s: 5 });
+    expect(summary.assessment.required[0]).toMatchObject({ id: 'notifyEcr', state: 'met', dt_s: 5 });
+    expect(summary.assessment.score).toBe(100);
+    expect(summary.assessment.passed).toBe(true);
+    sim.apply({ type: 'reset' });
+    expect(sim.current.scenario).toMatchObject({ phase: 'normal', ended: false, timelineFired: 0 });
+    expect(sim.takeEvents()).toEqual([]);
+  });
+
+  it('DemoSource 以 onMessage 推送事件框與 assessment 回覆', () => {
+    const source = new DemoSource({ shipId: 'FSB1', initialHeading: 0, initialSpeed_kn: 5 });
+    const frames: Record<string, unknown>[] = [];
+    source.onMessage((m) => frames.push(m));
+    source.send({ type: 'injectFault', value: 'mainEngine' });
+    expect(frames.map((f) => f['type'])).toEqual(['event', 'event']);
+    expect((frames[0]!['event'] as { kind: string }).kind).toBe('faultInjected');
+    source.send({ type: 'getAssessment' });
+    const last = frames.at(-1)!;
+    expect(last['type']).toBe('assessment');
+    expect(last['final']).toBe(false);
+    expect(parseAssessmentSummary(last['summary'])?.faultResponses[0]?.fault).toBe('mainEngine');
+    source.send({ type: 'endExercise' });
+    expect(frames.at(-1)!['final']).toBe(true);
+    // 結束後的後備 getAssessment 回覆仍為定稿(與 C# 主控程序 final = summary.Final 相同),不會把講評面板改回「未定稿」
+    source.send({ type: 'getAssessment' });
+    expect(frames.at(-1)!['type']).toBe('assessment');
+    expect(frames.at(-1)!['final']).toBe(true);
+    expect(parseAssessmentSummary(frames.at(-1)!['summary'])?.final).toBe(true);
   });
 });

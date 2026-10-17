@@ -1,0 +1,44 @@
+# 公司程序參數集(規劃書第 8.3、9.1 節 R14;schema:src/Contracts/parameter-set.schema.json;情境引擎設計第 2 節)
+# 由訓練負責人(訪船船長)依核准的 SMS 文件編輯;修改後需 bump version 並重新驗證引用情境(第 9.1 節)。
+# 鍵名 段.群.名_單位後綴,後綴須與 unit 一致(載入時檢查);情境以 ${params:<鍵>} 引用。
+id: simosa-company-procedures
+version: "2026.10.1"                 # 版次字串(年.月.序);紀錄標頭與講評報告顯示
+effectiveFrom: 2026-10-01
+approvedBy: 訪船船長(待填)
+approvedOn: 2026-09-28
+notes: 首版;數值為規劃階段假設值,待公司 SMS 文件核對(規劃書附錄 A)
+sources:                              # 程序文件索引;parameters[].source 引用此處的鍵
+  DWO-007: { title: 船長常規命令(Master's Standing Orders), revision: "3", approvedBy: 船長, date: 2026-06-01 }
+  SMS-NAV-012: { title: 航行程序 — UKC 政策, revision: "2", date: 2025-11-15 }
+  SMS-EMG-004: { title: 緊急程序 — 舵機故障, revision: "1", date: 2024-03-01 }
+  SMS-EMG-005: { title: 緊急程序 — 全船失電, revision: "1", date: 2024-03-01 }
+  PORT-MLW: { title: 麥寮港港口規定(港方), revision: "2025", date: 2025-01-01, external: true }
+  PORT-KHH: { title: 高雄港港口規定(港方), revision: "2025", date: 2025-01-01, external: true }
+  BRM-TRN-001: { title: BRM 訓練程序(評估準則), revision: "draft", date: 2026-10-01 }
+parameters:
+  navigation.cpa.openSea_nm:      { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.2", description: 開闊海最小 CPA }
+  navigation.cpa.coastal_nm:      { value: 0.5,  unit: nm,  source: DWO-007, clause: "4.2", description: 沿岸/港外最小 CPA }
+  navigation.cpa.hardFail_nm:     { value: 0.2,  unit: nm,  source: BRM-TRN-001, clause: "5.1", description: 評估硬性失敗門檻 }
+  navigation.cpa.channel_nm:      { value: 0.05, unit: nm,  source: DWO-007, clause: "4.2", description: 狹窄航道內最小通過距離(船中心線,約 93 m;走廊半寬 50 m 的航道) }
+  navigation.cpa.channelHardFail_nm: { value: 0.025, unit: nm, source: BRM-TRN-001, clause: "5.1", description: 航道內評估硬性失敗/容許帶 fail 門檻(約 46 m) }
+  navigation.bcr.min_nm:          { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.3" }
+  navigation.callMaster.cpa_nm:   { value: 1.0,  unit: nm,  source: DWO-007, clause: "6.1", description: CPA 低於此值須呼叫船長 }
+  navigation.encounter.detectionRange_nm:        { value: 6.0, unit: nm,  source: BRM-TRN-001, clause: "5.2", description: 會遇「首次偵測」距離 }
+  navigation.encounter.substantialAlteration_deg: { value: 30,  unit: deg, source: BRM-TRN-001, clause: "5.2", description: 「大幅」改向幅度 }
+  navigation.ukc.openSea_fraction: { value: 0.20, unit: fractionOfDraft, source: SMS-NAV-012, clause: "3.1" }
+  navigation.ukc.channel_fraction: { value: 0.10, unit: fractionOfDraft, source: SMS-NAV-012, clause: "3.2" }
+  navigation.ukc.hardFail_fraction: { value: 0.05, unit: fractionOfDraft, source: BRM-TRN-001, clause: "5.1" }
+  navigation.ukc.minimum_m:       { value: 1.0,  unit: m,   source: SMS-NAV-012, clause: "3.3" }
+  navigation.xtd.channel_m:       { value: 50,   unit: m,   source: SMS-NAV-012, clause: "4.1", description: 航道走廊半寬 }
+  navigation.xtd.coastal_m:       { value: 300,  unit: m,   source: SMS-NAV-012, clause: "4.1" }
+  manoeuvring.rotLimit_degPerMin: { value: 30,   unit: degPerMin, source: DWO-007, clause: "5.4" }
+  manoeuvring.berthingApproach_mps: { value: 0.15, unit: mps, source: SMS-NAV-012, clause: "6.2", description: 碰墊設計值 0.10–0.20 m/s }
+  port.mailiao.speedLimit_kn:     { value: 8,    unit: kn,  source: PORT-MLW, clause: "第 12 條" }
+  port.mailiao.innerSpeedLimit_kn: { value: 5,   unit: kn,  source: PORT-MLW, clause: "第 12 條" }
+  port.kaohsiung.speedLimit_kn:   { value: 8,    unit: kn,  source: PORT-KHH, clause: "" }
+  emergency.steeringFailure.firstAction_s: { value: 60,  unit: s, source: SMS-EMG-004, clause: "2.1", description: 故障注入到首個相關動作 }
+  emergency.steeringFailure.notifyEcr_s:   { value: 120, unit: s, source: SMS-EMG-004, clause: "2.3" }
+  emergency.steeringFailure.emergencySteering_s: { value: 300, unit: s, source: SMS-EMG-004, clause: "3.1" }
+  emergency.blackout.anchorReady_s: { value: 180, unit: s, source: SMS-EMG-005, clause: "" }
+  assessment.passMark:            { value: 70,   unit: score, source: BRM-TRN-001, clause: "6" }
+overrides: {}                         # 保留:依船舶 ID 覆寫(第一版不解析)

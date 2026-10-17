@@ -85,4 +85,57 @@ public class SnapshotRestoreTests
         var snap = e.CreateSnapshot() with { ShipId = "FSB2" };
         Assert.Throws<InvalidOperationException>(() => e.Restore(snap));
     }
+
+
+    /// <summary>教官指令還原保留目前的凍結狀態與時間倍率;練習結束後不能倒帶。</summary>
+    [Fact]
+    public void RestoreCommandKeepsFrozenAndTimeScaleAndIsRefusedAfterEnd()
+    {
+        var e = TestData.Engine();
+        var events = TestData.Capture(e);
+        e.Run(1250); // 自動快照 500、1000(未凍結、倍率 1)
+        e.Enqueue(SimCommand.TimeScale(4)); e.Enqueue(SimCommand.Freeze()); e.ProcessPendingCommands();
+        Assert.True(e.Frozen);
+        e.Enqueue(SimCommand.Restore()); e.ProcessPendingCommands();
+        Assert.Equal(1000, e.Tick);
+        Assert.True(e.Frozen, "凍結中倒帶不得自行恢復執行");
+        Assert.Equal(4.0, e.TimeScale);
+        e.Step();
+        Assert.Equal(1000, e.Tick);
+        Assert.DoesNotContain(events, x => x.Kind == SimEventKinds.Resumed);
+
+        // 直接呼叫 Restore(快照) 仍完全依快照(測試/工具路徑)
+        e.Restore(e.Snapshots[^1]);
+        Assert.False(e.Frozen);
+        Assert.Equal(1.0, e.TimeScale);
+
+        e.Run(300);
+        e.Enqueue(SimCommand.EndExercise("done")); e.ProcessPendingCommands();
+        Assert.True(e.Ended);
+        var hash = e.StateHash;
+        Assert.False(e.RestoreFromHistory());
+        e.Enqueue(SimCommand.Restore()); e.ProcessPendingCommands();
+        Assert.Equal(1300, e.Tick);
+        Assert.Equal(hash, e.StateHash);
+        Assert.True(e.Ended);
+    }
+
+    /// <summary>快照時能見度為無限制(null)而之後設為有限值:還原後回到 null(Version 2 快照直接取快照值)。</summary>
+    [Fact]
+    public void RestoreBringsBackUnlimitedVisibility()
+    {
+        var e = TestData.MinimalEngine();
+        Assert.Null(e.VisibilityNm);
+        TestData.RunTo(e, 5);
+        var snap = e.TakeSnapshot();
+        Assert.Null(snap.VisibilityNm);
+        e.Enqueue(SimCommand.SetEnvironment(visibilityNm: 1)); e.ProcessPendingCommands();
+        Assert.Equal(1.0, e.VisibilityNm);
+        e.Restore(snap);
+        Assert.Null(e.VisibilityNm);
+        // Version 1 快照沒有此欄位:沿用目前值
+        e.Enqueue(SimCommand.SetEnvironment(visibilityNm: 2)); e.ProcessPendingCommands();
+        e.Restore(snap with { Version = 1 });
+        Assert.Equal(2.0, e.VisibilityNm);
+    }
 }

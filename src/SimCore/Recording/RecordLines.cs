@@ -1,7 +1,8 @@
 using System.Text.Json.Serialization;
 using SimosaBRM.SimCore.Contracts;
+using SimosaBRM.SimCore.Assessment;
 using SimosaBRM.SimCore.Engine;
-using SimosaBRM.SimCore.Traffic;
+using SimosaBRM.SimCore.Parameters;
 
 namespace SimosaBRM.SimCore.Recording;
 
@@ -15,15 +16,18 @@ public static class RecordKinds
     public const string Input = "input";
     public const string State = "state";
     public const string Snapshot = "snapshot";
-    /// <summary>交通事件(碰撞、CPA 低於門檻、目標出現、航點、COLREG、聲號、目標控制);目標船狀態在 state 行的 targets[]、目標指令在 input 行</summary>
+    /// <summary>核心事件(交通、時間表、評估、教官、引擎;SimEvent);目標船狀態在 state 行的 targets[]、目標指令在 input 行</summary>
     public const string Event = "event";
+    /// <summary>評估摘要(footer 之前;endExercise 時也寫一行;講評站取最後一行)</summary>
+    public const string Summary = "summary";
     public const string Footer = "footer";
 }
 
 public sealed record RecordHeader
 {
     [JsonPropertyName("kind")] public string Kind { get; init; } = RecordKinds.Header;
-    [JsonPropertyName("version")] public int Version { get; init; } = 1;
+    /// <summary>2:新增 parameterSet,scenario 為解析後的完整情境(含 timeline/route/zones/assessment/briefing)</summary>
+    [JsonPropertyName("version")] public int Version { get; init; } = 2;
     [JsonPropertyName("createdUtc")] public required DateTime CreatedUtc { get; init; }
     [JsonPropertyName("shipId")] public required string ShipId { get; init; }
     [JsonPropertyName("shipName")] public string? ShipName { get; init; }
@@ -31,8 +35,10 @@ public sealed record RecordHeader
     [JsonPropertyName("seed")] public required int Seed { get; init; }
     [JsonPropertyName("dt")] public required double Dt { get; init; }
     [JsonPropertyName("dynamics")] public required string Dynamics { get; init; }
-    /// <summary>完整情境(重播不依賴原 YAML 檔)</summary>
+    /// <summary>完整情境(重播不依賴原 YAML 檔;參數引用已代入)</summary>
     [JsonPropertyName("scenario")] public required Scenario.Scenario Scenario { get; init; }
+    /// <summary>參數集摘要與解析清單(無參數引用時省略;重播不需參數集檔案)</summary>
+    [JsonPropertyName("parameterSet")] public ParameterSetInfo? ParameterSet { get; init; }
 }
 
 public sealed record RecordInput
@@ -56,12 +62,20 @@ public sealed record RecordSnapshot
     [JsonPropertyName("snapshot")] public required EngineSnapshot Snapshot { get; init; }
 }
 
-/// <summary>衍生事件行(規劃書第 5.3 節「衍生事件(警報、CPA、UKC)」;目前為交通事件)。</summary>
+/// <summary>衍生事件行(規劃書第 5.3 節「衍生事件(警報、CPA、UKC)」):交通、時間表、評估、教官與引擎事件,讀回一律為 SimEvent。</summary>
 public sealed record RecordEvent
 {
     [JsonPropertyName("kind")] public string Kind { get; init; } = RecordKinds.Event;
     [JsonPropertyName("tick")] public required long Tick { get; init; }
-    [JsonPropertyName("event")] public required TrafficEvent Event { get; init; }
+    [JsonPropertyName("event")] public required SimEvent Event { get; init; }
+}
+
+/// <summary>評估摘要行(情境引擎設計第 4.8 節);計入 footer 的 sha256。</summary>
+public sealed record RecordSummary
+{
+    [JsonPropertyName("kind")] public string Kind { get; init; } = RecordKinds.Summary;
+    [JsonPropertyName("tick")] public required long Tick { get; init; }
+    [JsonPropertyName("summary")] public required AssessmentSummary Summary { get; init; }
 }
 
 public sealed record RecordFooter
@@ -74,4 +88,6 @@ public sealed record RecordFooter
     [JsonPropertyName("inputs")] public required long Inputs { get; init; }
     /// <summary>footer 之前所有行(含換行)的 SHA-256(hex)</summary>
     [JsonPropertyName("sha256")] public required string Sha256 { get; init; }
+    /// <summary>summary 行數(選填)</summary>
+    [JsonPropertyName("summaryLines")] public long? SummaryLines { get; init; }
 }

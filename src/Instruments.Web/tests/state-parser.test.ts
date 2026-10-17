@@ -105,3 +105,20 @@ describe('parseState(缺欄位防呆)', () => {
     expect(parseState([1, 2])).toBeNull();
   });
 });
+
+describe('情境引擎新增欄位(設計文件第 5.1 節)', () => {
+  it('visibility_nm、scenario、route 皆選填;有則解析,型別錯誤記入 issues', () => {
+    const base = defaultState('FSB1');
+    const r = parseState({ ...base, visibility_nm: 6, scenario: { id: 'E07', phase: 'degraded', parameterSetVersion: '2026.10.1', timelineFired: 2, timelinePending: 5, hardFailed: false, score: 85, ended: false }, route: { legIndex: 1, nextWaypoint: 'WP3', xtd_m: -12.5, xtdLimit_m: 50, distanceToWaypoint_nm: 0.8, bearingToWaypoint_deg: 370, legCourse_deg: 70, speedLimit_kn: 8, complete: false } })!;
+    expect(r.issues).toEqual([]);
+    expect(r.state.visibility_nm).toBe(6);
+    expect(r.state.scenario).toEqual({ id: 'E07', phase: 'degraded', parameterSetVersion: '2026.10.1', timelineFired: 2, timelinePending: 5, hardFailed: false, score: 85, ended: false });
+    expect(r.state.route).toEqual({ legIndex: 1, nextWaypoint: 'WP3', xtd_m: -12.5, xtdLimit_m: 50, distanceToWaypoint_nm: 0.8, bearingToWaypoint_deg: 10, legCourse_deg: 70, speedLimit_kn: 8, complete: false });
+    const none = parseState({ ...base })!;
+    expect(none.state.scenario).toBeUndefined();
+    expect(none.state.route).toBeUndefined();
+    const bad = parseState({ ...base, scenario: 'x', route: { xtd_m: 'far' } })!;
+    expect(bad.issues).toEqual(['scenario', 'route.xtd_m']);
+    expect(bad.state.route).toEqual({});
+  });
+});

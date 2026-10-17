@@ -23,6 +23,14 @@ public enum SimCommandType
     Restore,
     /// <summary>目標船控制(args:id、heading/speed 覆寫、add/remove、waypoints、aisOn/aisError、behaviour、colreg、lights/sound、activate、position)</summary>
     TargetControl,
+    /// <summary>教官手動觸發時間表項目(args:id、force;情境引擎設計第 5.2 節)</summary>
+    TriggerTimeline,
+    /// <summary>教官/帶領者記錄口頭辨識、通知機控室等核心偵測不到的動作(args:kind、itemId、role、note)</summary>
+    Acknowledge,
+    /// <summary>結束練習:凍結並定稿 summary(args:reason)</summary>
+    EndExercise,
+    /// <summary>查詢目前評估摘要(主控程序直接回覆,不進引擎佇列、不寫 input 行;引擎收到時忽略)</summary>
+    GetAssessment,
 }
 
 /// <summary>
@@ -49,6 +57,18 @@ public sealed record SimCommand
     public static SimCommand InjectFault(string fault) => new() { Type = SimCommandType.InjectFault, Value = Str(fault) };
     public static SimCommand ClearFault(string fault) => new() { Type = SimCommandType.ClearFault, Value = Str(fault) };
     public static SimCommand LoadScenario(string path) => new() { Type = SimCommandType.LoadScenario, Value = Str(path) };
+    /// <summary>以物件形式注入故障(args {name, args};第一版引擎只記錄 args)。</summary>
+    public static SimCommand InjectFault(string fault, object? faultArgs)
+        => new() { Type = SimCommandType.InjectFault, Args = Obj(new { name = fault, args = faultArgs }) };
+    /// <summary>手動觸發時間表項目(force = 略過條件/once 限制)。</summary>
+    public static SimCommand TriggerTimeline(string id, bool force = false)
+        => new() { Type = SimCommandType.TriggerTimeline, Args = Obj(new { id, force }) };
+    /// <summary>確認/通知紀錄:kind 為 verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|other。</summary>
+    public static SimCommand Acknowledge(string kind, string? itemId = null, string? role = null, string? note = null)
+        => new() { Type = SimCommandType.Acknowledge, Args = Obj(new { kind, itemId, role, note }) };
+    public static SimCommand EndExercise(string? reason = null)
+        => new() { Type = SimCommandType.EndExercise, Args = Obj(new { reason }) };
+    public static SimCommand GetAssessment() => new() { Type = SimCommandType.GetAssessment };
 
     /// <summary>目標船控制:<paramref name="args"/> 為匿名物件或字典,鍵名見 README「targetControl」。</summary>
     public static SimCommand TargetControl(object args) => new() { Type = SimCommandType.TargetControl, Args = Obj(args) };
@@ -62,13 +82,24 @@ public sealed record SimCommand
     public static SimCommand Autopilot(bool enabled, double? heading = null, double? rotLimit = null)
         => new() { Type = SimCommandType.Autopilot, Args = Obj(new { enabled, heading, rotLimit }) };
 
+    /// <summary>環境設定;<paramref name="visibilityNm"/> 與 <paramref name="rampS"/>(漸變秒數,0 = 立即)為情境引擎新增欄位。</summary>
     public static SimCommand SetEnvironment(double? windTrueSpeedKn = null, double? windTrueDirDeg = null,
-        double? currentSetDeg = null, double? currentDriftKn = null, double? waterDepth = null)
+        double? currentSetDeg = null, double? currentDriftKn = null, double? waterDepth = null,
+        double? visibilityNm = null, double? rampS = null)
     {
         object? wind = windTrueSpeedKn is null && windTrueDirDeg is null ? null : new { trueSpeed = windTrueSpeedKn, trueDir = windTrueDirDeg };
         object? current = currentSetDeg is null && currentDriftKn is null ? null : new { set = currentSetDeg, drift = currentDriftKn };
-        return new() { Type = SimCommandType.SetEnvironment, Args = Obj(new { wind, current, waterDepth }) };
+        return new() { Type = SimCommandType.SetEnvironment, Args = Obj(new { wind, current, waterDepth, visibility_nm = visibilityNm, ramp_s = rampS }) };
     }
+
+    /// <summary>injectFault 的故障名稱:value 字串,或 args.name(物件形式)。</summary>
+    public string? FaultName()
+    {
+        if (Value is { ValueKind: JsonValueKind.String } v) return v.GetString();
+        return Arg("name") is { ValueKind: JsonValueKind.String } n ? n.GetString() : null;
+    }
+
+    public string? ArgAsString(string name) => Arg(name) is { ValueKind: JsonValueKind.String } e ? e.GetString() : null;
 
     // ---- 讀取輔助 ----
     public double? ValueAsDouble() => AsDouble(Value);

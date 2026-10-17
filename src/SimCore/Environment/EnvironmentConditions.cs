@@ -21,6 +21,8 @@ public sealed class EnvironmentConditions
     /// <summary>流速(m/s)</summary>
     public double CurrentDriftMps { get; set; }
     public IDepthProvider Depth { get; set; } = new ConstantDepth(50.0);
+    /// <summary>能見度(nm;null = 無限制);只保存、漸變、廣播與記錄,無物理效果(情境引擎設計第 1.5 節)</summary>
+    public double? VisibilityNm { get; set; }
 
     public double WindEffectiveSpeedMps => WindTrueSpeedMps * GustFactor;
 

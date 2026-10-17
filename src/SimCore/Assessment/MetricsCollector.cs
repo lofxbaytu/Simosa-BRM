@@ -1,0 +1,244 @@
+using SimosaBRM.SimCore.Contracts;
+using SimosaBRM.SimCore.Engine;
+
+namespace SimosaBRM.SimCore.Assessment;
+
+public sealed class MetricsState
+{
+    public long Samples { get; set; }
+    public double DistanceM { get; set; }
+    public double SumSogKn { get; set; }
+    public double MaxSogKn { get; set; }
+    public int Freezes { get; set; }
+    public double[] RudderBins { get; set; } = new double[5];
+    public int HardOverCount { get; set; }
+    public double HardOverTimeS { get; set; }
+    public bool InHardOver { get; set; }
+    public int RudderOrders { get; set; }
+    public double? LastRudderOrderDeg { get; set; }
+    public long LastRudderOrderTick { get; set; } = -1;
+    public double MaxRotDegPerMin { get; set; }
+    public long MaxRotTick { get; set; } = -1;
+    public double TimeRotOverLimitS { get; set; }
+    public int RotExcursions { get; set; }
+    public bool RotOver { get; set; }
+    public int TelegraphChanges { get; set; }
+    public List<TelegraphSpanState> TelegraphSpans { get; set; } = new();
+    public int RpmOrders { get; set; }
+    public int ThrusterOrders { get; set; }
+    public double ThrusterTimeS { get; set; }
+    public double LastThrusterOrder { get; set; }
+    public double TimeOverSpeedLimitS { get; set; }
+    public double MaxOverSpeedKn { get; set; }
+    public bool SpeedOver { get; set; }
+    public string? SpeedLimitSource { get; set; }
+    public double AutopilotTimeS { get; set; }
+    public int AutopilotSwitches { get; set; }
+    public bool? LastAutopilotEnabled { get; set; }
+    // UKC
+    public double? MinUkcM { get; set; }
+    public long MinUkcTick { get; set; } = -1;
+    public double MinUkcSquatM { get; set; }
+    public double TimeBelowUkcLimitS { get; set; }
+    public int UkcExcursions { get; set; }
+    public bool UkcBelow { get; set; }
+    public int Groundings { get; set; }
+    public double? UkcLimitM { get; set; }
+    public string? UkcLimitSource { get; set; }
+}
+
+public sealed class TelegraphSpanState
+{
+    public string Order { get; set; } = "";
+    public long FromTick { get; set; }
+}
+
+/// <summary>
+/// 操縱控制、一般與 UKC 指標的每秒累計器(第 4.3、4.5 節);舵角分箱 0-5/5-10/10-20/20-35/&gt;35,滿舵 |δ| ≥ hardOver − 0.5°,
+/// 速限/UKC 超限事件含滯後(0.2 kn / +0.2 m)。
+/// </summary>
+public sealed class MetricsCollector
+{
+    private static readonly string[] BinNames = { "0-5", "5-10", "10-20", "20-35", ">35" };
+    private readonly double _hardOverDeg;
+    private readonly double? _rotLimit;
+    private readonly double _dt;
+
+    public MetricsState State { get; private set; } = new();
+
+    public MetricsCollector(double hardOverDeg, double? rotLimitDegPerMin, double dt, TelegraphOrder initialTelegraph)
+    {
+        _hardOverDeg = hardOverDeg;
+        _rotLimit = rotLimitDegPerMin;
+        _dt = dt;
+        State.TelegraphSpans.Add(new TelegraphSpanState { Order = initialTelegraph.ToString(), FromTick = 0 });
+    }
+
+    public void OnFreeze() => State.Freezes++;
+    public void OnGrounding() => State.Groundings++;
+
+    /// <summary>學員指令觀察(引擎於套用指令時呼叫)。</summary>
+    public void OnAction(ObservedAction a)
+    {
+        var st = State;
+        switch (a.Kind)
+        {
+            case ActionKinds.RudderOrder:
+                // 1 s 視窗內合併:視窗自計入的那道舵令起算,不隨後續舵令延長(連續拖曳舵輪每 1 s 最多計 1 次)
+                if (st.LastRudderOrderTick < 0 || a.Tick - st.LastRudderOrderTick >= Math.Round(1.0 / _dt))
+                {
+                    st.RudderOrders++;
+                    st.LastRudderOrderTick = a.Tick;
+                }
+                break;
+            case ActionKinds.TelegraphChange:
+                st.TelegraphChanges++;
+                break;
+            case ActionKinds.RpmOrder: st.RpmOrders++; break;
+            case ActionKinds.ThrusterOrder: st.ThrusterOrders++; break;
+            case ActionKinds.AutopilotOn or ActionKinds.AutopilotOff: st.AutopilotSwitches++; break;
+        }
+    }
+
+    /// <summary>車鐘變更(含時間表 ownShip 覆寫)紀錄段落。</summary>
+    public void OnTelegraph(TelegraphOrder order, long tick)
+    {
+        var last = State.TelegraphSpans[^1];
+        if (last.Order == order.ToString()) return;
+        State.TelegraphSpans.Add(new TelegraphSpanState { Order = order.ToString(), FromTick = tick });
+    }
+
+    public void Sample(Situation sit, (double Limit, string Source)? speedLimit, (double LimitM, string Source)? ukcLimit, Action<string, string?, object?> raise)
+    {
+        var st = State;
+        st.Samples++;
+        st.DistanceM += Units.KnToMps(sit.SogKn);
+        st.SumSogKn += sit.SogKn;
+        if (sit.SogKn > st.MaxSogKn) st.MaxSogKn = sit.SogKn;
+
+        var r = Math.Abs(sit.RudderDeg);
+        st.RudderBins[r < 5 ? 0 : r < 10 ? 1 : r < 20 ? 2 : r <= 35 ? 3 : 4] += 1.0;
+        var hard = r >= _hardOverDeg - 0.5;
+        if (hard) { st.HardOverTimeS += 1.0; if (!st.InHardOver) st.HardOverCount++; }
+        st.InHardOver = hard;
+
+        var rot = Math.Abs(sit.RotDegPerMin);
+        if (rot > st.MaxRotDegPerMin || st.MaxRotTick < 0) { st.MaxRotDegPerMin = rot; st.MaxRotTick = sit.Tick; }
+        if (_rotLimit is { } lim)
+        {
+            var over = rot > lim;
+            if (over) { st.TimeRotOverLimitS += 1.0; if (!st.RotOver) st.RotExcursions++; }
+            st.RotOver = over;
+        }
+
+        if (Math.Abs(sit.ThrusterOrder) >= 0.05) st.ThrusterTimeS += 1.0;
+
+        if (sit.AutopilotEnabled) st.AutopilotTimeS += 1.0;
+        st.LastAutopilotEnabled = sit.AutopilotEnabled;
+
+        if (speedLimit is { } sl)
+        {
+            var over = sit.SogKn - sl.Limit;
+            if (over > 0)
+            {
+                st.TimeOverSpeedLimitS += 1.0;
+                if (over > st.MaxOverSpeedKn) { st.MaxOverSpeedKn = over; st.SpeedLimitSource = sl.Source; }
+                if (!st.SpeedOver)
+                {
+                    st.SpeedOver = true;
+                    raise(SimEventKinds.SpeedLimitExceeded, null, new { sog_kn = sit.SogKn, limit_kn = sl.Limit, source = sl.Source.Split(':')[0], id = sl.Source.Contains(':') ? sl.Source.Split(':')[1] : sl.Source });
+                }
+            }
+            else if (st.SpeedOver && over <= -0.2)
+            {
+                st.SpeedOver = false;
+                raise(SimEventKinds.SpeedLimitRestored, null, new { sog_kn = sit.SogKn, limit_kn = sl.Limit, source = sl.Source.Split(':')[0], id = sl.Source.Contains(':') ? sl.Source.Split(':')[1] : sl.Source });
+            }
+        }
+        else if (st.SpeedOver)
+        {
+            st.SpeedOver = false;
+            raise(SimEventKinds.SpeedLimitRestored, null, new { sog_kn = sit.SogKn });
+        }
+
+        if (st.MinUkcM is not { } mu || sit.UkcM < mu) { st.MinUkcM = sit.UkcM; st.MinUkcTick = sit.Tick; st.MinUkcSquatM = sit.SquatM; }
+        if (ukcLimit is { } ul)
+        {
+            st.UkcLimitM = ul.LimitM;
+            st.UkcLimitSource = ul.Source;
+            if (sit.UkcM < ul.LimitM)
+            {
+                st.TimeBelowUkcLimitS += 1.0;
+                if (!st.UkcBelow)
+                {
+                    st.UkcBelow = true;
+                    st.UkcExcursions++;
+                    raise(SimEventKinds.UkcAlarm, null, new { ukc_m = sit.UkcM, limit_m = ul.LimitM, source = ul.Source });
+                }
+            }
+            else if (st.UkcBelow && sit.UkcM >= ul.LimitM + 0.2)
+            {
+                st.UkcBelow = false;
+                raise(SimEventKinds.UkcClear, null, new { ukc_m = sit.UkcM, limit_m = ul.LimitM, source = ul.Source });
+            }
+        }
+    }
+
+    public SummaryGeneral General(double time) => new()
+    {
+        DurationS = time,
+        Freezes = State.Freezes,
+        DistanceNm = State.DistanceM / Units.MetresPerNauticalMile,
+        AvgSogKn = State.Samples > 0 ? State.SumSogKn / State.Samples : 0.0,
+        MaxSogKn = State.MaxSogKn,
+    };
+
+    public SummaryUkc Ukc() => new()
+    {
+        MinM = State.MinUkcM,
+        MinAtS = State.MinUkcTick >= 0 ? State.MinUkcTick * _dt : null,
+        MinSquatM = State.MinUkcM is null ? null : State.MinUkcSquatM,
+        TimeBelowLimitS = State.TimeBelowUkcLimitS,
+        Excursions = State.UkcExcursions,
+        Groundings = State.Groundings,
+        LimitM = State.UkcLimitM,
+        LimitSource = State.UkcLimitSource,
+    };
+
+    public SummaryManoeuvring Manoeuvring(long tick)
+    {
+        var st = State;
+        var spans = new List<TelegraphSpan>();
+        for (var i = 0; i < st.TelegraphSpans.Count; i++)
+        {
+            var from = st.TelegraphSpans[i].FromTick * _dt;
+            var to = (i + 1 < st.TelegraphSpans.Count ? st.TelegraphSpans[i + 1].FromTick : tick) * _dt;
+            spans.Add(new TelegraphSpan { Order = st.TelegraphSpans[i].Order, FromS = from, ToS = to, DurationS = to - from });
+        }
+        var bins = new Dictionary<string, double>();
+        for (var i = 0; i < BinNames.Length; i++) bins[BinNames[i]] = st.RudderBins[i];
+        return new SummaryManoeuvring
+        {
+            RudderDistributionS = bins,
+            HardOverCount = st.HardOverCount,
+            HardOverTimeS = st.HardOverTimeS,
+            RudderOrders = st.RudderOrders,
+            MaxRotDegPerMin = st.MaxRotDegPerMin,
+            MaxRotAtS = st.MaxRotTick >= 0 ? st.MaxRotTick * _dt : null,
+            TimeRotOverLimitS = st.TimeRotOverLimitS,
+            RotExcursions = st.RotExcursions,
+            TelegraphChanges = st.TelegraphChanges,
+            TelegraphOrders = spans,
+            RpmOrders = st.RpmOrders,
+            ThrusterOrders = st.ThrusterOrders,
+            ThrusterTimeS = st.ThrusterTimeS,
+            TimeOverSpeedLimitS = st.TimeOverSpeedLimitS,
+            MaxOverSpeedKn = st.MaxOverSpeedKn,
+            SpeedLimitSource = st.SpeedLimitSource,
+            AutopilotTimeS = st.AutopilotTimeS,
+            AutopilotSwitches = st.AutopilotSwitches,
+        };
+    }
+
+    public void Restore(MetricsState s) => State = s;
+}

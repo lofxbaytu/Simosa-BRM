@@ -4,6 +4,10 @@ import { serializeCommand, timeScaleCommand } from '../src/lib/command.js';
 import {
   DEFAULT_FAULTS,
   TIME_SCALES,
+  acknowledgeCommand,
+  endExerciseCommand,
+  getAssessmentCommand,
+  triggerTimelineCommand,
   clearFaultCommand,
   faultCatalogue,
   injectFaultCommand,
@@ -99,5 +103,32 @@ public static class FaultNames
     if (source === 'simcore') {
       for (const n of ['steeringGear', 'mainEngine', 'bowThruster']) expect(faults.find((f) => f.name === n)!.modelled).toBe(true);
     }
+  });
+});
+
+describe('情境引擎指令(設計文件第 5.2 節)', () => {
+  it('setEnvironment 附 ramp_s(只在有其他欄位時)與 visibility_nm', () => {
+    expect(setEnvironmentCommand({ wind: { trueSpeed: 20, trueDir: 10 }, ramp_s: 180 })).toEqual({ type: 'setEnvironment', args: { wind: { trueSpeed: 20, trueDir: 10 }, ramp_s: 180 } });
+    expect(setEnvironmentCommand({ visibility_nm: 0.5, ramp_s: 0 })).toEqual({ type: 'setEnvironment', args: { visibility_nm: 0.5 } });
+    expect(setEnvironmentCommand({ ramp_s: 60 })).toBeNull();
+  });
+
+  it('triggerTimeline:manual 項目不帶 force;強制時 force: true;空 id 丟例外', () => {
+    expect(triggerTimelineCommand('emergencySteering')).toEqual({ type: 'triggerTimeline', args: { id: 'emergencySteering' } });
+    expect(triggerTimelineCommand(' steeringFail ', true)).toEqual({ type: 'triggerTimeline', args: { id: 'steeringFail', force: true } });
+    expect(() => triggerTimelineCommand('  ')).toThrow(RangeError);
+  });
+
+  it('acknowledge:kind 在列舉內;未知 kind 轉 other 並把原字串放 note;只放有給的欄位', () => {
+    expect(acknowledgeCommand({ kind: 'notifyEcr', role: 'master', note: '已通知機控室', itemId: 'steeringFail' })).toEqual({ type: 'acknowledge', args: { kind: 'notifyEcr', itemId: 'steeringFail', role: 'master', note: '已通知機控室' } });
+    expect(acknowledgeCommand({ kind: 'verbal' })).toEqual({ type: 'acknowledge', args: { kind: 'verbal' } });
+    expect(acknowledgeCommand({ kind: 'tugFast', note: 'x' })).toEqual({ type: 'acknowledge', args: { kind: 'other', note: 'tugFast:x' } });
+    expect(acknowledgeCommand({ kind: 'tugFast' })).toEqual({ type: 'acknowledge', args: { kind: 'other', note: 'tugFast' } });
+  });
+
+  it('endExercise 與 getAssessment', () => {
+    expect(endExerciseCommand('到達泊位')).toEqual({ type: 'endExercise', args: { reason: '到達泊位' } });
+    expect(endExerciseCommand()).toEqual({ type: 'endExercise' });
+    expect(getAssessmentCommand()).toEqual({ type: 'getAssessment' });
   });
 });

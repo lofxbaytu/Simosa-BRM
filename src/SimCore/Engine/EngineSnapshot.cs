@@ -8,7 +8,8 @@ namespace SimosaBRM.SimCore.Engine;
 /// </summary>
 public sealed record EngineSnapshot
 {
-    public int Version { get; init; } = 1;
+    /// <summary>2:新增 Timeline/Assessment/ParameterSetVersion/Phase/VisibilityNm(皆可 null;Version 1 快照還原時沿用引擎目前狀態)</summary>
+    public int Version { get; init; } = 2;
     public required string ShipId { get; init; }
     public required LoadingCondition Loading { get; init; }
     public required string ScenarioId { get; init; }
@@ -29,6 +30,15 @@ public sealed record EngineSnapshot
     public int? StartsRemaining { get; init; }
     /// <summary>目標船與碰撞旗標(交通模組;舊快照無此欄位時沿用引擎目前的目標船)</summary>
     public Traffic.TrafficSnapshot? Traffic { get; init; }
+    /// <summary>時間表執行狀態(情境引擎;舊快照無此欄位)</summary>
+    public Scenario.TimelineSnapshot? Timeline { get; init; }
+    /// <summary>評估模組狀態(情境引擎;舊快照無此欄位)</summary>
+    public Assessment.AssessmentSnapshot? Assessment { get; init; }
+    /// <summary>重新評分的影子評估模組狀態(只在 --rescore 重播中存在;紀錄的快照行不含)</summary>
+    public Assessment.AssessmentSnapshot? RescoreAssessment { get; init; }
+    public string? ParameterSetVersion { get; init; }
+    public string? Phase { get; init; }
+    public double? VisibilityNm { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
     public required string StateHash { get; init; }
 

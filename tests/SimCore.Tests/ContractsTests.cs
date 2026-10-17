@@ -87,4 +87,79 @@ public class ContractsTests
         var t = SimCommand.Telegraph(TelegraphOrder.NAVF).ToJson();
         Assert.Contains("\"value\":\"NAVF\"", t);
     }
+
+    [Fact]
+    public void ScenarioEngineStateFieldsAreOptionalAndPresent()
+    {
+        var schemaPath = Path.Combine(TestData.Root, "src", "Contracts", "state.schema.json");
+        using var schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+        var required = schema.RootElement.GetProperty("required").EnumerateArray().Select(e => e.GetString()!).ToList();
+        Assert.DoesNotContain("scenario", required);
+        Assert.DoesNotContain("route", required);
+        Assert.DoesNotContain("visibility_nm", required);
+        var props = schema.RootElement.GetProperty("properties");
+        Assert.True(props.TryGetProperty("scenario", out var sc));
+        Assert.Equal(new[] { "id", "phase" }, sc.GetProperty("required").EnumerateArray().Select(e => e.GetString()));
+        foreach (var key in new[] { "legIndex", "nextWaypoint", "xtd_m", "xtdLimit_m", "distanceToWaypoint_nm", "bearingToWaypoint_deg", "legCourse_deg", "speedLimit_kn", "complete" })
+            Assert.True(props.GetProperty("route").GetProperty("properties").TryGetProperty(key, out _), key);
+
+        var engine = new SimosaBRM.SimCore.Engine.SimulationEngine(TestData.Fsb1(), TestData.E07());
+        engine.Run(60);
+        using var doc = JsonDocument.Parse(ContractJson.Serialize(engine.BuildState()));
+        var root = doc.RootElement;
+        Assert.Equal(6.0, root.GetProperty("visibility_nm").GetDouble());
+        var scen = root.GetProperty("scenario");
+        Assert.Equal("E07_steering_failure", scen.GetProperty("id").GetString());
+        Assert.Equal("normal", scen.GetProperty("phase").GetString());
+        Assert.Equal("2026.10.1", scen.GetProperty("parameterSetVersion").GetString());
+        Assert.False(scen.GetProperty("ended").GetBoolean());
+        var route = root.GetProperty("route");
+        Assert.Equal("WP2", route.GetProperty("nextWaypoint").GetString()); // 航段 0 = WP1 → WP2
+        Assert.Equal(50.0, route.GetProperty("xtdLimit_m").GetDouble());
+        Assert.True(route.TryGetProperty("xtd_m", out _));
+        var back = ContractJson.Deserialize<OwnShipState>(root.GetRawText());
+        Assert.Equal(root.GetRawText(), ContractJson.Serialize(back));
+    }
+
+    [Fact]
+    public void NewCommandExamplesParseAndSerialize()
+    {
+        var schemaPath = Path.Combine(TestData.Root, "src", "Contracts", "command.schema.json");
+        using var schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+        var types = schema.RootElement.GetProperty("properties").GetProperty("type").GetProperty("enum").EnumerateArray().Select(e => e.GetString()).ToList();
+        foreach (var t in new[] { "triggerTimeline", "acknowledge", "endExercise", "getAssessment" }) Assert.Contains(t, types);
+        var examples = schema.RootElement.GetProperty("examples").EnumerateArray().Select(e => SimCommand.Parse(e.GetRawText())!).ToList();
+        var trig = examples.Single(c => c.Type == SimCommandType.TriggerTimeline);
+        Assert.Equal("emergencySteering", trig.ArgAsString("id"));
+        Assert.False(trig.ArgAsBool("force"));
+        var ack = examples.Single(c => c.Type == SimCommandType.Acknowledge);
+        Assert.Equal("notifyEcr", ack.ArgAsString("kind"));
+        Assert.Equal("steeringFail", ack.ArgAsString("itemId"));
+        var inj = examples.Last(c => c.Type == SimCommandType.InjectFault);
+        Assert.Equal("steeringGear", inj.FaultName());
+        Assert.Equal(15.0, SimCommand.AsDouble(inj.Arg("args")!.Value.GetProperty("jamAt_deg")));
+        var env = examples.Last(c => c.Type == SimCommandType.SetEnvironment);
+        Assert.Equal(180.0, env.ArgAsDouble("ramp_s"));
+        Assert.Equal(2.0, env.ArgAsDouble("visibility_nm"));
+        Assert.Contains(examples, c => c.Type == SimCommandType.GetAssessment);
+        Assert.Contains("\"type\":\"triggerTimeline\"", SimCommand.TriggerTimeline("x", true).ToJson());
+        Assert.Contains("\"ramp_s\":5", SimCommand.SetEnvironment(windTrueSpeedKn: 1, rampS: 5).ToJson());
+    }
+
+    [Fact]
+    public void ParameterSetSchemaExampleLoads()
+    {
+        var schemaPath = Path.Combine(TestData.Root, "src", "Contracts", "parameter-set.schema.json");
+        using var schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+        Assert.Equal("ParameterSet", schema.RootElement.GetProperty("title").GetString());
+        var example = schema.RootElement.GetProperty("examples")[0].GetRawText();
+        var set = ContractJson.Deserialize<SimosaBRM.SimCore.Parameters.ParameterSet>(example)!.Validate();
+        Assert.Equal(3, set.Parameters.Count);
+        Assert.Equal("nm", set.Parameters["navigation.cpa.openSea_nm"].Unit);
+        // 事件紀錄行的 event 物件為 SimEvent(舊欄位不變)
+        var ev = ContractJson.Deserialize<SimosaBRM.SimCore.Engine.SimEvent>("""{"kind":"cpaAlarm","tick":100,"t":2.0,"targetId":"T1","cpa_nm":0.3}""")!;
+        Assert.Equal("cpaAlarm", ev.Kind);
+        Assert.Equal("engine", ev.Source);
+        Assert.Equal(0.3, ev.CpaNm);
+    }
 }

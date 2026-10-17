@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/scenario.schema.json",
   "title": "Scenario",
-  "description": "情境檔(data/scenarios/*.yaml;規劃書第 9.1 節、第 11.3 節)。最小 schema:自船 ID 與裝載狀態、初始位置(經緯度或本地 ENU)/航向/速度、環境、亂數種子;選填 targets(目標船)與 assessment(評估門檻)。C# SimCore 與 Python 參考實作共用(Python 無目標船,忽略 targets/assessment);角度為度、速度為節、航向 0 至 360、風向為來向、流向為去向。",
+  "description": "情境檔(data/scenarios/*.yaml;規劃書第 9.1 節、第 11.3 節;情境引擎設計 docs/design/scenario-engine.md)。最小 schema:自船 ID 與裝載狀態、初始位置(經緯度或本地 ENU)/航向/速度、環境、亂數種子;選填 targets(目標船)、assessment(評估門檻與規則)、timeline(事件時間表)、route(航線)、zones(區域)、briefing(簡報)。C# SimCore 與 Python 參考實作共用(Python 忽略 targets/assessment/timeline/route/zones);角度為度、速度為節、航向 0 至 360、風向為來向、流向為去向。數值欄位可寫整個字串 \"${params:<鍵>}\" 引用公司程序參數集(parameter-set.schema.json),載入時解析;在 YAML 流式寫法 { } 內須加引號。",
   "type": "object",
   "required": [
     "id",
@@ -214,6 +214,11 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "水深 (m,常數;日後改為水深網格參照)"
+        },
+        "visibility_nm": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "能見度(nm;未給 = 無限制);核心只保存、漸變、廣播與記錄,無物理效果"
         }
       }
     },
@@ -226,15 +231,126 @@
     },
     "assessment": {
       "type": "object",
-      "description": "評估參數(規劃書第 8.3 節)",
+      "description": "評估參數與規則(規劃書第 8.3 節;情境引擎設計第 1.3 節);數值欄位可引用參數集",
       "properties": {
+        "parameterSet": {
+          "type": "string",
+          "description": "參數集路徑(選填;預設 data/parameters/company-procedures.yaml,主控程序 --parameters 可覆寫)"
+        },
         "minCpa_nm": {
-          "type": "number",
-          "minimum": 0,
+          "$ref": "#/$defs/numberOrParam",
           "default": 0.5,
           "description": "自船與任一目標 CPA 低於此值且 TCPA > 0 時記錄 cpaAlarm 事件"
+        },
+        "encounter": {
+          "type": "object",
+          "properties": {
+            "detectionRange_nm": {
+              "$ref": "#/$defs/numberOrParam",
+              "default": 6,
+              "description": "「首次偵測」= 目標進入此距離且 TCPA > 0"
+            },
+            "substantialCourseChange_deg": {
+              "$ref": "#/$defs/numberOrParam",
+              "default": 30
+            },
+            "substantialSpeedChange_kn": {
+              "$ref": "#/$defs/numberOrParam",
+              "default": 2
+            },
+            "cpaInterest_nm": {
+              "$ref": "#/$defs/numberOrParam",
+              "description": "會遇開始的 CPA 關注門檻(預設 2 × minCpa_nm)"
+            }
+          }
+        },
+        "ukc": {
+          "type": "object",
+          "properties": {
+            "min": {
+              "$ref": "#/$defs/ukcLimit"
+            }
+          }
+        },
+        "manoeuvring": {
+          "type": "object",
+          "properties": {
+            "rotLimit_degPerMin": {
+              "$ref": "#/$defs/numberOrParam"
+            },
+            "hardOver_deg": {
+              "$ref": "#/$defs/numberOrParam",
+              "description": "滿舵角;未給時取船舶 rudder.maxAngle_deg(FSB1 70、FSB2 35)"
+            }
+          }
+        },
+        "hardFail": {
+          "type": "array",
+          "description": "任一成立 → passed = false",
+          "items": {
+            "$ref": "#/$defs/hardFailRule"
+          }
+        },
+        "bands": {
+          "type": "array",
+          "description": "容許帶與扣分",
+          "items": {
+            "$ref": "#/$defs/bandRule"
+          }
+        },
+        "required": {
+          "type": "array",
+          "description": "必要事件(第一版只用可自動偵測者)",
+          "items": {
+            "$ref": "#/$defs/requiredEvent"
+          }
+        },
+        "scoring": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/numberOrParam",
+              "default": 100
+            },
+            "passMark": {
+              "$ref": "#/$defs/numberOrParam",
+              "default": 70
+            },
+            "appliesTo": {
+              "type": "object",
+              "description": "保留:依階段加權(第一版不實作)"
+            }
+          }
         }
       }
+    },
+    "timeline": {
+      "type": "array",
+      "description": "事件時間表(情境引擎設計第 1.1 節;每秒評估;Python 參考實作忽略)",
+      "items": {
+        "$ref": "#/$defs/timelineItem"
+      }
+    },
+    "route": {
+      "$ref": "#/$defs/route"
+    },
+    "zones": {
+      "type": "array",
+      "description": "區域多邊形(noGo | speedLimit | ukcPolicy | reporting)",
+      "items": {
+        "$ref": "#/$defs/zone"
+      }
+    },
+    "briefing": {
+      "description": "簡報:字串(等同 {text})或物件",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/briefing"
+        }
+      ]
     }
   },
   "examples": [
@@ -263,10 +379,36 @@
           "set": 200,
           "drift": 0.5
         },
-        "waterDepth": 30
+        "waterDepth": 30,
+        "visibility_nm": 10
       },
       "assessment": {
-        "minCpa_nm": 0.5
+        "minCpa_nm": 0.5,
+        "hardFail": [
+          {
+            "id": "collision",
+            "rule": "collision"
+          },
+          {
+            "id": "grounding",
+            "rule": "grounding"
+          }
+        ],
+        "bands": [
+          {
+            "id": "minCpa",
+            "metric": "collisionAvoidance.minCpa_nm",
+            "direction": "below",
+            "warn": 1.0,
+            "fail": 0.5,
+            "penalty": 10,
+            "failPenalty": 30
+          }
+        ],
+        "scoring": {
+          "start": 100,
+          "passMark": 70
+        }
       },
       "targets": [
         {
@@ -338,6 +480,85 @@
             },
             "lessThan": 1.5
           }
+        }
+      ],
+      "briefing": "麥寮港外開闊水域;熟悉儀器與標準用語,觀察對遇目標並依 COLREG 行動。",
+      "route": {
+        "name": "北向航線",
+        "xtdLimit_m": 300,
+        "waypoints": [
+          {
+            "name": "WP1",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "name": "WP2",
+            "x": 0,
+            "y": 12000,
+            "checkpoint": true
+          }
+        ]
+      },
+      "timeline": [
+        {
+          "id": "ecrCheck",
+          "name": "機控室例行通話",
+          "when": {
+            "type": "time",
+            "atLeast": 300
+          },
+          "actions": [
+            {
+              "voiceScript": {
+                "role": "ecr",
+                "channel": "phone",
+                "text": "駕駛台,機控室。主機運轉正常。",
+                "lang": "zh-TW"
+              }
+            }
+          ]
+        },
+        {
+          "id": "steeringFail",
+          "name": "舵機故障",
+          "phase": "degraded",
+          "when": {
+            "all": [
+              {
+                "type": "routeLeg",
+                "atLeast": 0
+              },
+              {
+                "type": "time",
+                "atLeast": 600
+              }
+            ]
+          },
+          "actions": [
+            {
+              "injectFault": "steeringGear"
+            },
+            {
+              "message": {
+                "to": "instructor",
+                "text": "已注入舵機故障",
+                "severity": "warning"
+              }
+            }
+          ]
+        },
+        {
+          "id": "emergencySteering",
+          "manual": true,
+          "actions": [
+            {
+              "clearFault": "steeringGear"
+            },
+            {
+              "phase": "normal"
+            }
+          ]
         }
       ]
     }
@@ -764,6 +985,687 @@
               "description": "kn"
             }
           }
+        }
+      }
+    },
+    "paramRef": {
+      "type": "string",
+      "pattern": "^\\$\\{params:[A-Za-z0-9_.\\-]+\\}$",
+      "description": "公司程序參數集引用(整個字串;不支援內嵌/運算)"
+    },
+    "numberOrParam": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/paramRef"
+        }
+      ]
+    },
+    "ukcLimit": {
+      "type": "object",
+      "description": "UKC 門檻:{ metres } 或 { fractionOfDraft }",
+      "properties": {
+        "metres": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "fractionOfDraft": {
+          "$ref": "#/$defs/numberOrParam"
+        }
+      }
+    },
+    "triggerCondition": {
+      "type": "object",
+      "description": "觸發條件(遞迴):leaf(type 必填)或組合 all / any / not;欄位依 type 選用。time ★ atLeast(秒)、since{event,itemId?,targetId?,legIndex?,waypoint?};ownDistance ★ point|waypoint|target、lessThan/greaterThan(nm);ownHeading ★ greaterThan/lessThan(度,順時針扇區);ownSpeed metric sog|stw、lessThan/greaterThan(kn);ukc lessThan/greaterThan(m)|lessThanFractionOfDraft;xtd greaterThan(m)、side port|starboard|any;routeLeg atLeast|equals|passedWaypoint;zone id、inside;phase equals;event kind、itemId?、targetId?、count{atLeast};fault name、active;telegraph in|notIn;autopilot enabled;manual(永遠為假)",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "time",
+            "ownDistance",
+            "ownHeading",
+            "ownSpeed",
+            "ukc",
+            "xtd",
+            "routeLeg",
+            "zone",
+            "phase",
+            "event",
+            "fault",
+            "telegraph",
+            "autopilot",
+            "manual"
+          ]
+        },
+        "all": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/triggerCondition"
+          }
+        },
+        "any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/triggerCondition"
+          }
+        },
+        "not": {
+          "$ref": "#/$defs/triggerCondition"
+        },
+        "atLeast": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "since": {
+          "type": "object",
+          "required": [
+            "event"
+          ],
+          "properties": {
+            "event": {
+              "type": "string"
+            },
+            "itemId": {
+              "type": "string"
+            },
+            "targetId": {
+              "type": "string"
+            },
+            "legIndex": {
+              "type": "integer"
+            },
+            "waypoint": {
+              "type": "string"
+            }
+          }
+        },
+        "point": {
+          "$ref": "#/$defs/position"
+        },
+        "waypoint": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "lessThan": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "greaterThan": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "metric": {
+          "type": "string",
+          "enum": [
+            "sog",
+            "stw"
+          ]
+        },
+        "lessThanFractionOfDraft": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "port",
+            "starboard",
+            "any"
+          ]
+        },
+        "equals": {
+          "description": "routeLeg:航段索引;phase:階段名稱",
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "passedWaypoint": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "inside": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "targetId": {
+          "type": "string"
+        },
+        "count": {
+          "type": "object",
+          "properties": {
+            "atLeast": {
+              "type": "integer",
+              "default": 1
+            }
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "in": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notIn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "timelineAction": {
+      "type": "object",
+      "description": "只有一個鍵的物件(鍵即動作名):injectFault(<name> | {name, args})、clearFault(<name> | all)、setEnvironment{wind{trueSpeed,trueDir,gustiness},current{set,drift},waterDepth,visibility_nm,ramp_s}、targetControl{同 command.schema.json targetControl.args}、voiceScript{role,channel,text?,file?,lang?,durationEstimate_s?}、message{to: instructor|all, text, severity: info|warning|alarm}、phase: <name>、freeze{reason?}、autopilot{enabled,heading?,rotLimit?}、ownShip{rudder?,telegraph?,rpm?,thruster?}、timeScale: <n>、arm: <itemId>、disarm: <itemId>、endExercise{reason?}。不允許 loadScenario/reset/restore/snapshot",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "injectFault",
+          "clearFault",
+          "setEnvironment",
+          "targetControl",
+          "voiceScript",
+          "message",
+          "phase",
+          "freeze",
+          "autopilot",
+          "ownShip",
+          "timeScale",
+          "arm",
+          "disarm",
+          "endExercise"
+        ]
+      }
+    },
+    "timelineItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "actions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "情境內唯一;事件、手動觸發、評估規則以此引用"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string",
+          "description": "觸發時把情境階段設為此值(normal → degraded → emergency,規劃書第 8.1 節三步升級;允許自訂)"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "instructor",
+            "all"
+          ],
+          "default": "instructor",
+          "description": "all 時事件以 visible=true 廣播,學員站可顯示"
+        },
+        "repeat": {
+          "description": "once(預設)| always | { every_s, max }",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "once",
+                "always"
+              ]
+            },
+            {
+              "type": "object",
+              "required": [
+                "every_s"
+              ],
+              "properties": {
+                "every_s": {
+                  "$ref": "#/$defs/numberOrParam"
+                },
+                "max": {
+                  "type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "cooldown_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "default": 0,
+          "description": "repeat 非 once 時兩次觸發的最短間隔"
+        },
+        "holdFor_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "default": 0,
+          "description": "條件需連續成立多少秒才觸發"
+        },
+        "delay_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "default": 0,
+          "description": "觸發後延遲多少秒執行動作(待執行表進快照)"
+        },
+        "manual": {
+          "type": "boolean",
+          "default": false,
+          "description": "只能由教官 triggerTimeline 觸發(when 可省略);false 時教官仍可用 force 強制觸發"
+        },
+        "armed": {
+          "type": "boolean",
+          "default": true,
+          "description": "初始是否啟用;false 者需被 arm 動作啟用"
+        },
+        "when": {
+          "$ref": "#/$defs/triggerCondition"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/timelineAction"
+          }
+        }
+      }
+    },
+    "routeWaypoint": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "description": "航點(經緯度或 ENU);xtdLimit_m / speedLimit_kn 作用於「到達該航點的那一段」",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "lat": {
+          "type": "number"
+        },
+        "lon": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "xtdLimit_m": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "speedLimit_kn": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "arrivalRadius_m": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "到達半徑(預設 max(2·LOA, 150 m));最後一段只用半徑判定通過"
+        },
+        "checkpoint": {
+          "type": "boolean",
+          "default": false,
+          "description": "通過時產生 checkpointPassed 事件"
+        },
+        "report": {
+          "type": "string",
+          "description": "應報告的說明(事件 reportPointPassed;供核對 acknowledge {kind: report})"
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": [
+        "waypoints"
+      ],
+      "description": "航線(情境引擎設計第 1.2 節、第 4.2 節 XTD 演算法:右偏為正)",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "xtdLimit_m": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "預設走廊半寬(可被航點覆寫)"
+        },
+        "startLeg": {
+          "type": "integer",
+          "default": 0
+        },
+        "waypoints": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/routeWaypoint"
+          }
+        }
+      }
+    },
+    "zone": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "polygon"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "noGo",
+            "speedLimit",
+            "ukcPolicy",
+            "reporting"
+          ]
+        },
+        "polygon": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/position"
+          },
+          "description": "≥ 3 點,經緯度或 ENU 混用;自船以船舯點判定內外(ray casting)"
+        },
+        "waterDepth_m": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "區域內水深覆寫(ukcPolicy;多區重疊取最淺;進快照)"
+        },
+        "ukcMin": {
+          "$ref": "#/$defs/ukcLimit"
+        },
+        "speedLimit_kn": {
+          "$ref": "#/$defs/numberOrParam"
+        }
+      }
+    },
+    "briefing": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "roles": {
+          "type": "array",
+          "description": "規劃書第 9.1 節「需人員扮演的角色與最少人數」",
+          "items": {
+            "type": "object",
+            "required": [
+              "role"
+            ],
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "playedBy": {
+                "type": "string",
+                "description": "leader | voiceScript | instructor | trainee"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "minParticipants": {
+          "type": "integer"
+        },
+        "duration_s": {
+          "type": "number",
+          "description": "情境預估長度(驗證器用;預設 2 小時)"
+        }
+      }
+    },
+    "hardFailRule": {
+      "type": "object",
+      "required": [
+        "id",
+        "rule"
+      ],
+      "description": "rule:grounding | collision | cpa(lessThan nm,非 escort 目標的最小實際通過距離)| ukc(lessThan {metres|fractionOfDraft})| zoneEntered(zoneId)| event(kind)",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string",
+          "enum": [
+            "grounding",
+            "collision",
+            "cpa",
+            "ukc",
+            "zoneEntered",
+            "event"
+          ]
+        },
+        "lessThan": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/paramRef"
+            },
+            {
+              "$ref": "#/$defs/ukcLimit"
+            }
+          ]
+        },
+        "excludeEscorts": {
+          "type": "boolean"
+        },
+        "zoneId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      }
+    },
+    "bandRule": {
+      "type": "object",
+      "required": [
+        "id",
+        "metric"
+      ],
+      "description": "指標(summary 的 段.欄位,例如 track.maxXtd_m、collisionAvoidance.minCpa_nm、manoeuvring.timeRotOverLimit_s)超過 warn/fail 門檻時扣分;fail 可寫 \"2x\" = warn × 2;direction above(預設,值越大越差)| below",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ],
+          "default": "above"
+        },
+        "warn": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "fail": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/paramRef"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9.]+x$"
+            }
+          ]
+        },
+        "penalty": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "failPenalty": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "excludeEscorts": {
+          "type": "boolean"
+        }
+      }
+    },
+    "expectSpec": {
+      "description": "可偵測的期望動作:字串(rudderOrder | telegraphChange | rpmOrder | thrusterOrder | steeringModeChange | autopilotOn | autopilotOff | acknowledge)、{acknowledge: {kind}}、{event: {kind, itemId?, targetId?}}、{any: [...]}",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "rudderOrder",
+            "telegraphChange",
+            "rpmOrder",
+            "thrusterOrder",
+            "steeringModeChange",
+            "autopilotOn",
+            "autopilotOff",
+            "acknowledge"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/expectSpec"
+              }
+            },
+            "acknowledge": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "verbal",
+                    "notifyEcr",
+                    "callMaster",
+                    "report",
+                    "checklist",
+                    "steeringMode",
+                    "anchorReady",
+                    "other"
+                  ]
+                }
+              }
+            },
+            "event": {
+              "type": "object",
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "itemId": {
+                  "type": "string"
+                },
+                "targetId": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "requiredEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "after",
+        "expect",
+        "within_s"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "after": {
+          "type": "object",
+          "required": [
+            "event"
+          ],
+          "description": "計時起點事件",
+          "properties": {
+            "event": {
+              "type": "string"
+            },
+            "itemId": {
+              "type": "string"
+            },
+            "targetId": {
+              "type": "string"
+            },
+            "waypoint": {
+              "type": "string"
+            },
+            "legIndex": {
+              "type": "integer"
+            },
+            "zoneId": {
+              "type": "string"
+            }
+          }
+        },
+        "expect": {
+          "$ref": "#/$defs/expectSpec"
+        },
+        "within_s": {
+          "$ref": "#/$defs/numberOrParam"
+        },
+        "penalty": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "逾時或未發生"
+        },
+        "latePenaltyPer_s": {
+          "$ref": "#/$defs/numberOrParam",
+          "description": "逾時每秒再扣(上限 penalty)"
         }
       }
     }

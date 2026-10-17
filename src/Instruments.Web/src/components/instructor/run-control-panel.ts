@@ -1,11 +1,12 @@
-// 執行控制(規劃書第 9.1 節):凍結/恢復/重設(兩段確認)、時間倍率、快照/還原(列出最近快照)。
+// 執行控制(規劃書第 9.1 節):凍結/恢復/重設(兩段確認)、結束練習(兩段確認,送 endExercise 定稿 summary)、
+// 時間倍率、快照/還原(列出最近快照)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { dispatchCommand, tileStyles } from '../shared.js';
 import { instructorStyles, shortTime, wallTime } from './instructor-shared.js';
 import { simpleCommand, timeScaleCommand } from '../../lib/command.js';
-import { TIME_SCALES, restoreCommand, snapshotCommand } from '../../lib/instructor-command.js';
+import { TIME_SCALES, endExerciseCommand, restoreCommand, snapshotCommand } from '../../lib/instructor-command.js';
 
 export interface SnapshotEntry {
   name: string;
@@ -35,6 +36,10 @@ export class RunControlPanel extends LitElement {
       }
       .grid .reset {
         grid-column: span 2;
+      }
+      .grid .end {
+        grid-column: span 2;
+        font-weight: 500;
       }
       .seg {
         display: flex;
@@ -68,12 +73,30 @@ export class RunControlPanel extends LitElement {
   /** 時間倍率由本頁保存(state.schema.json 無此欄位) */
   @property({ type: Number }) timeScale = 1;
 
+  /** 練習已結束(state.scenario.ended) */
+  @property({ type: Boolean }) ended = false;
+
   @state() private confirmReset = false;
+  @state() private confirmEnd = false;
   private confirmTimer: ReturnType<typeof setTimeout> | null = null;
+  private confirmEndTimer: ReturnType<typeof setTimeout> | null = null;
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this.confirmTimer) clearTimeout(this.confirmTimer);
+    if (this.confirmEndTimer) clearTimeout(this.confirmEndTimer);
+  }
+
+  private endExercise(): void {
+    if (!this.confirmEnd) {
+      this.confirmEnd = true;
+      this.confirmEndTimer = setTimeout(() => (this.confirmEnd = false), 4000);
+      return;
+    }
+    if (this.confirmEndTimer) clearTimeout(this.confirmEndTimer);
+    this.confirmEnd = false;
+    dispatchCommand(this, endExerciseCommand('教官結束練習'));
+    this.dispatchEvent(new CustomEvent('exercise-ended', { bubbles: true, composed: true }));
   }
 
   private freeze(): void {
@@ -122,6 +145,7 @@ export class RunControlPanel extends LitElement {
           <button class="freeze ${this.frozen ? 'frozen' : ''}" ?disabled=${this.frozen} @click=${this.freeze}>凍結</button>
           <button class="resume" ?disabled=${!this.frozen} @click=${this.resume}>恢復</button>
           <button class="reset ${this.confirmReset ? 'danger' : ''}" @click=${this.reset}>${this.confirmReset ? '再按一次確認重設' : '重設'}</button>
+          <button class="end ${this.confirmEnd ? 'danger' : ''}" ?disabled=${this.ended} @click=${this.endExercise}>${this.ended ? '練習已結束' : this.confirmEnd ? '再按一次確認結束' : '結束練習'}</button>
         </div>
         <div class="form">
           <label>時間倍率</label>

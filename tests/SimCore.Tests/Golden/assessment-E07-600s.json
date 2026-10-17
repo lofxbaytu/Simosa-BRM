@@ -1,0 +1,342 @@
+{
+  "version": 1,
+  "advisory": true,
+  "final": true,
+  "scenarioId": "E07_steering_failure",
+  "shipId": "FSB1",
+  "loading": "full",
+  "parameterSet": {
+    "id": "simosa-company-procedures",
+    "version": "2026.10.1",
+    "sha256": "058285D5DE1EB5D1EEBA0A424D76A5A6F726C437BA457B471FC42365B8B5F538"
+  },
+  "phases": [
+    {
+      "phase": "normal",
+      "from_s": 0,
+      "to_s": 600
+    }
+  ],
+  "general": {
+    "duration_s": 600,
+    "freezes": 1,
+    "distance_nm": 0.8508541067696466,
+    "avgSog_kn": 5.105124640617879,
+    "maxSog_kn": 5.997495389718246
+  },
+  "collisionAvoidance": {
+    "encounters": 0,
+    "collisions": 0,
+    "targets": []
+  },
+  "track": {
+    "meanAbsXtd_m": 287.02676736486666,
+    "maxXtd_m": 872.1080535514328,
+    "maxXtdAt_s": 600,
+    "maxXtdLeg": 0,
+    "timeOutsideCorridor_s": 413,
+    "corridorExcursions": 1,
+    "fractionOutsideCorridor": 0.6883333333333334,
+    "minDistanceToCorridorEdge_m": -822.1080535514328,
+    "minDistanceToNoGo_m": 3610.581183887816,
+    "meanHeadingDeviation_deg": 5.503529576578278,
+    "legIndex": 0,
+    "complete": false,
+    "offRoute": false,
+    "waypoints": []
+  },
+  "ukc": {
+    "min_m": 7.817169828620138,
+    "minAt_s": 1,
+    "minSquat_m": 0.4718301713798621,
+    "timeBelowLimit_s": 0,
+    "excursions": 0,
+    "groundings": 0,
+    "limit_m": 1,
+    "limitSource": "navigation.ukc.minimum_m"
+  },
+  "manoeuvring": {
+    "rudderDistribution_s": {
+      "0-5": 527,
+      "5-10": 53,
+      "10-20": 20,
+      "20-35": 0,
+      ">35": 0
+    },
+    "hardOverCount": 0,
+    "hardOverTime_s": 0,
+    "rudderOrders": 1,
+    "maxRot_degPerMin": 10.242354548315115,
+    "maxRotAt_s": 600,
+    "timeRotOverLimit_s": 0,
+    "rotExcursions": 0,
+    "telegraphChanges": 1,
+    "telegraphOrders": [
+      {
+        "order": "HAH",
+        "from_s": 0,
+        "to_s": 200,
+        "duration_s": 200
+      },
+      {
+        "order": "SAH",
+        "from_s": 200,
+        "to_s": 600,
+        "duration_s": 400
+      }
+    ],
+    "rpmOrders": 0,
+    "thrusterOrders": 0,
+    "thrusterTime_s": 0,
+    "timeOverSpeedLimit_s": 0,
+    "maxOverSpeed_kn": 0,
+    "autopilotTime_s": 100,
+    "autopilotSwitches": 1
+  },
+  "faultResponses": [
+    {
+      "fault": "gyroDrift",
+      "injectedAt_s": 330,
+      "source": "instructor",
+      "firstAction": {
+        "kind": "autopilotOn",
+        "t_s": 500,
+        "dt_s": 170
+      },
+      "acknowledgements": []
+    }
+  ],
+  "events": {
+    "total": 20,
+    "byKind": {
+      "acknowledge": 2,
+      "bandFail": 2,
+      "bandWarn": 2,
+      "environmentChange": 1,
+      "environmentRampDone": 1,
+      "faultInjected": 1,
+      "frozen": 1,
+      "message": 1,
+      "resumed": 1,
+      "targetActivated": 1,
+      "timelineManual": 1,
+      "timelineTriggered": 2,
+      "voiceScript": 2,
+      "waypointReached": 1,
+      "xtdExceeded": 1
+    }
+  },
+  "assessment": {
+    "score": 60,
+    "passMark": 70,
+    "passed": false,
+    "hardFailed": false,
+    "hardFails": [],
+    "bands": [
+      {
+        "id": "xtdMax",
+        "metric": "track.maxXtd_m",
+        "value": 872.1080535514328,
+        "warn": 50,
+        "fail": 100,
+        "state": "fail",
+        "penalty": 25,
+        "paramKey": "navigation.xtd.channel_m",
+        "source": "SMS-NAV-012",
+        "revision": "2",
+        "clause": "4.1"
+      },
+      {
+        "id": "xtdTime",
+        "metric": "track.timeOutsideCorridor_s",
+        "value": 413,
+        "warn": 0,
+        "fail": 60,
+        "state": "fail",
+        "penalty": 15
+      },
+      {
+        "id": "ukcTime",
+        "metric": "ukc.timeBelowLimit_s",
+        "value": 0,
+        "warn": 0,
+        "fail": 30,
+        "state": "ok",
+        "penalty": 0
+      },
+      {
+        "id": "speed",
+        "metric": "manoeuvring.timeOverSpeedLimit_s",
+        "value": 0,
+        "warn": 0,
+        "fail": 120,
+        "state": "ok",
+        "penalty": 0
+      },
+      {
+        "id": "minCpa",
+        "metric": "collisionAvoidance.minCpa_nm",
+        "warn": 0.05,
+        "fail": 0.025,
+        "state": "ok",
+        "penalty": 0,
+        "paramKey": "navigation.cpa.channel_nm",
+        "source": "DWO-007",
+        "revision": "3",
+        "clause": "4.2"
+      }
+    ],
+    "required": [
+      {
+        "id": "steeringFirstAction",
+        "state": "notApplicable",
+        "within_s": 60,
+        "penalty": 0,
+        "paramKey": "emergency.steeringFailure.firstAction_s",
+        "source": "SMS-EMG-004",
+        "revision": "1",
+        "clause": "2.1"
+      },
+      {
+        "id": "notifyEcr",
+        "state": "notApplicable",
+        "within_s": 120,
+        "penalty": 0,
+        "paramKey": "emergency.steeringFailure.notifyEcr_s",
+        "source": "SMS-EMG-004",
+        "revision": "1",
+        "clause": "2.3"
+      },
+      {
+        "id": "emergencySteering",
+        "state": "notApplicable",
+        "within_s": 300,
+        "penalty": 0,
+        "paramKey": "emergency.steeringFailure.emergencySteering_s",
+        "source": "SMS-EMG-004",
+        "revision": "1",
+        "clause": "3.1"
+      },
+      {
+        "id": "vtsReport",
+        "state": "notApplicable",
+        "within_s": 120,
+        "penalty": 0
+      }
+    ],
+    "parameters": [
+      {
+        "key": "navigation.xtd.channel_m",
+        "value": 50,
+        "unit": "m",
+        "source": "SMS-NAV-012",
+        "revision": "2",
+        "clause": "4.1"
+      },
+      {
+        "key": "port.mailiao.speedLimit_kn",
+        "value": 8,
+        "unit": "kn",
+        "source": "PORT-MLW",
+        "revision": "2025",
+        "clause": "第 12 條"
+      },
+      {
+        "key": "port.mailiao.innerSpeedLimit_kn",
+        "value": 5,
+        "unit": "kn",
+        "source": "PORT-MLW",
+        "revision": "2025",
+        "clause": "第 12 條"
+      },
+      {
+        "key": "navigation.ukc.channel_fraction",
+        "value": 0.1,
+        "unit": "fractionOfDraft",
+        "source": "SMS-NAV-012",
+        "revision": "2",
+        "clause": "3.2"
+      },
+      {
+        "key": "navigation.cpa.channel_nm",
+        "value": 0.05,
+        "unit": "nm",
+        "source": "DWO-007",
+        "revision": "3",
+        "clause": "4.2"
+      },
+      {
+        "key": "navigation.encounter.substantialAlteration_deg",
+        "value": 30,
+        "unit": "deg",
+        "source": "BRM-TRN-001",
+        "revision": "draft",
+        "clause": "5.2"
+      },
+      {
+        "key": "navigation.ukc.minimum_m",
+        "value": 1,
+        "unit": "m",
+        "source": "SMS-NAV-012",
+        "revision": "2",
+        "clause": "3.3"
+      },
+      {
+        "key": "manoeuvring.rotLimit_degPerMin",
+        "value": 30,
+        "unit": "degPerMin",
+        "source": "DWO-007",
+        "revision": "3",
+        "clause": "5.4"
+      },
+      {
+        "key": "navigation.ukc.hardFail_fraction",
+        "value": 0.05,
+        "unit": "fractionOfDraft",
+        "source": "BRM-TRN-001",
+        "revision": "draft",
+        "clause": "5.1"
+      },
+      {
+        "key": "navigation.cpa.channelHardFail_nm",
+        "value": 0.025,
+        "unit": "nm",
+        "source": "BRM-TRN-001",
+        "revision": "draft",
+        "clause": "5.1"
+      },
+      {
+        "key": "emergency.steeringFailure.firstAction_s",
+        "value": 60,
+        "unit": "s",
+        "source": "SMS-EMG-004",
+        "revision": "1",
+        "clause": "2.1"
+      },
+      {
+        "key": "emergency.steeringFailure.notifyEcr_s",
+        "value": 120,
+        "unit": "s",
+        "source": "SMS-EMG-004",
+        "revision": "1",
+        "clause": "2.3"
+      },
+      {
+        "key": "emergency.steeringFailure.emergencySteering_s",
+        "value": 300,
+        "unit": "s",
+        "source": "SMS-EMG-004",
+        "revision": "1",
+        "clause": "3.1"
+      },
+      {
+        "key": "assessment.passMark",
+        "value": 70,
+        "unit": "score",
+        "source": "BRM-TRN-001",
+        "revision": "draft",
+        "clause": "6"
+      }
+    ]
+  }
+}

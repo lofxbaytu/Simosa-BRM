@@ -12,6 +12,7 @@ namespace SimosaBRM.SimCore.Host;
 /// WebSocket 伺服器(System.Net.HttpListener,無額外套件;與 Python 參考實作相同契約):
 /// 每個廣播週期(40 ms)推送 OwnShipState JSON 文字框,接收 SimCommand JSON 文字框送入引擎佇列。
 /// 慢速客戶端只會拿到最新一幀(每客戶端容量 1 的通道,舊幀丟棄),不會拖慢引擎。
+/// 事件框({"type":"event",…})與查詢回覆({"type":"assessment",…})走另一條容量 256 的通道,不被狀態幀丟棄(情境引擎設計第 5.2 節)。
 /// </summary>
 public sealed class WebSocketStateServer : IAsyncDisposable
 {
@@ -19,6 +20,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     {
         public required WebSocket Socket { get; init; }
         public Channel<byte[]> Outbox { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
+        public Channel<byte[]> Events { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest });
     }
 
     private readonly HttpListener _listener = new();
@@ -73,6 +75,12 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         foreach (var c in _clients.Values) c.Outbox.Writer.TryWrite(frame);
     }
 
+    /// <summary>推送事件/評估框給所有客戶端(不與狀態幀競爭)。</summary>
+    public void PublishEvent(byte[] frame)
+    {
+        foreach (var c in _clients.Values) c.Events.Writer.TryWrite(frame);
+    }
+
     private async Task AcceptLoopAsync()
     {
         while (!_cts.IsCancellationRequested)
@@ -123,6 +131,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         var receiver = ReceiveLoopAsync(client);
         await Task.WhenAny(sender, receiver).ConfigureAwait(false);
         client.Outbox.Writer.TryComplete();
+        client.Events.Writer.TryComplete();
         _clients.TryRemove(id, out _);
         try
         {
@@ -138,10 +147,20 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     {
         try
         {
-            await foreach (var frame in c.Outbox.Reader.ReadAllAsync(_cts.Token).ConfigureAwait(false))
+            while (c.Socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
             {
-                if (c.Socket.State != WebSocketState.Open) break;
-                await c.Socket.SendAsync(frame, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+                // 事件優先(不丟),再送最新狀態幀;兩者皆空時等待任一通道
+                while (c.Events.Reader.TryRead(out var ev))
+                    await c.Socket.SendAsync(ev, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+                if (c.Outbox.Reader.TryRead(out var frame))
+                {
+                    await c.Socket.SendAsync(frame, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+                    continue;
+                }
+                var waitState = c.Outbox.Reader.WaitToReadAsync(_cts.Token).AsTask();
+                var waitEvent = c.Events.Reader.WaitToReadAsync(_cts.Token).AsTask();
+                var done = await Task.WhenAny(waitState, waitEvent).ConfigureAwait(false);
+                if (!await done.ConfigureAwait(false) && c.Outbox.Reader.Completion.IsCompleted && c.Events.Reader.Completion.IsCompleted) break;
             }
         }
         catch (Exception) { /* 連線中斷或取消 */ }
@@ -165,11 +184,16 @@ public sealed class WebSocketStateServer : IAsyncDisposable
                 try
                 {
                     var cmd = SimCommand.Parse(text);
-                    if (cmd is not null)
+                    if (cmd is null) continue;
+                    Interlocked.Increment(ref CommandsReceived);
+                    if (cmd.Type == SimCommandType.GetAssessment)
                     {
-                        _engine.Enqueue(cmd);
-                        Interlocked.Increment(ref CommandsReceived);
+                        // 查詢:直接以 LatestSummary 回覆該客戶端(不進引擎佇列、不寫 input 行)
+                        var summary = _engine.LatestSummary;
+                        c.Events.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(new { type = "assessment", final = summary?.Final ?? false, summary }));
+                        continue;
                     }
+                    _engine.Enqueue(cmd);
                 }
                 catch (Exception ex)
                 {

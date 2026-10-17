@@ -29,15 +29,16 @@ describe('parseScenario', () => {
     expect(s.timeScale).toBe(1);
     expect(s.startTimeUtc).toBe('2026-01-01T02:00:00Z');
     expect(s.initial).toEqual({ position: { lat: 23.8, lon: 120.05 }, heading: 0, speed: 7.8, telegraph: 'HAH', rudder: 0 });
-    expect(s.environment).toEqual({ wind: { trueSpeed: 15, trueDir: 45, gustiness: 0.1 }, current: { set: 200, drift: 0.5 }, waterDepth: 30 });
-    expect(s.briefing).toBe('');
+    // E01 由核心工程師平行更新(加 visibility_nm、briefing、timeline、assessment),只比對不變的欄位
+    expect(s.environment).toMatchObject({ wind: { trueSpeed: 15, trueDir: 45, gustiness: 0.1 }, current: { set: 200, drift: 0.5 }, waterDepth: 30 });
   });
 
   it('摘要文字', () => {
     const s = parseScenario(readFileSync(e01Path, 'utf-8'), e01Path);
-    expect(environmentSummary(s.environment)).toBe('風 15 kn/045°(陣風 0.1) · 流 200°/0.5 kn · 水深 30 m');
+    expect(environmentSummary(s.environment)).toContain('風 15 kn/045°(陣風 0.1) · 流 200°/0.5 kn · 水深 30 m');
     expect(initialSummary(s.initial)).toBe('HDG 000 · 7.8 kn · HAH · 23.800, 120.050');
-    const b = briefingText(s);
+    const noBrief = { ...s, briefing: '' };
+    const b = briefingText(noBrief);
     expect(b).toContain('船:FSB1(壓載)');
     expect(b).toContain('初始:HDG 000');
     expect(b).toContain('環境:風 15 kn');

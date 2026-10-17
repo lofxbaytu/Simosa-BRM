@@ -5,6 +5,8 @@
 import { parse as parseYaml } from 'yaml';
 import { SHIP_IDS, TELEGRAPH_POSITIONS, type LoadingCondition, type ShipId, type TelegraphPosition } from '../types/state.js';
 import { normalizeHeading } from './angles.js';
+import { parseAssessmentRules, type AssessmentRules } from './assessment.js';
+import { collectParamRefs, isParamRef, parseBriefing, parseRoute, parseTimeline, parseZones, type ScenarioBriefing, type ScenarioRoute, type ScenarioZone, type TimelineItem } from './timeline.js';
 
 const LOADINGS: readonly LoadingCondition[] = ['full', 'ballast', 'intermediate'];
 
@@ -12,8 +14,19 @@ export interface ScenarioEnvironment {
   wind?: { trueSpeed?: number; trueDir?: number; gustiness?: number };
   current?: { set?: number; drift?: number };
   waterDepth?: number;
-  /** 能見度 (nm);schema 尚未定義,情境檔可先寫,核心未實作 */
+  /** 能見度 (nm);無物理效果,核心保存/漸變/廣播(設計文件第 1.5 節) */
   visibility_nm?: number;
+}
+
+/** 情境擴充欄位的統計(情境面板摘要:「時間表 n 項、航線 n 航點、評估規則 n 條、參數引用 n 個」)。 */
+export interface ScenarioStats {
+  timelineItems: number;
+  manualItems: number;
+  routeWaypoints: number;
+  zones: number;
+  assessmentRules: number;
+  paramRefs: number;
+  targets: number;
 }
 
 export interface ScenarioInitial {
@@ -29,8 +42,12 @@ export interface ScenarioSummary {
   id: string;
   name: string;
   description: string;
-  /** 練習簡報(情境檔的 briefing 欄位;schema 尚未定義,簡化教官模式大字顯示;無則用摘要) */
+  /** 練習簡報文字(briefing 字串或 briefing.text;簡化教官模式大字顯示;無則用摘要) */
   briefing: string;
+  /** 簡報物件(附件、角色、最少人數;設計文件第 1.4 節) */
+  briefingDoc: ScenarioBriefing;
+  /** 本地 ENU 原點(航線/區域疊圖換算用) */
+  origin?: { lat: number; lon: number };
   /** 相對於專案根目錄的路徑,例如 data/scenarios/E01_baseline.yaml(loadScenario 指令用) */
   path: string;
   shipId: ShipId;
@@ -40,6 +57,15 @@ export interface ScenarioSummary {
   startTimeUtc?: string;
   initial: ScenarioInitial;
   environment: ScenarioEnvironment;
+  /** 時間表(設計文件第 1.1 節) */
+  timeline: TimelineItem[];
+  route: ScenarioRoute | null;
+  zones: ScenarioZone[];
+  /** 評估規則(含既有 minCpa_nm;數值可為參數引用) */
+  assessment: AssessmentRules;
+  /** 情境內所有 ${params:key} 引用(路徑 → 鍵) */
+  paramRefs: Array<{ path: string; key: string }>;
+  stats: ScenarioStats;
   /** 解析時發現的問題(缺必要欄位、型別錯誤),空陣列表示通過最小檢查 */
   issues: string[];
 }
@@ -50,7 +76,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function optNumber(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+  if (typeof v === 'string' && v.trim() !== '' && !isParamRef(v) && Number.isFinite(Number(v))) return Number(v);
   return undefined;
 }
 
@@ -145,17 +171,25 @@ export function parseScenario(yamlText: string, path = ''): ScenarioSummary {
   }
   const depth = optNumber(env['waterDepth']);
   if (depth !== undefined && depth > 0) environment.waterDepth = depth;
-  else issues.push('缺 environment.waterDepth 或不為正數');
+  else if (!isParamRef(env['waterDepth'])) issues.push('缺 environment.waterDepth 或不為正數');
   const vis = optNumber(env['visibility_nm'] ?? env['visibility']);
   if (vis !== undefined) environment.visibility_nm = vis;
 
   const seed = optNumber(doc['seed']);
   const timeScale = optNumber(doc['timeScale']);
+  const briefingDoc = parseBriefing(doc['briefing'], issues);
+  const timeline = parseTimeline(doc['timeline'], issues);
+  const route = parseRoute(doc['route'], issues);
+  const zones = parseZones(doc['zones'], issues);
+  const assessment = parseAssessmentRules(doc['assessment'], issues);
+  const paramRefs = collectParamRefs(doc);
+  const targets = Array.isArray(doc['targets']) ? doc['targets'].length : 0;
   const summary: ScenarioSummary = {
     id: id || (path ? scenarioPathFromKey(path).replace(/^data\/scenarios\//, '').replace(/\.ya?ml$/i, '') : '(無 id)'),
     name: str(doc['name']).trim() || id || '(未命名情境)',
     description: str(doc['description']).trim(),
-    briefing: str(doc['briefing']).trim(),
+    briefing: briefingDoc.text,
+    briefingDoc,
     path: path ? scenarioPathFromKey(path) : '',
     shipId,
     loading,
@@ -163,8 +197,28 @@ export function parseScenario(yamlText: string, path = ''): ScenarioSummary {
     timeScale: timeScale !== undefined ? timeScale : 1,
     initial,
     environment,
+    timeline,
+    route,
+    zones,
+    assessment,
+    paramRefs,
+    stats: {
+      timelineItems: timeline.length,
+      manualItems: timeline.filter((i) => i.manual).length,
+      routeWaypoints: route?.waypoints.length ?? 0,
+      zones: zones.length,
+      assessmentRules: assessment.ruleCount,
+      paramRefs: paramRefs.length,
+      targets,
+    },
     issues,
   };
+  if (isRecord(doc['origin'])) {
+    const olat = optNumber(doc['origin']['lat']);
+    const olon = optNumber(doc['origin']['lon']);
+    if (olat !== undefined && olon !== undefined) summary.origin = { lat: olat, lon: olon };
+  }
+  if (!summary.origin && initial.position?.lat !== undefined && initial.position.lon !== undefined) summary.origin = { lat: initial.position.lat, lon: initial.position.lon };
   const start = doc['startTimeUtc'];
   if (typeof start === 'string' && start.trim() !== '') summary.startTimeUtc = start;
   else if (start instanceof Date) summary.startTimeUtc = start.toISOString();
@@ -205,6 +259,19 @@ export function initialSummary(init: ScenarioInitial): string {
     if (p.lat !== undefined && p.lon !== undefined) parts.push(`${p.lat.toFixed(3)}, ${p.lon.toFixed(3)}`);
     else if (p.x !== undefined && p.y !== undefined) parts.push(`x ${p.x} m, y ${p.y} m`);
   }
+  return parts.join(' · ');
+}
+
+/** 情境擴充欄位的一句話摘要,例如「時間表 3 項(手動 1)· 航線 4 航點 · 區域 2 · 評估規則 9 條 · 參數引用 12 個」;全無時回傳空字串。 */
+export function extensionSummary(s: ScenarioSummary): string {
+  const st = s.stats;
+  const parts: string[] = [];
+  if (st.timelineItems > 0) parts.push(`時間表 ${st.timelineItems} 項${st.manualItems > 0 ? `(手動 ${st.manualItems})` : ''}`);
+  if (st.routeWaypoints > 0) parts.push(`航線 ${st.routeWaypoints} 航點`);
+  if (st.zones > 0) parts.push(`區域 ${st.zones}`);
+  if (st.assessmentRules > 0) parts.push(`評估規則 ${st.assessmentRules} 條`);
+  if (st.paramRefs > 0) parts.push(`參數引用 ${st.paramRefs} 個`);
+  if (st.targets > 0) parts.push(`目標船 ${st.targets}`);
   return parts.join(' · ');
 }
 

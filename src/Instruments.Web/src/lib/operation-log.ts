@@ -16,7 +16,9 @@ export type OperationKind =
   | 'faultCleared'
   | 'aground'
   | 'collision'
-  | 'timeReset';
+  | 'timeReset'
+  /** 教官站播放語音腳本(lib/voice-script.ts;非由狀態推導) */
+  | 'voiceScript';
 
 export interface OperationEvent {
   seq: number;
@@ -75,6 +77,14 @@ export class OperationLogDeriver {
   /** 重新開始(重設/換情境後),保留序號遞增。 */
   restart(): void {
     this.prev = null;
+  }
+
+  /** 加入非由狀態推導的事件(例如語音腳本播放),時間由呼叫者給。 */
+  addExternal(kind: OperationKind, label: string, t: number, value?: number | string): OperationEvent {
+    const ev: OperationEvent = { seq: ++this.seq, t, wall: this.now().toISOString(), kind, label };
+    if (value !== undefined) ev.value = value;
+    this.events.push(ev);
+    return ev;
   }
 
   push(s: OwnShipState): OperationEvent[] {

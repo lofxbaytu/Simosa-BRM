@@ -9,6 +9,8 @@ import {
   type LoadingCondition,
   type OwnShipState,
   type Position,
+  type RouteStatus,
+  type ScenarioStatus,
   type ShipId,
   type StateFlags,
   type TelegraphPosition,
@@ -255,5 +257,56 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
   }
   state.flags = flags;
 
+  // 情境引擎新增的選填欄位(設計文件第 5.1 節):有就解析,型別錯誤記入 issues 但不影響其他欄位
+  const vis = optNum(raw, 'visibility_nm', issues, 'visibility_nm');
+  if (vis !== undefined) state.visibility_nm = vis;
+  if (isRecord(raw['scenario'])) {
+    const sc = parseScenarioStatus(raw['scenario'], issues);
+    if (sc) state.scenario = sc;
+  } else if (raw['scenario'] !== undefined && raw['scenario'] !== null) {
+    issues.push('scenario');
+  }
+  if (isRecord(raw['route'])) {
+    state.route = parseRouteStatus(raw['route'], issues);
+  } else if (raw['route'] !== undefined && raw['route'] !== null) {
+    issues.push('route');
+  }
+
   return { state, issues };
+}
+
+function parseScenarioStatus(sc: Record<string, unknown>, issues: string[]): ScenarioStatus | null {
+  const id = typeof sc['id'] === 'string' ? sc['id'] : '';
+  const phase = typeof sc['phase'] === 'string' && sc['phase'] ? sc['phase'] : 'normal';
+  if (!id) {
+    issues.push('scenario.id');
+  }
+  const out: ScenarioStatus = { id, phase };
+  if (typeof sc['parameterSetVersion'] === 'string') out.parameterSetVersion = sc['parameterSetVersion'];
+  const fired = optNum(sc, 'timelineFired', issues, 'scenario.timelineFired');
+  if (fired !== undefined) out.timelineFired = Math.trunc(fired);
+  const pending = optNum(sc, 'timelinePending', issues, 'scenario.timelinePending');
+  if (pending !== undefined) out.timelinePending = Math.trunc(pending);
+  if (typeof sc['hardFailed'] === 'boolean') out.hardFailed = sc['hardFailed'];
+  const score = optNum(sc, 'score', issues, 'scenario.score');
+  if (score !== undefined) out.score = score;
+  if (typeof sc['ended'] === 'boolean') out.ended = sc['ended'];
+  return out;
+}
+
+function parseRouteStatus(r: Record<string, unknown>, issues: string[]): RouteStatus {
+  const out: RouteStatus = {};
+  const leg = optNum(r, 'legIndex', issues, 'route.legIndex');
+  if (leg !== undefined) out.legIndex = Math.trunc(leg);
+  if (typeof r['nextWaypoint'] === 'string') out.nextWaypoint = r['nextWaypoint'];
+  for (const key of ['xtd_m', 'xtdLimit_m', 'distanceToWaypoint_nm', 'speedLimit_kn'] as const) {
+    const v = optNum(r, key, issues, `route.${key}`);
+    if (v !== undefined) out[key] = v;
+  }
+  for (const key of ['bearingToWaypoint_deg', 'legCourse_deg'] as const) {
+    const v = optNum(r, key, issues, `route.${key}`);
+    if (v !== undefined) out[key] = normalizeHeading(v);
+  }
+  if (typeof r['complete'] === 'boolean') out.complete = r['complete'];
+  return out;
 }

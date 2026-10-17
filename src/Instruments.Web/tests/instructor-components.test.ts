@@ -1,8 +1,14 @@
 // 教官站元件煙霧測試(happy-dom):情境面板、執行控制、環境、故障、自船覆寫、BRM 標記鈕送出的事件與指令,
-// 重播檢視可載入 JSON Lines 並依時間軸取狀態。
+// 講評摘要(核心 summary 優先、本地推導後備)、重播檢視可載入 JSON Lines(含 event/summary 行)並依時間軸取狀態、
+// conning 條的航線/能見度方塊。
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { SimCommand } from '../src/types/command.js';
+import { parseAssessmentSummary } from '../src/lib/assessment.js';
+import type { DebriefSummaryView } from '../src/components/instructor/debrief-summary.js';
 import { COMMAND_EVENT } from '../src/components/shared.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import { parseScenario } from '../src/lib/scenario.js';
@@ -46,6 +52,11 @@ function setInput(el: HTMLElement, sel: string, value: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+const summaryFixture = readFileSync(path.resolve(here, 'fixtures/summary-E07.json'), 'utf-8');
+const coreSummary = parseAssessmentSummary((JSON.parse(summaryFixture) as { summary: unknown }).summary)!;
+const E07: ScenarioSummary = parseScenario(readFileSync(path.resolve(here, 'fixtures/E07_steering_failure.yaml'), 'utf-8'), 'data/scenarios/E07_steering_failure.yaml');
+
 const E01: ScenarioSummary = parseScenario(
   `id: E01_baseline
 name: 基線
@@ -67,6 +78,7 @@ beforeAll(async () => {
   await import('../src/components/instructor/command-log-view.js');
   await import('../src/components/instructor/debrief-summary.js');
   await import('../src/components/instructor/replay-view.js');
+  await import('../src/components/conning-bar.js');
 });
 
 describe('情境面板', () => {
@@ -79,6 +91,16 @@ describe('情境面板', () => {
     el.addEventListener('scenario-load', (ev) => loads.push((ev as CustomEvent<ScenarioSummary>).detail));
     q<HTMLButtonElement>(el, 'button.load').click();
     expect(loads[0]?.id).toBe('E01_baseline');
+  });
+
+  it('擴充欄位摘要與簡報物件(角色、附件、最少人數、參數集)', async () => {
+    const el = await mount('brm-scenario-panel', { scenarios: [E07] });
+    const text = shadowText(el);
+    expect(text).toContain('時間表 7 項(手動 1) · 航線 4 航點 · 區域 3 · 評估規則 13 條 · 參數引用');
+    expect(text).toContain('角色:引水人(帶領者,必要)、機控室(語音腳本)、VTS(語音腳本) · 最少 3 人');
+    expect(text).toContain('附件:');
+    expect(text).toContain('參數集 data/parameters/company-procedures.yaml');
+    expect(el.shadowRoot!.querySelector('.attachments a')?.getAttribute('href')).toBe('data/scenarios/E07_steering_failure/docs/passage-plan-mailiao.pdf');
   });
 });
 
@@ -107,11 +129,23 @@ describe('執行控制', () => {
     expect(cmds.length).toBe(before);
     q<HTMLButtonElement>(el, 'button.reset').click();
     expect(cmds.at(-1)).toEqual({ type: 'reset' });
+    // 結束練習需按兩次,送 endExercise 並發出 exercise-ended
+    const ended: Event[] = [];
+    el.addEventListener('exercise-ended', (e) => ended.push(e));
+    const n = cmds.length;
+    q<HTMLButtonElement>(el, 'button.end').click();
+    expect(cmds.length).toBe(n);
+    q<HTMLButtonElement>(el, 'button.end').click();
+    expect(cmds.at(-1)).toEqual({ type: 'endExercise', args: { reason: '教官結束練習' } });
+    expect(ended).toHaveLength(1);
+    el.ended = true;
+    await el.updateComplete;
+    expect(q<HTMLButtonElement>(el, 'button.end').disabled).toBe(true);
   });
 });
 
 describe('環境面板', () => {
-  it('帶入目前狀態並分組送 setEnvironment;能見度標示核心未實作', async () => {
+  it('帶入目前狀態並分組送 setEnvironment;能見度與漸變標示僅 C# 核心', async () => {
     const cmds = captureCommands();
     const st = { ...defaultState('FSB1'), wind: { trueSpeed: 15, trueDir: 45 }, current: { set: 200, drift: 0.5 }, waterDepth: 30 };
     const el = await mount('brm-environment-panel', { state: st });
@@ -127,7 +161,11 @@ describe('環境面板', () => {
     setInput(el, 'input.visibility', '0.5');
     q<HTMLButtonElement>(el, 'button.apply-visibility').click();
     expect(cmds.at(-1)).toEqual({ type: 'setEnvironment', args: { visibility_nm: 0.5 } });
-    expect(shadowText(el)).toContain('核心未實作');
+    expect(shadowText(el)).toContain('僅 C# 核心');
+    // 漸變秒數附在每次套用上(設計文件第 3.5 節 ramp_s)
+    setInput(el, 'input.ramp', '180');
+    q<HTMLButtonElement>(el, 'button.apply-depth').click();
+    expect(cmds.at(-1)).toEqual({ type: 'setEnvironment', args: { waterDepth: 12, ramp_s: 180 } });
   });
 });
 
@@ -229,6 +267,78 @@ describe('紀錄清單與講評摘要', () => {
     expect(text).toContain('0.80 m');
     expect(text).toContain('02:00');
     expect(sum.shadowRoot!.querySelectorAll('tr.alarm').length).toBe(2);
+    expect(text).toContain('本地推導');
+  });
+
+  it('有核心 summary 時優先顯示評分/硬性失敗/必要事件/容許帶/參數來源;本地推導可並列', async () => {
+    const local = {
+      samples: 10,
+      duration_s: 3600,
+      minUkc_m: 1.4,
+      minUkcAt_s: 2210,
+      maxRudder_deg: 20,
+      maxRudderAt_s: 50,
+      maxRot_degPerMin: 21,
+      maxRotAt_s: 640,
+      telegraphChanges: 4,
+      rudderOrders: 36,
+      hardOverCount: 0,
+      distance_nm: 5.7,
+      avgSpeed_kn: 5.8,
+      maxSog_kn: 8.3,
+      timeOverSpeedLimit_s: 0,
+      timeUkcBelowAlarm_s: 0,
+      timeRotOverLimit_s: 0,
+      agroundEvents: 0,
+      collisionEvents: 0,
+      frozen_s: 45,
+      thresholds: { portSpeedLimit_kn: 8, ukcAlarm_m: 1, rotLimit_degPerMin: 30, hardOver_deg: 35 },
+    };
+    const el = await mount<DebriefSummaryView>('brm-debrief-summary', { summary: local, coreSummary });
+    const text = shadowText(el);
+    expect(text).toContain('85 分 / 及格 70 通過 定稿 · E07_steering_failure · 參數集 simosa-company-procedures 2026.10.1');
+    expect(text).toContain('必要事件');
+    expect(text).toContain('steeringResponse 達成 +35 s / 限 60 s · telegraph');
+    expect(text).toContain('SMS-EMG-004 rev.1 · emergency.steeringFailure.firstAction_s');
+    expect(text).toContain('vtsReport 逾時');
+    expect(text).toContain('xtdMax(track.maxXtd_m) 74.0 · 警告 警告 50.0 / 失敗 100.0 · 扣 10 SMS-NAV-012 rev.2 §4.1');
+    expect(text).toContain('steeringGear(steeringFail) 首個動作 telegraph +35 s');
+    expect(text).toContain('通知機控室(船長) +82 s');
+    expect(text).toContain('會遇 T1 CPA 0.62 nm');
+    expect(text).toContain('navigation.xtd.channel_m = 50 m — SMS-NAV-012 rev.2 §4.1');
+    expect(text).toContain('自動評分僅輔助');
+    expect(text).not.toContain('核心 5.70 nm');
+    q<HTMLButtonElement>(el, 'button.toggle-local').click();
+    await el.updateComplete;
+    const both = shadowText(el);
+    expect(both).toContain('5.70 nm');
+    expect(both).toContain('核心 5.80 nm');
+    // 硬性失敗
+    const failed = parseAssessmentSummary({ ...coreSummary.raw, assessment: { score: 0, passMark: 70, passed: false, hardFailed: true, hardFails: [{ id: 'grounding', rule: 'grounding', t_s: 1200 }], bands: [], required: [], parameters: [] } })!;
+    el.coreSummary = failed;
+    await el.updateComplete;
+    expect(shadowText(el)).toContain('硬性失敗');
+    expect(shadowText(el)).toContain('grounding 擱淺 20:00');
+  });
+});
+
+describe('conning 條的航線/能見度方塊', () => {
+  it('有 state.route 時顯示 XTD(右正 → R 偏右)、下一航點、速限與能見度;無則不顯示', async () => {
+    const cfg = (await import('../src/lib/ship-config.js')).getShipConfig('FSB1');
+    const withRoute = { ...defaultState('FSB1'), visibility_nm: 0.8, route: { legIndex: 1, nextWaypoint: 'WP3', xtd_m: 62, xtdLimit_m: 50, distanceToWaypoint_nm: 0.8, bearingToWaypoint_deg: 70, legCourse_deg: 70, speedLimit_kn: 8 } };
+    const bar = await mount('brm-conning-bar', { state: withRoute, config: cfg, issues: [] });
+    const route = bar.shadowRoot!.querySelector('brm-route') as (HTMLElement & { updateComplete: Promise<unknown> }) | null;
+    expect(route).not.toBeNull();
+    await route!.updateComplete;
+    const text = shadowText(route!);
+    expect(text).toContain('→ WP3');
+    expect(text).toContain('62m R 偏右 限 50 m');
+    expect(text).toContain('下一航點WP3 0.80 nm');
+    expect(text).toContain('速限8 kn');
+    expect(text).toContain('能見度0.8 nm');
+    expect(route!.shadowRoot!.querySelector('.bar.over')).not.toBeNull();
+    const plain = await mount('brm-conning-bar', { state: defaultState('FSB1'), config: cfg, issues: [] });
+    expect(plain.shadowRoot!.querySelector('brm-route')).toBeNull();
   });
 });
 
@@ -259,5 +369,45 @@ describe('重播檢視', () => {
     expect(shadowText(el)).toContain('00:03 / 00:04');
     const bar = el.shadowRoot!.querySelector('brm-conning-bar') as HTMLElement & { state: { heading: number } };
     expect(bar.state.heading).toBe(5);
+  });
+
+  it('version 2 紀錄:事件標記、事件流、核心 summary 與評分、航線疊圖、參數集版次;點事件跳至該時刻', async () => {
+    const el = await mount<ReplayView>('brm-replay-view');
+    const line = (t: number) => JSON.stringify({ kind: 'state', state: { ...defaultState('FSB1'), t, tick: Math.round(t / 0.02), pos: { lat: 0, lon: 0, x: t, y: 0 } } });
+    const text = [
+      JSON.stringify({ kind: 'header', version: 2, shipId: 'FSB1', dt: 0.02, scenario: { id: 'E07_steering_failure', origin: { lat: 23.78, lon: 120.1 }, route: { waypoints: [{ name: 'WP1', x: 0, y: 0 }, { name: 'WP2', x: 1000, y: 0, xtdLimit_m: 50 }] }, zones: [{ id: 'z', type: 'noGo', polygon: [{ x: 0, y: 100 }, { x: 100, y: 100 }, { x: 50, y: 200 }] }] }, parameterSet: { id: 'simosa-company-procedures', version: '2026.10.1', resolved: [{ path: 'a', key: 'k' }] } }),
+      line(0),
+      '{"kind":"event","tick":1500,"event":{"kind":"faultInjected","tick":1500,"t":30,"source":"timeline","itemId":"steeringFail","seq":1,"data":{"fault":"steeringGear"}}}',
+      line(60),
+      '{"kind":"event","tick":4500,"event":{"kind":"hardFail","tick":4500,"t":90,"source":"assessment","itemId":"grounding","seq":2,"data":{"rule":"grounding"}}}',
+      line(120),
+      summaryFixture.replace(/\s*\n\s*/g, ''),
+      '{"kind":"footer","finalTick":6000,"stateHash":"AB","lines":8,"inputs":0,"sha256":"CD"}',
+    ].join('\n');
+    const data = el.loadText(text, 'e07.jsonl');
+    expect(data.errors).toEqual([]);
+    await el.updateComplete;
+    const txt = shadowText(el);
+    expect(txt).toContain('2 筆事件');
+    expect(txt).toContain('參數集 simosa-company-procedures 2026.10.1(已解析 1 個引用)');
+    expect(txt).toContain('評分 85(通過)');
+    expect(txt).toContain('核心 summary(定稿)');
+    const debrief = el.shadowRoot!.querySelector('brm-debrief-summary') as HTMLElement & { updateComplete: Promise<unknown> };
+    await debrief.updateComplete;
+    expect(shadowText(debrief)).toContain('85 分 / 及格 70');
+    const marks = Array.from(el.shadowRoot!.querySelectorAll<HTMLElement>('.marks .mark'));
+    expect(marks.map((m) => m.className)).toEqual(['mark phase', 'mark phase', 'mark timeline warning', 'mark assessment alarm']);
+    expect(marks[3]!.style.left).toBe('75%');
+    const plot = el.shadowRoot!.querySelector('brm-track-plot') as HTMLElement & { overlay: { route: { waypoints: unknown[] } | null; zones: unknown[]; events: unknown[] } };
+    expect(plot.overlay.route?.waypoints).toHaveLength(2);
+    expect(plot.overlay.zones).toHaveLength(1);
+    expect(plot.overlay.events).toHaveLength(0); // t = 0 時尚無事件
+    const stream = el.shadowRoot!.querySelector('brm-event-stream') as HTMLElement & { updateComplete: Promise<unknown> };
+    await stream.updateComplete;
+    (stream.shadowRoot!.querySelector('.item[data-kind="hardFail"]') as HTMLElement).click();
+    await el.updateComplete;
+    expect(el.time).toBe(90);
+    expect(shadowText(el)).toContain('01:30 / 02:00');
+    expect(plot.overlay.events).toHaveLength(2);
   });
 });

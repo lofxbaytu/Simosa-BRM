@@ -1,4 +1,5 @@
 // 上排 conning 條:把各儀器方塊排成一列(1920 寬一列;窄於 1500 時折成兩列)。
+// 核心有航線狀態(state.route)或能見度時加一格航線/能見度方塊(規劃書第 7.2 節 XTD/下一航點)。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
@@ -15,6 +16,7 @@ import './depth-readout.js';
 import './wind-readout.js';
 import './current-readout.js';
 import './clock-readout.js';
+import './route-readout.js';
 
 @customElement('brm-conning-bar')
 export class ConningBar extends LitElement {
@@ -29,9 +31,13 @@ export class ConningBar extends LitElement {
       grid-template-columns: 1.7fr 1fr 1.1fr 1.8fr 1.5fr 1.1fr 1fr 1.2fr 1.1fr 1.3fr;
       gap: 6px;
     }
+    .bar.with-route {
+      grid-template-columns: 1.7fr 1fr 1.1fr 1.8fr 1.5fr 1.1fr 1fr 1.2fr 1.1fr 1.3fr 1.3fr;
+    }
     @media (max-width: 1500px) {
-      .bar {
-        grid-template-columns: 1.7fr 1fr 1.1fr 1.8fr 1.5fr;
+      .bar,
+      .bar.with-route {
+        grid-template-columns: 1.7fr 1fr 1.1fr 1.8fr 1.5fr 1.1fr;
         grid-template-rows: 1fr 1fr;
       }
     }
@@ -49,8 +55,9 @@ export class ConningBar extends LitElement {
     const cfg = this.config;
     const step = telegraphStep(cfg, s.telegraph);
     const headingSuspect = this.noData || this.issues.includes('heading');
+    const withRoute = s.route !== undefined || s.visibility_nm !== undefined;
     return html`
-      <div class="bar">
+      <div class="bar ${withRoute ? 'with-route' : ''}">
         <brm-heading .heading=${s.heading} .setHeading=${this.setHeading} .cog=${s.cog} .suspect=${headingSuspect}></brm-heading>
         <brm-rot .rot=${s.rot} .range=${30}></brm-rot>
         <brm-speed .stw=${s.stw} .sog=${s.sog} .cog=${s.cog} .drift=${s.drift}></brm-speed>
@@ -77,6 +84,7 @@ export class ConningBar extends LitElement {
         <brm-wind .trueDir=${s.wind.trueDir} .trueSpeed=${s.wind.trueSpeed} .relDir=${s.wind.relDir} .relSpeed=${s.wind.relSpeed} .heading=${s.heading}></brm-wind>
         <brm-current .set=${s.current.set} .drift=${s.current.drift} .heading=${s.heading}></brm-current>
         <brm-clock .simTime=${s.t} .tick=${s.tick} .lat=${s.pos.lat} .lon=${s.pos.lon} .frozen=${s.flags?.frozen ?? false}></brm-clock>
+        ${withRoute ? html`<brm-route .route=${s.route} .visibility=${s.visibility_nm}></brm-route>` : ''}
       </div>
     `;
   }

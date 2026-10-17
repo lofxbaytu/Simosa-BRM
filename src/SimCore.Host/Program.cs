@@ -4,6 +4,7 @@ using SimosaBRM.Gateway.Nmea;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Engine;
 using SimosaBRM.SimCore.Host;
+using SimosaBRM.SimCore.Parameters;
 using SimosaBRM.SimCore.Physics;
 using SimosaBRM.SimCore.Physics.Mmg;
 using SimosaBRM.SimCore.Recording;
@@ -35,6 +36,19 @@ Func<ShipParticulars, LoadingCondition, IShipDynamics> DynamicsFactory(string na
     _ => (s, l) => MmgDynamics.Load(root, s, l),
 };
 
+// 參數集(情境引擎設計第 2 節):--parameters 指定時先載入;未指定時由 ScenarioLoader 依情境 assessment.parameterSet 自動載入
+ParameterSet? parameterSet = null;
+if (options.Parameters is { } paramPath)
+{
+    var full = Path.IsPathRooted(paramPath) ? paramPath : Path.Combine(root, paramPath);
+    try { parameterSet = ParameterSetLoader.Load(full); }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"參數集載入失敗:{ex.Message}");
+        return 2;
+    }
+}
+
 // ---------------------------------------------------------------- 重播模式
 if (options.Replay is { } replayPath)
 {
@@ -43,26 +57,63 @@ if (options.Replay is { } replayPath)
     // 依紀錄標頭的模型名稱選擇動力學(紀錄用暫代模型時不會因預設 MMG 而雜湊不一致)
     var recordedDynamics = RecordReader.Read(full).Header.Dynamics;
     var replayFactory = DynamicsFactory(recordedDynamics.StartsWith("mmg", StringComparison.OrdinalIgnoreCase) ? "mmg" : "placeholder");
-    var result = Replayer.Replay(full, LoadShip, replayFactory);
+    if (options.Rescore && parameterSet is null)
+    {
+        Console.Error.WriteLine("--rescore 需要 --parameters <path>");
+        return 2;
+    }
+    var result = Replayer.Replay(full, LoadShip, replayFactory, rescore: options.Rescore ? parameterSet : null);
     Console.WriteLine($"  完整性雜湊:{(result.IntegrityOk ? "一致" : "不一致或缺少 footer")}");
     Console.WriteLine($"  動力學模型:紀錄 {result.DynamicsRecorded} / 目前 {result.DynamicsUsed}");
     Console.WriteLine($"  重播指令數:{result.InputsReplayed},最終 tick {result.FinalTick}");
     Console.WriteLine($"  紀錄雜湊:{result.ExpectedHash}");
     Console.WriteLine($"  重播雜湊:{result.ActualHash}");
+    Console.WriteLine($"  事件序列:紀錄 {result.EventsRecorded} / 重播 {result.EventsReplayed},{(result.EventSequenceMatches ? "一致" : "不一致:" + result.FirstEventMismatch)}");
+    if (result.SummaryMatches is { } sm) Console.WriteLine($"  評估摘要:{(sm ? "與紀錄一致" : "與紀錄不一致")}");
+    if (options.Rescore && result.Summary is { } rs)
+    {
+        // 重新評分:物理、交通、時間表與雜湊仍依紀錄的原情境重播(雜湊與事件序列必須一致),只有評估模組以新參數集重算
+        Console.WriteLine($"  重新評分(參數集 {rs.ParameterSet?.Id} {rs.ParameterSet?.Version}):分數 {rs.Assessment.Score:F0}/{rs.Assessment.PassMark:F0},{(rs.Assessment.Passed ? "通過" : "未通過")}");
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(rs, ContractJson.Indented));
+    }
     if (result.Warning is not null) Console.WriteLine($"  警告:{result.Warning}");
-    Console.WriteLine(result.HashMatches ? "結果:狀態雜湊一致" : "結果:狀態雜湊不一致");
-    return result.HashMatches && result.IntegrityOk ? 0 : 1;
+    var ok = result.HashMatches && result.IntegrityOk && result.EventSequenceMatches;
+    Console.WriteLine(ok ? "結果:狀態雜湊、完整性與事件序列一致" : result.HashMatches ? "結果:狀態雜湊一致,但完整性或事件序列不一致" : "結果:狀態雜湊不一致");
+    return ok ? 0 : 1;
 }
 
 // ---------------------------------------------------------------- 即時模式
 var scenarioPath = Path.IsPathRooted(options.Scenario) ? options.Scenario : Path.Combine(root, options.Scenario);
-var scenario = ScenarioLoader.Load(scenarioPath);
+if (!File.Exists(scenarioPath) && !Path.HasExtension(options.Scenario))
+    scenarioPath = Path.Combine(root, "data", "scenarios", options.Scenario + ".yaml"); // 允許以情境代號指定
+Scenario scenario;
+try { scenario = ScenarioLoader.Load(scenarioPath, parameterSet); }
+catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException or System.Text.Json.JsonException)
+{
+    Console.Error.WriteLine($"情境載入失敗:{ex.Message}");
+    return 2;
+}
 if (options.Ship is { } shipOverride) scenario.Ship.Id = shipOverride.ToUpperInvariant();
 if (options.Loading is { } loadingOverride) scenario.Ship.Loading = loadingOverride;
 if (options.TimeScale is { } ts) scenario.TimeScale = ts;
 scenario.Validate();
 
 var ship = LoadShip(scenario.Ship.Id);
+
+// 靜態檢查(規劃書第 9.1 節自動檢查;--validate 只檢查不執行)
+void PrintIssues(Scenario sc)
+{
+    var issues = ScenarioValidator.Check(sc, ship, Path.Combine(root, "data", "scenarios", sc.Id));
+    foreach (var issue in issues) Console.WriteLine($"  情境檢查 {issue}");
+    if (sc.ParameterSetInfo is { } ps) Console.WriteLine($"  參數集 {ps.Id} {ps.Version}(sha256 {ps.Sha256[..16]}…),解析 {ps.Resolved.Count} 個引用");
+}
+PrintIssues(scenario);
+if (options.Validate)
+{
+    var errors = ScenarioValidator.Check(scenario, ship).Count(i => i.Severity == ScenarioIssueSeverity.Error);
+    Console.WriteLine(errors == 0 ? "情境檢查:無錯誤" : $"情境檢查:{errors} 個錯誤");
+    return errors == 0 ? 0 : 1;
+}
 SimulationEngine engine;
 try { engine = new SimulationEngine(ship, scenario, DynamicsFactory(options.Dynamics)); }
 catch (FileNotFoundException ex) when (options.Dynamics == "mmg")
@@ -71,19 +122,36 @@ catch (FileNotFoundException ex) when (options.Dynamics == "mmg")
     Console.Error.WriteLine("(或以 --dynamics placeholder 使用暫代模型)");
     return 3;
 }
+// 紀錄(規劃書第 5.3 節):每份紀錄一個 header 情境;loadScenario 時紀錄器在引擎重設前自動關閉,這裡再為新情境開新檔
+RecordWriter? recorder = null;
+string RecordPathFor(string scenarioId) => options.RecordPath is { } rp && recorder is null
+    ? (Path.IsPathRooted(rp) ? rp : Path.Combine(root, rp))
+    : RecordWriter.DefaultPath(RepositoryPaths.RecordsDirectory(root), scenarioId);
+if (options.Record)
+{
+    recorder = new RecordWriter(RecordPathFor(scenario.Id), engine);
+    Console.WriteLine($"  紀錄:{recorder.Path}");
+}
 engine.ScenarioLoadRequested += (e, path) =>
 {
     try
     {
         var p = Path.IsPathRooted(path) ? path : Path.Combine(root, path);
-        var sc = ScenarioLoader.Load(p);
+        var sc = ScenarioLoader.Load(p, parameterSet);
         e.LoadScenario(sc, string.Equals(sc.Ship.Id, e.Ship.Id, StringComparison.OrdinalIgnoreCase) ? null : LoadShip(sc.Ship.Id));
         Console.WriteLine($"已載入情境 {sc.Id}");
+        PrintIssues(sc);
+        if (recorder is { Closed: true } closed)
+        {
+            var footer = closed.Footer!;
+            Console.WriteLine($"紀錄已關閉(情境切換):{closed.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…)");
+            recorder = new RecordWriter(RecordPathFor(sc.Id), e);
+            Console.WriteLine($"  紀錄(新情境):{recorder.Path}");
+        }
     }
     catch (Exception ex) { Console.Error.WriteLine($"載入情境失敗:{ex.Message}"); }
 };
-engine.Grounded += e => Console.WriteLine($"[t={e.Time:F1}] 擱淺:UKC ≤ 0");
-engine.TrafficEventRaised += (e, ev) => Console.WriteLine($"[t={ev.T:F1}] 交通事件 {ev.Kind}{(ev.TargetId is null ? "" : $" {ev.TargetId}")}:{ev.Message}");
+engine.EventRaised += (e, ev) => Console.WriteLine($"[t={ev.T:F1}] 事件 {ev.Source}/{ev.Kind}{(ev.ItemId is null ? "" : $" {ev.ItemId}")}{(ev.TargetId is null ? "" : $" {ev.TargetId}")}{(ev.Message is null ? "" : $":{ev.Message}")}");
 
 var startUtc = scenario.StartTimeUtc is { } st
     ? DateTime.Parse(st, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal)
@@ -94,13 +162,8 @@ Console.WriteLine($"  dt = {engine.Dt} s(50 Hz)、廣播 25 Hz、快照每 {engi
 if (scenario.Targets.Count > 0)
     Console.WriteLine($"  目標船 {scenario.Targets.Count} 艘:{string.Join("、", scenario.Targets.Select(t => $"{t.Id}({t.Behaviour.Mode}{(t.Trigger is { Type: not SimosaBRM.SimCore.Scenario.TargetTriggerType.None } ? ",觸發" : "")})"))};最小 CPA 門檻 {scenario.Assessment.MinCpaNm} nm");
 
-RecordWriter? recorder = null;
-if (options.Record)
-{
-    var recPath = RecordWriter.DefaultPath(RepositoryPaths.RecordsDirectory(root), scenario.Id);
-    recorder = new RecordWriter(recPath, engine);
-    Console.WriteLine($"  紀錄:{recPath}");
-}
+if (scenario.Timeline.Count > 0 || scenario.Route is not null || scenario.Zones.Count > 0)
+    Console.WriteLine($"  情境引擎:時間表 {scenario.Timeline.Count} 項、航線 {scenario.Route?.Waypoints.Count ?? 0} 航點、區域 {scenario.Zones.Count}、硬性失敗 {scenario.Assessment.HardFail.Count}/容許帶 {scenario.Assessment.Bands.Count}/必要事件 {scenario.Assessment.Required.Count}");
 
 WebSocketStateServer? ws = null;
 if (options.EnableWebSocket)
@@ -139,6 +202,14 @@ engine.Broadcast += (e, state) =>
     ws?.Publish(frame);
     bus?.Publish(frame);
 };
+// 事件框與結束時的評估框(情境引擎設計第 5.2 節)
+engine.EventRaised += (e, ev) =>
+{
+    if (ws is null) return;
+    ws.PublishEvent(ContractJson.SerializeToUtf8Bytes(new { type = "event", @event = ev }));
+    if (ev.Kind == SimEventKinds.ExerciseEnded && e.LatestSummary is { } summary)
+        ws.PublishEvent(ContractJson.SerializeToUtf8Bytes(new { type = "assessment", final = summary.Final, summary }));
+};
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -168,8 +239,10 @@ bus?.Dispose();
 if (ws is not null) await ws.DisposeAsync();
 if (recorder is not null)
 {
-    var footer = recorder.Close();
-    Console.WriteLine($"紀錄已關閉:{recorder.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…,檔案 SHA-256 {footer.Sha256[..16]}…)");
+    var footer = recorder.Closed ? recorder.Footer! : recorder.Close();
+    Console.WriteLine($"紀錄已關閉:{recorder.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…,檔案 SHA-256 {footer.Sha256[..16]}…,summary 行 {footer.SummaryLines})");
 }
+if (engine.LatestSummary is { } finalSummary)
+    Console.WriteLine($"評估摘要:分數 {finalSummary.Assessment.Score:F0}/{finalSummary.Assessment.PassMark:F0},{(finalSummary.Assessment.Passed ? "通過" : "未通過")}{(finalSummary.Assessment.HardFailed ? "(硬性失敗)" : "")};事件 {finalSummary.Events.Total}");
 Console.WriteLine("結束。");
 return 0;

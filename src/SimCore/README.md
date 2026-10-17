@@ -5,10 +5,10 @@
 
 | 專案 | 內容 |
 |---|---|
-| `src/SimCore` | 類別庫:契約型別、船舶資料、物理介面、MMG 完整模型與暫代模型、RK4、引擎、環境、情境、目標船/交通(Traffic)、紀錄/重播 |
-| `src/SimCore.Host` | 主控台程式:WebSocket(ws://0.0.0.0:8765)、UDP 多播狀態匯流排、NMEA 閘道、紀錄、重播 |
+| `src/SimCore` | 類別庫:契約型別、船舶資料、物理介面、MMG 完整模型與暫代模型、RK4、引擎、環境、情境(含時間表/航線/區域/評估規則)、公司程序參數集、目標船/交通(Traffic)、評估(Assessment)、紀錄/重播 |
+| `src/SimCore.Host` | 主控台程式:WebSocket(ws://0.0.0.0:8765;狀態、事件與評估框)、UDP 多播狀態匯流排、NMEA 閘道、紀錄、重播/重新評分、情境靜態檢查 |
 | `src/Gateway.Nmea` | NMEA 0183 句型產生與 UDP 輸出(含目標船 AIS `!AIVDM` 與 `$RATTM`) |
-| `tests/SimCore.Tests` | xunit:單位、RK4、確定性、快照/還原、紀錄→重播、NMEA/AIS、情境、交通(行為模式、CPA/TCPA/BCR、碰撞、觸發、指令)、暫代模型行為、MMG 黃金測試與 C#↔Python 一致性(`Golden/`) |
+| `tests/SimCore.Tests` | xunit:單位、RK4、確定性、快照/還原、紀錄→重播、NMEA/AIS、情境、交通(行為模式、CPA/TCPA/BCR、碰撞、觸發、指令)、暫代模型行為、MMG 黃金測試與 C#↔Python 一致性(`Golden/`)、情境引擎(參數集、時間表、漸變、航線/區域/會遇/故障應變/指標、評分黃金摘要 `Golden/assessment-E07-600s.json`、靜態檢查、雜湊相容) |
 
 ```
 dotnet build SimosaBRM.sln
@@ -27,10 +27,16 @@ SimCore(類別庫)
 ├─ Environment/   EnvironmentConditions(風、均勻流、水深)、EnvironmentMath(相對風、COG/SOG、squat、UKC)
 ├─ Geo/           LocalTangentPlane(本地 ENU ↔ WGS-84,平面近似)
 ├─ Engine/        SimulationEngine(50 Hz、指令佇列、快照、雜湊)、RealtimeRunner、Autopilot、DeterministicRandom
-├─ Scenario/      Scenario(YAML,schema 在 src/Contracts/scenario.schema.json)、ScenarioTarget(targets[] 定義)、ScenarioLoader
+├─ Engine/        SimEvent(所有核心事件;SimEventKinds/SimEventSources)
+├─ Scenario/      Scenario(YAML,schema 在 src/Contracts/scenario.schema.json)、ScenarioTarget(targets[])、ScenarioTimeline(timeline[]:TimelineItem/TriggerCondition/TimelineAction)、
+│                 ScenarioRoute(route/zones)、ScenarioAssessment(assessment 規則)、ScenarioBriefing、ScenarioLoader(YAML → 節點樹 → ${params} 替換 → JSON)、
+│                 YamlJson、ScenarioValidator(靜態檢查)、TimelineEngine(執行期)、EnvironmentRamp(漸變)、TimelineSnapshot
+├─ Parameters/    ParameterSet / ParameterSetLoader(公司程序參數集,parameter-set.schema.json)、ParameterResolver(${params:…} 解析、重新評分)
+├─ Assessment/    RouteTracker(XTD/航段)、ZoneTracker(多邊形、區域速限/UKC/水深)、MetricsCollector(操縱/一般/UKC 指標)、EncounterTracker(會遇)、
+│                 FaultResponseTracker(故障應變)、AssessmentEngine(硬性失敗/容許帶/必要事件/評分)、AssessmentSummary(summary 行)
 ├─ Traffic/       TrafficManager(目標船集合、觸發、行為、COLREG、會遇指標、碰撞、targetControl)、TargetShip(運動模型與狀態)、
-│                 Encounter(CPA/TCPA/BCR、船體外形多邊形相交)、TrafficEvent、TrafficSnapshot
-└─ Recording/     RecordWriter / RecordReader / Replayer(JSON Lines + SHA-256;含 event 行)
+│                 Encounter(CPA/TCPA/BCR、船體外形多邊形相交)、TrafficEvent(: SimEvent)、TrafficSnapshot
+└─ Recording/     RecordWriter / RecordReader / Replayer(JSON Lines + SHA-256;含 event 與 summary 行;重播比對雜湊、事件序列與 summary)
 ```
 
 ### 1.1 資料流與時序(規劃書第 5.3 節)
@@ -60,8 +66,11 @@ dotnet run --project src/SimCore.Host -- [選項]
   --ship FSB1|FSB2             覆寫情境自船
   --loading full|ballast|intermediate
   --scenario <path.yaml>       預設 data/scenarios/E01_baseline.yaml
-  --record                     紀錄到 build/records/<yyyyMMdd-HHmmss>-<scenario>.jsonl
-  --replay <file.jsonl>        離線重播並比對雜湊(結束碼 0 = 一致)
+  --record [<file.jsonl>]      紀錄到 build/records/<yyyyMMdd-HHmmss>-<scenario>.jsonl(或指定路徑;loadScenario 時另開新檔)
+  --replay <file.jsonl>        離線重播並比對雜湊、事件序列與 summary(結束碼 0 = 一致)
+  --parameters <path.yaml>     公司程序參數集(預設 data/parameters/company-procedures.yaml 或情境 assessment.parameterSet)
+  --validate                   只做情境靜態檢查(error/warning)後結束
+  --rescore                    與 --replay 併用:以 --parameters 的參數集重新評分(雜湊與事件序列不變,印出新 summary)
   --port 8765                  WebSocket 埠
   --timescale 1                初始時間倍率
   --duration <秒>              模擬時間到達後結束(煙霧測試)
@@ -85,8 +94,8 @@ dotnet run --project src/SimCore.Host -- [選項]
 ## 4. 情境與紀錄
 
 - 情境 YAML 最小內容見 `src/Contracts/scenario.schema.json` 與 `data/scenarios/E01_baseline.yaml`(麥寮外海、FSB1 壓載、HAH 7.8 kn、風 15 kn NE、流 0.5 kn、水深 30 m、種子 20260101;另含 1 艘對遇、1 艘錨泊的目標船)。`initial.rpm`(選填)直接指定初始軸轉速;未指定車鐘與轉速時 MMG 取該航速的直航平衡轉速(與 Python `reset()` 相同),暫代模型取航速最接近的車令。`data/scenarios/E05_pilot_traffic.yaml`:高雄港外 Charlie 引水站附近,3 艘交通(對遇、橫越直航、不守規則的漁船)+ 自船接近引水站 1.5 nm 時出現並跟隨的引水船。目標船格式見第 6.2 節。
-- 紀錄檔(JSON Lines,UTF-8/LF):`header`(含完整情境與動力學模型名稱)、`input`(每個套用的指令與其 tick,含 `targetControl`)、`state`(25 Hz,含 `targets[]`)、`event`(交通事件:碰撞、CPA 警報、目標出現、航點、COLREG、聲號、目標控制)、`snapshot`(每 10 s 與手動,含目標船)、`footer`(最終 tick、狀態雜湊、footer 之前所有位元組的 SHA-256)。
-- 重播:`Replayer.Replay(path, shipLoader)` 依 header 情境重建引擎,依序在相同 tick 送入指令並推進到相同 tick,`HashMatches` 必須為真;動力學模型不同時會警告(雜湊預期不一致)。執行中以指令新增的目標船不在 header 情境內,由 `input` 行重播還原。
+- 紀錄檔(JSON Lines,UTF-8/LF;`header.version` 2):`header`(完整情境—參數引用已代入、動力學模型名稱、`parameterSet{id, version, path, sha256, resolved[]}`)、`input`(每個套用的教官/學員指令與其 tick,含 `targetControl`、`triggerTimeline`、`acknowledge`、`endExercise`;時間表自動動作**不**進 input 行)、`state`(25 Hz,含 `targets[]`、`scenario`、`route`、`visibility_nm`)、`event`(`SimEvent`:交通、時間表、評估、教官、引擎事件;`seq` 遞增)、`snapshot`(每 10 s 與手動;`EngineSnapshot.Version` 2 含 `timeline`/`assessment`)、`summary`(評估摘要;`endExercise` 時一行、關閉時再一行 `final: true`,講評站取最後一行)、`footer`(最終 tick、狀態雜湊、footer 之前所有位元組的 SHA-256、`summaryLines`)。
+- 重播:`Replayer.Replay(path, shipLoader)` 依 header 情境重建引擎,依序在相同 tick 送入指令並推進到相同 tick:`HashMatches`、`EventSequenceMatches`(逐事件 seq/kind/tick/itemId/targetId)、`SummaryMatches`(JSON 相等)必須為真;動力學模型不同時會警告(雜湊預期不一致)。執行中以指令新增的目標船不在 header 情境內,由 `input` 行重播還原;時間表動作由重播引擎在相同 tick 重新產生。`rescore:` 參數以另一參數集代入 header `parameterSet.resolved` 的欄位得到重新評分情境,引擎仍以 header 情境執行(物理/交通/時間表/雜湊/事件序列不變),另建影子評估模組(`SimulationEngine.EnableRescore`、`RescoreAssessment`)產生新門檻的 summary(第 8.6 節)。重播時指令在引擎 tick 等於紀錄 tick 時立即套用(與主控程序等價),`restore`/`reset` 倒帶後的指令各自套在紀錄的 tick。`loadScenario` 不寫 input 行:紀錄器在情境切換前自動關閉(`ScenarioLoading` 事件;footer 為舊情境的最終 tick/雜湊),主控程序為新情境另開新檔;重播遇到舊紀錄的 `loadScenario` 行時中止並 Warning。
 
 ## 5. MMG 完整模型(`Physics/Mmg`,ModelName `mmg/1`)
 
@@ -224,3 +233,53 @@ targets:
 - 目標船(第 6 節):運動模型為簡化的一階響應(無 MMG、無風壓/淺水、不能倒退);COLREG 只對自船判定(目標間互不避碰),不含第 19 條限制能見度、不含燈號/聲號的自動邏輯(聲號只能由指令觸發);跟隨模式無拖纜動力;錨泊為確定性迴盪(非走錨模型);碰撞只偵測自船與目標外形相交(不偵測目標之間),無碰撞力學;AIS 報告率固定(不依航速/轉向縮短)且無 SOTDMA 時槽模擬;水深、岸線與固定物尚未納入目標船避讓。
 - 主機模型無起動空氣次數上限的實際阻擋(只遞減 `startsRemaining`)、臨界轉速區;換向/起動延遲已在 MMG 模式的狀態機實作,暫代模式仍為一階滯後。
 - 時間倍率只影響即時驅動;高倍率下若物理負荷過高會丟步(`RealtimeRunner.DroppedSteps`)。
+
+## 8. 情境引擎(`Scenario/`、`Parameters/`、`Assessment/`;設計文件 `docs/design/scenario-engine.md`)
+
+規劃書第 5.3 節(紀錄)、第 7.2 節(故障目錄)、第 8.1 節(練習目錄、三步升級)、第 8.3 節(自動量測指標與評分)、第 8.4 節(講評)、第 9.1 節(教官站、簡化教官模式、程序參數管理 R13/R14)。
+
+### 8.1 情境 YAML 擴充(全部選填;`src/Contracts/scenario.schema.json`)
+
+- `timeline[]`:`{id, name, phase, visibility: instructor|all, repeat: once|always|{every_s,max}, cooldown_s, holdFor_s, delay_s, manual, armed, when, actions[]}`。`when` 為遞迴條件(`all`/`any`/`not` + 14 種 leaf:`time`(可 `since: {event,…}`)、`ownDistance`(point|waypoint|target)、`ownHeading`、`ownSpeed`、`ukc`、`xtd`、`routeLeg`、`zone`、`phase`、`event`、`fault`、`telegraph`、`autopilot`、`manual`)。`actions[]` 每項為單鍵物件:`injectFault`、`clearFault`、`setEnvironment`(含 `ramp_s` 漸變、`visibility_nm`)、`targetControl`、`voiceScript`、`message`、`phase`、`freeze`、`autopilot`、`ownShip`、`timeScale`、`arm`/`disarm`、`endExercise`;`loadScenario`/`reset`/`restore`/`snapshot` 不允許(載入錯誤)。
+- `route`:`{name, xtdLimit_m, startLeg, waypoints: [{name, lat/lon|x/y, xtdLimit_m, speedLimit_kn, arrivalRadius_m, checkpoint, report}]}`;航點限制作用於「到達該航點的那一段」。
+- `zones[]`:`{id, type: noGo|speedLimit|ukcPolicy|reporting, polygon[≥3], waterDepth_m, ukcMin{metres|fractionOfDraft}, speedLimit_kn}`;`waterDepth_m` 以 `ZoneDepth` 覆寫區域內水深(多區取最淺,進快照)。
+- `assessment`:`parameterSet`、`minCpa_nm`、`encounter{detectionRange_nm, substantialCourseChange_deg, substantialSpeedChange_kn, cpaInterest_nm}`、`ukc{min}`、`manoeuvring{rotLimit_degPerMin, hardOver_deg}`、`hardFail[]`(grounding|collision|cpa|ukc|zoneEntered|event)、`bands[]`(指標名稱見 `Assessment/MetricNames.cs`;`fail: 2x`、`direction: below`)、`required[]`(`after` 事件起算、`expect` 可偵測動作、`within_s`、`penalty`、`latePenaltyPer_s`)、`scoring{start, passMark}`。
+- `briefing`:字串或 `{text, attachments[], roles[], minParticipants, duration_s}`;`environment.visibility_nm`。
+- 參數引用:任何數值欄位整個字串寫 `"${params:<鍵>}"`(**YAML 流式 `{ }` 內須加引號**,因 `}` 會結束純量);載入時以參數集代入(`ScenarioLoader.Load(path, parameterSet)`;未給參數集時依 `assessment.parameterSet`/預設路徑自動載入),未知鍵、單位後綴不符、引用於 id/name/seed 等位置、來源文件未定義皆為 `InvalidDataException`。解析清單進紀錄 `header.parameterSet.resolved[]`,`summary.assessment.bands/required[]` 附 `paramKey/source/revision/clause`。
+- 載入靜態檢查 `ScenarioValidator.Check(scenario, ship)`(主控程序啟動/`loadScenario` 印出;`--validate` 只檢查):error = 結構錯誤(id 重複、參照不存在、動作不允許、航點不足/重合、多邊形點數/自交、指標名稱、required.after)與初始狀態已成立的硬性失敗;warning = 初始即成立的條件、過晚的 time 觸發、`always` 無 cooldown、缺音檔、只記錄的故障。
+
+### 8.2 公司程序參數集(`data/parameters/company-procedures.yaml`;`src/Contracts/parameter-set.schema.json`)
+
+`id`、`version`(`YYYY.M.n`)、`effectiveFrom`、`approvedBy/On`、`notes`、`sources{文件編號: {title, revision, approvedBy, date, external}}`、`parameters{鍵: {value, unit, source, clause, description, min, max}}`、`overrides`(保留)。鍵名 `段.群.名_單位後綴`,後綴(`_nm/_m/_s/_min/_kn/_mps/_deg/_degPerMin/_fraction`)須與 `unit` 一致,無後綴者 unit 須為 `score/count/bool/text`;`source` 須在 `sources`。`ParameterSetLoader.Load` 計算檔案 sha256(紀錄標頭、summary、主控程序啟動列印)。
+
+### 8.3 執行時序(每步;`SimulationEngine.Advance`)
+
+陣風亂數(每秒)→ **環境漸變 `RampSet.Apply`**(線性;角度最短弧;完成發 `environmentRampDone`)→ 自動舵 → 致動器 → RK4 → `Tick++` → 擱淺(`Grounded` + `grounding` 事件)→ 目標船 → **評估步(每秒)**:`RouteTracker`/`ZoneTracker` → `MetricsCollector` → `EncounterTracker`/`FaultResponseTracker` → `TimelineEngine.Evaluate`(依 YAML 順序評估 armed 項目,觸發者立刻執行動作或排入 `delay_s`,再執行到期的待執行動作;單步觸發上限 16)→ `AssessmentEngine.EvaluateRules`(硬性失敗、容許帶、必要事件逾時;更新 `LatestSummary`)→ 雜湊 → `Stepped` → 廣播 → 自動快照。時間觸發精度 1 s;同一評估步中後面的項目看得到前面項目產生的事件,反之要等下一秒。
+
+### 8.4 事件、指令與狀態
+
+- `SimEvent`(`Engine/SimEvent.cs`):`kind/tick/t/source/itemId/targetId/message/range_nm/cpa_nm/tcpa_min/phase/visible/seq/data`;`TrafficEvent : SimEvent`(source `traffic`)。引擎事件 `EventRaised` 發所有事件(紀錄器、主控程序訂閱),`TrafficEventRaised` 仍只發交通事件。新 kind 見 `SimEventKinds`(timelineTriggered、faultInjected/faultCleared、environmentChange/environmentRampDone、voiceScript、message、phaseChanged、frozen/resumed、autopilotOverride/ownShipOverride/timeScaleChanged、exerciseEnded、grounding、routeLegChanged/routeCompleted/checkpointPassed/reportPointPassed、xtdExceeded/xtdRestored、zoneEntered/zoneExited、ukcAlarm/ukcClear、speedLimitExceeded/speedLimitRestored、encounterStarted/encounterFirstAction/encounterClosed、requiredEventMet/requiredEventMissed、hardFail、bandWarn/bandFail、acknowledge、timelineManual)。
+- 教官指令 `injectFault`/`clearFault`/`setEnvironment`/`freeze`/`resume`/`timeScale` 照舊寫 `input` 行並**也**發對應事件(source `instructor`);時間表動作經 `ApplyInternal` 走同一邏輯但不寫 input 行(source `timeline`)。新指令:`triggerTimeline{id, force}`(manual 項目或 force;once 已觸發需 force;事件 `timelineManual{ok}`)、`acknowledge{kind, itemId, role, note}`、`endExercise{reason}`(凍結、定稿 summary、`exerciseEnded`;之後 resume 無效)、`getAssessment`(主控程序以 `LatestSummary` 直接回覆該客戶端 `{"type":"assessment","final","summary"}`,不進佇列)。WebSocket 另推送 `{"type":"event","event":…}`(每個事件)與 `exerciseEnded` 時的 assessment 框(事件走獨立通道,不被狀態幀丟棄)。
+- 狀態 `state.scenario{id, phase, parameterSetVersion, timelineFired, timelinePending, hardFailed, score, ended}`、`state.route{legIndex, nextWaypoint, xtd_m(右正), xtdLimit_m, distanceToWaypoint_nm, bearingToWaypoint_deg, legCourse_deg, speedLimit_kn, complete}`、`state.visibility_nm`。
+
+### 8.5 自動量測指標與評分(`summary`;規劃書第 8.3 節第 1–5 類)
+
+- 航跡(`RouteTracker`):航段 i 由 W[i] 到 W[i+1],`xtd = (P−A)·(u.y, −u.x)`(右正);航段切換於正橫(`s ≥ L`)或到達半徑(預設 `max(2·LOA, 150 m)`;最後一段只用半徑);不回退;走廊超限事件於回到 ≤ 0.8·limit 才恢復;`track.{meanAbsXtd_m, maxXtd_m, maxXtdAt_s, maxXtdLeg, timeOutsideCorridor_s, corridorExcursions, fractionOutsideCorridor, minDistanceToCorridorEdge_m, minDistanceToNoGo_m, meanHeadingDeviation_deg, waypoints[]}`。
+- UKC(`ZoneTracker` + `MetricsCollector`):門檻 = 區內 `ukcPolicy.ukcMin`(優先)或 `assessment.ukc.min`;`ukc.{min_m, minAt_s, minSquat_m, timeBelowLimit_s, excursions(離開滯後 +0.2 m), groundings, limit_m, limitSource(參數鍵)}`。
+- 避碰(`EncounterTracker`):會遇開始 = 目標 active、`range ≤ detectionRange_nm`、TCPA > 0、CPA < `cpaInterest_nm`(預設 2×minCpa);首次行動 = 舵令 ≥ 5°、車令/轉速令、自動舵改向 ≥ 5°;航向/速度改變幅度與 `substantial`;結束 = TCPA < 0 且距離連續 30 s 增加,或目標移除;關閉後同一目標再次成立開始條件即新開一筆(同 targetId),未成立時仍把更小的實際距離記到最後一筆的 `minRange_nm`;跟隨自船的 escort 不列入。**`collisionAvoidance.minCpa_nm` 與硬性失敗 `cpa` 使用非 escort 目標的最小實際通過距離(minRange)**,每目標另列預測最小 CPA(`targets[].minCpa_nm`)。
+- 操縱(`MetricsCollector`):舵角分箱 `0-5/5-10/10-20/20-35/>35`(秒)、滿舵次數/秒數(門檻 = `hardOver_deg` 或目前模型的舵角上限 − 0.5°)、舵令次數(|Δ| ≥ 1°、自動舵不計;1 s 視窗自計入的舵令起算、不隨後續舵令延長)、ROT 最大值與超限秒數、車令段落、轉速/側推令、速限超限秒數(航段與區域取較嚴者)、自動舵時間/切換;`general.{duration_s, freezes, distance_nm, avgSog_kn, maxSog_kn}`。
+- 故障應變(`FaultResponseTracker`):每個 `faultInjected`(時間表或教官)一筆 `{fault, itemId, injectedAt_s, source, firstAction{kind, t_s, dt_s}, acknowledgements[], cleared_s, withinFirstAction, withinNotifyEcr}`;相關動作取 `required[]` 中 `after` 指向該故障的 `expect`,無規則時任一舵/車/側推/自動舵指令;`acknowledge` 帶 `itemId` 明確對應,否則對應最近 120 s 內注入者。
+- 評分(`AssessmentEngine`):硬性失敗成立即發 `hardFail`(一次),`passed = false`;容許帶每條一次(進入 fail 帶取 `failPenalty`,否則 warn 帶取 `penalty`);必要事件 `after` 後計時,`expect` 達成 → `requiredEventMet`(逾時後達成記 `late`,扣 `min(penalty, latePenaltyPer_s × 逾時秒)`),逾 `within_s` 未達成 → `requiredEventMissed` + `penalty`,`after` 未發生 → `notApplicable`;`score = max(0, start − Σ)`,`passed = !hardFailed && score ≥ passMark`;`advisory: true`(自動評分僅輔助,A-I/12)。
+
+### 8.6 確定性、快照與雜湊
+
+- `EngineSnapshot.Version` 2:`Timeline{phase, seq, assessmentEvents, items[{id, armed, fireCount, lastFiredTick, satisfiedSinceTick}], pendingActions[], ramps[], eventCounts, lastEventTick, phaseHistory, ended}`、`Assessment{route, zones, metrics, encounters, faults, rules}`(各追蹤器狀態經 JSON 深拷貝,double 位元一致)、`parameterSetVersion`、`phase`、`visibilityNm`。Version 1 快照(無這些欄位)可還原。
+- 雜湊鏈:**只在情境有時間表/航線/區域/評估規則時**於目標船位元組之後追加 `int64 非評估事件數(seq − assessmentEvents)`、`int64 階段索引`、各項目 `fireCount/lastFiredTick/satisfiedSinceTick`、各進行中漸變 `channel/endTick/to`、`int64 航段`;無時間表的情境(E05)雜湊與舊版位元一致(`HashCompatibilityTests` 以獨立實作的舊版雜湊逐步對照)。評估事件與累計值不進雜湊。「以新參數集重新評分」(`--replay --rescore --parameters`)以影子評估模組實作:物理、交通、時間表與雜湊仍依紀錄原情境(雜湊與事件序列不變,結束碼 0),只有 summary 依新門檻改變。
+- 時間表與評估不使用引擎亂數;凍結時不評估;`delay_s` 以模擬時間計;`reset`/`loadScenario` 重建全部狀態。
+
+### 8.7 示範情境與驗證
+
+- `E01_baseline.yaml`:加 `briefing`、`visibility_nm`、時間表(5 分鐘機控室語音、10 分鐘風向轉北 3 分鐘漸變、T1 CPA 警報提示 ×3)、評估(碰撞/擱淺/CPA 硬性失敗、min CPA 與 ROT 容許帶、參數引用)。
+- `E07_steering_failure.yaml`:麥寮進港航道舵機故障(航線 4 航點、UKC 政策區含水深覆寫、錨地禁區、內港速限區、2 艘目標、7 項時間表含手動的應急操舵、4 條硬性失敗/5 條容許帶/4 條必要事件;座標為示意,待 ENC 校正)。`dotnet run --project src/SimCore.Host -c Release -- --scenario E07_steering_failure --record build/records/e07-test.jsonl --duration 300 --timescale 10 --no-ws --no-udp --no-nmea`,再 `--replay build/records/e07-test.jsonl`:雜湊、事件序列與 summary 一致。
+- 黃金摘要 `tests/SimCore.Tests/Golden/assessment-E07-600s.json`(暫代模型、`TimelineRecordReplayTests.Script` 600 s;含參數集 sha256,參數集檔案或腳本變更時以 `SIMOSA_UPDATE_GOLDEN=1 dotnet test --filter GoldenE07SummaryMatches` 重新產生並在提交說明)。
+- 尚未實作(設計文件第 0.2、10 節):操舵模式指令(`steeringModeChange` 以自動舵關閉或 `acknowledge {kind: steeringMode}` 代表)、`blackout` 組合故障、參數集 `overrides`、Python 參考實作的 `${params:…}` 替換(`src/Tools.Calibration` 本次未改;Python 目前忽略 assessment/route/zones/timeline,E01/E07 仍可載入)。

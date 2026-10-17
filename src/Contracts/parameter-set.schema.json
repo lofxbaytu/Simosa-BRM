@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simosa-brm/contracts/parameter-set.schema.json",
+  "title": "ParameterSet",
+  "description": "公司程序參數集(data/parameters/company-procedures.yaml;規劃書第 8.3、9.1 節 R14;情境引擎設計第 2 節)。鍵名 段.群.名_單位後綴,後綴須與 unit 一致;情境以 \"${params:<鍵>}\" 引用,載入時解析,未知鍵為錯誤。",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "sources",
+    "parameters"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d{4}\\.\\d{1,2}\\.\\d+$",
+      "description": "版次(年.月.序);紀錄標頭與講評報告顯示"
+    },
+    "effectiveFrom": {
+      "type": "string",
+      "format": "date"
+    },
+    "approvedBy": {
+      "type": "string"
+    },
+    "approvedOn": {
+      "type": "string",
+      "format": "date"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "sources": {
+      "type": "object",
+      "description": "程序文件索引;parameters[].source 引用此處的鍵",
+      "additionalProperties": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)+(_[A-Za-z]+)?$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/parameter"
+      }
+    },
+    "overrides": {
+      "type": "object",
+      "description": "保留:依船舶 ID 覆寫(第一版不解析)"
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": [
+        "title",
+        "revision"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "approvedBy": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "format": "date"
+        },
+        "external": {
+          "type": "boolean"
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "required": [
+        "value",
+        "unit",
+        "source"
+      ],
+      "properties": {
+        "value": {
+          "type": [
+            "number",
+            "boolean",
+            "string"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "enum": [
+            "nm",
+            "m",
+            "s",
+            "min",
+            "kn",
+            "mps",
+            "deg",
+            "degPerMin",
+            "fractionOfDraft",
+            "score",
+            "count",
+            "bool",
+            "text"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "須存在於 sources"
+        },
+        "clause": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "simosa-company-procedures",
+      "version": "2026.10.1",
+      "sources": {
+        "DWO-007": {
+          "title": "船長常規命令",
+          "revision": "3"
+        },
+        "SMS-NAV-012": {
+          "title": "航行程序 — UKC 政策",
+          "revision": "2"
+        }
+      },
+      "parameters": {
+        "navigation.cpa.openSea_nm": {
+          "value": 1.0,
+          "unit": "nm",
+          "source": "DWO-007",
+          "clause": "4.2"
+        },
+        "navigation.ukc.channel_fraction": {
+          "value": 0.1,
+          "unit": "fractionOfDraft",
+          "source": "SMS-NAV-012",
+          "clause": "3.2"
+        },
+        "navigation.xtd.channel_m": {
+          "value": 50,
+          "unit": "m",
+          "source": "SMS-NAV-012",
+          "clause": "4.1"
+        }
+      }
+    }
+  ]
+}

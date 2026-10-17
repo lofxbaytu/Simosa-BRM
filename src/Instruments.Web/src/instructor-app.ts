@@ -1,14 +1,17 @@
 // <brm-instructor-app>:教官站(規劃書第 9.1 節)第一版,三種版面:
-//  - full(預設):訪船船長直連時用。連線狀態與自船摘要(共用 conning 條)、情境選擇與載入、執行控制
-//    (凍結/恢復/重設、時間倍率、快照/還原)、環境即時改變、故障注入、自船覆寫、鳥瞰航跡圖、
-//    學員操作紀錄(由狀態推導)、教官指令與核心回應、BRM 快速標記(第 8.2 節五大類)。
+//  - full(預設):訪船船長直連時用。連線狀態與自船摘要(共用 conning 條)、情境選擇與載入、時間表面板
+//    (手動觸發、確認鈕、必要事件倒數)、執行控制(凍結/恢復/重設/結束練習、時間倍率、快照/還原)、環境即時改變
+//    (含漸變)、故障注入、自船覆寫、鳥瞰航跡圖(疊航線/區域)、核心事件流、學員操作紀錄(由狀態推導)、
+//    教官指令與核心回應、BRM 快速標記(第 8.2 節五大類)。
+//    核心推送的事件框 {"type":"event"} 與評估框 {"type":"assessment"}(設計文件 docs/design/scenario-engine.md 第 5.2 節)
+//    經 onMessage 收下;語音腳本事件由 VoiceScriptPlayer 播放(簡化模式自動、完整模式按「播放」)。
 //  - simple(?mode=simple):船上簡化教官模式(第 9.1 節 R13):選擇練習 → 簡報 → 開始 → 凍結/結束 →
 //    自動講評摘要與紀錄下載。
 //  - replay(?mode=replay):講評站雛型(第 9.2 節),載入 JSON Lines 紀錄檔離線重播,不需核心。
 // 指令與狀態格式同儀器頁(src/Contracts);資料來源可為 WebSocket 核心或示範模式。
 
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, query, state } from 'lit/decorators.js';
 import type { OwnShipState, ShipId } from './types/state.js';
 import type { SimCommand } from './types/command.js';
 import type { ConnectionStatus, SimSource } from './net/sim-source.js';
@@ -21,7 +24,7 @@ import { TrackHistory } from './lib/track-history.js';
 import { THEMES, applyTheme, isTheme, readTheme, type Theme } from './lib/theme.js';
 import { COMMAND_EVENT, tileStyles, type CommandEvent } from './components/shared.js';
 import { briefingText, loadScenarioList, loadingLabel, type ScenarioSummary } from './lib/scenario.js';
-import { loadScenarioCommand } from './lib/instructor-command.js';
+import { endExerciseCommand, getAssessmentCommand, loadScenarioCommand } from './lib/instructor-command.js';
 import { simpleCommand } from './lib/command.js';
 import { OperationLogDeriver, type OperationEvent } from './lib/operation-log.js';
 import { DebriefAccumulator, type DebriefSummary } from './lib/debrief.js';
@@ -29,9 +32,17 @@ import { BRM_CATEGORIES, BrmMarkerStore, type BrmMarker } from './lib/brm-marker
 import { StateSampler, buildSessionRecord, type CommandLogEntry } from './lib/session-record.js';
 import { downloadText, fileStamp } from './lib/download.js';
 import { formatHeading, formatKnots, formatMeters, formatRot, formatRudder, formatSimTime } from './lib/format.js';
+import type { SimEvent } from './types/event.js';
+import { EventStore, eventFromFrame, eventLabel, voiceScriptData } from './lib/sim-event.js';
+import { assessmentFromFrame, type AssessmentSummary } from './lib/assessment.js';
+import { VoiceScriptPlayer, voiceLine, voiceRecordLabel } from './lib/voice-script.js';
+import { eventMarks, overlayFromScenario, type PlotOverlay } from './lib/plot-overlay.js';
+import { PLAYED_BY_LABEL } from './lib/timeline.js';
+import { ROLE_LABEL } from './lib/sim-event.js';
 import { instructorStyles } from './components/instructor/instructor-shared.js';
 import type { BrmMarkDetail } from './components/instructor/brm-marker-bar.js';
 import type { SnapshotEntry } from './components/instructor/run-control-panel.js';
+import type { ReplayView } from './components/instructor/replay-view.js';
 import './components/conning-bar.js';
 import './components/track-plot.js';
 import './components/instructor/scenario-panel.js';
@@ -44,6 +55,8 @@ import './components/instructor/command-log-view.js';
 import './components/instructor/brm-marker-bar.js';
 import './components/instructor/debrief-summary.js';
 import './components/instructor/replay-view.js';
+import './components/instructor/event-stream.js';
+import './components/instructor/timeline-panel.js';
 
 export type PageMode = 'full' | 'simple' | 'replay';
 export type SourceMode = 'live' | 'demo';
@@ -170,6 +183,10 @@ export class InstructorApp extends LitElement {
       }
 
       /* ---- 教官站完整版面 ---- */
+      .full[hidden],
+      brm-replay-view[hidden] {
+        display: none;
+      }
       .full {
         display: grid;
         grid-template-rows: minmax(150px, 18vh) minmax(0, 1fr);
@@ -188,13 +205,34 @@ export class InstructorApp extends LitElement {
         min-height: 0;
       }
       .col.left {
-        grid-template-rows: minmax(0, 1fr) auto;
+        grid-template-rows: minmax(0, 0.9fr) minmax(0, 1fr) auto;
       }
       .col.center {
         grid-template-rows: minmax(0, 1fr) auto;
       }
       .col.right {
-        grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr) auto;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 0.5fr) auto;
+      }
+      header .warn-badge {
+        color: var(--ob-warning);
+        border: 1px solid var(--ob-warning);
+        border-radius: 4px;
+        padding: 1px 6px;
+      }
+      header .phase {
+        font-weight: 600;
+      }
+      .voice-banner {
+        grid-column: 1 / -1;
+        font-size: 15px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        background: var(--ob-accent-soft);
+        border: 1px solid var(--ob-accent);
+      }
+      .simple .brief-meta {
+        font-size: 14px;
+        color: var(--ob-text-secondary);
       }
       .center .plot {
         min-height: 0;
@@ -207,7 +245,7 @@ export class InstructorApp extends LitElement {
         overflow: auto;
       }
       .col.right brm-marker-bar {
-        max-height: 34vh;
+        max-height: 30vh;
       }
       @media (max-width: 1500px) {
         .full {
@@ -290,7 +328,7 @@ export class InstructorApp extends LitElement {
       }
       .simple .stage.running .side {
         display: grid;
-        grid-template-rows: minmax(0, 1fr) auto;
+        grid-template-rows: minmax(0, 1fr) auto minmax(0, 0.6fr);
         gap: 10px;
         min-height: 0;
       }
@@ -341,8 +379,18 @@ export class InstructorApp extends LitElement {
   @state() private simplePhase: SimplePhase = 'select';
   @state() private debriefSummary: DebriefSummary | null = null;
   @state() private confirmEnd = false;
+  @state() private events: readonly SimEvent[] = [];
+  @state() private coreSummary: AssessmentSummary | null = null;
+  @state() private lastVoice: string = '';
+  @state() private voicePlaying = false;
+
+  @query('brm-replay-view') private replayView?: ReplayView;
 
   private source: SimSource | null = null;
+  private readonly eventStore = new EventStore(2000);
+  private readonly voice = new VoiceScriptPlayer();
+  private assessmentTimer: ReturnType<typeof setTimeout> | null = null;
+  private voiceUnsub: (() => void) | null = null;
   private unsubscribe: Array<() => void> = [];
   private readonly history = new TrackHistory(1, 7200);
   private readonly opLog = new OperationLogDeriver();
@@ -383,6 +431,10 @@ export class InstructorApp extends LitElement {
     this.addEventListener('brm-mark', this.onBrmMark as EventListener);
     this.addEventListener('brm-mark-remove', this.onBrmRemove as EventListener);
     this.addEventListener('brm-export', this.onBrmExport as EventListener);
+    this.addEventListener('event-seek', this.onEventSeek as EventListener);
+    this.addEventListener('voice-play', this.onVoicePlay as EventListener);
+    this.addEventListener('exercise-ended', this.onExerciseEnded);
+    this.voiceUnsub = this.voice.onPlaying((p) => (this.voicePlaying = p));
     window.addEventListener('keydown', this.onKeyDown);
   }
 
@@ -399,6 +451,12 @@ export class InstructorApp extends LitElement {
     this.removeEventListener('brm-mark', this.onBrmMark as EventListener);
     this.removeEventListener('brm-mark-remove', this.onBrmRemove as EventListener);
     this.removeEventListener('brm-export', this.onBrmExport as EventListener);
+    this.removeEventListener('event-seek', this.onEventSeek as EventListener);
+    this.removeEventListener('voice-play', this.onVoicePlay as EventListener);
+    this.removeEventListener('exercise-ended', this.onExerciseEnded);
+    if (this.assessmentTimer) clearTimeout(this.assessmentTimer);
+    this.voiceUnsub?.();
+    this.voice.stop();
     window.removeEventListener('keydown', this.onKeyDown);
   }
 
@@ -477,6 +535,20 @@ export class InstructorApp extends LitElement {
   }
 
   private onMessage(msg: Record<string, unknown>): void {
+    const ev = eventFromFrame(msg);
+    if (ev) {
+      this.onSimEvent(ev);
+      return;
+    }
+    const summary = assessmentFromFrame(msg);
+    if (summary) {
+      this.coreSummary = summary;
+      if (this.assessmentTimer) {
+        clearTimeout(this.assessmentTimer);
+        this.assessmentTimer = null;
+      }
+      return;
+    }
     if (msg['type'] !== 'ack') return;
     const cmdType = msg['command'];
     const entry = this.commandLog.find((e) => !e.ack && e.command.type === cmdType);
@@ -486,6 +558,84 @@ export class InstructorApp extends LitElement {
     if (typeof msg['tick'] === 'number') ack.tick = msg['tick'];
     entry.ack = ack;
     this.commandLog = [...this.commandLog];
+  }
+
+  /** 核心事件:存入事件流;語音事件在簡化教官模式自動播放;練習結束時請求 summary。 */
+  private onSimEvent(ev: SimEvent): void {
+    this.eventStore.push(ev);
+    this.events = [...this.eventStore.all()];
+    const v = voiceScriptData(ev);
+    if (v) {
+      this.lastVoice = voiceLine(v);
+      if (this.pageMode === 'simple') void this.playVoice(ev, true);
+    } else if (ev.kind === 'message' && (ev.visible || this.pageMode === 'simple')) {
+      this.lastVoice = eventLabel(ev);
+    }
+    if (ev.kind === 'exerciseEnded') this.requestAssessment();
+  }
+
+  private async playVoice(ev: SimEvent, auto: boolean): Promise<void> {
+    const rec = await this.voice.play(ev, this.activeScenario?.id ?? this.shipState.scenario?.id ?? '', auto);
+    if (!rec) return;
+    this.opLog.addExternal('voiceScript', voiceRecordLabel(rec), rec.t, rec.text || rec.file);
+    this.opEvents = [...this.opLog.all()];
+  }
+
+  /** 送 getAssessment;核心在 exerciseEnded 時也會主動推送,這裡作為後備(1 s 後仍無回覆才送)。 */
+  private requestAssessment(immediate = false): void {
+    if (this.assessmentTimer) clearTimeout(this.assessmentTimer);
+    const send = () => {
+      this.assessmentTimer = null;
+      this.send(getAssessmentCommand());
+    };
+    if (immediate) send();
+    else this.assessmentTimer = setTimeout(send, 1000);
+  }
+
+  private onExerciseEnded = (): void => {
+    this.requestAssessment();
+  };
+
+  private onVoicePlay = (ev: CustomEvent<SimEvent>): void => {
+    void this.playVoice(ev.detail, false);
+  };
+
+  /** 事件流點擊:重播檢視已載有紀錄時跳至該時刻(即時模式下切到重播檢視);未載入紀錄時不切換(空白的重播頁沒有可跳的時刻)。 */
+  private onEventSeek = (ev: CustomEvent<SimEvent>): void => {
+    if (this.pageMode === 'simple') return;
+    if (!this.replayView?.loaded) return;
+    void this.seekReplay(ev.detail.t);
+  };
+
+  private async seekReplay(t: number): Promise<void> {
+    if (this.view !== 'replay') {
+      this.view = 'replay';
+      await this.updateComplete;
+    }
+    this.replayView?.seekTo(t);
+  }
+
+  /** 核心是否支援情境引擎(C# 核心廣播 state.scenario;Python 參考伺服器不會)。 */
+  private get engineUnsupported(): boolean {
+    return this.sourceMode === 'live' && this.hasReceived && this.shipState.scenario === undefined && this.events.length === 0;
+  }
+
+  /** 參數集版次警示:情境檔引用參數但核心未回報版次、核心情境 id 與選擇不同、summary 與狀態版次不一致。 */
+  private parameterSetWarning(): string {
+    const sc = this.shipState.scenario;
+    const active = this.activeScenario;
+    if (!this.hasReceived || !active) return '';
+    if (sc && sc.id && sc.id !== active.id) return `核心載入的情境為 ${sc.id},與所選 ${active.id} 不同`;
+    if (active.stats.paramRefs > 0 && sc && !sc.parameterSetVersion) return `情境引用 ${active.stats.paramRefs} 個程序參數,但核心未回報參數集版次`;
+    if (this.coreSummary?.parameterSet?.version && sc?.parameterSetVersion && this.coreSummary.parameterSet.version !== sc.parameterSetVersion) return `summary 的參數集版次 ${this.coreSummary.parameterSet.version} 與核心狀態 ${sc.parameterSetVersion} 不同`;
+    return '';
+  }
+
+  private liveOverlay(): PlotOverlay | null {
+    const base = overlayFromScenario(this.activeScenario);
+    const marks = eventMarks(this.events, this.sampler.all());
+    if (!base.route && base.zones.length === 0 && marks.length === 0) return null;
+    return { ...base, events: marks };
   }
 
   // ------------------------------------------------------------ 指令
@@ -514,6 +664,11 @@ export class InstructorApp extends LitElement {
     this.debrief.reset();
     this.sampler.clear();
     this.debriefSummary = null;
+    this.eventStore.clear();
+    this.events = [];
+    this.coreSummary = null;
+    this.lastVoice = '';
+    this.voice.stop();
   }
 
   private onScenarioLoad = (ev: CustomEvent<ScenarioSummary>): void => {
@@ -603,6 +758,8 @@ export class InstructorApp extends LitElement {
       markers: this.markerStore.all(),
       commands: this.commandLog,
       summary: this.debrief.summary(),
+      events: this.eventStore.all(),
+      coreSummary: this.coreSummary,
     });
     downloadText(`brm-record-${fileStamp()}-${this.activeScenario?.id ?? this.shipState.shipId}.json`, JSON.stringify(record));
   }
@@ -628,7 +785,10 @@ export class InstructorApp extends LitElement {
     }
     if (this.confirmEndTimer) clearTimeout(this.confirmEndTimer);
     this.confirmEnd = false;
+    // endExercise 定稿核心 summary(C# 核心會推送 assessment 框);Python 參考伺服器不認得時仍以 freeze 停下
+    this.send(endExerciseCommand('帶領者結束練習'));
     this.send(simpleCommand('freeze'));
+    this.requestAssessment();
     this.debriefSummary = this.debrief.summary();
     this.simplePhase = 'ended';
   }
@@ -651,9 +811,12 @@ export class InstructorApp extends LitElement {
 
   // ------------------------------------------------------------ 畫面
   override render() {
+    // 重播檢視常駐(以 hidden 切換,不換模板):載入的紀錄與時間軸位置不因切回「即時」而遺失
     return html`
       ${this.renderHeader()}
-      ${this.pageMode === 'simple' ? this.renderSimple() : this.view === 'replay' ? html`<brm-replay-view></brm-replay-view>` : this.renderFull()}
+      ${this.pageMode === 'simple'
+        ? this.renderSimple()
+        : html`${this.renderFull()}<brm-replay-view ?hidden=${this.view !== 'replay'}></brm-replay-view>`}
     `;
   }
 
@@ -668,7 +831,7 @@ export class InstructorApp extends LitElement {
     return html`
       <header>
         <span class="title">${MODE_TITLE[this.pageMode]}</span>
-        ${live ? html`<span class="ship">${cfg.name}(${cfg.id})${this.activeScenario ? ` · ${this.activeScenario.id}` : ''}</span>` : nothing}
+        ${live ? html`<span class="ship">${cfg.name}(${cfg.id})${this.activeScenario ? ` · ${this.activeScenario.id}` : ''}${s.scenario?.parameterSetVersion ? html` · <span class="param-version" title="公司程序參數集版次(state.scenario.parameterSetVersion)">參數集 ${s.scenario.parameterSetVersion}</span>` : ''}</span>` : nothing}
         ${live ? html`<span class="pill ${pillClass}" title=${this.statusDetail}>${pillText}</span>` : nothing}
         ${live && this.sourceMode === 'live' ? html`<span class="muted">${this.wsUrl}</span>` : nothing}
         ${live
@@ -677,6 +840,10 @@ export class InstructorApp extends LitElement {
               ${flags.aground ? html`<span class="alarm">擱淺</span>` : nothing}
               ${flags.collision ? html`<span class="alarm">碰撞</span>` : nothing}
               ${faults.map((f) => html`<span class="alarm">故障:${f}</span>`)}
+              ${s.scenario?.phase && s.scenario.phase !== 'normal' ? html`<span class="phase ${s.scenario.phase === 'emergency' ? 'alarm' : 'warning'}">階段 ${s.scenario.phase}</span>` : nothing}
+              ${s.scenario?.hardFailed ? html`<span class="alarm">硬性失敗</span>` : nothing}
+              ${s.scenario?.ended ? html`<span class="caution">練習已結束</span>` : nothing}
+              ${this.parameterSetWarning() ? html`<span class="warn-badge param-warning" title=${this.parameterSetWarning()}>參數集不一致</span>` : nothing}
               ${this.issues.length > 0 ? html`<span class="warning" title=${this.issues.join(', ')}>資料可疑 ${this.issues.length}</span>` : nothing}
             </div>`
           : nothing}
@@ -713,15 +880,23 @@ export class InstructorApp extends LitElement {
     const s = this.shipState;
     const cfg = this.config;
     return html`
-      <div class="full">
+      <div class="full" ?hidden=${this.view !== 'live'}>
         <brm-conning-bar .state=${s} .config=${cfg} .issues=${this.issues} .noData=${!this.hasReceived}></brm-conning-bar>
         <div class="body">
           <div class="col left">
             <brm-scenario-panel .scenarios=${this.scenarios} .activeId=${this.activeScenario?.id ?? ''}></brm-scenario-panel>
-            <brm-run-control .frozen=${s.flags?.frozen ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale}></brm-run-control>
+            <brm-timeline-panel
+              .timeline=${this.activeScenario?.timeline ?? []}
+              .events=${this.events}
+              .scenarioStatus=${s.scenario ?? null}
+              .assessment=${this.activeScenario?.assessment ?? null}
+              .simTime=${s.t}
+              .unsupported=${this.engineUnsupported}
+            ></brm-timeline-panel>
+            <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale}></brm-run-control>
           </div>
           <div class="col center">
-            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived}></brm-track-plot>
+            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()}></brm-track-plot>
             <div class="bottom">
               <brm-environment-panel .state=${this.hasReceived ? s : null}></brm-environment-panel>
               <brm-fault-panel .active=${s.faults ?? []}></brm-fault-panel>
@@ -729,6 +904,7 @@ export class InstructorApp extends LitElement {
             </div>
           </div>
           <div class="col right">
+            <brm-event-stream .events=${this.events} voiceButtons .unsupported=${this.engineUnsupported}></brm-event-stream>
             <brm-operation-log .events=${this.opEvents}></brm-operation-log>
             <brm-command-log .entries=${this.commandLog}></brm-command-log>
             <brm-marker-bar .markers=${this.markers}></brm-marker-bar>
@@ -758,8 +934,13 @@ export class InstructorApp extends LitElement {
       case 'briefing':
         return html`<div class="simple">
           <div class="stage briefing">
-            <h2>${sc?.id} ${sc?.name} <span class="sum-note">${sc ? `${sc.shipId} · ${loadingLabel(sc.loading)}` : ''}</span></h2>
-            <div class="big briefing-text">${sc ? briefingText(sc) : ''}</div>
+            <h2>${sc?.id} ${sc?.name} <span class="sum-note">${sc ? `${sc.shipId} · ${loadingLabel(sc.loading)}` : ''}${s.scenario?.parameterSetVersion ? ` · 參數集 ${s.scenario.parameterSetVersion}` : ''}</span></h2>
+            <div class="big briefing-text">${sc ? briefingText(sc) : ''}${sc && (sc.briefingDoc.roles.length > 0 || sc.briefingDoc.attachments.length > 0)
+                ? html`<div class="brief-meta">
+                    ${sc.briefingDoc.roles.length > 0 ? html`<div>角色:${sc.briefingDoc.roles.map((r) => `${ROLE_LABEL[r.role] ?? r.role}(${PLAYED_BY_LABEL[r.playedBy] ?? r.playedBy}${r.required ? ',必要' : ''})`).join('、')}${sc.briefingDoc.minParticipants !== undefined ? ` · 最少 ${sc.briefingDoc.minParticipants} 人` : ''}</div>` : nothing}
+                    ${sc.briefingDoc.attachments.length > 0 ? html`<div>附件:${sc.briefingDoc.attachments.map((a) => a.title).join('、')}</div>` : nothing}
+                  </div>`
+                : nothing}</div>
             <div class="actions">
               <button class="primary start" @click=${this.simpleStart}>開始練習</button>
               <button @click=${this.simpleNew}>返回</button>
@@ -781,10 +962,13 @@ export class InstructorApp extends LitElement {
               ${frozen ? html`<span class="v caution">已凍結</span>` : nothing}
               ${s.flags?.aground ? html`<span class="v alarm">擱淺</span>` : nothing}
               ${(s.faults ?? []).map((f) => html`<span class="alarm">故障:${f}</span>`)}
+              ${s.scenario?.phase && s.scenario.phase !== 'normal' ? html`<span class="v warning">階段 ${s.scenario.phase}</span>` : nothing}
             </div>
-            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived}></brm-track-plot>
+            ${this.lastVoice ? html`<div class="voice-banner">${this.voicePlaying ? '▶ ' : ''}${this.lastVoice}</div>` : nothing}
+            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()}></brm-track-plot>
             <div class="side">
               <brm-marker-bar large .markers=${this.markers}></brm-marker-bar>
+              <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>
               <brm-operation-log .events=${this.opEvents} .max=${50}></brm-operation-log>
             </div>
             <div class="actions">
@@ -799,8 +983,8 @@ export class InstructorApp extends LitElement {
           <div class="stage ended">
             <h2>練習結束 — ${sc?.id} ${sc?.name}</h2>
             <div class="panel">
-              <div class="panel-title"><span>自動講評摘要 DEBRIEF</span></div>
-              <brm-debrief-summary large .summary=${this.debriefSummary}></brm-debrief-summary>
+              <div class="panel-title"><span>自動講評摘要 DEBRIEF</span><span class="zh">${this.coreSummary ? `核心評分${this.coreSummary.final ? '(定稿)' : ''}${this.coreSummary.parameterSet?.version ? ` · 參數集 ${this.coreSummary.parameterSet.version}` : ''}` : '本地推導(核心未回覆 summary)'}</span></div>
+              <brm-debrief-summary large .summary=${this.debriefSummary} .coreSummary=${this.coreSummary}></brm-debrief-summary>
             </div>
             <brm-marker-bar .markers=${this.markers}></brm-marker-bar>
             <div class="actions">

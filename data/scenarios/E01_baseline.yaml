@@ -1,6 +1,7 @@
 # E01 基線情境:麥寮外海開闊水域(規劃書第 8.1 節 E01;schema:src/Contracts/scenario.schema.json)
 # FS Bitumen No.1 壓載出港狀態,半速進,風 15 kn 東北,微弱南向流,水深 30 m。
-# 目標船:1 艘對遇(COLREG 自動,約 6 分鐘後右轉)、1 艘錨泊(右艏 1.4 nm);最小 CPA 門檻 0.5 nm。
+# 目標船:1 艘對遇(COLREG 自動,約 6 分鐘後右轉)、1 艘錨泊(右艏 1.4 nm);最小 CPA 門檻引用參數集 navigation.cpa.openSea_nm。
+# 時間表:5 分鐘機控室例行通話(語音)、10 分鐘風向轉北漸變、T1 CPA 警報時教官提示;評估:碰撞/擱淺/CPA 硬性失敗、min CPA 與 ROT 容許帶。
 id: E01_baseline
 name: 麥寮外海開闊水域 — 基線
 description: >-
@@ -31,8 +32,52 @@ environment:
     set: 200        # 去向(度)
     drift: 0.5      # kn
   waterDepth: 30    # m
+  visibility_nm: 10
+briefing:
+  text: |
+    麥寮港外開闊水域,壓載、半速進向北。熟悉儀器、舵令/車令與標準用語;
+    前方 5 浬有一艘對遇貨船(HAI XING 8),右艏 1.4 浬一艘錨泊油輪。
+    觀察目標 CPA/TCPA,依 COLREG 及早、大幅行動;風向將於 10 分鐘後轉北。
+  roles:
+    - { role: ecr, playedBy: voiceScript }
+  minParticipants: 2
+timeline:
+  - id: windShift
+    name: 風向轉北、增強
+    when: { type: time, atLeast: 600 }
+    actions:
+      - setEnvironment: { wind: { trueSpeed: 20, trueDir: 10 }, ramp_s: 180 }
+      - message: { to: instructor, text: "風 15 kn/045 → 20 kn/010,3 分鐘漸變", severity: info }
+  - id: ecrCheck
+    name: 機控室例行通話
+    when: { type: time, atLeast: 300 }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室。主機運轉正常,目前 HAH,有需要請通知。", lang: zh-TW }
+  - id: cpaCoach
+    name: CPA 警報提示(教官)
+    visibility: instructor
+    repeat: { every_s: 60, max: 3 }
+    when: { type: event, kind: cpaAlarm, targetId: T1 }
+    actions:
+      - message: { to: instructor, text: "T1 CPA 低於門檻;觀察團隊是否提出並採取行動", severity: warning }
 assessment:
-  minCpa_nm: 0.5    # 自船與任一目標 CPA 低於此值且 TCPA > 0 時記錄事件
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"   # 自船與任一目標 CPA 低於此值且 TCPA > 0 時記錄事件
+  encounter:
+    detectionRange_nm: "${params:navigation.encounter.detectionRange_nm}"
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  ukc:
+    min: { fractionOfDraft: "${params:navigation.ukc.openSea_fraction}" }
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: collision, rule: collision }
+    - { id: grounding, rule: grounding }
+    - { id: cpaHard, rule: cpa, lessThan: "${params:navigation.cpa.hardFail_nm}", excludeEscorts: true }
+  bands:
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.openSea_nm}", fail: "${params:navigation.cpa.coastal_nm}", penalty: 10, failPenalty: 30, excludeEscorts: true }
+    - { id: rotOver, metric: manoeuvring.timeRotOverLimit_s, warn: 0, fail: 30, penalty: 5, failPenalty: 10 }
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
 targets:
   - id: T1
     name: HAI XING 8

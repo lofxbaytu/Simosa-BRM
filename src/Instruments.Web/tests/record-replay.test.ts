@@ -1,15 +1,18 @@
-// 重播紀錄解析:SimCore JSON Lines(header/input/state/snapshot/footer)與教官站 SessionRecord JSON。
+// 重播紀錄解析:SimCore JSON Lines(header/input/state/snapshot/event/summary/footer)與教官站 SessionRecord JSON;
+// 舊紀錄(無 event/summary 行、header 無 parameterSet)仍可解析,未知 kind 只計數。
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { detectRecordFormat, parseJsonLines, parseReplay, stateIndexAt, trackPoints } from '../src/lib/record-replay.js';
+import { detectRecordFormat, eventIndexAt, parseJsonLines, parseReplay, stateIndexAt, trackPoints } from '../src/lib/record-replay.js';
 import { StateSampler, buildSessionRecord } from '../src/lib/session-record.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import { BrmMarkerStore } from '../src/lib/brm-markers.js';
+import type { SimEvent } from '../src/types/event.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sample = path.resolve(here, '../../../build/records/20261008-120739-E01_baseline.jsonl');
+const summaryLine = readFileSync(path.resolve(here, 'fixtures/summary-E07.json'), 'utf-8').replace(/\s*\n\s*/g, '');
 
 function stateLine(t: number, x: number, y: number, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ kind: 'state', state: { ...defaultState('FSB1'), t, tick: Math.round(t / 0.02), pos: { lat: 0, lon: 0, x, y }, ...extra } });
@@ -53,6 +56,52 @@ describe('parseJsonLines', () => {
     expect(r.tStart).toBe(0.04);
     expect(r.tEnd).toBe(12);
     expect(r.states[2]!.flags?.frozen).toBe(true);
+    // 舊紀錄:無 event/summary 行
+    expect(r.events).toEqual([]);
+    expect(r.summary).toBeNull();
+    expect(r.header.parameterSet).toBeUndefined();
+    expect(r.unknownKinds).toEqual({});
+  });
+
+  it('version 2:event 行(舊 TrafficEvent 與新 SimEvent)、summary 行、header.parameterSet;未知 kind 只計數', () => {
+    const header2 = JSON.stringify({
+      kind: 'header',
+      version: 2,
+      shipId: 'FSB1',
+      dt: 0.02,
+      scenario: { id: 'E07_steering_failure', name: 'E07', origin: { lat: 23.78, lon: 120.1 }, route: { waypoints: [{ name: 'WP1', lat: 23.78, lon: 120.1 }, { name: 'WP2', lat: 23.796, lon: 120.122 }] } },
+      parameterSet: { id: 'simosa-company-procedures', version: '2026.10.1', path: 'data/parameters/company-procedures.yaml', sha256: 'abc', resolved: [{ path: 'assessment.minCpa_nm', key: 'navigation.cpa.coastal_nm', value: 0.5, unit: 'nm', source: 'DWO-007', revision: '3' }] },
+    });
+    const text = [
+      header2,
+      stateLine(0, 0, 0),
+      '{"kind":"event","tick":6000,"event":{"kind":"cpaAlarm","tick":6000,"t":120,"targetId":"T1","cpa_nm":0.4,"tcpa_min":8}}',
+      '{"kind":"event","tick":21000,"event":{"kind":"faultInjected","tick":21000,"t":420,"source":"timeline","itemId":"steeringFail","phase":"degraded","visible":false,"seq":5,"data":{"fault":"steeringGear"}}}',
+      '{"kind":"event","tick":21050,"event":"bad"}',
+      '{"kind":"telemetry","tick":1}',
+      '{"kind":"telemetry","tick":2}',
+      stateLine(600, 100, 100),
+      summaryLine,
+      '{"kind":"footer","finalTick":30000,"stateHash":"ABC","lines":9,"inputs":0,"sha256":"DEF"}',
+    ].join('\n');
+    const r = parseJsonLines(text);
+    expect(r.errors).toEqual(['第 5 行:event 無法解析']);
+    expect(r.unknownKinds).toEqual({ telemetry: 2 });
+    expect(r.events.map((e) => [e.kind, e.source, e.t])).toEqual([
+      ['cpaAlarm', 'traffic', 120],
+      ['faultInjected', 'timeline', 420],
+    ]);
+    expect(r.events[1]!.itemId).toBe('steeringFail');
+    expect(r.summary?.final).toBe(true);
+    expect(r.summary?.assessment.score).toBe(85);
+    expect(r.summary?.assessment.required[2]).toMatchObject({ id: 'vtsReport', state: 'missed' });
+    expect(r.header.version).toBe(2);
+    expect(r.header.parameterSet?.version).toBe('2026.10.1');
+    expect(r.header.parameterSet?.resolved[0]?.key).toBe('navigation.cpa.coastal_nm');
+    expect(r.header.scenarioId).toBe('E07_steering_failure');
+    expect(eventIndexAt(r.events, 100)).toBe(-1);
+    expect(eventIndexAt(r.events, 120)).toBe(0);
+    expect(eventIndexAt(r.events, 9999)).toBe(1);
   });
 
   it('實際的 SimCore 紀錄檔(build/records)可解析', () => {
@@ -121,4 +170,95 @@ describe('stateIndexAt / trackPoints', () => {
     expect(trackPoints(states, 2).map((p) => p.t)).toEqual([0, 2, 4]);
     expect(trackPoints(states, 1)).toHaveLength(5);
   });
+
+describe('倒帶分段(restore/reset)', () => {
+  const evLine = (t: number, kind: string, seq: number) => JSON.stringify({ kind: 'event', tick: Math.round(t / 0.02), event: { kind, tick: Math.round(t / 0.02), t, source: 'instructor', seq } });
+
+  it('核心紀錄:倒帶時丟棄 t > 倒帶點的舊分支狀態與事件,航跡與事件索引只含最終歷史', () => {
+    const text = [
+      header,
+      stateLine(1, 0, 10),
+      stateLine(2, 0, 20),
+      evLine(2, 'frozen', 0),
+      stateLine(3, 0, 30),
+      evLine(3.5, 'faultInjected', 1),
+      stateLine(4, 0, 40),
+      '{"kind":"input","tick":200,"command":{"type":"restore","args":{"tick":100}}}',
+      stateLine(2.04, 0, 20.4), // 倒帶到 tick 100(t = 2)後重新推進
+      stateLine(3, 5, 30),
+      evLine(3, 'resumed', 1),
+      stateLine(4, 10, 40),
+      '{"kind":"input","tick":200,"command":{"type":"reset"}}',
+      stateLine(0.04, 0, 0.4),
+      evLine(0.5, 'message', 0),
+      stateLine(1, 0, 10),
+      '{"kind":"footer","finalTick":50,"stateHash":"AB","lines":16,"inputs":2,"sha256":"CD"}',
+    ].join('\n');
+    const r = parseJsonLines(text);
+    expect(r.errors).toEqual([]);
+    expect(r.rewinds).toEqual([
+      { t: 2.04, from: 4, droppedStates: 2, droppedEvents: 1 },
+      { t: 0.04, from: 4, droppedStates: 5, droppedEvents: 2 },
+    ]);
+    expect(r.states.map((s) => s.t)).toEqual([0.04, 1]);
+    expect(r.states.every((s, i, a) => i === 0 || s.t > a[i - 1]!.t)).toBe(true);
+    expect(r.events.map((e) => e.kind)).toEqual(['message']);
+    expect(r.tEnd).toBe(1);
+    expect(trackPoints(r.states, 0.5).map((p) => p.y)).toEqual([0.4, 10]);
+    expect(eventIndexAt(r.events, 0.7)).toBe(0);
+    expect(eventIndexAt(r.events, 0.2)).toBe(-1);
+    expect(r.inputs).toHaveLength(2); // 指令紀錄保留(教官做過的事)
+  });
+
+  it('只有一次倒帶:保留倒帶點之前的歷史與倒帶後的新分支;eventIndexAt 取得倒帶後的事件', () => {
+    const text = [header, stateLine(1, 0, 10), evLine(1, 'frozen', 0), stateLine(2, 0, 20), stateLine(3, 0, 30), evLine(3, 'faultInjected', 1), stateLine(4, 0, 40), stateLine(2.04, 0, 20.4), evLine(2.5, 'resumed', 1), stateLine(3, 7, 30), stateLine(5, 9, 50)].join('\n');
+    const r = parseJsonLines(text);
+    expect(r.states.map((s) => [s.t, s.pos.x])).toEqual([
+      [1, 0],
+      [2, 0],
+      [2.04, 0],
+      [3, 7],
+      [5, 9],
+    ]);
+    expect(r.rewinds).toEqual([{ t: 2.04, from: 4, droppedStates: 2, droppedEvents: 1 }]);
+    expect(r.events.map((e) => [e.kind, e.t])).toEqual([
+      ['frozen', 1],
+      ['resumed', 2.5],
+    ]);
+    expect(eventIndexAt(r.events, 3)).toBe(1);
+    expect(stateIndexAt(r.states, 3.5)).toBe(3);
+    expect(r.tStart).toBe(1);
+    expect(r.tEnd).toBe(5);
+  });
+
+  it('教官站紀錄(狀態抽樣含倒帶)同樣分段;事件整批也依倒帶點丟棄舊分支', () => {
+    const s = (t: number, x: number) => ({ ...defaultState('FSB1'), t, tick: Math.round(t / 0.02), pos: { lat: 0, lon: 0, x, y: 0 } });
+    const e = (t: number, kind: string, seq: number): SimEvent => ({ kind, tick: Math.round(t / 0.02), t, source: 'instructor', seq, visible: false, phase: 'normal' });
+    const record = buildSessionRecord({
+      mode: 'full',
+      source: 'ws://x',
+      scenario: null,
+      shipId: 'FSB1',
+      sampleInterval_s: 1,
+      states: [s(1, 1), s(2, 2), s(3, 3), s(4, 4), s(2, 2), s(3, 30), s(4, 40)],
+      operations: [],
+      markers: [],
+      commands: [],
+      summary: null,
+      events: [e(1.5, 'frozen', 0), e(3.5, 'faultInjected', 1), e(2.5, 'resumed', 1), e(3.5, 'message', 2)],
+      coreSummary: null,
+    });
+    const r = parseReplay(JSON.stringify(record));
+    expect(r.errors).toEqual([]);
+    expect(r.rewinds).toEqual([{ t: 2, from: 4, droppedStates: 2, droppedEvents: 0 }]);
+    expect(r.states.map((st) => [st.t, st.pos.x])).toEqual([
+      [1, 1],
+      [2, 2],
+      [2, 2],
+      [3, 30],
+      [4, 40],
+    ]);
+    expect(r.events.map((ev) => ev.kind)).toEqual(['frozen', 'resumed', 'message']);
+  });
+});
 });

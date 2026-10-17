@@ -1,7 +1,8 @@
-// 示範模式來源:以 50 Hz 推進 DemoSim、25 Hz 廣播狀態,與 WebSocket 來源介面相同。
+// 示範模式來源:以 50 Hz 推進 DemoSim、25 Hz 廣播狀態,與 WebSocket 來源介面相同;
+// 另以 onMessage 推送 DemoSim 的假事件框 {"type":"event"} 與 getAssessment 的 {"type":"assessment"} 回覆。
 
 import type { SimCommand } from '../types/command.js';
-import type { ConnectionStatus, SimSource, StateListener, StatusListener } from '../net/sim-source.js';
+import type { ConnectionStatus, MessageListener, SimSource, StateListener, StatusListener } from '../net/sim-source.js';
 import { DEMO_DT, DemoSim, type DemoOptions } from './demo-sim.js';
 
 const BROADCAST_HZ = 25;
@@ -13,6 +14,7 @@ export class DemoSource implements SimSource {
   private accumulator = 0;
   private stateListeners = new Set<StateListener>();
   private statusListeners = new Set<StatusListener>();
+  private messageListeners = new Set<MessageListener>();
   private _status: ConnectionStatus = 'disconnected';
 
   constructor(options: DemoOptions = {}) {
@@ -47,6 +49,20 @@ export class DemoSource implements SimSource {
   send(cmd: SimCommand): void {
     this.sim.apply(cmd);
     this.emit();
+    // 與 C# 主控程序相同:final 取 summary 的定稿旗標(結束練習後的 getAssessment 回覆仍為定稿)
+    if (cmd.type === 'getAssessment' || cmd.type === 'endExercise') {
+      const summary = this.sim.assessmentSummary();
+      this.dispatch({ type: 'assessment', final: summary['final'] === true, summary });
+    }
+  }
+
+  onMessage(listener: MessageListener): () => void {
+    this.messageListeners.add(listener);
+    return () => this.messageListeners.delete(listener);
+  }
+
+  private dispatch(frame: Record<string, unknown>): void {
+    for (const l of this.messageListeners) l(frame);
   }
 
   onState(listener: StateListener): () => void {
@@ -76,6 +92,7 @@ export class DemoSource implements SimSource {
     // 複製一份,避免元件持有的狀態被下一步覆寫
     const state = structuredClone(this.sim.current);
     for (const l of this.stateListeners) l({ state, issues: [] });
+    for (const ev of this.sim.takeEvents()) this.dispatch({ type: 'event', event: ev });
   }
 
   private setStatus(status: ConnectionStatus, detail?: string): void {

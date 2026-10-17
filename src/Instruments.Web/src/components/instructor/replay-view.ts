@@ -1,6 +1,8 @@
 // 重播檢視(講評站雛型,規劃書第 9.2 節「重播」與「航跡圖」):以檔案選擇器載入 SimCore 的 JSON Lines 紀錄
-// 或教官站的 JSON 紀錄,時間軸拖曳檢視任一時刻的狀態(鳥瞰航跡圖 + conning 儀器摘要),列出輸入事件與
-// BRM 標記(若紀錄含),整段的自動講評摘要;不需核心連線。
+// 或教官站的 JSON 紀錄,時間軸拖曳檢視任一時刻的狀態(鳥瞰航跡圖 + conning 儀器摘要),列出輸入事件、核心事件與
+// BRM 標記(若紀錄含),整段的講評摘要(核心 summary 優先,無則本地推導);不需核心連線。
+// 設計文件第 6 節 W8:時間軸上畫事件標記(顏色依來源;hardFail/collision/grounding 紅)、航跡圖疊 header.scenario 的
+// 航線走廊與區域、顯示 header.parameterSet 版次。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -12,9 +14,13 @@ import { getShipConfig } from '../../lib/ship-config.js';
 import { summarize, type DebriefSummary } from '../../lib/debrief.js';
 import { brmCategory } from '../../lib/brm-markers.js';
 import { defaultState } from '../../lib/state-parser.js';
+import { eventLabel, eventSeverity } from '../../lib/sim-event.js';
+import { eventMarks, overlayFromHeaderScenario, type PlotOverlay } from '../../lib/plot-overlay.js';
+import type { SimEvent } from '../../types/event.js';
 import '../conning-bar.js';
 import '../track-plot.js';
 import './debrief-summary.js';
+import './event-stream.js';
 
 const PLAY_RATES = [0.25, 1, 4, 16];
 
@@ -52,6 +58,55 @@ export class ReplayView extends LitElement {
         gap: 8px;
         align-items: center;
       }
+      .timeline .track {
+        display: grid;
+        grid-template-rows: 14px auto;
+        gap: 2px;
+      }
+      .marks {
+        position: relative;
+        height: 14px;
+        border-bottom: 1px solid var(--ob-border);
+      }
+      .marks .mark {
+        position: absolute;
+        top: 1px;
+        width: 2px;
+        height: 12px;
+        transform: translateX(-1px);
+        background: var(--ob-text-muted);
+        cursor: pointer;
+      }
+      .marks .mark.timeline {
+        background: var(--ob-accent);
+      }
+      .marks .mark.assessment {
+        background: var(--ob-ok);
+      }
+      .marks .mark.traffic {
+        background: var(--ob-caution);
+      }
+      .marks .mark.instructor {
+        background: var(--ob-text-muted);
+      }
+      .marks .mark.warning {
+        background: var(--ob-warning);
+      }
+      .marks .mark.alarm {
+        background: var(--ob-alarm);
+        width: 3px;
+      }
+      .marks .mark.phase {
+        top: 0;
+        height: 14px;
+        width: 1px;
+        background: var(--ob-border-strong);
+      }
+      .marks .mark.marker {
+        top: 8px;
+        height: 5px;
+        background: var(--ob-text);
+      }
       .timeline input[type='range'] {
         width: 100%;
         min-height: 20px;
@@ -74,9 +129,16 @@ export class ReplayView extends LitElement {
       }
       .side {
         display: grid;
-        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.6fr) auto;
         gap: 6px;
         min-height: 0;
+      }
+      .side brm-event-stream {
+        min-height: 0;
+      }
+      .param-set {
+        font-size: 11px;
+        color: var(--ob-text-secondary);
       }
       .side .panel {
         min-height: 0;
@@ -117,6 +179,7 @@ export class ReplayView extends LitElement {
   @state() private rate = 1;
   @state() private summary: DebriefSummary | null = null;
   @state() private loading = false;
+  @state() private overlay: PlotOverlay | null = null;
 
   private points: TrackPoint[] = [];
   private history = new TrackHistory(1, 100000);
@@ -135,9 +198,27 @@ export class ReplayView extends LitElement {
     this.fileName = name;
     this.points = trackPoints(data.states, 1);
     this.summary = data.states.length > 0 ? summarize(data.states) : null;
+    const base = overlayFromHeaderScenario(data.header.scenario);
+    this.overlay = base.route || base.zones.length > 0 || data.events.length > 0 ? base : null;
     this.stopPlay();
     this.seek(data.tStart);
     return data;
+  }
+
+  /** 跳至指定時刻(教官站事件流點擊、測試)。 */
+  seekTo(t: number): void {
+    this.stopPlay();
+    this.seek(t);
+  }
+
+  /** 目前時刻 */
+  get time(): number {
+    return this.t;
+  }
+
+  /** 已載入紀錄 */
+  get loaded(): boolean {
+    return this.data !== null;
   }
 
   private async onFile(ev: Event): Promise<void> {
@@ -162,6 +243,23 @@ export class ReplayView extends LitElement {
       if (p.t > this.t) break;
       this.history.push(p.x, p.y, p.t);
     }
+    if (this.overlay) this.overlay = { ...this.overlay, events: eventMarks(d.events, d.states, this.t) };
+  }
+
+  private onEventSeek(ev: CustomEvent<SimEvent>): void {
+    this.seekTo(ev.detail.t);
+  }
+
+  private renderMarks(d: ReplayData) {
+    const span = d.tEnd - d.tStart;
+    if (span <= 0) return nothing;
+    const pct = (t: number) => `${((Math.min(d.tEnd, Math.max(d.tStart, t)) - d.tStart) / span) * 100}%`;
+    const phases = d.summary?.phases ?? [];
+    return html`<div class="marks" aria-label="事件標記">
+      ${phases.slice(1).map((p) => html`<span class="mark phase" style="left:${pct(p.from_s)}" title=${`階段 ${p.phase} ${shortTime(p.from_s)}`}></span>`)}
+      ${d.events.map((e) => html`<span class="mark ${e.source} ${eventSeverity(e)}" style="left:${pct(e.t)}" title=${`${shortTime(e.t)} ${eventLabel(e)}`} @click=${() => this.seekTo(e.t)}></span>`)}
+      ${d.markers.map((m) => html`<span class="mark marker" style="left:${pct(m.t)}" title=${`${shortTime(m.t)} ${brmCategory(m.category).label} ${m.note}`} @click=${() => this.seekTo(m.t)}></span>`)}
+    </div>`;
   }
 
   private onSlide(ev: Event): void {
@@ -224,8 +322,10 @@ export class ReplayView extends LitElement {
         ${d
           ? html`<span class="info">
               ${this.fileName} · ${d.source === 'simcore-jsonl' ? 'SimCore JSON Lines' : '教官站紀錄'} · ${d.header.scenarioId ?? '(無情境)'}${d.header.scenarioName ? ` ${d.header.scenarioName}` : ''} ·
-              ${d.header.shipId ?? '?'}${d.header.loading ? `/${d.header.loading}` : ''} · ${d.states.length} 筆狀態 · ${d.inputs.length} 筆輸入 · ${d.markers.length} 筆標記
+              ${d.header.shipId ?? '?'}${d.header.loading ? `/${d.header.loading}` : ''} · ${d.states.length} 筆狀態 · ${d.inputs.length} 筆輸入 · ${d.events.length} 筆事件 · ${d.markers.length} 筆標記
               ${d.header.dynamics ? ` · ${d.header.dynamics}` : ''}${d.footer?.stateHash ? ` · 雜湊 ${d.footer.stateHash.slice(0, 8)}…` : ''}
+              ${d.header.parameterSet ? html`<span class="param-set"> · 參數集 ${d.header.parameterSet.id ?? ''} ${d.header.parameterSet.version ?? ''}${d.header.parameterSet.resolved.length > 0 ? `(已解析 ${d.header.parameterSet.resolved.length} 個引用)` : ''}</span>` : nothing}
+              ${d.summary?.assessment.score !== undefined ? html`<span class="param-set"> · 評分 ${Math.round(d.summary.assessment.score)}${d.summary.assessment.passed !== undefined ? (d.summary.assessment.passed ? '(通過)' : '(未通過)') : ''}</span>` : nothing}
             </span>`
           : html`<span class="info">選擇 SimCore 的 .jsonl 紀錄(src/SimCore/README.md 第 4 節)或教官站下載的 .json 紀錄</span>`}
       </div>
@@ -239,15 +339,19 @@ export class ReplayView extends LitElement {
                 ${PLAY_RATES.map((r) => html`<option value=${r} ?selected=${r === this.rate}>×${r}</option>`)}
               </select>
             </span>
-            <input class="slider" type="range" min=${d.tStart} max=${d.tEnd} step="0.04" .value=${String(this.t)} @input=${this.onSlide} aria-label="時間軸" />
+            <div class="track">
+              ${this.renderMarks(d)}
+              <input class="slider" type="range" min=${d.tStart} max=${d.tEnd} step="0.04" .value=${String(this.t)} @input=${this.onSlide} aria-label="時間軸" />
+            </div>
             <span class="t">${shortTime(this.t)} / ${shortTime(d.tEnd)}</span>
           </div>`
         : html`<div class="hint">${d ? '紀錄沒有狀態資料' : ''}</div>`}
       ${d && d.states.length > 0
         ? html`<div class="main">
             <brm-conning-bar .state=${current} .config=${cfg} .issues=${[]} .noData=${false}></brm-conning-bar>
-            <brm-track-plot .state=${current} .config=${cfg} .history=${this.history} .noData=${false}></brm-track-plot>
+            <brm-track-plot .state=${current} .config=${cfg} .history=${this.history} .noData=${false} .overlay=${this.overlay}></brm-track-plot>
             <div class="side">
+              <brm-event-stream .events=${d.events} @event-seek=${this.onEventSeek}></brm-event-stream>
               <div class="panel">
                 <div class="panel-title"><span>輸入事件 INPUTS</span><span class="zh">${d.inputs.length} 筆 · 點選跳至</span></div>
                 <div class="list" aria-label="輸入事件">
@@ -275,9 +379,10 @@ export class ReplayView extends LitElement {
                 </div>
               </div>
               <div class="panel summary">
-                <div class="panel-title"><span>自動講評摘要 DEBRIEF</span></div>
-                <brm-debrief-summary .summary=${this.summary}></brm-debrief-summary>
+                <div class="panel-title"><span>講評摘要 DEBRIEF</span><span class="zh">${d.summary ? `核心 summary${d.summary.final ? '(定稿)' : ''}` : '本地推導(紀錄無核心 summary)'}</span></div>
+                <brm-debrief-summary .summary=${this.summary} .coreSummary=${d.summary}></brm-debrief-summary>
                 ${d.errors.length > 0 ? html`<div class="errors">略過 ${d.errors.length} 行:${d.errors.slice(0, 5).join(';')}${d.errors.length > 5 ? '…' : ''}</div>` : nothing}
+                ${Object.keys(d.unknownKinds).length > 0 ? html`<div class="hint">未知的行種類:${Object.entries(d.unknownKinds).map(([k, n]) => `${k} ×${n}`).join('、')}</div>` : nothing}
               </div>
             </div>
           </div>`

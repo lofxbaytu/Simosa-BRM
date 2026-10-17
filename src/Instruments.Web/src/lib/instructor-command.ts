@@ -4,6 +4,7 @@
 // (src/Tools.Calibration/simosa_brm/server.py);核心尚未支援的欄位仍照送,由 UI 標示「核心未實作」。
 
 import type { SimCommand } from '../types/command.js';
+import { ACKNOWLEDGE_KINDS, type AcknowledgeKind } from '../types/event.js';
 import type { LoadingCondition } from '../types/state.js';
 import { clamp, normalizeHeading } from './angles.js';
 
@@ -37,19 +38,22 @@ export interface EnvironmentChange {
   wind?: { trueSpeed?: number; trueDir?: number; gustiness?: number };
   current?: { set?: number; drift?: number };
   waterDepth?: number;
-  /** 能見度 (nm):兩個核心都尚未實作,照送供日後接上 */
+  /** 能見度 (nm):C# 核心保存/漸變/廣播(無物理效果);Python 參考伺服器照收無作用 */
   visibility_nm?: number;
+  /** 漸變秒數(設計文件第 3.5 節):自目前值線性漸變到目標值;0 或省略為立即 */
+  ramp_s?: number;
 }
 
-/** 核心對 setEnvironment 各欄位的支援情形(供 UI 標示;依兩核心原始碼整理,2026-10)。 */
+/** 核心對 setEnvironment 各欄位的支援情形(供 UI 標示;依兩核心原始碼與設計文件整理,2026-10)。 */
 export type CoreSupport = 'both' | 'csharp' | 'python' | 'none';
 
-export const ENVIRONMENT_FIELD_SUPPORT: Readonly<Record<'wind' | 'gustiness' | 'current' | 'waterDepth' | 'visibility', CoreSupport>> = {
+export const ENVIRONMENT_FIELD_SUPPORT: Readonly<Record<'wind' | 'gustiness' | 'current' | 'waterDepth' | 'visibility' | 'ramp', CoreSupport>> = {
   wind: 'both',
   gustiness: 'csharp',
   current: 'both',
   waterDepth: 'both',
-  visibility: 'none',
+  visibility: 'csharp',
+  ramp: 'csharp',
 };
 
 export const CORE_SUPPORT_LABEL: Readonly<Record<CoreSupport, string>> = {
@@ -85,7 +89,52 @@ export function setEnvironmentCommand(change: EnvironmentChange): SimCommand | n
   if (finite(change.waterDepth) && change.waterDepth > 0) args['waterDepth'] = round1(change.waterDepth);
   if (finite(change.visibility_nm)) args['visibility_nm'] = Math.max(0, round1(change.visibility_nm));
   if (Object.keys(args).length === 0) return null;
+  // ramp_s 只在有其他欄位時附上(單獨的漸變秒數沒有意義)
+  if (finite(change.ramp_s) && change.ramp_s > 0) args['ramp_s'] = Math.round(change.ramp_s);
   return { type: 'setEnvironment', args };
+}
+
+// ------------------------------------------------------------------ 時間表、確認、結束練習、評估查詢(設計文件第 5.2 節)
+
+/** triggerTimeline:手動觸發時間表項目;force 跳過條件(非 manual 項目或 once 已觸發者需 force)。 */
+export function triggerTimelineCommand(id: string, force = false): SimCommand {
+  const trimmed = id.trim();
+  if (!trimmed) throw new RangeError('時間表項目 id 不可為空');
+  const args: Record<string, unknown> = { id: trimmed };
+  if (force) args['force'] = true;
+  return { type: 'triggerTimeline', args };
+}
+
+export interface AcknowledgeInput {
+  kind: AcknowledgeKind | string;
+  /** 明確對應的時間表項目/故障(不帶時核心對應最近 120 s 內注入且未確認的故障) */
+  itemId?: string;
+  /** 做出該動作的角色(officer/master/pilot/…) */
+  role?: string;
+  note?: string;
+}
+
+/** acknowledge:教官/帶領者記錄核心偵測不到的口頭辨識、通知等;只放有給的欄位。 */
+export function acknowledgeCommand(input: AcknowledgeInput): SimCommand {
+  const kind = (ACKNOWLEDGE_KINDS as readonly string[]).includes(input.kind) ? input.kind : 'other';
+  const args: Record<string, unknown> = { kind };
+  if (input.itemId && input.itemId.trim()) args['itemId'] = input.itemId.trim();
+  if (input.role && input.role.trim()) args['role'] = input.role.trim();
+  if (input.note && input.note.trim()) {
+    args['note'] = input.note.trim();
+    if (kind !== input.kind) args['note'] = `${input.kind}:${args['note'] as string}`;
+  } else if (kind !== input.kind) args['note'] = input.kind;
+  return { type: 'acknowledge', args };
+}
+
+/** endExercise:凍結並定稿 summary;核心之後推送 {"type":"assessment","final":true,…}。 */
+export function endExerciseCommand(reason?: string): SimCommand {
+  return reason && reason.trim() ? { type: 'endExercise', args: { reason: reason.trim() } } : { type: 'endExercise' };
+}
+
+/** getAssessment:查詢最新 summary(主控程序直接回覆,不進引擎佇列、不寫 input 行)。 */
+export function getAssessmentCommand(): SimCommand {
+  return { type: 'getAssessment' };
 }
 
 // ------------------------------------------------------------------ 故障

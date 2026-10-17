@@ -265,6 +265,80 @@
       "items": {
         "$ref": "#/$defs/target"
       }
+    },
+    "visibility_nm": {
+      "type": "number",
+      "description": "能見度(nm;未設定時省略;無物理效果)"
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "id",
+        "phase"
+      ],
+      "description": "情境引擎狀態(情境引擎設計第 5.1 節)",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "parameterSetVersion": {
+          "type": "string"
+        },
+        "timelineFired": {
+          "type": "integer",
+          "description": "時間表項目累計觸發次數"
+        },
+        "timelinePending": {
+          "type": "integer",
+          "description": "待執行(delay_s 排程中、尚未執行)的時間表動作數;不是待觸發項目數(由教官站依事件推導)"
+        },
+        "hardFailed": {
+          "type": "boolean"
+        },
+        "score": {
+          "type": "number"
+        },
+        "ended": {
+          "type": "boolean"
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "description": "航線狀態(規劃書第 7.2 節 conning 的 XTD/下一航點;情境無 route 時省略)",
+      "properties": {
+        "legIndex": {
+          "type": "integer"
+        },
+        "nextWaypoint": {
+          "type": "string"
+        },
+        "xtd_m": {
+          "type": "number",
+          "description": "右正左負"
+        },
+        "xtdLimit_m": {
+          "type": "number"
+        },
+        "distanceToWaypoint_nm": {
+          "type": "number"
+        },
+        "bearingToWaypoint_deg": {
+          "type": "number"
+        },
+        "legCourse_deg": {
+          "type": "number"
+        },
+        "speedLimit_kn": {
+          "type": "number"
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
     }
   },
   "$defs": {

@@ -1,5 +1,6 @@
 // 鳥瞰航跡圖(第一版沒有 3D 視景時的視覺參考):本地 ENU、北上,自船外形依 LPP/B 比例,
 // 航跡線、航向向量(6 分鐘)、COG/SOG 向量(虛線)、格線與比例尺;滾輪或按鈕縮放,拖曳平移。
+// 疊圖(overlay,設計文件第 6 節 W8):情境航線(航點、走廊半寬)、區域多邊形(禁區/速限/UKC/報告)、事件標記。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, query, state } from 'lit/decorators.js';
@@ -7,6 +8,7 @@ import { tileStyles } from './shared.js';
 import type { OwnShipState } from '../types/state.js';
 import type { ShipDisplayConfig } from '../lib/ship-config.js';
 import type { TrackHistory } from '../lib/track-history.js';
+import type { PlotOverlay } from '../lib/plot-overlay.js';
 import { bodyToEnu, chooseGridSpacing, hullOutline, superstructureOutline } from '../lib/ship-geometry.js';
 import { degToRad, knotsToMps } from '../lib/angles.js';
 import { formatHeading, formatKnots } from '../lib/format.js';
@@ -94,6 +96,8 @@ export class TrackPlot extends LitElement {
   @property({ attribute: false }) config!: ShipDisplayConfig;
   @property({ attribute: false }) history!: TrackHistory;
   @property({ type: Boolean }) noData = false;
+  /** 航線/區域/事件疊圖(無則不畫) */
+  @property({ attribute: false }) overlay: PlotOverlay | null = null;
 
   /** 比例尺(px/m) */
   @state() private zoom = 0.6;
@@ -259,6 +263,9 @@ export class TrackPlot extends LitElement {
     }
     ctx.stroke();
 
+    // 疊圖:區域、航線走廊(在航跡之下)
+    if (this.overlay) this.drawOverlay(ctx, toPx, z);
+
     // 航跡
     const pts = this.history?.all() ?? [];
     if (pts.length > 1) {
@@ -356,6 +363,132 @@ export class TrackPlot extends LitElement {
     ctx.lineTo(w - 16, 32);
     ctx.stroke();
     ctx.fillText('N', w - 24, 58);
+
+    // 事件標記(在自船之上)
+    if (this.overlay && this.overlay.events.length > 0) this.drawEventMarks(ctx, toPx);
+  }
+
+  private zoneColor(type: string): string {
+    switch (type) {
+      case 'noGo':
+        return this.cssVar('--ob-alarm');
+      case 'speedLimit':
+        return this.cssVar('--ob-warning');
+      case 'ukcPolicy':
+        return this.cssVar('--ob-accent');
+      default:
+        return this.cssVar('--ob-text-muted');
+    }
+  }
+
+  private drawOverlay(ctx: CanvasRenderingContext2D, toPx: (x: number, y: number) => [number, number], z: number): void {
+    const ov = this.overlay!;
+    ctx.save();
+    ctx.font = '11px system-ui, sans-serif';
+    // 區域
+    for (const zone of ov.zones) {
+      const color = this.zoneColor(zone.type);
+      ctx.beginPath();
+      zone.polygon.forEach((p, i) => {
+        const [px, py] = toPx(p.x, p.y);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(zone.type === 'noGo' ? [] : [4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const c = zone.polygon.reduce((acc, p) => ({ x: acc.x + p.x / zone.polygon.length, y: acc.y + p.y / zone.polygon.length }), { x: 0, y: 0 });
+      const [cx, cy] = toPx(c.x, c.y);
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+      ctx.fillText(zone.name, cx, cy);
+      ctx.textAlign = 'left';
+    }
+    // 航線:中心線、走廊、航點
+    const route = ov.route;
+    if (route) {
+      const accent = this.cssVar('--ob-accent');
+      const wps = route.waypoints;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      wps.forEach((p, i) => {
+        const [px, py] = toPx(p.x, p.y);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      // 走廊:每段左右各一條平行線(到達航點的限制)
+      ctx.setLineDash([3, 4]);
+      ctx.lineWidth = 1;
+      for (let i = 1; i < wps.length; i++) {
+        const a = wps[i - 1]!;
+        const b = wps[i]!;
+        const limit = b.xtdLimit_m;
+        if (limit === undefined || limit <= 0) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        const nx = (dy / len) * limit;
+        const ny = (-dx / len) * limit;
+        for (const sign of [1, -1]) {
+          const [x0, y0] = toPx(a.x + sign * nx, a.y + sign * ny);
+          const [x1, y1] = toPx(b.x + sign * nx, b.y + sign * ny);
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+      // 航點
+      ctx.fillStyle = accent;
+      for (const w of wps) {
+        const [px, py] = toPx(w.x, w.y);
+        ctx.beginPath();
+        ctx.arc(px, py, w.checkpoint || w.report ? 5 : 3.5, 0, Math.PI * 2);
+        if (w.checkpoint || w.report) {
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        } else ctx.fill();
+        if (w.arrivalRadius_m !== undefined && w.arrivalRadius_m * z > 4) {
+          ctx.beginPath();
+          ctx.arc(px, py, w.arrivalRadius_m * z, 0, Math.PI * 2);
+          ctx.setLineDash([2, 3]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        ctx.fillText(w.name, px + 7, py - 5);
+      }
+    }
+    ctx.restore();
+  }
+
+  private drawEventMarks(ctx: CanvasRenderingContext2D, toPx: (x: number, y: number) => [number, number]): void {
+    const ov = this.overlay!;
+    ctx.save();
+    for (const m of ov.events) {
+      const [px, py] = toPx(m.x, m.y);
+      ctx.fillStyle = m.severity === 'alarm' ? this.cssVar('--ob-alarm') : m.severity === 'warning' ? this.cssVar('--ob-warning') : this.cssVar('--ob-accent');
+      ctx.strokeStyle = this.cssVar('--ob-plot-bg');
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, py - 6);
+      ctx.lineTo(px + 5, py + 3);
+      ctx.lineTo(px - 5, py + 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 }
 

@@ -85,6 +85,36 @@ export interface StateFlags {
   collision?: boolean;
 }
 
+/** 情境執行狀態(state.schema.json scenario,設計文件第 5.1 節;皆選填,核心無時間表時可省略)。 */
+export interface ScenarioStatus {
+  id: string;
+  /** 情境階段:normal | degraded | emergency | 自訂 */
+  phase: string;
+  /** 公司程序參數集版次(例如 2026.10.1) */
+  parameterSetVersion?: string;
+  /** 時間表項目累計觸發次數(核心 TimelineEngine.TotalFired) */
+  timelineFired?: number;
+  /** 待執行(delay_s 排程中、尚未執行)的時間表動作數;「待觸發項目數」由教官站依事件推導(timeline-panel) */
+  timelinePending?: number;
+  hardFailed?: boolean;
+  score?: number;
+  ended?: boolean;
+}
+
+/** 航線狀態(state.schema.json route;同時滿足第 7.2 節 conning 的 XTD/下一航點)。 */
+export interface RouteStatus {
+  legIndex?: number;
+  nextWaypoint?: string;
+  /** 航跡偏差 (m),右正左負 */
+  xtd_m?: number;
+  xtdLimit_m?: number;
+  distanceToWaypoint_nm?: number;
+  bearingToWaypoint_deg?: number;
+  legCourse_deg?: number;
+  speedLimit_kn?: number;
+  complete?: boolean;
+}
+
 export interface OwnShipState {
   /** 模擬時間(秒,自練習開始) */
   t: number;
@@ -127,4 +157,8 @@ export interface OwnShipState {
   engine?: EngineStatus;
   faults?: string[];
   flags?: StateFlags;
+  /** 能見度 (nm);無物理效果,核心保存/漸變/廣播(設計文件第 1.5 節) */
+  visibility_nm?: number;
+  scenario?: ScenarioStatus;
+  route?: RouteStatus;
 }

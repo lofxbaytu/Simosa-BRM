@@ -1,6 +1,3 @@
-using System.Text.Json.Serialization;
-using YamlDotNet.Serialization;
-
 namespace SimosaBRM.SimCore.Scenario;
 
 /// <summary>
@@ -215,13 +212,4 @@ public sealed class TargetAisError
     public int? Mmsi { get; set; }
     /// <summary>不發送(AIS 開啟但無訊息,等同故障)</summary>
     public bool Silent { get; set; }
-}
-
-/// <summary>評估參數(規劃書第 8.3 節):最小 CPA 門檻等。</summary>
-public sealed class ScenarioAssessment
-{
-    /// <summary>最小 CPA 門檻(nm);自船與任一目標的 CPA 低於此值且 TCPA &gt; 0 時記錄事件</summary>
-    [YamlMember(Alias = "minCpa_nm", ApplyNamingConventions = false)]
-    [JsonPropertyName("minCpa_nm")]
-    public double MinCpaNm { get; set; } = 0.5;
 }

@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using SimosaBRM.SimCore.Contracts;
+using SimosaBRM.SimCore.Parameters;
+using AssessmentNs = SimosaBRM.SimCore.Assessment;
 
 namespace SimosaBRM.SimCore.Scenario;
 
@@ -26,8 +28,22 @@ public sealed class Scenario
     public ScenarioEnvironment Environment { get; set; } = new();
     /// <summary>目標船(交通;規劃書第 9.1 節);Python 參考實作無目標船,忽略此欄位</summary>
     public List<ScenarioTarget> Targets { get; set; } = new();
-    /// <summary>評估參數(最小 CPA 門檻等;規劃書第 8.3 節)</summary>
+    /// <summary>評估參數與規則(最小 CPA 門檻、硬性失敗、容許帶、必要事件、評分;規劃書第 8.3 節)</summary>
     public ScenarioAssessment Assessment { get; set; } = new();
+    /// <summary>事件時間表(情境引擎設計第 1.1 節;Python 參考實作忽略)</summary>
+    public List<TimelineItem> Timeline { get; set; } = new();
+    /// <summary>航線(航點、走廊、速限、檢查點;第 1.2 節)</summary>
+    public ScenarioRoute? Route { get; set; }
+    /// <summary>區域(禁區、速限、UKC 政策、報告;第 1.2 節)</summary>
+    public List<ScenarioZone> Zones { get; set; } = new();
+    /// <summary>簡報(字串或物件;第 1.4 節)</summary>
+    public ScenarioBriefing? Briefing { get; set; }
+
+    /// <summary>載入時解析的參數集摘要(無引用時 null;不序列化,紀錄標頭另有 parameterSet 欄位)</summary>
+    [JsonIgnore] public ParameterSetInfo? ParameterSetInfo { get; set; }
+
+    /// <summary>是否有時間表/航線/區域/評估規則(決定雜湊鏈是否追加情境引擎位元組;無者雜湊與舊版一致)。</summary>
+    [JsonIgnore] public bool HasScenarioEngine => Timeline.Count > 0 || Route is not null || Zones.Count > 0 || Assessment.HasRules;
 
     /// <summary>檢查必要欄位並補齊原點;回傳自身以便串接。</summary>
     public Scenario Validate()
@@ -44,9 +60,197 @@ public sealed class Scenario
             Origin = new GeoPoint { Lat = pos.Lat!.Value, Lon = pos.Lon!.Value };
         }
         if (Environment.WaterDepth <= 0) throw new InvalidDataException("environment.waterDepth 必須為正");
+        if (Environment.VisibilityNm is { } vis && vis <= 0) throw new InvalidDataException("environment.visibility_nm 必須為正");
         ValidateTargets();
+        var firstError = StructuralIssues().FirstOrDefault(i => i.Severity == ScenarioIssueSeverity.Error);
+        if (firstError is not null) throw new InvalidDataException($"{firstError.Path}:{firstError.Message}");
         return this;
     }
+
+    /// <summary>
+    /// 時間表/航線/區域/評估規則的結構檢查(不依賴初始狀態;情境引擎設計第 2.4 節 error 項):id 重複、參照不存在、
+    /// 動作名稱不在允許清單、航點不足或重合、多邊形點數/自交、bands 指標名稱、required.after 事件。
+    /// </summary>
+    public IEnumerable<ScenarioIssue> StructuralIssues()
+    {
+        var issues = new List<ScenarioIssue>();
+        void Error(string path, string msg) => issues.Add(new ScenarioIssue(ScenarioIssueSeverity.Error, path, msg));
+        var itemIds = new HashSet<string>(StringComparer.Ordinal);
+        var zoneIds = new HashSet<string>(Zones.Select(z => z.Id), StringComparer.Ordinal);
+        var wpNames = new HashSet<string>(Route?.Waypoints.Select(w => w.Name) ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+        var targetIds = new HashSet<string>(Targets.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
+        var allItemIds = new HashSet<string>(Timeline.Select(t => t.Id), StringComparer.Ordinal);
+
+        for (var i = 0; i < Timeline.Count; i++)
+        {
+            var item = Timeline[i];
+            var path = $"timeline[{i}]";
+            if (string.IsNullOrWhiteSpace(item.Id)) Error(path, "時間表項目缺少 id");
+            else if (!itemIds.Add(item.Id)) Error(path, $"時間表 id 重複:{item.Id}");
+            if (item.When is not null) CheckCondition(item.When, $"{path}.when", Error, zoneIds, wpNames, targetIds);
+            if (item.Repeat.Mode == RepeatMode.Every && item.Repeat.EveryS <= 0) Error($"{path}.repeat", "every_s 必須為正");
+            for (var a = 0; a < item.Actions.Count; a++)
+            {
+                var act = item.Actions[a];
+                var ap = $"{path}.actions[{a}]";
+                if (TimelineAction.ForbiddenKinds.Contains(act.Kind)) Error(ap, $"不允許的動作:{act.Kind}");
+                else if (!TimelineAction.AllowedKinds.Contains(act.Kind)) Error(ap, $"未知的動作:{act.Kind}");
+                else switch (act.Kind)
+                {
+                    case "arm" or "disarm":
+                        if (act.AsString() is not { } rid || !allItemIds.Contains(rid)) Error(ap, $"{act.Kind} 引用不存在的時間表項目:{act.AsString()}");
+                        break;
+                    case "injectFault" or "clearFault":
+                        if (string.IsNullOrWhiteSpace(act.AsString())) Error(ap, $"{act.Kind} 缺少故障名稱");
+                        break;
+                    case "phase":
+                        if (string.IsNullOrWhiteSpace(act.AsString())) Error(ap, "phase 缺少階段名稱");
+                        break;
+                    case "timeScale":
+                        if (act.AsNumber() is not > 0) Error(ap, "timeScale 必須為正數");
+                        break;
+                    case "voiceScript":
+                        if (act.AsVoiceScript() is not { } vs || (string.IsNullOrWhiteSpace(vs.Text) && string.IsNullOrWhiteSpace(vs.File))) Error(ap, "voiceScript 需要 text 或 file");
+                        break;
+                    case "message":
+                        if (act.AsMessage() is not { } ms || string.IsNullOrWhiteSpace(ms.Text)) Error(ap, "message 需要 text");
+                        break;
+                }
+            }
+        }
+
+        if (Route is { } route)
+        {
+            if (route.Waypoints.Count < 2) Error("route.waypoints", "航線至少需要 2 個航點");
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < route.Waypoints.Count; i++)
+            {
+                var w = route.Waypoints[i];
+                if (string.IsNullOrWhiteSpace(w.Name)) Error($"route.waypoints[{i}]", "航點缺少 name");
+                else if (!names.Add(w.Name)) Error($"route.waypoints[{i}]", $"航點名稱重複:{w.Name}");
+                if (!w.HasPosition) Error($"route.waypoints[{i}]", "航點需為 {lat, lon} 或 {x, y}");
+            }
+            if (route.StartLeg < 0 || (route.Waypoints.Count >= 2 && route.StartLeg >= route.Waypoints.Count - 1)) Error("route.startLeg", "startLeg 超出航段範圍");
+            if (Origin is { } o)
+            {
+                var proj = new Geo.LocalTangentPlane(o.Lat, o.Lon);
+                for (var i = 0; i + 1 < route.Waypoints.Count; i++)
+                {
+                    if (!route.Waypoints[i].HasPosition || !route.Waypoints[i + 1].HasPosition) continue;
+                    var (ax, ay) = Resolve(proj, route.Waypoints[i]);
+                    var (bx, by) = Resolve(proj, route.Waypoints[i + 1]);
+                    if (Math.Sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay)) < 1.0)
+                        Error($"route.waypoints[{i + 1}]", $"航點 {route.Waypoints[i + 1].Name} 與前一航點重合(航段 < 1 m)");
+                }
+            }
+        }
+
+        var zids = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < Zones.Count; i++)
+        {
+            var z = Zones[i];
+            var path = $"zones[{i}]";
+            if (string.IsNullOrWhiteSpace(z.Id)) Error(path, "區域缺少 id");
+            else if (!zids.Add(z.Id)) Error(path, $"區域 id 重複:{z.Id}");
+            if (z.Polygon.Count < 3) Error($"{path}.polygon", "多邊形至少需要 3 點");
+            if (z.Polygon.Count > 64) Error($"{path}.polygon", "多邊形點數上限 64");
+            foreach (var p in z.Polygon)
+                if (!((p.Lat is not null && p.Lon is not null) || (p.X is not null && p.Y is not null))) { Error($"{path}.polygon", "頂點需為 {lat, lon} 或 {x, y}"); break; }
+            if (z.WaterDepthM is <= 0) Error($"{path}.waterDepth_m", "區域水深必須為正");
+            if (Origin is { } o && z.Polygon.Count >= 3 && z.Polygon.All(p => (p.Lat is not null && p.Lon is not null) || (p.X is not null && p.Y is not null)))
+            {
+                var proj = new Geo.LocalTangentPlane(o.Lat, o.Lon);
+                var pts = z.Polygon.Select(p => Resolve(proj, p)).ToArray();
+                if (Geo.Polygon2D.SelfIntersects(pts)) Error($"{path}.polygon", "多邊形自交");
+            }
+        }
+
+        var ruleIds = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < Assessment.HardFail.Count; i++)
+        {
+            var r = Assessment.HardFail[i];
+            var path = $"assessment.hardFail[{i}]";
+            if (!ruleIds.Add(r.Id)) Error(path, $"規則 id 重複:{r.Id}");
+            if (!HardFailRule.Rules.Contains(r.Rule)) Error(path, $"未知的 rule:{r.Rule}");
+            if (r.Rule == "cpa" && r.LessThanNumber is null) Error(path, "cpa 規則需要 lessThan(nm)");
+            if (r.Rule == "ukc" && r.LessThanUkc is null) Error(path, "ukc 規則需要 lessThan {metres|fractionOfDraft}");
+            if (r.Rule == "zoneEntered" && (r.ZoneId is null || !zoneIds.Contains(r.ZoneId))) Error(path, $"zoneEntered 引用不存在的區域:{r.ZoneId}");
+            if (r.Rule == "event" && string.IsNullOrWhiteSpace(r.Kind)) Error(path, "event 規則需要 kind");
+        }
+        for (var i = 0; i < Assessment.Bands.Count; i++)
+        {
+            var b = Assessment.Bands[i];
+            var path = $"assessment.bands[{i}]";
+            if (!ruleIds.Add(b.Id)) Error(path, $"規則 id 重複:{b.Id}");
+            if (!AssessmentNs.MetricNames.IsKnown(b.Metric)) Error(path, $"未知的指標:{b.Metric}");
+            if (b.Warn is null && b.Fail is null) Error(path, "容許帶需要 warn 或 fail");
+            if (b.Fail is { Multiplier: not null } && b.Warn is null) Error(path, "fail 為倍數時需要 warn");
+            if (b.Direction is not ("above" or "below")) Error(path, $"direction 須為 above | below:{b.Direction}");
+        }
+        for (var i = 0; i < Assessment.Required.Count; i++)
+        {
+            var r = Assessment.Required[i];
+            var path = $"assessment.required[{i}]";
+            if (!ruleIds.Add(r.Id)) Error(path, $"規則 id 重複:{r.Id}");
+            if (string.IsNullOrWhiteSpace(r.After.Event)) Error($"{path}.after", "after 需要 event");
+            if (r.After.ItemId is { } aid && !allItemIds.Contains(aid)) Error($"{path}.after", $"after 引用不存在的時間表項目:{aid}");
+            if (r.After.Waypoint is { } awp && !wpNames.Contains(awp)) Error($"{path}.after", $"after 引用不存在的航點:{awp}");
+            if (r.After.ZoneId is { } azid && !zoneIds.Contains(azid)) Error($"{path}.after", $"after 引用不存在的區域:{azid}");
+            if (r.WithinS <= 0) Error(path, "within_s 必須為正");
+            foreach (var leaf in r.Expect.Leaves())
+            {
+                if (leaf.Name is { } n && !ExpectSpec.SimpleNames.Contains(n)) Error($"{path}.expect", $"未知的 expect:{n}");
+                if (leaf.Event is { } ev && ev.ItemId is { } eid && !allItemIds.Contains(eid)) Error($"{path}.expect", $"expect 引用不存在的時間表項目:{eid}");
+            }
+        }
+        return issues;
+    }
+
+    private static void CheckCondition(TriggerCondition c, string path, Action<string, string> error,
+        HashSet<string> zoneIds, HashSet<string> wpNames, HashSet<string> targetIds)
+    {
+        if (c.IsComposite)
+        {
+            if (c.Type is not null) error(path, "組合條件不可同時有 type");
+            if (c.All is not null) for (var i = 0; i < c.All.Count; i++) CheckCondition(c.All[i], $"{path}.all[{i}]", error, zoneIds, wpNames, targetIds);
+            if (c.Any is not null) for (var i = 0; i < c.Any.Count; i++) CheckCondition(c.Any[i], $"{path}.any[{i}]", error, zoneIds, wpNames, targetIds);
+            if (c.Not is not null) CheckCondition(c.Not, $"{path}.not", error, zoneIds, wpNames, targetIds);
+            return;
+        }
+        if (c.Type is null || !TriggerCondition.LeafTypes.Contains(c.Type)) { error(path, $"未知的條件型別:{c.Type}"); return; }
+        switch (c.Type)
+        {
+            case "time" when c.AtLeast is null: error(path, "time 條件需要 atLeast"); break;
+            case "ownDistance":
+                if (c.Point is null && c.Waypoint is null && c.Target is null) error(path, "ownDistance 需要 point | waypoint | target");
+                if (c.LessThan is null && c.GreaterThan is null) error(path, "ownDistance 需要 lessThan / greaterThan");
+                if (c.Waypoint is { } w && !wpNames.Contains(w)) error(path, $"ownDistance 引用不存在的航點:{w}");
+                if (c.Target is { } t && !targetIds.Contains(t)) error(path, $"ownDistance 引用不存在的目標:{t}");
+                break;
+            case "ownHeading" or "ownSpeed" when c.LessThan is null && c.GreaterThan is null: error(path, $"{c.Type} 需要 lessThan / greaterThan"); break;
+            case "ukc" when c.LessThan is null && c.GreaterThan is null && c.LessThanFractionOfDraft is null: error(path, "ukc 需要 lessThan / greaterThan / lessThanFractionOfDraft"); break;
+            case "xtd" when c.GreaterThan is null: error(path, "xtd 需要 greaterThan"); break;
+            case "routeLeg":
+                if (c.AtLeast is null && c.EqualsNumber is null && c.PassedWaypoint is null) error(path, "routeLeg 需要 atLeast | equals | passedWaypoint");
+                if (c.PassedWaypoint is { } pw && !wpNames.Contains(pw)) error(path, $"routeLeg 引用不存在的航點:{pw}");
+                break;
+            case "zone":
+                if (c.Id is null || !zoneIds.Contains(c.Id)) error(path, $"zone 引用不存在的區域:{c.Id}");
+                break;
+            case "phase" when string.IsNullOrWhiteSpace(c.EqualsString): error(path, "phase 需要 equals"); break;
+            case "event" when string.IsNullOrWhiteSpace(c.Kind): error(path, "event 需要 kind"); break;
+            case "fault" when string.IsNullOrWhiteSpace(c.Name): error(path, "fault 需要 name"); break;
+            case "telegraph" when c.In is null && c.NotIn is null: error(path, "telegraph 需要 in / notIn"); break;
+            case "autopilot" when c.Enabled is null: error(path, "autopilot 需要 enabled"); break;
+        }
+        if (c.Since is { } s && string.IsNullOrWhiteSpace(s.Event)) error(path, "since 需要 event");
+    }
+
+    internal static (double X, double Y) Resolve(Geo.LocalTangentPlane proj, RouteWaypoint w)
+        => w.X is not null && w.Y is not null ? (w.X.Value, w.Y.Value) : proj.ToLocal(w.Lat!.Value, w.Lon!.Value);
+
+    internal static (double X, double Y) Resolve(Geo.LocalTangentPlane proj, ScenarioPosition p)
+        => p.X is not null && p.Y is not null ? (p.X.Value, p.Y.Value) : proj.ToLocal(p.Lat!.Value, p.Lon!.Value);
 
     /// <summary>目標船定義檢查:id 唯一、位置可解析、航點/跟隨/腳本的必要欄位。</summary>
     private void ValidateTargets()
@@ -141,6 +345,20 @@ public sealed class ScenarioEnvironment
     public ScenarioCurrent Current { get; set; } = new();
     /// <summary>水深(m,常數;日後可改為水深網格參照)</summary>
     public double WaterDepth { get; set; } = 50.0;
+    /// <summary>能見度(nm;未給 = 無限制;無物理效果)</summary>
+    [JsonPropertyName("visibility_nm")] public double? VisibilityNm { get; set; }
+}
+
+public enum ScenarioIssueSeverity
+{
+    Error,
+    Warning,
+}
+
+/// <summary>情境靜態檢查結果(規劃書第 9.1 節自動檢查)。</summary>
+public sealed record ScenarioIssue(ScenarioIssueSeverity Severity, string Path, string Message)
+{
+    public override string ToString() => $"[{(Severity == ScenarioIssueSeverity.Error ? "error" : "warning")}] {Path}:{Message}";
 }
 
 public sealed class ScenarioWind

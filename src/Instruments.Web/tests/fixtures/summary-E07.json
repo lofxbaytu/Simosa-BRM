@@ -1,0 +1,16 @@
+{"kind":"summary","tick":180000,"summary":{
+  "version":1,"advisory":true,"final":true,"scenarioId":"E07_steering_failure","shipId":"FSB1","loading":"full",
+  "parameterSet":{"id":"simosa-company-procedures","version":"2026.10.1","sha256":"…"},
+  "phases":[{"phase":"normal","from_s":0,"to_s":420},{"phase":"degraded","from_s":420,"to_s":612},{"phase":"emergency","from_s":612,"to_s":3600}],
+  "general":{"duration_s":3600,"freezes":2,"distance_nm":5.8,"avgSog_kn":5.9,"maxSog_kn":8.4},
+  "collisionAvoidance":{"minCpa_nm":0.62,"encounters":1,"collisions":0,"targets":[{"targetId":"T1","situation":"headOn","detectedAt_s":95,"firstActionAt_s":131,"timeToAction_s":36,"firstAction":"rudder","minCpa_nm":0.62,"minCpaAt_s":402,"tcpaAtDetection_min":14.2,"bcrAtDetection_nm":0.1,"courseChange_deg":32,"speedChange_kn":0,"substantial":true,"cpaAlarmTime_s":0}]},
+  "track":{"meanAbsXtd_m":18.4,"maxXtd_m":74,"maxXtdAt_s":655,"maxXtdLeg":1,"timeOutsideCorridor_s":41,"corridorExcursions":1,"fractionOutsideCorridor":0.012,"minDistanceToCorridorEdge_m":-24,"minDistanceToNoGo_m":210,"meanHeadingDeviation_deg":2.1,"waypoints":[{"name":"WP2","passedAt_s":418,"xtd_m":6,"distance_m":22}]},
+  "ukc":{"min_m":1.42,"minAt_s":2210,"minSquat_m":0.31,"timeBelowLimit_s":0,"excursions":0,"groundings":0,"limit_m":0.57,"limitSource":"navigation.ukc.channel_fraction"},
+  "manoeuvring":{"rudderDistribution_s":{"0-5":2900,"5-10":410,"10-20":200,"20-35":45,">35":0},"hardOverCount":0,"hardOverTime_s":0,"rudderOrders":38,"maxRot_degPerMin":22,"maxRotAt_s":640,"timeRotOverLimit_s":0,"rotExcursions":0,"telegraphChanges":4,"telegraphOrders":[{"order":"HAH","from_s":0,"to_s":455,"duration_s":455},{"order":"SAH","from_s":455,"to_s":612,"duration_s":157}],"rpmOrders":0,"thrusterOrders":3,"thrusterTime_s":140,"timeOverSpeedLimit_s":0,"maxOverSpeed_kn":0,"autopilotTime_s":380,"autopilotSwitches":2},
+  "faultResponses":[{"fault":"steeringGear","itemId":"steeringFail","injectedAt_s":420,"source":"timeline","firstAction":{"kind":"telegraph","t_s":455,"dt_s":35},"acknowledgements":[{"kind":"verbal","t_s":431,"dt_s":11,"role":"officer"},{"kind":"notifyEcr","t_s":502,"dt_s":82,"role":"master"}],"cleared_s":1300,"withinFirstAction":true,"withinNotifyEcr":true}],
+  "events":{"total":57,"byKind":{"timelineTriggered":4,"faultInjected":1,"cpaAlarm":0,"xtdExceeded":1}},
+  "assessment":{"score":85,"passMark":70,"passed":true,"hardFailed":false,"hardFails":[],
+    "bands":[{"id":"xtdMax","metric":"track.maxXtd_m","value":74,"warn":50,"fail":100,"state":"warn","penalty":10,"paramKey":"navigation.xtd.channel_m","source":"SMS-NAV-012","revision":"2","clause":"4.1"}],
+    "required":[{"id":"steeringResponse","state":"met","dt_s":35,"within_s":60,"by":"telegraph","paramKey":"emergency.steeringFailure.firstAction_s","source":"SMS-EMG-004","revision":"1"},{"id":"notifyEcr","state":"met","dt_s":82,"within_s":120,"by":"acknowledge:notifyEcr"},{"id":"vtsReport","state":"missed","within_s":120,"penalty":5}],
+    "parameters":[{"key":"navigation.xtd.channel_m","value":50,"unit":"m","source":"SMS-NAV-012","revision":"2","clause":"4.1"}]}
+}}

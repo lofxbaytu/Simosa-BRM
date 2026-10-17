@@ -16,3 +16,6 @@ data/ships/*/confidential/
 build/records/
 *.mcap
 *.mp4
+
+# xunit/VSTest 輸出
+TestResults/

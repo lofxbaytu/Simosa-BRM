@@ -54,6 +54,41 @@ public sealed record OwnShipState
     [JsonPropertyName("flags")] public StateFlags? Flags { get; init; }
     /// <summary>已出現的目標船(情境無目標船時省略;規劃書第 5.2 節 Traffic)</summary>
     [JsonPropertyName("targets")] public IReadOnlyList<TargetState>? Targets { get; init; }
+    /// <summary>能見度(nm;未設定時省略;無物理效果,儀器端自行反應)</summary>
+    [JsonPropertyName("visibility_nm")] public double? VisibilityNm { get; init; }
+    /// <summary>情境引擎狀態(階段、參數集版次、時間表、評估;情境引擎設計第 5.1 節)</summary>
+    [JsonPropertyName("scenario")] public ScenarioStatus? Scenario { get; init; }
+    /// <summary>航線狀態(XTD/下一航點;規劃書第 7.2 節 conning 最低資訊);情境無 route 時省略</summary>
+    [JsonPropertyName("route")] public RouteStatus? Route { get; init; }
+}
+
+/// <summary>情境引擎狀態摘要(state.schema.json `scenario`)。</summary>
+public sealed record ScenarioStatus
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("phase")] public required string Phase { get; init; }
+    [JsonPropertyName("parameterSetVersion")] public string? ParameterSetVersion { get; init; }
+    /// <summary>時間表項目累計觸發次數</summary>
+    [JsonPropertyName("timelineFired")] public int? TimelineFired { get; init; }
+    /// <summary>待執行(delay_s)的動作數</summary>
+    [JsonPropertyName("timelinePending")] public int? TimelinePending { get; init; }
+    [JsonPropertyName("hardFailed")] public bool? HardFailed { get; init; }
+    [JsonPropertyName("score")] public double? Score { get; init; }
+    [JsonPropertyName("ended")] public bool? Ended { get; init; }
+}
+
+/// <summary>航線狀態(state.schema.json `route`);xtd_m 右正左負。</summary>
+public sealed record RouteStatus
+{
+    [JsonPropertyName("legIndex")] public int? LegIndex { get; init; }
+    [JsonPropertyName("nextWaypoint")] public string? NextWaypoint { get; init; }
+    [JsonPropertyName("xtd_m")] public double? XtdM { get; init; }
+    [JsonPropertyName("xtdLimit_m")] public double? XtdLimitM { get; init; }
+    [JsonPropertyName("distanceToWaypoint_nm")] public double? DistanceToWaypointNm { get; init; }
+    [JsonPropertyName("bearingToWaypoint_deg")] public double? BearingToWaypointDeg { get; init; }
+    [JsonPropertyName("legCourse_deg")] public double? LegCourseDeg { get; init; }
+    [JsonPropertyName("speedLimit_kn")] public double? SpeedLimitKn { get; init; }
+    [JsonPropertyName("complete")] public bool? Complete { get; init; }
 }
 
 /// <summary>位置:WGS-84 經緯度與本地 ENU(m)。</summary>

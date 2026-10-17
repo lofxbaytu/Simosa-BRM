@@ -1,0 +1,203 @@
+# E07 舵機故障:麥寮進港航道,引水人在船(規劃書第 8.1 節 E07;schema:src/Contracts/scenario.schema.json)
+# FSB1 滿載自西南接近麥寮港,沿 3 段進港航道(走廊半寬 50 m)以 HAH 8 kn → 減速進港;退潮流 2.0 kn 向西南橫越航道,東北風 18 kn。
+# 時間表:T+5 min 引水人登船語音 → 進入航段 1 後 90 s 舵卡(steeringGear,階段 degraded)→ 60 s 內無相關動作(必要事件 steeringFirstAction 逾時)則機控室來電提示(emergency)
+#          → 教官確認「已轉應急操舵」後 clearFault;航段 2 內超速提示;錨地禁區。評估:故障首個相關動作 ≤ 60 s、通知機控室 ≤ 120 s、XTD、UKC、CPA(航道門檻 navigation.cpa.channel_nm)。
+id: E07_steering_failure
+name: 麥寮進港航道舵機故障
+description: >-
+  進港航道中段舵機卡住,團隊需辨識(舵角指示 vs 舵令)、以車令/側推控制艏向、通知機控室並轉應急操舵,
+  同時維持航道內、監控 UKC 與出港船;評估故障應變時間、航跡保持與溝通。
+seed: 20260707
+startTimeUtc: "2026-07-07T06:30:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 23.7800, lon: 120.1000 }
+initial:
+  position: { lat: 23.7696, lon: 120.0857 }    # WP1 西南 1 nm,位於航段 0 的延長線上(航向 052°)
+  heading: 52
+  speed: 8.0
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 18, trueDir: 40, gustiness: 0.15 }
+  current: { set: 230, drift: 2.0 }             # 退潮,橫越航道
+  waterDepth: 14                                 # 航道外;航道內由 zones channel 覆寫 12.5 m
+  visibility_nm: 6
+briefing:
+  text: |
+    麥寮港進港,滿載,引水人已登船(由帶領者扮演)。航道三段:WP1→WP2 052°、WP2→WP3 070°、WP3→泊位 085°;
+    走廊半寬 50 m,航道內速限 8 kn、內港 5 kn;退潮 2 kn 橫流。UKC 政策:航道內 ≥ 10% 吃水。
+    注意舵令與舵角指示的一致性;發生異常時依公司緊急程序 SMS-EMG-004 處置並通知機控室。
+  attachments:
+    - { title: 航程計畫(麥寮進港), file: docs/passage-plan-mailiao.pdf }
+    - { title: 緊急程序 — 舵機故障, file: docs/SMS-EMG-004.pdf }
+  roles:
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: vts, playedBy: voiceScript }
+  minParticipants: 3
+route:
+  name: 麥寮進港航道
+  xtdLimit_m: "${params:navigation.xtd.channel_m}"
+  waypoints:
+    - { name: WP1, lat: 23.7800, lon: 120.1000 }
+    - { name: WP2, lat: 23.7960, lon: 120.1220, checkpoint: true, speedLimit_kn: "${params:port.mailiao.speedLimit_kn}" }
+    - { name: WP3, lat: 23.8050, lon: 120.1490, checkpoint: true, speedLimit_kn: "${params:port.mailiao.speedLimit_kn}", report: "麥寮 VTS 報告點(VHF 13)" }
+    - { name: BERTH, lat: 23.8075, lon: 120.1700, arrivalRadius_m: 120, speedLimit_kn: "${params:port.mailiao.innerSpeedLimit_kn}" }
+zones:
+  - id: channel
+    name: 進港航道(UKC 政策區)
+    type: ukcPolicy
+    waterDepth_m: 12.5
+    ukcMin: { fractionOfDraft: "${params:navigation.ukc.channel_fraction}" }
+    polygon:
+      - { lat: 23.7780, lon: 120.0980 }
+      - { lat: 23.7990, lon: 120.1200 }
+      - { lat: 23.8080, lon: 120.1500 }
+      - { lat: 23.8100, lon: 120.1720 }
+      - { lat: 23.8050, lon: 120.1730 }
+      - { lat: 23.8020, lon: 120.1490 }
+      - { lat: 23.7930, lon: 120.1230 }
+      - { lat: 23.7750, lon: 120.1010 }
+  - id: anchorage_S
+    name: 南側錨地(禁區)
+    type: noGo
+    polygon:
+      - { lat: 23.7850, lon: 120.1250 }
+      - { lat: 23.7900, lon: 120.1500 }
+      - { lat: 23.7800, lon: 120.1520 }
+      - { lat: 23.7750, lon: 120.1270 }
+  - id: inner
+    name: 內港速限區
+    type: speedLimit
+    speedLimit_kn: "${params:port.mailiao.innerSpeedLimit_kn}"
+    polygon:
+      - { lat: 23.8040, lon: 120.1600 }
+      - { lat: 23.8110, lon: 120.1600 }
+      - { lat: 23.8110, lon: 120.1760 }
+      - { lat: 23.8040, lon: 120.1760 }
+targets:
+  - id: OUT1
+    name: TAI PING 12
+    mmsi: 416400201
+    shipType: cargo
+    loa: 95
+    beam: 15
+    draft: 5.5
+    initial:
+      position: { lat: 23.8074, lon: 120.1558 }   # 航道內出港:沿自船航線左舷側(航道西北半幅)170 m 的平行線反向航行,左舷對左舷通過(COLREG 第 9/14 條)
+      heading: 262
+      speed: 6
+    behaviour:
+      mode: waypoints
+      waypoints:                                   # 自船 WP3/WP2/WP1 向左舷平移 170 m;自船守在走廊(半寬 50 m)內時通過距離 120–220 m
+        - { lat: 23.8065, lon: 120.1486, speed: 6 }
+        - { lat: 23.7973, lon: 120.1212, speed: 6 }
+        - { lat: 23.7812, lon: 120.0990, speed: 7 }
+      stopAtEnd: true
+    trigger: { type: time, time: 240 }
+  - id: ANCH1
+    name: SHENG LI
+    mmsi: 416400202
+    shipType: tanker
+    loa: 110
+    beam: 18
+    initial: { position: { lat: 23.7830, lon: 120.1380 }, heading: 40 }
+    behaviour: { mode: anchored, anchor: { swing: 20, period: 420 } }
+timeline:
+  - id: pilotBoarded
+    name: 引水人登船(語音)
+    when: { type: time, atLeast: 60 }
+    actions:
+      - voiceScript: { role: pilot, channel: bridge, text: "船長早,引水人登船。計畫走三段航道,WP2 前減到半速,內港五節。", lang: zh-TW, file: audio/E07/pilot_boarded.ogg }
+      - message: { to: instructor, text: "引水人 MPX 開始;觀察是否核對航程計畫與航道速限", severity: info }
+  - id: vtsCall
+    name: VTS 詢問 ETA
+    when: { type: routeLeg, atLeast: 1 }
+    actions:
+      - voiceScript: { role: vts, channel: vhf13, text: "FS Bitumen No.1, Mailiao VTS, 請報 WP3 ETA 與吃水。", lang: zh-TW }
+  - id: steeringFail
+    name: 舵機故障(卡舵)
+    phase: degraded
+    holdFor_s: 0
+    when:
+      all:
+        - { type: routeLeg, atLeast: 1 }
+        - { type: time, atLeast: 90, since: { event: routeLegChanged, legIndex: 1 } }
+    actions:
+      - injectFault: steeringGear
+      - voiceScript: { role: helmsman, channel: bridge, text: "舵不聽使喚!舵令右十,舵角指示不動。", lang: zh-TW }
+      - message: { to: instructor, text: "已注入舵機故障(舵卡在目前角);期望 60 s 內車令/側推/確認,120 s 內通知機控室(SMS-EMG-004)", severity: warning }
+  - id: ecrPrompt
+    name: 機控室來電(無反應時)
+    phase: emergency
+    when:                                        # 「無反應」= 必要事件 steeringFirstAction 逾時(核心於故障後 firstAction_s 內無車令/側推/自動舵解除/操舵模式確認時發 requiredEventMissed);
+      all:                                       #   不以累計的 acknowledge 次數判斷,故障前的任何確認不會讓此項目失效
+        - { type: fault, name: steeringGear, active: true }
+        - { type: event, kind: requiredEventMissed, itemId: steeringFirstAction }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室。舵機液壓油壓低警報,你們舵有問題嗎?", lang: zh-TW }
+  - id: emergencySteering
+    name: 應急操舵完成(教官確認後解除故障)
+    manual: true
+    actions:
+      - clearFault: steeringGear
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,舵機房已切換應急操舵,請以電話下舵令。", lang: zh-TW }
+      - phase: normal
+  - id: speedCoach
+    name: 超速提示
+    repeat: { every_s: 60, max: 3 }
+    when: { type: event, kind: speedLimitExceeded }
+    actions:
+      - message: { to: instructor, text: "超過航道/內港速限;觀察引水人與船長是否提出", severity: warning }
+  - id: end
+    name: 到達泊位附近結束
+    when: { type: ownDistance, waypoint: BERTH, lessThan: 0.15 }
+    actions:
+      - endExercise: { reason: 到達泊位接近區 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.channel_nm}"       # 航道內通過距離門檻(cpaAlarm 與會遇關注 2×);沿岸值 0.5 nm 比航道還寬
+  encounter:
+    detectionRange_nm: 3
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  ukc:
+    min: { metres: "${params:navigation.ukc.minimum_m}" }
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: collision, rule: collision }
+    - { id: noGo, rule: zoneEntered, zoneId: anchorage_S }
+    - { id: ukcHard, rule: ukc, lessThan: { fractionOfDraft: "${params:navigation.ukc.hardFail_fraction}" } }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.channel_m}", fail: 2x, penalty: 10, failPenalty: 25 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 60, penalty: 5, failPenalty: 15 }
+    - { id: ukcTime, metric: ukc.timeBelowLimit_s, warn: 0, fail: 30, penalty: 10, failPenalty: 25 }
+    - { id: speed, metric: manoeuvring.timeOverSpeedLimit_s, warn: 0, fail: 120, penalty: 5, failPenalty: 15 }
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.channel_nm}", fail: "${params:navigation.cpa.channelHardFail_nm}", penalty: 10, failPenalty: 30 }
+  required:
+    - id: steeringFirstAction
+      after: { event: faultInjected, itemId: steeringFail }
+      expect: { any: [ telegraphChange, rpmOrder, thrusterOrder, autopilotOff, { acknowledge: { kind: steeringMode } } ] }
+      within_s: "${params:emergency.steeringFailure.firstAction_s}"
+      penalty: 20
+      latePenaltyPer_s: 0.5
+    - id: notifyEcr
+      after: { event: faultInjected, itemId: steeringFail }
+      expect: { acknowledge: { kind: notifyEcr } }
+      within_s: "${params:emergency.steeringFailure.notifyEcr_s}"
+      penalty: 10
+    - id: emergencySteering
+      after: { event: faultInjected, itemId: steeringFail }
+      expect: { event: { kind: timelineTriggered, itemId: emergencySteering } }
+      within_s: "${params:emergency.steeringFailure.emergencySteering_s}"
+      penalty: 10
+    - id: vtsReport
+      after: { event: reportPointPassed, waypoint: WP3 }
+      expect: { acknowledge: { kind: report } }
+      within_s: 120
+      penalty: 5
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
