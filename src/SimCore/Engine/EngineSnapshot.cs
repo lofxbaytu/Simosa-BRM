@@ -37,6 +37,8 @@ public sealed record EngineSnapshot
     /// <summary>重新評分的影子評估模組狀態(只在 --rescore 重播中存在;紀錄的快照行不含)</summary>
     public Assessment.AssessmentSnapshot? RescoreAssessment { get; init; }
     public string? ParameterSetVersion { get; init; }
+    /// <summary>操舵模式(舊快照無此欄位:fu、泵 1;自動舵啟用時為 autopilot)</summary>
+    public SteeringSnapshot? Steering { get; init; }
     public string? Phase { get; init; }
     public double? VisibilityNm { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
@@ -64,3 +66,6 @@ public sealed record EnvironmentSnapshot(
     double? ConstantDepth);
 
 public sealed record AutopilotSnapshot(bool Enabled, double HeadingRad, double RotLimitDegPerMin);
+
+/// <summary>操舵模式:mode、泵("1"|"2"|"both")、NFU 推動方向(−1 左、0 停、+1 右)。</summary>
+public sealed record SteeringSnapshot(SteeringMode Mode, string Pump, int NfuDirection);

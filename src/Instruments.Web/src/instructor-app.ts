@@ -37,6 +37,7 @@ import { EventStore, eventFromFrame, eventLabel, voiceScriptData } from './lib/s
 import { assessmentFromFrame, type AssessmentSummary } from './lib/assessment.js';
 import { VoiceScriptPlayer, voiceLine, voiceRecordLabel } from './lib/voice-script.js';
 import { eventMarks, overlayFromScenario, type PlotOverlay } from './lib/plot-overlay.js';
+import { cpaAlarmTargets } from './lib/targets.js';
 import { PLAYED_BY_LABEL } from './lib/timeline.js';
 import { ROLE_LABEL } from './lib/sim-event.js';
 import { instructorStyles } from './components/instructor/instructor-shared.js';
@@ -56,7 +57,7 @@ import './components/instructor/brm-marker-bar.js';
 import './components/instructor/debrief-summary.js';
 import './components/instructor/replay-view.js';
 import './components/instructor/event-stream.js';
-import './components/instructor/timeline-panel.js';
+import { requiredCountdowns } from './components/instructor/timeline-panel.js';
 
 export type PageMode = 'full' | 'simple' | 'replay';
 export type SourceMode = 'live' | 'demo';
@@ -896,7 +897,7 @@ export class InstructorApp extends LitElement {
             <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale}></brm-run-control>
           </div>
           <div class="col center">
-            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()}></brm-track-plot>
+            <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${cpaAlarmTargets(this.events)} target-table></brm-track-plot>
             <div class="bottom">
               <brm-environment-panel .state=${this.hasReceived ? s : null}></brm-environment-panel>
               <brm-fault-panel .active=${s.faults ?? []}></brm-fault-panel>
@@ -965,7 +966,7 @@ export class InstructorApp extends LitElement {
               ${s.scenario?.phase && s.scenario.phase !== 'normal' ? html`<span class="v warning">階段 ${s.scenario.phase}</span>` : nothing}
             </div>
             ${this.lastVoice ? html`<div class="voice-banner">${this.voicePlaying ? '▶ ' : ''}${this.lastVoice}</div>` : nothing}
-            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()}></brm-track-plot>
+            <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${this.liveOverlay()} .targets=${s.targets} .alarmTargets=${cpaAlarmTargets(this.events)}></brm-track-plot>
             <div class="side">
               <brm-marker-bar large .markers=${this.markers}></brm-marker-bar>
               <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>
@@ -984,7 +985,7 @@ export class InstructorApp extends LitElement {
             <h2>練習結束 — ${sc?.id} ${sc?.name}</h2>
             <div class="panel">
               <div class="panel-title"><span>自動講評摘要 DEBRIEF</span><span class="zh">${this.coreSummary ? `核心評分${this.coreSummary.final ? '(定稿)' : ''}${this.coreSummary.parameterSet?.version ? ` · 參數集 ${this.coreSummary.parameterSet.version}` : ''}` : '本地推導(核心未回覆 summary)'}</span></div>
-              <brm-debrief-summary large .summary=${this.debriefSummary} .coreSummary=${this.coreSummary}></brm-debrief-summary>
+              <brm-debrief-summary large .summary=${this.debriefSummary} .coreSummary=${this.coreSummary} .countdowns=${sc?.assessment ? requiredCountdowns(sc.assessment, this.events, s.t) : []}></brm-debrief-summary>
             </div>
             <brm-marker-bar .markers=${this.markers}></brm-marker-bar>
             <div class="actions">

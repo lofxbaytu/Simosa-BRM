@@ -60,6 +60,13 @@ public sealed class SimulationEngine
     private long _assessmentSeq;
     private bool _hashScenarioEngine;
     private List<string> _phaseNames = new();
+    /// <summary>事件發出中由觀察者(評估模組)再發出的事件:待外層事件送完後依序發出,使紀錄/seq 順序與因果一致</summary>
+    private readonly Queue<SimEvent> _deferredEvents = new();
+    private bool _raising;
+    // 操舵模式(規劃書第 7.2 節;情境引擎設計 D32):autopilot 模式與 Autopilot.Enabled 同步;nfu 以 _nfuDirection(−1 左、0 停、+1 右)推動舵
+    private SteeringMode _steeringMode = SteeringMode.Fu;
+    private string _steeringPump = SteeringPumps.One;
+    private int _nfuDirection;
 
     public EngineOptions Options { get; }
     public ShipParticulars Ship { get; private set; }
@@ -82,6 +89,14 @@ public sealed class SimulationEngine
     public ActuatorModel Actuators => _act;
     public LocalTangentPlane Projection => _projection;
     public DeterministicRandom Random => _rng;
+    /// <summary>操舵模式(fu / nfu / autopilot / emergency;autopilot ⇔ <see cref="Autopilot"/>.Enabled)</summary>
+    public SteeringMode SteeringMode => _steeringMode;
+    /// <summary>使用中的舵機泵("1"|"2"|"both";速率依 particulars 的單/雙泵滿舵時間換算,無資料時不變)</summary>
+    public string SteeringPump => _steeringPump;
+    /// <summary>NFU 推動方向(−1 左、0 停、+1 右;非 nfu 模式為 0)</summary>
+    public int NfuDirection => _nfuDirection;
+    /// <summary>應急操舵的舵機速率(度/秒):particulars rudder.steeringGear.emergencyHardOverTime35_s,無資料時取隨動速率的一半</summary>
+    public double EmergencyRudderRateDegPerSec => Ship.Rudder.SteeringGear?.EmergencyHardOverTime35_s is { } t && t > 0 ? 35.0 / t : _act.Parameters.RudderRateDegPerSec / 2.0;
     public IReadOnlyList<EngineSnapshot> Snapshots => _snapshots;
     public int PendingCommandCount => _queue.Count;
     /// <summary>交通模組(目標船;規劃書第 5.2 節)</summary>
@@ -233,6 +248,11 @@ public sealed class SimulationEngine
         _snapshots.Clear();
         Autopilot.Enabled = false;
         Autopilot.HeadingRad = psi;
+        _steeringMode = SteeringMode.Fu;
+        _steeringPump = SteeringPumps.One;
+        _nfuDirection = 0;
+        _deferredEvents.Clear();
+        _raising = false;
         _startsRemaining = Ship.Engine.MaxConsecutiveStarts;
         AttachTraffic(TrafficManager.FromScenario(sc, _projection, Options.Dt));
 
@@ -257,8 +277,27 @@ public sealed class SimulationEngine
 
     // ------------------------------------------------------------------ 事件
 
-    /// <summary>發出事件:補 seq 與 phase,轉給時間表/評估模組觀察,再通知訂閱者(紀錄器、主控程序)。</summary>
+    /// <summary>
+    /// 發出事件:補 seq 與 phase,轉給時間表/評估模組觀察,再通知訂閱者(紀錄器、主控程序)。
+    /// 觀察者在觀察途中再發出的事件(例如 faultInjected → requiredEventPending)先排隊,待本事件送完後依序發出,seq 與紀錄順序因此與因果一致。
+    /// </summary>
     private void Raise(SimEvent e)
+    {
+        if (_raising)
+        {
+            _deferredEvents.Enqueue(e);
+            return;
+        }
+        _raising = true;
+        try
+        {
+            Dispatch(e);
+            while (_deferredEvents.TryDequeue(out var d)) Dispatch(d);
+        }
+        finally { _raising = false; }
+    }
+
+    private void Dispatch(SimEvent e)
     {
         e = e with { Seq = _seq++, Phase = e.Phase ?? Phase };
         _timeline?.OnEvent(e);
@@ -427,6 +466,8 @@ public sealed class SimulationEngine
                     // 手動舵令解除自動舵:學員指令視為一次 autopilotOff(autopilotSwitches、必要事件 expect autopilotOff);時間表 ownShip 覆寫不觀察
                     if (fromInstructor && Autopilot.Enabled) Observe(ActionKinds.AutopilotOff, 1.0);
                     Autopilot.Enabled = false;
+                    // 隨動舵令 = 使用舵輪:autopilot / nfu 模式回到 fu(emergency 保持,電話下令仍以 rudder 指令表示)
+                    if (_steeringMode is SteeringMode.Autopilot or SteeringMode.Nfu) SetSteeringMode(SteeringMode.Fu, null, source, itemId, observe: false);
                     _act.RudderOrderDeg = Units.Clamp(deg, -_act.Parameters.RudderMaxDeg, _act.Parameters.RudderMaxDeg);
                     if (fromInstructor && Math.Abs(_act.RudderOrderDeg - before) >= 1.0) Observe(ActionKinds.RudderOrder, Math.Abs(_act.RudderOrderDeg - before));
                 }
@@ -473,6 +514,27 @@ public sealed class SimulationEngine
                     if (Autopilot.Enabled && dh >= 1.0) Observe(ActionKinds.AutopilotHeading, dh);
                 }
                 else Raise(NewEvent(SimEventKinds.AutopilotOverride, source, itemId, null, null, cmd.Args));
+                // 操舵模式與自動舵同步:啟用 → autopilot;解除 → fu(autopilotOff 已觀察,不再重複 steeringModeChange)
+                if (Autopilot.Enabled) SetSteeringMode(SteeringMode.Autopilot, null, source, itemId, observe: false);
+                else if (_steeringMode == SteeringMode.Autopilot) SetSteeringMode(SteeringMode.Fu, null, source, itemId, observe: false);
+                break;
+            }
+
+            case SimCommandType.SteeringMode:
+            {
+                var modeName = cmd.ValueAsString() ?? cmd.ArgAsString("mode");
+                if (modeName is null || !Enum.TryParse<SteeringMode>(modeName, ignoreCase: true, out var mode)) break;
+                var pump = SteeringPumps.Normalize(cmd.Arg("pump"));
+                var wasAutopilot = Autopilot.Enabled;
+                if (mode == SteeringMode.Autopilot)
+                {
+                    if (cmd.ArgAsDouble("heading") is { } hdg) Autopilot.HeadingRad = Units.DegToRad(Units.NormalizeHeadingDeg(hdg));
+                    else if (!wasAutopilot) Autopilot.HeadingRad = Motion.Psi; // 未給航向時保持目前艏向
+                    if (cmd.ArgAsDouble("rotLimit") is { } lim) Autopilot.RotLimitDegPerMin = Math.Max(1.0, Math.Abs(lim));
+                }
+                SetSteeringMode(mode, pump, source, itemId, observe: fromInstructor);
+                if (fromInstructor && Autopilot.Enabled != wasAutopilot) Observe(Autopilot.Enabled ? ActionKinds.AutopilotOn : ActionKinds.AutopilotOff, 1.0);
+                if (mode == SteeringMode.Nfu) ApplyNfu(cmd.ArgAsString("direction"), fromInstructor);
                 break;
             }
 
@@ -576,6 +638,49 @@ public sealed class SimulationEngine
             case SimCommandType.GetAssessment:
                 break; // 查詢由主控程序直接回覆;引擎不處理
         }
+    }
+
+    /// <summary>
+    /// 切換操舵模式(規劃書第 7.2 節;情境引擎設計 D32):autopilot ⇔ Autopilot.Enabled;離開 nfu 時推動方向歸零;
+    /// 模式或泵改變時發 steeringModeChanged {from, to, pump},<paramref name="observe"/> 時並以 steeringModeChange 動作餵評估(必要事件、故障應變)。
+    /// </summary>
+    private void SetSteeringMode(SteeringMode to, string? pump, string source, string? itemId, bool observe)
+    {
+        var from = _steeringMode;
+        var pumpFrom = _steeringPump;
+        if (pump is not null) _steeringPump = pump;
+        _steeringMode = to;
+        if (to != SteeringMode.Nfu) _nfuDirection = 0;
+        Autopilot.Enabled = to == SteeringMode.Autopilot;
+        if (from == to && pumpFrom == _steeringPump) return;
+        Raise(NewEvent(SimEventKinds.SteeringModeChanged, source, itemId, null, $"{ContractJson.EnumName(from)} → {ContractJson.EnumName(to)}",
+            new { from = ContractJson.EnumName(from), to = ContractJson.EnumName(to), pump = _steeringPump }));
+        if (observe && from != to) Observe(ActionKinds.SteeringModeChange, 1.0);
+    }
+
+    /// <summary>NFU 推桿:port/starboard 時舵令設為該側滿舵(舵以舵機速率移動),stop 時舵令設為目前舵角(舵停在原處);未給方向則不變。幅度 ≥ 1° 視為一次舵令。</summary>
+    private void ApplyNfu(string? direction, bool fromInstructor)
+    {
+        var dir = direction?.ToLowerInvariant() switch { "port" => -1, "starboard" => 1, "stop" => 0, null => _nfuDirection, _ => (int?)null };
+        if (dir is not { } d) return;
+        _nfuDirection = d;
+        var before = _act.RudderOrderDeg;
+        _act.RudderOrderDeg = d == 0 ? Units.Clamp(_act.RudderDeg, -_act.Parameters.RudderMaxDeg, _act.Parameters.RudderMaxDeg) : d * _act.Parameters.RudderMaxDeg;
+        if (fromInstructor && Math.Abs(_act.RudderOrderDeg - before) >= 1.0) Observe(ActionKinds.RudderOrder, Math.Abs(_act.RudderOrderDeg - before));
+    }
+
+    /// <summary>
+    /// 本步的舵機速率(度/秒):emergency 為 <see cref="EmergencyRudderRateDegPerSec"/>;其他模式為參數速率依泵數換算
+    /// (particulars hardOverTime35_onePump_s / _twoPumps_s 相對 <see cref="ShipParticulars.RudderParticulars.HardOverTime35Seconds"/>;無資料時不變)。
+    /// </summary>
+    private double RudderRateForStep()
+    {
+        if (_steeringMode == SteeringMode.Emergency) return EmergencyRudderRateDegPerSec;
+        var nominal = Ship.Rudder.HardOverTime35Seconds;
+        var sg = Ship.Rudder.SteeringGear;
+        var pumpTime = _steeringPump == SteeringPumps.Both ? sg?.HardOverTime35_twoPumps_s : sg?.HardOverTime35_onePump_s;
+        var scale = pumpTime is { } t && t > 0 && nominal > 0 ? nominal / t : 1.0;
+        return _act.Parameters.RudderRateDegPerSec * scale;
     }
 
     /// <summary>學員指令觀察 → 評估模組(會遇首次行動、必要事件、故障應變、操縱指標)。</summary>
@@ -762,10 +867,12 @@ public sealed class SimulationEngine
             _act.RudderOrderDeg = Autopilot.RudderOrderDeg(Motion.Psi, Motion.R, _act.Parameters.RudderMaxDeg);
 
         // 致動器(含主機換向狀態機)先推進;MMG 模式回傳 RK4 各階段的舵角/轉速/側推,與 Python 參考實作的耦合積分一致
+        // 舵機故障:舵卡住;切到 emergency(應急操舵)後舵以降低的速率再度可動(規劃書第 7.2 節操舵模式)
         var controls = _act.Step(Options.Dt,
-            rudderJammed: _faults.Contains(FaultNames.SteeringGear),
+            rudderJammed: _faults.Contains(FaultNames.SteeringGear) && _steeringMode != SteeringMode.Emergency,
             engineFailed: _faults.Contains(FaultNames.MainEngine),
-            thrusterFailed: _faults.Contains(FaultNames.BowThruster));
+            thrusterFailed: _faults.Contains(FaultNames.BowThruster),
+            rudderRateDegPerSec: RudderRateForStep());
 
         var sample = Environment.SampleAt(Motion.X, Motion.Y);
         Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
@@ -807,6 +914,9 @@ public sealed class SimulationEngine
     {
         // 既有欄位的位元組配置不變;目標船(若有)接在其後,因此無目標船的情境雜湊與舊版完全相同
         var size = 32 + 8 + 8 * 16 + _traffic.Targets.Count * TrafficManager.HashDoublesPerTarget * 8;
+        // 操舵模式只在非預設(nfu / emergency / 泵非 1)時追加 3 個 int64:fu 與 autopilot(與既有 Autopilot.Enabled 同義,其舵令已在雜湊內)維持舊版配置
+        var hashSteering = _steeringMode is SteeringMode.Nfu or SteeringMode.Emergency || _steeringPump != SteeringPumps.One;
+        if (hashSteering) size += 24;
         if (_hashScenarioEngine)
             size += 16 + Scenario.Timeline.Count * TimelineEngine.HashLongsPerItem * 8 + _ramps.Count * 24 + 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
@@ -825,6 +935,12 @@ public sealed class SimulationEngine
             o += 8;
         }
         o += _traffic.WriteHash(buf[o..]);
+        if (hashSteering)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], (long)_steeringMode); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], SteeringPumps.Index(_steeringPump)); o += 8;
+            BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _nfuDirection); o += 8;
+        }
         if (_hashScenarioEngine)
         {
             // 情境引擎(只在有時間表/航線/區域/規則時追加,E05 等情境雜湊不變):非評估事件數、階段索引、各項目狀態、進行中漸變、航段
@@ -874,6 +990,7 @@ public sealed class SimulationEngine
         Assessment = _assessment?.CreateSnapshot(),
         RescoreAssessment = _rescore?.CreateSnapshot(),
         ParameterSetVersion = ParameterSet?.Version,
+        Steering = new SteeringSnapshot(_steeringMode, _steeringPump, _nfuDirection),
         Phase = Phase,
         VisibilityNm = Environment.VisibilityNm,
         StateHash = StateHash,
@@ -964,6 +1081,11 @@ public sealed class SimulationEngine
         Autopilot.Enabled = s.Autopilot.Enabled;
         Autopilot.HeadingRad = s.Autopilot.HeadingRad;
         Autopilot.RotLimitDegPerMin = s.Autopilot.RotLimitDegPerMin;
+        // 操舵模式:舊快照無此欄位 → fu(自動舵啟用時 autopilot)、泵 1
+        _steeringMode = s.Steering?.Mode ?? (s.Autopilot.Enabled ? SteeringMode.Autopilot : SteeringMode.Fu);
+        _steeringPump = SteeringPumps.Normalize(s.Steering?.Pump) ?? SteeringPumps.One;
+        _nfuDirection = _steeringMode == SteeringMode.Nfu ? Math.Sign(s.Steering?.NfuDirection ?? 0) : 0;
+        Autopilot.Enabled = _steeringMode == SteeringMode.Autopilot;
         _faults.Clear();
         _faults.AddRange(s.Faults);
         Aground = s.Aground;
@@ -1096,6 +1218,7 @@ public sealed class SimulationEngine
             Engine = new EngineStatus { State = engineState, StartsRemaining = _startsRemaining, LoadPct = loadPct },
             Faults = _faults.Count == 0 ? Array.Empty<string>() : _faults.ToArray(),
             Flags = new StateFlags { Frozen = Frozen, Aground = Aground, Collision = _traffic.Collision },
+            Steering = new SteeringState { Mode = _steeringMode, Pump = _steeringPump, NfuActive = _steeringMode == SteeringMode.Nfu ? _nfuDirection != 0 : null },
             Targets = _traffic.BuildStates(new ShipKinematics(m.X, m.Y, m.Psi, velE, velN,
                 Ship.Hull.LengthOverall_m > 0 ? Ship.Hull.LengthOverall_m : Ship.Hull.LengthBetweenPerpendiculars_m, Ship.Hull.Breadth_m)),
             VisibilityNm = env.VisibilityNm,
@@ -1113,4 +1236,31 @@ public sealed class SimulationEngine
             Route = _assessment?.Route?.Status(),
         };
     }
+}
+
+/// <summary>舵機泵選擇(指令 steeringMode args.pump、state.steering.pump):"1"、"2"、"both"。</summary>
+public static class SteeringPumps
+{
+    public const string One = "1";
+    public const string Two = "2";
+    public const string Both = "both";
+
+    /// <summary>雜湊用索引(1 → 0、2 → 1、both → 2)。</summary>
+    public static long Index(string pump) => pump switch { Two => 1, Both => 2, _ => 0 };
+
+    /// <summary>由指令/快照值正規化(數值 1/2、字串 "1"/"2"/"both"/"all";其他 → null = 不變)。</summary>
+    public static string? Normalize(JsonElement? e) => e is { } v ? v.ValueKind switch
+    {
+        JsonValueKind.Number => Normalize(v.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        JsonValueKind.String => Normalize(v.GetString()),
+        _ => null,
+    } : null;
+
+    public static string? Normalize(string? s) => s?.Trim().ToLowerInvariant() switch
+    {
+        "1" => One,
+        "2" => Two,
+        "both" or "all" or "1+2" => Both,
+        _ => null,
+    };
 }

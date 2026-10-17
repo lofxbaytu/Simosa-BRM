@@ -1,6 +1,8 @@
 // 鳥瞰航跡圖(第一版沒有 3D 視景時的視覺參考):本地 ENU、北上,自船外形依 LPP/B 比例,
 // 航跡線、航向向量(6 分鐘)、COG/SOG 向量(虛線)、格線與比例尺;滾輪或按鈕縮放,拖曳平移。
 // 疊圖(overlay,設計文件第 6 節 W8):情境航線(航點、走廊半寬)、區域多邊形(禁區/速限/UKC/報告)、事件標記。
+// 目標船(state.targets[],規劃書第 5.2 節):三角形依航向、船名/ID 標籤、COG/SOG 短向量;AIS 關閉者空心虛線,
+// 處於 cpaAlarm 的目標紅色(alarmTargets 由事件流推得);targetTable 開啟時左上角列 CPA/TCPA 小表(教官站完整模式)。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, query, state } from 'lit/decorators.js';
@@ -9,6 +11,8 @@ import type { OwnShipState } from '../types/state.js';
 import type { ShipDisplayConfig } from '../lib/ship-config.js';
 import type { TrackHistory } from '../lib/track-history.js';
 import type { PlotOverlay } from '../lib/plot-overlay.js';
+import type { TargetState } from '../types/target.js';
+import { targetTableRows } from '../lib/targets.js';
 import { bodyToEnu, chooseGridSpacing, hullOutline, superstructureOutline } from '../lib/ship-geometry.js';
 import { degToRad, knotsToMps } from '../lib/angles.js';
 import { formatHeading, formatKnots } from '../lib/format.js';
@@ -82,6 +86,41 @@ export class TrackPlot extends LitElement {
         background: var(--ob-alarm);
         color: var(--ob-alarm-text);
       }
+      .targets {
+        position: absolute;
+        left: 8px;
+        top: 24px;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        color: var(--ob-text-secondary);
+        background: color-mix(in srgb, var(--ob-bg-surface) 78%, transparent);
+        border: 1px solid var(--ob-border);
+        border-radius: 4px;
+        padding: 2px 6px;
+        pointer-events: none;
+        border-collapse: collapse;
+      }
+      .targets th,
+      .targets td {
+        padding: 0 4px;
+        text-align: right;
+        font-weight: 400;
+        white-space: nowrap;
+      }
+      .targets th {
+        color: var(--ob-text-muted);
+      }
+      .targets td:first-child,
+      .targets th:first-child {
+        text-align: left;
+      }
+      .targets tr.alarm td {
+        color: var(--ob-alarm);
+        font-weight: 600;
+      }
+      .targets tr.aisoff td:first-child {
+        font-style: italic;
+      }
       .notice.nodata {
         background: var(--ob-bg-surface);
         color: var(--ob-text-secondary);
@@ -98,6 +137,12 @@ export class TrackPlot extends LitElement {
   @property({ type: Boolean }) noData = false;
   /** 航線/區域/事件疊圖(無則不畫) */
   @property({ attribute: false }) overlay: PlotOverlay | null = null;
+  /** 目標船(state.targets[];無則不畫) */
+  @property({ attribute: false }) targets: readonly TargetState[] = [];
+  /** 處於 CPA 警報中的目標 id(lib/targets.ts cpaAlarmTargets) */
+  @property({ attribute: false }) alarmTargets: ReadonlySet<string> = new Set();
+  /** 顯示 CPA/TCPA 小表(教官站完整模式) */
+  @property({ type: Boolean, attribute: 'target-table' }) targetTable = false;
 
   /** 比例尺(px/m) */
   @state() private zoom = 0.6;
@@ -159,8 +204,9 @@ export class TrackPlot extends LitElement {
           @pointercancel=${this.onPointerUp}
         ></canvas>
         <div class="legend">
-          鳥瞰航跡圖(北上,本地 ENU)· 實線 = 航向向量 ${VECTOR_MINUTES} min · 虛線 = COG/SOG
+          鳥瞰航跡圖(北上,本地 ENU)· 實線 = 航向向量 ${VECTOR_MINUTES} min · 虛線 = COG/SOG${this.targets.length > 0 ? ' · 三角 = 目標船(虛線 = AIS 關)' : ''}
         </div>
+        ${this.targetTable && this.targets.length > 0 ? this.renderTargetTable() : null}
         <div class="toolbar">
           <button title="放大" @click=${() => this.setZoom(this.zoom * 1.5)}>+</button>
           <button title="縮小" @click=${() => this.setZoom(this.zoom / 1.5)}>−</button>
@@ -169,6 +215,26 @@ export class TrackPlot extends LitElement {
         ${notice}
       </div>
     `;
+  }
+
+  private renderTargetTable() {
+    const rows = targetTableRows(this.targets, this.alarmTargets);
+    return html`<table class="targets" aria-label="目標船 CPA/TCPA">
+      <thead>
+        <tr><th>目標</th><th>距離 nm</th><th>方位</th><th>CPA nm</th><th>TCPA min</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map(
+          (r) => html`<tr class="${r.alarm ? 'alarm' : ''} ${r.aisOn ? '' : 'aisoff'}" data-target=${r.id} title=${r.aisOn ? r.id : `${r.id}(AIS 關)`}>
+            <td>${r.label}</td>
+            <td>${r.range_nm.toFixed(2)}</td>
+            <td>${formatHeading(r.bearing_deg)}</td>
+            <td>${r.cpa_nm.toFixed(2)}</td>
+            <td>${r.tcpa_min.toFixed(1)}</td>
+          </tr>`,
+        )}
+      </tbody>
+    </table>`;
   }
 
   private setZoom(z: number): void {
@@ -364,8 +430,66 @@ export class TrackPlot extends LitElement {
     ctx.stroke();
     ctx.fillText('N', w - 24, 58);
 
+    // 目標船(在自船之上、事件標記之下)
+    if (this.targets.length > 0) this.drawTargets(ctx, toPx, z);
+
     // 事件標記(在自船之上)
     if (this.overlay && this.overlay.events.length > 0) this.drawEventMarks(ctx, toPx);
+  }
+
+  private drawTargets(ctx: CanvasRenderingContext2D, toPx: (x: number, y: number) => [number, number], z: number): void {
+    const alarmColor = this.cssVar('--ob-alarm');
+    const normalColor = this.cssVar('--ob-text');
+    const fill = this.cssVar('--ob-ship-fill');
+    ctx.save();
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    for (const t of this.targets) {
+      const alarm = this.alarmTargets.has(t.id);
+      const color = alarm ? alarmColor : normalColor;
+      const [px, py] = toPx(t.pos.x, t.pos.y);
+      // COG/SOG 短向量(虛線,與自船相同的 6 分鐘)
+      const cogLen = knotsToMps(t.sog) * VECTOR_MINUTES * 60 * z;
+      if (cogLen > 2) {
+        const cogRad = degToRad(t.cog);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + Math.sin(cogRad) * cogLen, py - Math.cos(cogRad) * cogLen);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // 三角形依航向;尺寸隨 LOA 縮放但不小於符號尺寸
+      const half = Math.max(7, Math.min(16, (t.loa * z) / 2));
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(degToRad(t.heading));
+      ctx.beginPath();
+      ctx.moveTo(0, -half);
+      ctx.lineTo(half * 0.6, half * 0.8);
+      ctx.lineTo(-half * 0.6, half * 0.8);
+      ctx.closePath();
+      ctx.lineWidth = alarm ? 2 : 1.5;
+      ctx.strokeStyle = color;
+      if (t.aisOn) {
+        ctx.fillStyle = alarm ? alarmColor : fill;
+        ctx.globalAlpha = alarm ? 0.6 : 1;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.setLineDash([]);
+      } else {
+        ctx.setLineDash([3, 2]);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      // 標籤:船名(無則 id);AIS 關以「(AIS 關)」標示
+      ctx.fillStyle = color;
+      ctx.fillText(`${t.name || t.id}${t.aisOn ? '' : '(AIS 關)'}`, px + half + 3, py + 4);
+    }
+    ctx.restore();
   }
 
   private zoneColor(type: string): string {

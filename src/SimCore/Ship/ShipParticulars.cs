@@ -234,6 +234,8 @@ public sealed class SteeringGearParticulars
     [JsonPropertyName("hardOverTime35_s")] public double? HardOverTime35_s { get; set; }
     [JsonPropertyName("hardOverTime35_onePump_s")] public double? HardOverTime35_onePump_s { get; set; }
     [JsonPropertyName("hardOverTime35_twoPumps_s")] public double? HardOverTime35_twoPumps_s { get; set; }
+    /// <summary>應急操舵(舵機房手動/電話下令)的 35°→35° 時間;無資料時引擎取隨動速率的一半(規劃書第 7.2 節操舵模式)</summary>
+    [JsonPropertyName("emergencyHardOverTime35_s")] public double? EmergencyHardOverTime35_s { get; set; }
     [JsonPropertyName("pumps")] public int? Pumps { get; set; }
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 }

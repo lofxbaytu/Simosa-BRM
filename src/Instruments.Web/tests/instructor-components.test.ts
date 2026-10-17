@@ -322,6 +322,27 @@ describe('紀錄清單與講評摘要', () => {
   });
 });
 
+describe('講評摘要的必要事件倒數', () => {
+  const cd = (id: string, state: 'counting' | 'overdue' | 'met' | 'inactive', remaining: number | null, within: number | null = 60) => ({ rule: E07.assessment.required.find((r) => r.id === id)!, startedAt_s: 420, within_s: within, deadline_t: within === null ? null : 420 + within, state, remaining_s: remaining });
+  it('無核心 summary 時列「必要事件(即時倒數)」;核心 summary 的 pending 列改顯示剩餘/逾時秒數', async () => {
+    const local = await mount<DebriefSummaryView>('brm-debrief-summary', { summary: null, countdowns: [cd('steeringFirstAction', 'counting', 30), cd('notifyEcr', 'overdue', 12, 120), cd('emergencySteering', 'counting', null, null), cd('vtsReport', 'inactive', null)] });
+    const text = shadowText(local);
+    expect(text).toContain('必要事件(即時倒數)');
+    expect(text).toContain('steeringFirstAction 剩 30 s 自 07:00 / 限 60 s');
+    expect(text).toContain('notifyEcr 逾時 12 s 自 07:00 / 限 120 s');
+    expect(text).toContain('emergencySteering 計時中 自 07:00');
+    expect(text).not.toContain('vtsReport');
+    expect(text).toContain('尚無資料');
+    const pending = { ...coreSummary, assessment: { ...coreSummary.assessment, required: coreSummary.assessment.required.map((r) => (r.id === 'steeringResponse' ? { id: r.id, state: 'pending' as const } : r)) } };
+    const core = await mount<DebriefSummaryView>('brm-debrief-summary', { coreSummary: pending, countdowns: [cd('steeringFirstAction', 'counting', 30), { ...cd('steeringFirstAction', 'overdue', 7, 60), rule: { ...E07.assessment.required[0]!, id: 'steeringResponse' } }] });
+    const rows = Array.from(core.shadowRoot!.querySelectorAll<HTMLElement>('table[aria-label="必要事件"] tr'));
+    const row = rows.find((r) => r.textContent!.includes('steeringResponse'))!;
+    expect(row.textContent!.replace(/\s+/g, ' ')).toContain('逾時 7 s / 限 60 s');
+    expect(row.className).toBe('alarm');
+    expect(shadowText(core)).not.toContain('必要事件(即時倒數)');
+  });
+});
+
 describe('conning 條的航線/能見度方塊', () => {
   it('有 state.route 時顯示 XTD(右正 → R 偏右)、下一航點、速限與能見度;無則不顯示', async () => {
     const cfg = (await import('../src/lib/ship-config.js')).getShipConfig('FSB1');
@@ -409,5 +430,60 @@ describe('重播檢視', () => {
     expect(el.time).toBe(90);
     expect(shadowText(el)).toContain('01:30 / 02:00');
     expect(plot.overlay.events).toHaveLength(2);
+  });
+
+  it('倒帶標記:時間軸畫 rewinds[],懸停顯示倒帶 tick 與丟棄筆數;目標船依時刻取該筆 state,cpaAlarm 由 t ≤ 目前時刻的事件推得', async () => {
+    const el = await mount<ReplayView>('brm-replay-view');
+    const target = (id: string, cpa: number) => ({ id, name: id, mmsi: 1, shipType: 'cargo', loa: 90, beam: 14, pos: { lat: 0, lon: 0, x: 500, y: 500 }, heading: 180, cog: 180, sog: 5, rot: 0, range_nm: 1, bearing_deg: 45, cpa_nm: cpa, tcpa_min: 6, aisOn: true, lights: 'powerDriven', behaviour: 'hold' });
+    const line = (t: number, targets: unknown[]) => JSON.stringify({ kind: 'state', state: { ...defaultState('FSB1'), t, tick: Math.round(t / 0.02), pos: { lat: 0, lon: 0, x: t, y: 0 }, targets } });
+    const text = [
+      JSON.stringify({ kind: 'header', version: 2, shipId: 'FSB1', dt: 0.02, scenario: { id: 'E01_baseline' } }),
+      line(0, []),
+      line(2, [target('T1', 0.9)]),
+      '{"kind":"event","tick":150,"event":{"kind":"cpaAlarm","tick":150,"t":3,"targetId":"T1","cpa_nm":0.3,"tcpa_min":5}}',
+      line(4, [target('T1', 0.3)]),
+      line(6, [target('T1', 0.2)]),
+      // 倒帶(restore 至 tick 100):t > 2 的舊分支狀態與事件丟棄
+      line(2.02, [target('T1', 0.9)]),
+      line(4, [target('T1', 0.8), target('T2', 2)]),
+      '{"kind":"footer","finalTick":200}',
+    ].join('\n');
+    const data = el.loadText(text, 'rewind.jsonl');
+    expect(data.rewinds).toEqual([{ t: 2.02, from: 6, droppedStates: 2, droppedEvents: 1 }]);
+    await el.updateComplete;
+    const rewindMarks = Array.from(el.shadowRoot!.querySelectorAll<HTMLElement>('.marks .mark.rewind'));
+    expect(rewindMarks).toHaveLength(1);
+    expect(rewindMarks[0]!.title).toBe('倒帶至 00:02(tick 101)← 自 00:06;丟棄 2 筆狀態、1 筆事件');
+    expect(rewindMarks[0]!.style.left).toBe(`${(2.02 / 4) * 100}%`);
+    const plot = el.shadowRoot!.querySelector('brm-track-plot') as HTMLElement & { targets: ReadonlyArray<{ id: string }>; alarmTargets: ReadonlySet<string>; targetTable: boolean };
+    expect(plot.targets).toEqual([]);
+    expect(plot.targetTable).toBe(true);
+    el.seekTo(4);
+    await el.updateComplete;
+    expect(plot.targets.map((t) => t.id)).toEqual(['T1', 'T2']);
+    // cpaAlarm 事件(t = 3)屬被丟棄的舊分支 → 不在警報中
+    expect([...plot.alarmTargets]).toEqual([]);
+    rewindMarks[0]!.click();
+    await el.updateComplete;
+    expect(el.time).toBe(2.02);
+    expect(plot.targets.map((t) => t.id)).toEqual(['T1']);
+  });
+
+  it('cpaAlarm 狀態隨重播時刻變化;compact 模式不顯示小表', async () => {
+    const el = await mount<ReplayView>('brm-replay-view', { compact: true });
+    const target = { id: 'T1', name: 'T1', mmsi: 1, shipType: 'cargo', loa: 90, beam: 14, pos: { lat: 0, lon: 0, x: 500, y: 500 }, heading: 180, cog: 180, sog: 5, rot: 0, range_nm: 1, bearing_deg: 45, cpa_nm: 0.3, tcpa_min: 6, aisOn: true, lights: 'powerDriven', behaviour: 'hold' };
+    const line = (t: number) => JSON.stringify({ kind: 'state', state: { ...defaultState('FSB1'), t, tick: Math.round(t / 0.02), targets: [target] } });
+    el.loadText([JSON.stringify({ kind: 'header', version: 2, shipId: 'FSB1', dt: 0.02 }), line(0), '{"kind":"event","tick":100,"event":{"kind":"cpaAlarm","tick":100,"t":2,"targetId":"T1"}}', line(4), '{"kind":"event","tick":300,"event":{"kind":"cpaClear","tick":300,"t":6,"targetId":"T1"}}', line(8)].join('\n'), 'cpa.jsonl');
+    await el.updateComplete;
+    const plot = el.shadowRoot!.querySelector('brm-track-plot') as HTMLElement & { alarmTargets: ReadonlySet<string>; targetTable: boolean };
+    expect(plot.targetTable).toBe(false);
+    expect([...plot.alarmTargets]).toEqual([]);
+    el.seekTo(4);
+    await el.updateComplete;
+    expect([...plot.alarmTargets]).toEqual(['T1']);
+    el.seekTo(8);
+    await el.updateComplete;
+    expect([...plot.alarmTargets]).toEqual([]);
+    expect(el.shadowRoot!.querySelectorAll('.marks .mark.rewind')).toHaveLength(0);
   });
 });

@@ -7,22 +7,56 @@
 - 初始車鐘/轉速:``initial.rpm`` 優先(車鐘未指定時以最接近者標示);否則車鐘指定時取其轉速;否則航速 > 0 取直航平衡轉速
   (``MMGShip.reset`` 的預設);否則停俥。
 - 角度為度、速度為節;風向為來向、流向為去向;時間倍率夾到 [0.1, 10];``environment.visibility_nm``(schema 未定義)只記錄。
+- YAML 以 ``parameters.yaml_to_tree`` 讀取(純量型別推斷與 C# YamlJson 相同),``${params:<key>}`` 引用在檢查前以參數集替換
+  (``parameters.resolve_references``;情境引擎設計第 2.3 節):有引用而未給參數集時依 ``assessment.parameterSet``
+  (相對專案根目錄或情境檔目錄,預設 data/parameters/company-procedures.yaml)自動載入,仍無則 ``ValueError``。
+  載入結果的 ``parameterSet`` 為 ``{id, version, path, sha256, resolved}``(無引用時 None),形狀同紀錄標頭 ``header.parameterSet``。
+- timeline / route / zones / assessment / briefing 只做結構檢查(C# ``Scenario.StructuralIssues`` 的便宜規則:必要欄位、
+  id 唯一、參照存在、動作/條件/規則名稱在允許清單、航點 ≥ 2、多邊形 3–64 點 …),**不模擬**;解析後的子樹原樣保留在結果中。
 """
 
 from __future__ import annotations
 
+import copy
 import os
+import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from . import paths
-from .mmg import DEG, TELEGRAPH_ORDERS, MMGShip, make_ship
+from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship
+from .parameters import ParameterSet, find_parameter_set, has_references, resolve_references, yaml_to_tree
 
 SCENARIO_SUFFIXES = (".yaml", ".yml")
 MIN_TIME_SCALE, MAX_TIME_SCALE = 0.1, 10.0  # scenario.schema.json timeScale 範圍;C# EngineOptions.MaxTimeScale = 10
 LOADINGS = ("full", "ballast", "intermediate")
+
+# ---- 結構檢查用的允許清單(與 C# SimCore 相同;來源檔案見各註解)
+TIMELINE_ACTIONS = (  # ScenarioTimeline.cs TimelineAction.AllowedKinds
+    "injectFault", "clearFault", "setEnvironment", "targetControl", "voiceScript", "message", "phase", "freeze",
+    "autopilot", "ownShip", "timeScale", "arm", "disarm", "endExercise",
+)
+FORBIDDEN_ACTIONS = ("loadScenario", "reset", "restore", "snapshot")  # TimelineAction.ForbiddenKinds
+TRIGGER_LEAF_TYPES = (  # TriggerCondition.LeafTypes
+    "time", "ownDistance", "ownHeading", "ownSpeed", "ukc", "xtd", "routeLeg", "zone", "phase", "event", "fault", "telegraph", "autopilot", "manual",
+)
+ZONE_TYPES = ("noGo", "speedLimit", "ukcPolicy", "reporting")  # ScenarioRoute.cs ZoneType
+HARD_FAIL_RULES = ("grounding", "collision", "cpa", "ukc", "zoneEntered", "event")  # ScenarioAssessment.cs HardFailRule.Rules
+EXPECT_NAMES = (  # ExpectSpec.SimpleNames
+    "rudderOrder", "telegraphChange", "rpmOrder", "thrusterOrder", "steeringModeChange", "autopilotOn", "autopilotOff", "acknowledge",
+)
+METRIC_NAMES = (  # Assessment/MetricNames.cs
+    "track.meanAbsXtd_m", "track.maxXtd_m", "track.timeOutsideCorridor_s", "track.corridorExcursions", "track.fractionOutsideCorridor",
+    "track.minDistanceToCorridorEdge_m", "track.minDistanceToNoGo_m", "track.meanHeadingDeviation_deg",
+    "ukc.min_m", "ukc.timeBelowLimit_s", "ukc.excursions", "ukc.groundings",
+    "collisionAvoidance.minCpa_nm", "collisionAvoidance.encounters", "collisionAvoidance.collisions",
+    "manoeuvring.hardOverCount", "manoeuvring.hardOverTime_s", "manoeuvring.rudderOrders", "manoeuvring.maxRot_degPerMin",
+    "manoeuvring.timeRotOverLimit_s", "manoeuvring.rotExcursions", "manoeuvring.telegraphChanges", "manoeuvring.rpmOrders",
+    "manoeuvring.thrusterOrders", "manoeuvring.thrusterTime_s", "manoeuvring.timeOverSpeedLimit_s", "manoeuvring.maxOverSpeed_kn",
+    "manoeuvring.autopilotTime_s", "manoeuvring.autopilotSwitches",
+    "general.duration_s", "general.distance_nm", "general.avgSog_kn", "general.maxSog_kn",
+)
+_MULTIPLIER = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?x$")  # bands[].fail 的 "<n>x" 倍數寫法
 
 
 def scenarios_dir() -> Path:
@@ -65,10 +99,367 @@ def _num(obj: dict[str, Any], key: str, default: float | None = None, *, where: 
     return float(v)
 
 
-def validate_scenario(raw: dict[str, Any], default_id: str = "") -> dict[str, Any]:
-    """檢查必要欄位並補齊預設值(C# Scenario.Validate 相同);回傳正規化後的新 dict(角度為度、速度為節)。"""
+# ---------------------------------------------------------------- 結構檢查(C# Scenario.StructuralIssues 的便宜規則)
+
+
+def _is_num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _has_position(p: Any) -> bool:
+    return isinstance(p, dict) and ((_is_num(p.get("lat")) and _is_num(p.get("lon"))) or (_is_num(p.get("x")) and _is_num(p.get("y"))))
+
+
+def _resolve_xy(ltp: LocalTangentPlane, p: dict[str, Any]) -> tuple[float, float]:
+    if _is_num(p.get("x")) and _is_num(p.get("y")):
+        return float(p["x"]), float(p["y"])
+    return ltp.to_local(float(p["lat"]), float(p["lon"]))
+
+
+def _action_string(payload: Any) -> str | None:
+    """動作的字串值(或物件的 name 欄位;C# TimelineAction.AsString)。"""
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict) and isinstance(payload.get("name"), str):
+        return payload["name"]
+    if _is_num(payload):
+        return str(payload)
+    return None
+
+
+def _check_condition(c: Any, path: str, error: Any, zone_ids: set[str], wp_names: set[str], target_ids: set[str]) -> None:
+    if not isinstance(c, dict):
+        error(path, "條件須為物件")
+        return
+    composite = any(k in c for k in ("all", "any", "not"))
+    if composite:
+        if c.get("type") is not None:
+            error(path, "組合條件不可同時有 type")
+        for key in ("all", "any"):
+            if key in c:
+                if not isinstance(c[key], list):
+                    error(f"{path}.{key}", f"{key} 須為陣列")
+                else:
+                    for i, k in enumerate(c[key]):
+                        _check_condition(k, f"{path}.{key}[{i}]", error, zone_ids, wp_names, target_ids)
+        if "not" in c:
+            _check_condition(c["not"], f"{path}.not", error, zone_ids, wp_names, target_ids)
+        return
+    t = c.get("type")
+    if t is None or t not in TRIGGER_LEAF_TYPES:
+        error(path, f"未知的條件型別:{t}")
+        return
+    lt, gt = c.get("lessThan"), c.get("greaterThan")
+    if t == "time" and c.get("atLeast") is None:
+        error(path, "time 條件需要 atLeast")
+    elif t == "ownDistance":
+        if c.get("point") is None and c.get("waypoint") is None and c.get("target") is None:
+            error(path, "ownDistance 需要 point | waypoint | target")
+        if lt is None and gt is None:
+            error(path, "ownDistance 需要 lessThan / greaterThan")
+        if isinstance(c.get("waypoint"), str) and c["waypoint"] not in wp_names:
+            error(path, f"ownDistance 引用不存在的航點:{c['waypoint']}")
+        if isinstance(c.get("target"), str) and c["target"].upper() not in target_ids:
+            error(path, f"ownDistance 引用不存在的目標:{c['target']}")
+    elif t in ("ownHeading", "ownSpeed") and lt is None and gt is None:
+        error(path, f"{t} 需要 lessThan / greaterThan")
+    elif t == "ukc" and lt is None and gt is None and c.get("lessThanFractionOfDraft") is None:
+        error(path, "ukc 需要 lessThan / greaterThan / lessThanFractionOfDraft")
+    elif t == "xtd" and gt is None:
+        error(path, "xtd 需要 greaterThan")
+    elif t == "routeLeg":
+        if c.get("atLeast") is None and c.get("equals") is None and c.get("passedWaypoint") is None:
+            error(path, "routeLeg 需要 atLeast | equals | passedWaypoint")
+        if isinstance(c.get("passedWaypoint"), str) and c["passedWaypoint"] not in wp_names:
+            error(path, f"routeLeg 引用不存在的航點:{c['passedWaypoint']}")
+    elif t == "zone" and (not isinstance(c.get("id"), str) or c["id"] not in zone_ids):
+        error(path, f"zone 引用不存在的區域:{c.get('id')}")
+    elif t == "phase" and not str(c.get("equals") or "").strip():
+        error(path, "phase 需要 equals")
+    elif t == "event" and not str(c.get("kind") or "").strip():
+        error(path, "event 需要 kind")
+    elif t == "fault" and not str(c.get("name") or "").strip():
+        error(path, "fault 需要 name")
+    elif t == "telegraph" and c.get("in") is None and c.get("notIn") is None:
+        error(path, "telegraph 需要 in / notIn")
+    elif t == "autopilot" and c.get("enabled") is None:
+        error(path, "autopilot 需要 enabled")
+    since = c.get("since")
+    if since is not None and (not isinstance(since, dict) or not str(since.get("event") or "").strip()):
+        error(path, "since 需要 event")
+
+
+def _expect_leaves(e: Any) -> list[Any]:
+    if isinstance(e, dict) and isinstance(e.get("any"), list):
+        return [leaf for sub in e["any"] for leaf in _expect_leaves(sub)]
+    return [e]
+
+
+def structural_issues(raw: dict[str, Any]) -> list[tuple[str, str]]:
+    """timeline / route / zones / assessment / briefing 的結構錯誤 ``[(路徑, 訊息)]``(不依賴初始狀態;情境引擎設計第 2.4 節 error 項)。
+    參數引用須已解析(未解析的 "${params:…}" 字串在此視為一般字串)。"""
+    issues: list[tuple[str, str]] = []
+
+    def error(path: str, msg: str) -> None:
+        issues.append((path, msg))
+
+    timeline = raw.get("timeline") or []
+    route = raw.get("route")
+    zones = raw.get("zones") or []
+    assessment = raw.get("assessment") or {}
+    briefing = raw.get("briefing")
+    targets = raw.get("targets") or []
+    for name, v, kind in (("timeline", timeline, list), ("zones", zones, list), ("assessment", assessment, dict), ("targets", targets, list)):
+        if not isinstance(v, kind):
+            error(name, f"{name} 須為{'陣列' if kind is list else '物件'}")
+            return issues
+    if route is not None and not isinstance(route, dict):
+        error("route", "route 須為物件")
+        return issues
+    if briefing is not None and not isinstance(briefing, (str, dict)):
+        error("briefing", "briefing 須為字串或物件")
+        return issues
+
+    waypoints = (route.get("waypoints") if route else None) or []
+    if route and not isinstance(waypoints, list):
+        error("route.waypoints", "waypoints 須為陣列")
+        waypoints = []
+    zone_ids = {str(z.get("id")) for z in zones if isinstance(z, dict) and z.get("id") is not None}
+    wp_names = {str(w.get("name")) for w in waypoints if isinstance(w, dict) and w.get("name") is not None}
+    target_ids = {str(t.get("id")).upper() for t in targets if isinstance(t, dict) and t.get("id") is not None}
+    all_item_ids = {str(t.get("id")) for t in timeline if isinstance(t, dict) and t.get("id") is not None}
+
+    # ---- timeline
+    item_ids: set[str] = set()
+    for i, item in enumerate(timeline):
+        path = f"timeline[{i}]"
+        if not isinstance(item, dict):
+            error(path, "時間表項目須為物件")
+            continue
+        iid = item.get("id")
+        if not isinstance(iid, str) or not iid.strip():
+            error(path, "時間表項目缺少 id")
+        elif iid in item_ids:
+            error(path, f"時間表 id 重複:{iid}")
+        else:
+            item_ids.add(iid)
+        if item.get("when") is not None:
+            _check_condition(item["when"], f"{path}.when", error, zone_ids, wp_names, target_ids)
+        rep = item.get("repeat", "once")
+        if isinstance(rep, dict):
+            if not (_is_num(rep.get("every_s")) and rep["every_s"] > 0):
+                error(f"{path}.repeat", "every_s 必須為正")
+        elif rep not in ("once", "always"):
+            error(f"{path}.repeat", f"repeat 須為 once | always | {{every_s, max}}:{rep!r}")
+        actions = item.get("actions") or []
+        if not isinstance(actions, list):
+            error(f"{path}.actions", "actions 須為陣列")
+            continue
+        for a, act in enumerate(actions):
+            ap = f"{path}.actions[{a}]"
+            if not isinstance(act, dict) or len(act) != 1:
+                error(ap, "動作須為只有一個鍵的物件(鍵即動作名)")
+                continue
+            kind, payload = next(iter(act.items()))
+            if kind in FORBIDDEN_ACTIONS:
+                error(ap, f"不允許的動作:{kind}")
+            elif kind not in TIMELINE_ACTIONS:
+                error(ap, f"未知的動作:{kind}")
+            elif kind in ("arm", "disarm"):
+                rid = _action_string(payload)
+                if rid is None or rid not in all_item_ids:
+                    error(ap, f"{kind} 引用不存在的時間表項目:{rid}")
+            elif kind in ("injectFault", "clearFault"):
+                if not (_action_string(payload) or "").strip():
+                    error(ap, f"{kind} 缺少故障名稱")
+            elif kind == "phase":
+                if not (_action_string(payload) or "").strip():
+                    error(ap, "phase 缺少階段名稱")
+            elif kind == "timeScale":
+                if not (_is_num(payload) and payload > 0):
+                    error(ap, "timeScale 必須為正數")
+            elif kind == "voiceScript":
+                if not isinstance(payload, dict) or not (str(payload.get("text") or "").strip() or str(payload.get("file") or "").strip()):
+                    error(ap, "voiceScript 需要 text 或 file")
+            elif kind == "message":
+                if not isinstance(payload, dict) or not str(payload.get("text") or "").strip():
+                    error(ap, "message 需要 text")
+
+    # ---- route
+    if route is not None:
+        if len(waypoints) < 2:
+            error("route.waypoints", "航線至少需要 2 個航點")
+        names: set[str] = set()
+        for i, w in enumerate(waypoints):
+            wp = f"route.waypoints[{i}]"
+            if not isinstance(w, dict):
+                error(wp, "航點須為物件")
+                continue
+            n = w.get("name")
+            if not isinstance(n, str) or not n.strip():
+                error(wp, "航點缺少 name")
+            elif n in names:
+                error(wp, f"航點名稱重複:{n}")
+            else:
+                names.add(n)
+            if not _has_position(w):
+                error(wp, "航點需為 {lat, lon} 或 {x, y}")
+        start_leg = route.get("startLeg", 0)
+        if not isinstance(start_leg, int) or isinstance(start_leg, bool) or start_leg < 0 or (len(waypoints) >= 2 and start_leg >= len(waypoints) - 1):
+            error("route.startLeg", "startLeg 超出航段範圍")
+        origin = raw.get("origin")
+        if isinstance(origin, dict) and _is_num(origin.get("lat")) and _is_num(origin.get("lon")):
+            ltp = LocalTangentPlane(float(origin["lat"]), float(origin["lon"]))
+            for i in range(len(waypoints) - 1):
+                a, b = waypoints[i], waypoints[i + 1]
+                if not (_has_position(a) and _has_position(b)):
+                    continue
+                (ax, ay), (bx, by) = _resolve_xy(ltp, a), _resolve_xy(ltp, b)
+                if ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5 < 1.0:
+                    error(f"route.waypoints[{i + 1}]", f"航點 {b.get('name')} 與前一航點重合(航段 < 1 m)")
+
+    # ---- zones
+    zids: set[str] = set()
+    for i, z in enumerate(zones):
+        path = f"zones[{i}]"
+        if not isinstance(z, dict):
+            error(path, "區域須為物件")
+            continue
+        zid = z.get("id")
+        if not isinstance(zid, str) or not zid.strip():
+            error(path, "區域缺少 id")
+        elif zid in zids:
+            error(path, f"區域 id 重複:{zid}")
+        else:
+            zids.add(zid)
+        if z.get("type") not in ZONE_TYPES:
+            error(f"{path}.type", f"區域 type 須為 {' | '.join(ZONE_TYPES)}:{z.get('type')!r}")
+        poly = z.get("polygon")
+        if not isinstance(poly, list) or len(poly) < 3:
+            error(f"{path}.polygon", "多邊形至少需要 3 點")
+        elif len(poly) > 64:
+            error(f"{path}.polygon", "多邊形點數上限 64")
+        elif not all(_has_position(p) for p in poly):
+            error(f"{path}.polygon", "頂點需為 {lat, lon} 或 {x, y}")
+        wd = z.get("waterDepth_m")
+        if wd is not None and (not _is_num(wd) or wd <= 0):
+            error(f"{path}.waterDepth_m", "區域水深必須為正")
+
+    # ---- assessment
+    rule_ids: set[str] = set()
+
+    def rule_id(path: str, r: dict[str, Any]) -> None:
+        rid = str(r.get("id") or "")
+        if rid in rule_ids:
+            error(path, f"規則 id 重複:{rid}")
+        rule_ids.add(rid)
+
+    for name, v in (("hardFail", assessment.get("hardFail")), ("bands", assessment.get("bands")), ("required", assessment.get("required"))):
+        if v is not None and not isinstance(v, list):
+            error(f"assessment.{name}", f"{name} 須為陣列")
+    for i, r in enumerate(assessment.get("hardFail") or []):
+        path = f"assessment.hardFail[{i}]"
+        if not isinstance(r, dict):
+            error(path, "規則須為物件")
+            continue
+        rule_id(path, r)
+        rule, lt = r.get("rule"), r.get("lessThan")
+        if rule not in HARD_FAIL_RULES:
+            error(path, f"未知的 rule:{rule}")
+        if rule == "cpa" and not _is_num(lt):
+            error(path, "cpa 規則需要 lessThan(nm)")
+        if rule == "ukc" and not (isinstance(lt, dict) and (_is_num(lt.get("metres")) or _is_num(lt.get("fractionOfDraft")))):
+            error(path, "ukc 規則需要 lessThan {metres|fractionOfDraft}")
+        if rule == "zoneEntered" and (not isinstance(r.get("zoneId"), str) or r["zoneId"] not in zone_ids):
+            error(path, f"zoneEntered 引用不存在的區域:{r.get('zoneId')}")
+        if rule == "event" and not str(r.get("kind") or "").strip():
+            error(path, "event 規則需要 kind")
+    for i, b in enumerate(assessment.get("bands") or []):
+        path = f"assessment.bands[{i}]"
+        if not isinstance(b, dict):
+            error(path, "容許帶須為物件")
+            continue
+        rule_id(path, b)
+        if b.get("metric") not in METRIC_NAMES:
+            error(path, f"未知的指標:{b.get('metric')}")
+        warn, fail = b.get("warn"), b.get("fail")
+        if warn is None and fail is None:
+            error(path, "容許帶需要 warn 或 fail")
+        if fail is not None and not _is_num(fail):
+            if isinstance(fail, str) and _MULTIPLIER.match(fail.strip()):
+                if warn is None:
+                    error(path, "fail 為倍數時需要 warn")
+            else:
+                error(path, f"bands[].fail 須為數值或 \"<n>x\":{fail!r}")
+        if warn is not None and not _is_num(warn):
+            error(path, f"warn 須為數值:{warn!r}")
+        if b.get("direction", "above") not in ("above", "below"):
+            error(path, f"direction 須為 above | below:{b.get('direction')}")
+    for i, r in enumerate(assessment.get("required") or []):
+        path = f"assessment.required[{i}]"
+        if not isinstance(r, dict):
+            error(path, "必要事件須為物件")
+            continue
+        rule_id(path, r)
+        after = r.get("after")
+        if not isinstance(after, dict) or not str(after.get("event") or "").strip():
+            error(f"{path}.after", "after 需要 event")
+        else:
+            if isinstance(after.get("itemId"), str) and after["itemId"] not in all_item_ids:
+                error(f"{path}.after", f"after 引用不存在的時間表項目:{after['itemId']}")
+            if isinstance(after.get("waypoint"), str) and after["waypoint"] not in wp_names:
+                error(f"{path}.after", f"after 引用不存在的航點:{after['waypoint']}")
+            if isinstance(after.get("zoneId"), str) and after["zoneId"] not in zone_ids:
+                error(f"{path}.after", f"after 引用不存在的區域:{after['zoneId']}")
+        within = r.get("within_s")
+        if not (_is_num(within) and within > 0):
+            error(path, "within_s 必須為正")
+        expect = r.get("expect")
+        if expect is None:
+            error(f"{path}.expect", "必要事件需要 expect")
+        for leaf in _expect_leaves(expect) if expect is not None else []:
+            if isinstance(leaf, str):
+                if leaf not in EXPECT_NAMES:
+                    error(f"{path}.expect", f"未知的 expect:{leaf}")
+            elif isinstance(leaf, dict):
+                if isinstance(leaf.get("name"), str) and leaf["name"] not in EXPECT_NAMES:
+                    error(f"{path}.expect", f"未知的 expect:{leaf['name']}")
+                ev = leaf.get("event")
+                if isinstance(ev, dict) and isinstance(ev.get("itemId"), str) and ev["itemId"] not in all_item_ids:
+                    error(f"{path}.expect", f"expect 引用不存在的時間表項目:{ev['itemId']}")
+            else:
+                error(f"{path}.expect", "expect 須為字串或物件")
+
+    # ---- briefing
+    if isinstance(briefing, dict):
+        roles = briefing.get("roles")
+        if roles is not None:
+            if not isinstance(roles, list):
+                error("briefing.roles", "roles 須為陣列")
+            else:
+                for i, role in enumerate(roles):
+                    if not isinstance(role, dict) or not str(role.get("role") or "").strip():
+                        error(f"briefing.roles[{i}]", "角色需要 role")
+        mp = briefing.get("minParticipants")
+        if mp is not None and (not isinstance(mp, int) or isinstance(mp, bool) or mp < 1):
+            error("briefing.minParticipants", "minParticipants 須為正整數")
+        dur = briefing.get("duration_s")
+        if dur is not None and (not _is_num(dur) or dur <= 0):
+            error("briefing.duration_s", "duration_s 必須為正")
+    return issues
+
+
+def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: dict[str, Any] | None = None) -> dict[str, Any]:
+    """檢查必要欄位並補齊預設值(C# Scenario.Validate 相同);回傳正規化後的新 dict(角度為度、速度為節)。
+    ``raw`` 的參數引用須已解析(``load_scenario`` 會先做);timeline / route / zones / assessment / briefing 經
+    ``structural_issues`` 檢查(第一個錯誤即 ``ValueError``)後原樣(深拷貝)保留;``parameter_set`` 為參數集摘要(無引用時 None)。"""
     if not isinstance(raw, dict):
         raise ValueError("情境內容必須為物件(YAML mapping)")
+    if has_references(raw):
+        raise ValueError("情境含未解析的 ${params:…} 引用;請先以 parameters.resolve_references 解析(load_scenario 會自動處理)")
+    issues = structural_issues(raw)
+    if issues:
+        raise ValueError(f"{issues[0][0]}:{issues[0][1]}")
     sid = str(raw.get("id") or default_id).strip()
     if not sid:
         raise ValueError("情境缺少 id")
@@ -156,19 +547,43 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "") -> dict[str, An
             "waterDepth": depth,
             "visibility_nm": vis,
         },
+        # 情境引擎區段(只結構檢查、不模擬;數值已代入參數)
+        "timeline": copy.deepcopy(raw.get("timeline") or []),
+        "route": copy.deepcopy(raw.get("route")),
+        "zones": copy.deepcopy(raw.get("zones") or []),
+        "assessment": copy.deepcopy(raw.get("assessment") or {}),
+        "briefing": copy.deepcopy(raw.get("briefing")),
+        "parameterSet": copy.deepcopy(parameter_set),
     }
 
 
-def load_scenario(ref: str | os.PathLike[str]) -> dict[str, Any]:
-    """讀取並檢查情境檔;回傳正規化 dict(含 ``path``)。id 未填時取檔名。"""
+def load_scenario(ref: str | os.PathLike[str], parameters: ParameterSet | None = None) -> dict[str, Any]:
+    """讀取並檢查情境檔;回傳正規化 dict(含 ``path``、``parameterSet``)。id 未填時取檔名。
+    ``parameters`` 未給而情境含 ``${params:…}`` 時依 ``assessment.parameterSet`` 自動載入(C# ScenarioLoader.Load 相同)。"""
     path = resolve_scenario_path(ref)
-    with open(path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+    raw = yaml_to_tree(path.read_text(encoding="utf-8"))
     if raw is None:
         raise ValueError(f"{path}: 情境 YAML 為空")
-    sc = validate_scenario(raw, default_id=path.stem)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: 情境 YAML 須為物件")
+    sc = scenario_from_tree(raw, default_id=path.stem, parameters=parameters, base_directory=path.parent)
     sc["path"] = str(path)
     return sc
+
+
+def scenario_from_tree(raw: dict[str, Any], default_id: str = "", parameters: ParameterSet | None = None,
+                       base_directory: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """節點樹 → 參數替換(就地)→ 正規化情境;``base_directory`` 供自動尋找 assessment.parameterSet(C# ScenarioLoader.FromYaml)。"""
+    pset = parameters
+    if pset is None and has_references(raw):
+        assessment = raw.get("assessment")
+        declared = assessment.get("parameterSet") if isinstance(assessment, dict) else None
+        found = find_parameter_set(declared if isinstance(declared, str) else None, base_directory)
+        if found is not None:
+            pset = ParameterSet.load(found)
+    resolved = resolve_references(raw, pset)
+    info = pset.info(resolved) if pset is not None and resolved else None
+    return validate_scenario(raw, default_id=default_id, parameter_set=info)
 
 
 def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:

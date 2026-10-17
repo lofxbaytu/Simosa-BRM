@@ -148,28 +148,30 @@ public sealed class ActuatorModel
 
     /// <summary>
     /// 推進一步,回傳本步 RK4 各階段的控制量。<paramref name="rudderJammed"/>:舵機故障(舵角不動);
-    /// <paramref name="engineFailed"/>:主機故障(轉速衰減到 0);<paramref name="thrusterFailed"/>:側推不可用。
+    /// <paramref name="engineFailed"/>:主機故障(轉速衰減到 0);<paramref name="thrusterFailed"/>:側推不可用;
+    /// <paramref name="rudderRateDegPerSec"/>:本步的舵機速率(null = 參數值;應急操舵降速、泵數換算用,規劃書第 7.2 節操舵模式)。
     /// </summary>
-    public ControlStages Step(double dt, bool rudderJammed = false, bool engineFailed = false, bool thrusterFailed = false)
+    public ControlStages Step(double dt, bool rudderJammed = false, bool engineFailed = false, bool thrusterFailed = false, double? rudderRateDegPerSec = null)
     {
         var p = Parameters;
         RudderOrderDeg = Units.Clamp(RudderOrderDeg, -p.RudderMaxDeg, p.RudderMaxDeg);
         ThrusterOrder = p.HasBowThruster ? Units.Clamp(ThrusterOrder, -1.0, 1.0) : 0.0;
+        var rudderRate = rudderJammed ? 0.0 : Math.Max(0.0, rudderRateDegPerSec ?? p.RudderRateDegPerSec);
         return p.CoupledRk4
-            ? StepCoupled(dt, rudderJammed, engineFailed, thrusterFailed)
-            : StepExplicit(dt, rudderJammed, engineFailed, thrusterFailed);
+            ? StepCoupled(dt, rudderRate, engineFailed, thrusterFailed)
+            : StepExplicit(dt, rudderRate, engineFailed, thrusterFailed);
     }
 
     // ------------------------------------------------------------------ 暫代模式:顯式更新
 
-    private ControlStages StepExplicit(double dt, bool rudderJammed, bool engineFailed, bool thrusterFailed)
+    private ControlStages StepExplicit(double dt, double rudderRate, bool engineFailed, bool thrusterFailed)
     {
         var p = Parameters;
 
-        // 舵機:速率限制
-        if (!rudderJammed)
+        // 舵機:速率限制(速率 0 = 卡舵)
+        if (rudderRate > 0.0)
         {
-            var maxDelta = p.RudderRateDegPerSec * dt;
+            var maxDelta = rudderRate * dt;
             var delta = RudderOrderDeg - RudderDeg;
             RudderDeg += Units.Clamp(delta, -maxDelta, maxDelta);
         }
@@ -304,7 +306,7 @@ public sealed class ActuatorModel
         return (dd, dn, dth);
     }
 
-    private ControlStages StepCoupled(double dt, bool rudderJammed, bool engineFailed, bool thrusterFailed)
+    private ControlStages StepCoupled(double dt, double rudderRate, bool engineFailed, bool thrusterFailed)
     {
         var p = Parameters;
         if (p.EngineStateMachine) EngineLogic(dt, engineFailed);
@@ -314,7 +316,6 @@ public sealed class ActuatorModel
             RpmTau = p.RpmTimeConstantSec;
         }
         var deltaCmd = RudderOrderDeg;
-        var rudderRate = rudderJammed ? 0.0 : p.RudderRateDegPerSec;
         var thrCmd = thrusterFailed ? 0.0 : ThrusterOrder;
 
         var d0 = RudderDeg; var n0 = Rpm; var t0 = ThrusterActual;

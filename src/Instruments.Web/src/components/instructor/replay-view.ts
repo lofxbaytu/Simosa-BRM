@@ -2,13 +2,14 @@
 // 或教官站的 JSON 紀錄,時間軸拖曳檢視任一時刻的狀態(鳥瞰航跡圖 + conning 儀器摘要),列出輸入事件、核心事件與
 // BRM 標記(若紀錄含),整段的講評摘要(核心 summary 優先,無則本地推導);不需核心連線。
 // 設計文件第 6 節 W8:時間軸上畫事件標記(顏色依來源;hardFail/collision/grounding 紅)、航跡圖疊 header.scenario 的
-// 航線走廊與區域、顯示 header.parameterSet 版次。
+// 航線走廊與區域、顯示 header.parameterSet 版次。時間軸另畫倒帶標記(ReplayData.rewinds[];懸停顯示倒帶 tick 與丟棄筆數),
+// 航跡圖畫該時刻 state 的目標船(cpaAlarm 狀態由 t ≤ 目前時刻的事件推得)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { tileStyles } from '../shared.js';
 import { instructorStyles, shortTime } from './instructor-shared.js';
-import { parseReplay, stateIndexAt, trackPoints, type ReplayData } from '../../lib/record-replay.js';
+import { parseReplay, stateIndexAt, trackPoints, type ReplayData, type ReplayRewind } from '../../lib/record-replay.js';
 import { TrackHistory, type TrackPoint } from '../../lib/track-history.js';
 import { getShipConfig } from '../../lib/ship-config.js';
 import { summarize, type DebriefSummary } from '../../lib/debrief.js';
@@ -16,6 +17,7 @@ import { brmCategory } from '../../lib/brm-markers.js';
 import { defaultState } from '../../lib/state-parser.js';
 import { eventLabel, eventSeverity } from '../../lib/sim-event.js';
 import { eventMarks, overlayFromHeaderScenario, type PlotOverlay } from '../../lib/plot-overlay.js';
+import { cpaAlarmTargets } from '../../lib/targets.js';
 import type { SimEvent } from '../../types/event.js';
 import '../conning-bar.js';
 import '../track-plot.js';
@@ -106,6 +108,14 @@ export class ReplayView extends LitElement {
         top: 8px;
         height: 5px;
         background: var(--ob-text);
+      }
+      .marks .mark.rewind {
+        top: 0;
+        height: 14px;
+        width: 0;
+        background: none;
+        border-left: 3px double var(--ob-warning);
+        transform: translateX(-2px);
       }
       .timeline input[type='range'] {
         width: 100%;
@@ -259,6 +269,7 @@ export class ReplayView extends LitElement {
       ${phases.slice(1).map((p) => html`<span class="mark phase" style="left:${pct(p.from_s)}" title=${`階段 ${p.phase} ${shortTime(p.from_s)}`}></span>`)}
       ${d.events.map((e) => html`<span class="mark ${e.source} ${eventSeverity(e)}" style="left:${pct(e.t)}" title=${`${shortTime(e.t)} ${eventLabel(e)}`} @click=${() => this.seekTo(e.t)}></span>`)}
       ${d.markers.map((m) => html`<span class="mark marker" style="left:${pct(m.t)}" title=${`${shortTime(m.t)} ${brmCategory(m.category).label} ${m.note}`} @click=${() => this.seekTo(m.t)}></span>`)}
+      ${d.rewinds.map((r) => html`<span class="mark rewind" style="left:${pct(r.t)}" title=${rewindTitle(r, d.header.dt)} @click=${() => this.seekTo(r.t)}></span>`)}
     </div>`;
   }
 
@@ -349,7 +360,7 @@ export class ReplayView extends LitElement {
       ${d && d.states.length > 0
         ? html`<div class="main">
             <brm-conning-bar .state=${current} .config=${cfg} .issues=${[]} .noData=${false}></brm-conning-bar>
-            <brm-track-plot .state=${current} .config=${cfg} .history=${this.history} .noData=${false} .overlay=${this.overlay}></brm-track-plot>
+            <brm-track-plot .state=${current} .config=${cfg} .history=${this.history} .noData=${false} .overlay=${this.overlay} .targets=${current.targets} .alarmTargets=${cpaAlarmTargets(d.events, this.t)} ?target-table=${!this.compact}></brm-track-plot>
             <div class="side">
               <brm-event-stream .events=${d.events} @event-seek=${this.onEventSeek}></brm-event-stream>
               <div class="panel">
@@ -389,6 +400,12 @@ export class ReplayView extends LitElement {
         : html`<div class="empty">載入紀錄檔後,以時間軸拖曳檢視任一時刻的航跡與儀器</div>`}
     `;
   }
+}
+
+/** 倒帶標記的懸停文字:倒帶 tick(由 t / dt 推得)、來源時刻與丟棄的舊分支筆數。 */
+export function rewindTitle(r: ReplayRewind, dt: number): string {
+  const tick = Math.round(r.t / (dt > 0 ? dt : 0.02));
+  return `倒帶至 ${shortTime(r.t)}(tick ${tick})← 自 ${shortTime(r.from)};丟棄 ${r.droppedStates} 筆狀態、${r.droppedEvents} 筆事件`;
 }
 
 /** 該輸入事件是否為目前時刻之前最後一筆(清單高亮) */

@@ -24,7 +24,7 @@ public sealed class ParameterSet
     /// <summary>保留:依船舶 ID 覆寫(第一版不解析)</summary>
     public JsonElement? Overrides { get; set; }
 
-    /// <summary>載入來源路徑(由 Loader 填入)</summary>
+    /// <summary>載入來源路徑(由 Loader 填入;專案內的檔案為相對專案根目錄的路徑,例如 data/parameters/company-procedures.yaml)</summary>
     [JsonIgnore] public string? Path { get; set; }
     /// <summary>檔案位元組的 SHA-256(hex;由 Loader 填入)</summary>
     [JsonIgnore] public string Sha256 { get; set; } = "";
@@ -145,7 +145,7 @@ public static class ParameterSetLoader
         if (!File.Exists(path)) throw new FileNotFoundException($"找不到參數集:{path}", path);
         var bytes = File.ReadAllBytes(path);
         var set = FromYaml(System.Text.Encoding.UTF8.GetString(bytes));
-        set.Path = path;
+        set.Path = Ship.RepositoryPaths.ToProjectRelative(path); // 紀錄標頭 header.parameterSet.path 為相對專案根目錄(情境引擎設計 D34)
         set.Sha256 = Convert.ToHexString(SHA256.HashData(bytes));
         return set;
     }

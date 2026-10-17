@@ -10,7 +10,8 @@ public sealed class FaultResponseState
 
 /// <summary>
 /// 故障應變追蹤(第 4.6 節):每個 faultInjected(時間表或教官)建立紀錄;「相關動作」取 assessment.required[] 中 after 指向該故障的 expect,
-/// 無規則時預設任一 telegraph/rpm/thruster/rudder/autopilot 指令;acknowledge 可帶 itemId 或對應最近 120 s 內注入且未確認者。
+/// 無規則時預設任一 telegraph/rpm/thruster/rudder/autopilot/steeringMode 指令(操舵模式變更 steeringModeChanged 以 ObservedAction steeringModeChange 進入);
+/// acknowledge 可帶 itemId 或對應最近 120 s 內注入且未確認者。
 /// </summary>
 public sealed class FaultResponseTracker
 {
@@ -94,7 +95,7 @@ public sealed class FaultResponseTracker
         var rules = RulesFor(rec).ToList();
         if (rules.Count == 0)
             return actionKind is ActionKinds.TelegraphChange or ActionKinds.RpmOrder or ActionKinds.ThrusterOrder or ActionKinds.RudderOrder
-                or ActionKinds.AutopilotOn or ActionKinds.AutopilotOff;
+                or ActionKinds.AutopilotOn or ActionKinds.AutopilotOff or ActionKinds.SteeringModeChange;
         foreach (var leaf in rules.SelectMany(r => r.Expect.Leaves()))
         {
             if (actionKind is not null && leaf.Name is { } n && (n == actionKind || (n == ActionKinds.SteeringModeChange && actionKind is ActionKinds.AutopilotOff))) return true;

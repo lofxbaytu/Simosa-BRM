@@ -5,7 +5,10 @@
   reset / setEnvironment / timeScale / snapshot / restore / injectFault / clearFault / loadScenario;各命令語意見
   README「WebSocket 服務命令支援」。
 - 每筆命令回 {"type": "ack", "command": ..., "ok": bool, "detail": ..., "tick": ...};未支援或失敗者回 ok=false
-  並在 detail 說明,模型狀態不變。
+  並在 detail 說明,模型狀態不變。情境引擎指令 triggerTimeline / acknowledge / getAssessment / endExercise 固定回 ok=false
+  (Python 參考實作不模擬時間表與評估;情境引擎設計第 2.3 節)。
+- 已載入情境時 state JSON 加 scenario {id, phase: "normal", parameterSetVersion?}(state.schema.json 的 scenario 物件;
+  Python 不推進階段,phase 固定 normal)。
 """
 
 from __future__ import annotations
@@ -27,13 +30,20 @@ FAULT_DETAIL = {
     FAULT_BOW_THRUSTER: "已套用:艏側推不可用,側推令視為 0",
 }
 RECORD_ONLY_DETAIL = "僅記錄並廣播(核心不改變行為,由儀器端自行反應)"
+# 情境引擎指令(command.schema.json):Python 參考實作只做情境的參數解析與結構檢查,不模擬時間表/評估
+UNIMPLEMENTED_DETAIL = {
+    "triggerTimeline": "未實作:Python 參考實作不執行時間表(情境引擎由 C# SimCore 執行)",
+    "acknowledge": "未實作:Python 參考實作不記錄確認事件、不評估必要事件",
+    "getAssessment": "未實作:Python 參考實作不計算評估指標與分數",
+    "endExercise": "未實作:Python 參考實作無情境結束/講評摘要",
+}
 
 
 class SimServer:
     def __init__(self, ship: MMGShip, time_scale: float = 1.0, scenario: dict[str, Any] | None = None) -> None:
         self.ship = ship
         self.time_scale = max(0.0, float(time_scale))
-        self.scenario: dict[str, Any] | None = scenario  # 目前載入的情境(正規化 dict;state JSON 無情境欄位,只供 ack/reset)
+        self.scenario: dict[str, Any] | None = scenario  # 目前載入的情境(正規化 dict;供 ack/reset 與 state.scenario)
         self.clients: set[Any] = set()
         self.snapshots: dict[str, dict[str, Any]] = {}
         self._accum = 0.0
@@ -50,6 +60,17 @@ class SimServer:
         self.snapshots.clear()
         self._accum = 0.0
         return sc
+
+    def state_json(self) -> dict[str, Any]:
+        """廣播用狀態:自船狀態(MMGShip.state_json)加 scenario 物件(已載入情境時;state.schema.json)。"""
+        s = self.ship.state_json()
+        if self.scenario is not None:
+            sc: dict[str, Any] = {"id": self.scenario["id"], "phase": "normal"}
+            ps = self.scenario.get("parameterSet")
+            if ps and ps.get("version"):
+                sc["parameterSetVersion"] = ps["version"]
+            s["scenario"] = sc
+        return s
 
     # ---- 命令 ----
     def apply_command(self, cmd: dict[str, Any]) -> dict[str, Any]:
@@ -153,8 +174,12 @@ class SimServer:
                     if sc is None:
                         ok, detail = False, ";".join(errors)
                     else:
+                        ps = sc.get("parameterSet")
                         detail = (f"已載入情境 {sc['id']}" + (f"({sc['name']})" if sc.get("name") else "")
-                                  + f":{sc['ship']['id']}/{sc['ship']['loading']},時間倍率 {self.time_scale:g}")
+                                  + f":{sc['ship']['id']}/{sc['ship']['loading']},時間倍率 {self.time_scale:g}"
+                                  + (f";參數集 {ps['id']} {ps['version']}({len(ps['resolved'])} 處引用)" if ps else ""))
+            elif t in UNIMPLEMENTED_DETAIL:
+                ok, detail = False, UNIMPLEMENTED_DETAIL[t]
             else:
                 ok, detail = False, f"未知命令 {t!r}"
         except Exception as exc:  # noqa: BLE001 - 回報給客戶端
@@ -167,7 +192,7 @@ class SimServer:
 
         self.clients.add(ws)
         try:
-            await ws.send(json.dumps(self.ship.state_json()))
+            await ws.send(json.dumps(self.state_json()))
             async for msg in ws:
                 try:
                     cmd = json.loads(msg)
@@ -198,7 +223,7 @@ class SimServer:
                     self.ship.step()
                 self._accum -= steps * dt
             if self.clients:
-                msg = json.dumps(self.ship.state_json())
+                msg = json.dumps(self.state_json())
                 dead = []
                 for c in list(self.clients):
                     try:

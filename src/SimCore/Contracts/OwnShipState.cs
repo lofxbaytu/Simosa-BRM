@@ -52,6 +52,8 @@ public sealed record OwnShipState
     [JsonPropertyName("engine")] public EngineStatus? Engine { get; init; }
     [JsonPropertyName("faults")] public IReadOnlyList<string>? Faults { get; init; }
     [JsonPropertyName("flags")] public StateFlags? Flags { get; init; }
+    /// <summary>操舵模式(規劃書第 7.2 節操舵模式選擇;Python 參考實作不輸出)</summary>
+    [JsonPropertyName("steering")] public SteeringState? Steering { get; init; }
     /// <summary>已出現的目標船(情境無目標船時省略;規劃書第 5.2 節 Traffic)</summary>
     [JsonPropertyName("targets")] public IReadOnlyList<TargetState>? Targets { get; init; }
     /// <summary>能見度(nm;未設定時省略;無物理效果,儀器端自行反應)</summary>
@@ -137,6 +139,14 @@ public sealed record EngineStatus
     [JsonPropertyName("startsRemaining")] public int? StartsRemaining { get; init; }
     /// <summary>主機負荷百分比;JSON 名稱依 schema 為 load_pct(非 camelCase)。</summary>
     [JsonPropertyName("load_pct")] public double? LoadPct { get; init; }
+}
+
+/// <summary>操舵模式狀態(state.schema.json <c>steering</c>):mode、使用中的舵機泵("1"|"2"|"both")、nfu 時舵是否正被推動(其他模式省略)。</summary>
+public sealed record SteeringState
+{
+    [JsonPropertyName("mode")] public required SteeringMode Mode { get; init; }
+    [JsonPropertyName("pump")] public required string Pump { get; init; }
+    [JsonPropertyName("nfuActive")] public bool? NfuActive { get; init; }
 }
 
 public sealed record StateFlags

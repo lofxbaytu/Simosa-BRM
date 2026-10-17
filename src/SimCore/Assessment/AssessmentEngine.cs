@@ -103,7 +103,7 @@ public sealed class AssessmentEngine
         if (e.Kind == SimEventKinds.Grounding) Metrics.OnGrounding();
         if (e.Kind == SimEventKinds.Frozen) Metrics.OnFreeze();
         if (Rules.Ended) return;
-        // 必要事件:after 起算、expect 達成
+        // 必要事件:after 起算(發 requiredEventPending,附已解析的 within_s 與期限 deadline_t,供教官站倒數)、expect 達成
         foreach (var rule in _a.Required)
         {
             var st = Rules.Required[rule.Id];
@@ -111,6 +111,10 @@ public sealed class AssessmentEngine
             {
                 st.State = "pending";
                 st.StartTick = e.Tick;
+                _raise(SimEventKinds.RequiredEventPending, rule.Id, null, null, new
+                {
+                    after = e.Kind, afterItemId = e.ItemId, afterSeq = e.Seq, start_t = e.T, within_s = rule.WithinS, deadline_t = e.T + rule.WithinS, penalty = rule.Penalty,
+                });
                 continue;
             }
             if (st.State is "pending" or "missed" && st.MetTick < 0 && MatchesExpect(rule.Expect, e, null) is { } by)

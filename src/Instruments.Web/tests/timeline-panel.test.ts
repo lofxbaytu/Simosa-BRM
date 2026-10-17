@@ -95,6 +95,29 @@ describe('timelineStatuses / requiredCountdowns', () => {
     expect(requiredCountdowns(rules, [report], 1030).find((c) => c.rule.id === 'vtsReport')).toMatchObject({ state: 'counting', remaining_s: 90 });
     expect(requiredCountdowns(rules, [report], 1150).find((c) => c.rule.id === 'vtsReport')).toMatchObject({ state: 'overdue', remaining_s: 30 });
   });
+
+  it('within_s 為參數引用時由事件 data 取期限:deadline_t 優先,否則 within_s + 事件 t,都沒有維持計時中', () => {
+    const rules = E07.assessment;
+    const injected = ev('faultInjected', 420, { itemId: 'steeringFail', data: { fault: 'steeringGear' } });
+    const find = (cds: ReturnType<typeof requiredCountdowns>, id: string) => cds.find((c) => c.rule.id === id)!;
+    // (1) 規則 id 的「開始計時」事件帶 deadline_t(與 within_s 並存時 deadline_t 優先)
+    const started = ev('requiredEventStarted', 420, { itemId: 'steeringFirstAction', source: 'assessment', data: { within_s: 60, deadline_t: 500 } });
+    expect(find(requiredCountdowns(rules, [injected, started], 450), 'steeringFirstAction')).toMatchObject({ startedAt_s: 420, within_s: 80, deadline_t: 500, state: 'counting', remaining_s: 50 });
+    expect(find(requiredCountdowns(rules, [injected, started], 530), 'steeringFirstAction')).toMatchObject({ state: 'overdue', remaining_s: 30 });
+    // (2) 只有 within_s:期限 = 事件 t + within_s(after 事件本身的 data 亦可)
+    const startedW = ev('requiredEventStarted', 420, { itemId: 'notifyEcr', source: 'assessment', data: { within_s: 120 } });
+    expect(find(requiredCountdowns(rules, [injected, startedW], 450), 'notifyEcr')).toMatchObject({ within_s: 120, deadline_t: 540, state: 'counting', remaining_s: 90 });
+    const injectedW = ev('faultInjected', 420, { itemId: 'steeringFail', data: { fault: 'steeringGear', within_s: 90 } });
+    expect(find(requiredCountdowns(rules, [injectedW], 450), 'emergencySteering')).toMatchObject({ within_s: 90, deadline_t: 510, state: 'counting', remaining_s: 60 });
+    // (3) 都沒有:計時中、無剩餘秒數
+    expect(find(requiredCountdowns(rules, [injected], 450), 'emergencySteering')).toMatchObject({ within_s: null, deadline_t: null, state: 'counting', remaining_s: null });
+    // Met/Missed 事件的 within_s 是自 after 事件起算:只補時限顯示,狀態仍為達成/逾時
+    const missed = ev('requiredEventMissed', 480, { itemId: 'steeringFirstAction', source: 'assessment', data: { within_s: 60, penalty: 20 } });
+    expect(find(requiredCountdowns(rules, [injected, missed], 500), 'steeringFirstAction')).toMatchObject({ state: 'missed', within_s: 60, deadline_t: 480 });
+    // 數值 within_s 的規則不受事件 data 影響
+    const report = ev('reportPointPassed', 1000, { source: 'assessment', data: { waypoint: 'WP3', within_s: 999 } });
+    expect(find(requiredCountdowns(rules, [report], 1030), 'vtsReport')).toMatchObject({ within_s: 120, deadline_t: 1120, remaining_s: 90 });
+  });
 });
 
 describe('時間表面板', () => {

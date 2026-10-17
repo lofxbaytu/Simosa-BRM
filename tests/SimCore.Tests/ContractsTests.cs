@@ -97,7 +97,9 @@ public class ContractsTests
         Assert.DoesNotContain("scenario", required);
         Assert.DoesNotContain("route", required);
         Assert.DoesNotContain("visibility_nm", required);
+        Assert.DoesNotContain("steering", required);
         var props = schema.RootElement.GetProperty("properties");
+        Assert.Equal(new[] { "fu", "nfu", "autopilot", "emergency" }, props.GetProperty("steering").GetProperty("properties").GetProperty("mode").GetProperty("enum").EnumerateArray().Select(e => e.GetString()));
         Assert.True(props.TryGetProperty("scenario", out var sc));
         Assert.Equal(new[] { "id", "phase" }, sc.GetProperty("required").EnumerateArray().Select(e => e.GetString()));
         foreach (var key in new[] { "legIndex", "nextWaypoint", "xtd_m", "xtdLimit_m", "distanceToWaypoint_nm", "bearingToWaypoint_deg", "legCourse_deg", "speedLimit_kn", "complete" })
@@ -113,6 +115,8 @@ public class ContractsTests
         Assert.Equal("normal", scen.GetProperty("phase").GetString());
         Assert.Equal("2026.10.1", scen.GetProperty("parameterSetVersion").GetString());
         Assert.False(scen.GetProperty("ended").GetBoolean());
+        Assert.Equal("fu", root.GetProperty("steering").GetProperty("mode").GetString());
+        Assert.Equal("1", root.GetProperty("steering").GetProperty("pump").GetString());
         var route = root.GetProperty("route");
         Assert.Equal("WP2", route.GetProperty("nextWaypoint").GetString()); // 航段 0 = WP1 → WP2
         Assert.Equal(50.0, route.GetProperty("xtdLimit_m").GetDouble());
@@ -127,7 +131,7 @@ public class ContractsTests
         var schemaPath = Path.Combine(TestData.Root, "src", "Contracts", "command.schema.json");
         using var schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
         var types = schema.RootElement.GetProperty("properties").GetProperty("type").GetProperty("enum").EnumerateArray().Select(e => e.GetString()).ToList();
-        foreach (var t in new[] { "triggerTimeline", "acknowledge", "endExercise", "getAssessment" }) Assert.Contains(t, types);
+        foreach (var t in new[] { "triggerTimeline", "acknowledge", "endExercise", "getAssessment", "steeringMode" }) Assert.Contains(t, types);
         var examples = schema.RootElement.GetProperty("examples").EnumerateArray().Select(e => SimCommand.Parse(e.GetRawText())!).ToList();
         var trig = examples.Single(c => c.Type == SimCommandType.TriggerTimeline);
         Assert.Equal("emergencySteering", trig.ArgAsString("id"));
@@ -142,6 +146,11 @@ public class ContractsTests
         Assert.Equal(180.0, env.ArgAsDouble("ramp_s"));
         Assert.Equal(2.0, env.ArgAsDouble("visibility_nm"));
         Assert.Contains(examples, c => c.Type == SimCommandType.GetAssessment);
+        var sm = examples.First(c => c.Type == SimCommandType.SteeringMode);
+        Assert.Equal("nfu", sm.ValueAsString());
+        Assert.Equal("both", sm.ArgAsString("pump"));
+        Assert.Equal("starboard", sm.ArgAsString("direction"));
+        Assert.Equal("emergency", examples.Last(c => c.Type == SimCommandType.SteeringMode).ValueAsString());
         Assert.Contains("\"type\":\"triggerTimeline\"", SimCommand.TriggerTimeline("x", true).ToJson());
         Assert.Contains("\"ramp_s\":5", SimCommand.SetEnvironment(windTrueSpeedKn: 1, rampS: 5).ToJson());
     }

@@ -17,6 +17,7 @@ import {
   type Thruster,
   type Wind,
 } from '../types/state.js';
+import type { TargetAisReport, TargetState } from '../types/target.js';
 import { normalizeHeading } from './angles.js';
 
 export interface ParseResult {
@@ -94,6 +95,7 @@ export function defaultState(shipId: ShipId = 'FSB1'): OwnShipState {
     current: { set: 0, drift: 0 },
     loading: 'full',
     flags: { frozen: false, aground: false, collision: false },
+    targets: [],
   };
 }
 
@@ -204,6 +206,7 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
     wind,
     current,
     loading: oneOf<LoadingCondition>(raw, 'loading', LOADINGS, base.loading, issues, 'loading'),
+    targets: [],
   };
 
   if (thruster) state.thruster = thruster;
@@ -272,7 +275,88 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
     issues.push('route');
   }
 
+  // 目標船(state.targets[];規劃書第 5.2 節):舊狀態或情境無目標船時省略 → 空陣列(不記問題);非陣列才記入 issues
+  if (Array.isArray(raw['targets'])) {
+    state.targets = parseTargets(raw['targets'], issues);
+  } else if (raw['targets'] !== undefined && raw['targets'] !== null) {
+    issues.push('targets');
+  }
+
   return { state, issues };
+}
+
+const TARGET_REQUIRED_NUMS = ['loa', 'beam', 'sog', 'rot', 'range_nm', 'cpa_nm', 'tcpa_min'] as const;
+const TARGET_OPT_NUMS = ['draft', 'stw', 'bcr_nm', 'bct_min'] as const;
+const AIS_NUMS = ['mmsi', 'imo', 'shipType', 'navStatus', 'lat', 'lon', 'cog', 'sog', 'heading', 'rot', 'dimToBow', 'dimToStern', 'dimToPort', 'dimToStarboard', 'draught'] as const;
+
+/** 解析 targets[]:缺 id 的項目略過(記入 issues),其他缺欄位以 0/空字串補上並記入 issues;航向類角度正規化至 0–360。 */
+export function parseTargets(raw: readonly unknown[], issues: string[]): TargetState[] {
+  const out: TargetState[] = [];
+  raw.forEach((item, i) => {
+    const path = `targets[${i}]`;
+    if (!isRecord(item)) {
+      issues.push(path);
+      return;
+    }
+    const id = typeof item['id'] === 'string' ? item['id'] : typeof item['id'] === 'number' ? String(item['id']) : '';
+    if (!id) {
+      issues.push(`${path}.id`);
+      return;
+    }
+    let pos: Position;
+    if (isRecord(item['pos'])) {
+      const p = item['pos'];
+      pos = { lat: num(p, 'lat', 0, issues, `${path}.pos.lat`), lon: num(p, 'lon', 0, issues, `${path}.pos.lon`), x: num(p, 'x', 0, issues, `${path}.pos.x`), y: num(p, 'y', 0, issues, `${path}.pos.y`) };
+    } else {
+      issues.push(`${path}.pos`);
+      pos = { lat: 0, lon: 0, x: 0, y: 0 };
+    }
+    const t: TargetState = {
+      id,
+      name: typeof item['name'] === 'string' ? item['name'] : id,
+      mmsi: Math.trunc(num(item, 'mmsi', 0, issues, `${path}.mmsi`)),
+      shipType: typeof item['shipType'] === 'string' ? item['shipType'] : 'other',
+      loa: 0,
+      beam: 0,
+      pos,
+      heading: normalizeHeading(num(item, 'heading', 0, issues, `${path}.heading`)),
+      cog: normalizeHeading(num(item, 'cog', 0, issues, `${path}.cog`)),
+      sog: 0,
+      rot: 0,
+      range_nm: 0,
+      bearing_deg: normalizeHeading(num(item, 'bearing_deg', 0, issues, `${path}.bearing_deg`)),
+      cpa_nm: 0,
+      tcpa_min: 0,
+      aisOn: true,
+      lights: typeof item['lights'] === 'string' ? item['lights'] : 'powerDriven',
+      behaviour: typeof item['behaviour'] === 'string' ? item['behaviour'] : 'hold',
+    };
+    for (const key of TARGET_REQUIRED_NUMS) t[key] = num(item, key, 0, issues, `${path}.${key}`);
+    for (const key of TARGET_OPT_NUMS) {
+      const v = optNum(item, key, issues, `${path}.${key}`);
+      if (v !== undefined) t[key] = v;
+    }
+    const rel = optNum(item, 'relBearing_deg', issues, `${path}.relBearing_deg`);
+    if (rel !== undefined) t.relBearing_deg = normalizeHeading(rel);
+    if (typeof item['aisOn'] === 'boolean') t.aisOn = item['aisOn'];
+    else issues.push(`${path}.aisOn`);
+    if (typeof item['sound'] === 'string' && item['sound']) t.sound = item['sound'];
+    if (typeof item['colreg'] === 'string' && item['colreg']) t.colreg = item['colreg'];
+    if (isRecord(item['ais'])) {
+      const a = item['ais'];
+      const ais: TargetAisReport = {};
+      for (const key of AIS_NUMS) {
+        const v = a[key];
+        if (typeof v === 'number' && Number.isFinite(v)) ais[key] = v;
+      }
+      for (const key of ['name', 'callSign', 'destination'] as const) {
+        if (typeof a[key] === 'string') ais[key] = a[key] as string;
+      }
+      t.ais = ais;
+    }
+    out.push(t);
+  });
+  return out;
 }
 
 function parseScenarioStatus(sc: Record<string, unknown>, issues: string[]): ScenarioStatus | null {

@@ -48,6 +48,7 @@ public class TimelineRecordReplayTests
         Assert.Equal(2, rec.Header.Version);
         Assert.NotNull(rec.Header.ParameterSet);
         Assert.Equal("2026.10.1", rec.Header.ParameterSet!.Version);
+        Assert.Equal("data/parameters/company-procedures.yaml", rec.Header.ParameterSet.Path); // 相對專案根目錄(D34)
         Assert.True(rec.Header.ParameterSet.Resolved.Count > 10);
         Assert.Equal(7, rec.Header.Scenario.Timeline.Count); // 解析後完整情境
         Assert.Equal(50.0, rec.Header.Scenario.Route!.XtdLimitM);

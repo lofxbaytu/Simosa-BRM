@@ -35,6 +35,19 @@ public enum LoadingCondition
     Intermediate,
 }
 
+/// <summary>
+/// 操舵模式(state.schema.json <c>steering.mode</c>、指令 <c>steeringMode</c>;規劃書第 7.2 節操舵模式選擇;JSON 為小寫 fu / nfu / autopilot / emergency)。
+/// fu:隨動(舵令 = 目標舵角);nfu:非隨動(舵以舵機速率依 port/starboard/stop 推動);autopilot:等同 <c>autopilot {enabled: true}</c>;
+/// emergency:應急操舵(舵機房/電話下令,速率降低;舵機故障時仍可動)。
+/// </summary>
+public enum SteeringMode
+{
+    Fu,
+    Nfu,
+    Autopilot,
+    Emergency,
+}
+
 /// <summary>主機狀態(JSON 為小寫)。</summary>
 public enum EngineRunState
 {

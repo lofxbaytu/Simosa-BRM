@@ -107,7 +107,7 @@
     }
   ],
   "events": {
-    "total": 20,
+    "total": 21,
     "byKind": {
       "acknowledge": 2,
       "bandFail": 2,
@@ -118,6 +118,7 @@
       "frozen": 1,
       "message": 1,
       "resumed": 1,
+      "steeringModeChanged": 1,
       "targetActivated": 1,
       "timelineManual": 1,
       "timelineTriggered": 2,

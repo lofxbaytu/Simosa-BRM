@@ -2,7 +2,9 @@
 //  - 有核心 summary(coreSummary)時優先顯示:評分/通過、硬性失敗、容許帶、必要事件、故障應變、會遇、航跡、UKC、操縱、
 //    參數集版次與各規則引用的程序文件(來源/版次/條款);「自動評分僅輔助」(advisory)提示;
 //  - 無核心 summary(Python 參考伺服器、離線)時退回本地推導(DebriefAccumulator 的 DebriefSummary);
-//  - 兩者皆有時可展開「本地推導」並列對照(交叉核對:時長、航程、最大 ROT、車令次數…)。
+//  - 兩者皆有時可展開「本地推導」並列對照(交叉核對:時長、航程、最大 ROT、車令次數…);
+//  - 必要事件倒數(countdowns,timeline-panel 的 requiredCountdowns):核心 summary 的 pending 列顯示剩餘/逾時秒數,
+//    無核心 summary 時另列「必要事件(即時)」表。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -11,6 +13,7 @@ import { instructorStyles, shortTime } from './instructor-shared.js';
 import type { DebriefSummary } from '../../lib/debrief.js';
 import { BAND_STATE_LABEL, HARD_FAIL_RULE_LABEL, REQUIRED_STATE_LABEL, type AssessmentSummary, type SummaryBand, type SummaryRequired } from '../../lib/assessment.js';
 import { ACK_KIND_LABEL, ROLE_LABEL } from '../../lib/sim-event.js';
+import type { RequiredCountdown } from './timeline-panel.js';
 
 function fix(v: number | undefined, digits = 1, unit = ''): string {
   if (v === undefined) return '--';
@@ -27,6 +30,24 @@ function sourceText(x: { source?: string; revision?: string; clause?: string; pa
   if (x.source) parts.push(`${x.source}${x.revision ? ` rev.${x.revision}` : ''}${x.clause ? ` §${x.clause}` : ''}`);
   if (x.paramKey) parts.push(x.paramKey);
   return parts.join(' · ');
+}
+
+/** 倒數狀態的一句話(與 timeline-panel 的顯示一致)。 */
+export function countdownText(c: RequiredCountdown): string {
+  switch (c.state) {
+    case 'counting':
+      return c.remaining_s === null ? '計時中' : `剩 ${Math.ceil(c.remaining_s)} s`;
+    case 'overdue':
+      return `逾時 ${Math.floor(c.remaining_s ?? 0)} s`;
+    case 'met':
+      return `達成${c.by ? `(${c.by})` : ''}`;
+    case 'late':
+      return '逾時後達成';
+    case 'missed':
+      return '逾時';
+    default:
+      return '';
+  }
 }
 
 @customElement('brm-debrief-summary')
@@ -148,6 +169,8 @@ export class DebriefSummaryView extends LitElement {
   /** 核心 summary(優先顯示) */
   @property({ attribute: false }) coreSummary: AssessmentSummary | null = null;
   @property({ type: Boolean, reflect: true }) large = false;
+  /** 必要事件倒數(即時;重播無) */
+  @property({ attribute: false }) countdowns: readonly RequiredCountdown[] = [];
 
   @state() private showLocal = false;
 
@@ -163,8 +186,14 @@ export class DebriefSummaryView extends LitElement {
       `;
     }
     const s = this.summary;
-    if (!s || s.samples === 0) return html`<div class="hint">尚無資料</div>`;
-    return html`${this.renderLocal(s, null)}
+    const active = this.countdowns.filter((c) => c.state !== 'inactive');
+    const countdownTable =
+      active.length > 0
+        ? html`<div class="section"><span>必要事件(即時倒數)</span></div>
+            <table aria-label="必要事件倒數"><tbody>${active.map((c) => this.row(c.rule.id, countdownText(c), c.startedAt_s !== null ? `自 ${shortTime(c.startedAt_s)}${c.within_s !== null ? ` / 限 ${Math.round(c.within_s)} s` : ''}` : '', c.state === 'overdue' || c.state === 'missed' ? 'alarm' : c.state === 'met' ? 'ok' : c.state === 'late' ? 'over' : ''))}</tbody></table>`
+        : nothing;
+    if (!s || s.samples === 0) return html`${countdownTable}<div class="hint">尚無資料</div>`;
+    return html`${countdownTable}${this.renderLocal(s, null)}
       <div class="hint">本地推導:閾值為第一版暫用常數(速限 ${s.thresholds.portSpeedLimit_kn} kn、UKC ${s.thresholds.ukcAlarm_m} m、ROT ${s.thresholds.rotLimit_degPerMin}°/min、滿舵 ${s.thresholds.hardOver_deg}°);核心有評估規則與參數集時會改顯示核心 summary(規劃書第 9.1 節)</div>`;
   }
 
@@ -274,8 +303,11 @@ export class DebriefSummaryView extends LitElement {
   }
 
   private requiredRow(r: SummaryRequired) {
-    const cls = r.state === 'met' ? 'ok' : r.state === 'missed' ? 'alarm' : r.state === 'late' ? 'over' : '';
-    return this.row(r.id, REQUIRED_STATE_LABEL[r.state], `${r.dt_s !== undefined ? `+${fix(r.dt_s, 0, 's')}` : ''}${r.within_s !== undefined ? ` / 限 ${fix(r.within_s, 0, 's')}` : ''}${r.by ? ` · ${r.by}` : ''}${r.penalty ? ` · 扣 ${r.penalty}` : ''}`, cls, sourceText(r));
+    // 核心 summary 仍為 pending 時,以即時倒數顯示剩餘/逾時秒數
+    const cd = r.state === 'pending' ? this.countdowns.find((c) => c.rule.id === r.id && (c.state === 'counting' || c.state === 'overdue')) : undefined;
+    const cls = r.state === 'met' ? 'ok' : r.state === 'missed' || cd?.state === 'overdue' ? 'alarm' : r.state === 'late' ? 'over' : '';
+    const within = r.within_s ?? (cd && cd.within_s !== null ? cd.within_s : undefined);
+    return this.row(r.id, cd ? countdownText(cd) : REQUIRED_STATE_LABEL[r.state], `${r.dt_s !== undefined ? `+${fix(r.dt_s, 0, 's')}` : ''}${within !== undefined ? ` / 限 ${fix(within, 0, 's')}` : ''}${r.by ? ` · ${r.by}` : ''}${r.penalty ? ` · 扣 ${r.penalty}` : ''}`, cls, sourceText(r));
   }
 
   private renderLocal(s: DebriefSummary, core: AssessmentSummary | null) {

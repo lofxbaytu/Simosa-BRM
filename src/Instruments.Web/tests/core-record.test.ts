@@ -161,8 +161,13 @@ describe('核心紀錄(E07_steering_failure,MMG,300 s)', () => {
     const last = r.states[r.states.length - 1]!;
     expect(last.scenario?.score).toBe(85);
     expect(Math.abs(last.route!.xtd_m!)).toBeGreaterThan(50);
-    // 注意:教官站 state-parser 目前不解析 targets[](目標船由核心 AIS/NMEA 走 OpenCPN),原始行仍有 2 個目標
+    // 目標船 targets[](真實核心紀錄每幀含所有已出現的目標):解析為 TargetState,原始行同樣有 2 個目標
     expect((e07Lines.filter((l) => l['kind'] === 'state').at(-1)!['state'] as { targets: unknown[] }).targets).toHaveLength(2);
+    expect(last.targets.map((t) => t.id)).toEqual(['OUT1', 'ANCH1']);
+    expect(last.targets[0]).toMatchObject({ name: 'TAI PING 12', shipType: 'cargo', aisOn: true, behaviour: 'waypoints' });
+    expect(last.targets[0]!.ais?.mmsi).toBe(416400201);
+    expect(last.targets[1]).toMatchObject({ name: 'SHENG LI', lights: 'anchored', behaviour: 'anchored' });
+    expect(last.targets[1]!.cpa_nm).toBeCloseTo(1.01, 1);
   });
 
   it('header.scenario(核心序列化)與 data/scenarios/E07_steering_failure.yaml 經 parseScenario 結構相同', () => {

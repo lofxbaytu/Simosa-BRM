@@ -1,7 +1,8 @@
 # E07 舵機故障:麥寮進港航道,引水人在船(規劃書第 8.1 節 E07;schema:src/Contracts/scenario.schema.json)
 # FSB1 滿載自西南接近麥寮港,沿 3 段進港航道(走廊半寬 50 m)以 HAH 8 kn → 減速進港;退潮流 2.0 kn 向西南橫越航道,東北風 18 kn。
 # 時間表:T+5 min 引水人登船語音 → 進入航段 1 後 90 s 舵卡(steeringGear,階段 degraded)→ 60 s 內無相關動作(必要事件 steeringFirstAction 逾時)則機控室來電提示(emergency)
-#          → 教官確認「已轉應急操舵」後 clearFault;航段 2 內超速提示;錨地禁區。評估:故障首個相關動作 ≤ 60 s、通知機控室 ≤ 120 s、XTD、UKC、CPA(航道門檻 navigation.cpa.channel_nm)。
+#          → 教官確認「已轉應急操舵」後 clearFault;航段 2 內超速提示;錨地禁區。評估:故障首個相關動作 ≤ 60 s(車令/轉速/側推/操舵模式切換 steeringMode 指令,或備援的 acknowledge steeringMode)、
+#          通知機控室 ≤ 120 s、XTD、UKC、CPA(航道門檻 navigation.cpa.channel_nm)。學員站可直接下 steeringMode emergency(舵以降低速率再度可動),不必等教官 emergencySteering 項目。
 id: E07_steering_failure
 name: 麥寮進港航道舵機故障
 description: >-
@@ -133,7 +134,7 @@ timeline:
   - id: ecrPrompt
     name: 機控室來電(無反應時)
     phase: emergency
-    when:                                        # 「無反應」= 必要事件 steeringFirstAction 逾時(核心於故障後 firstAction_s 內無車令/側推/自動舵解除/操舵模式確認時發 requiredEventMissed);
+    when:                                        # 「無反應」= 必要事件 steeringFirstAction 逾時(核心於故障後 firstAction_s 內無車令/側推/操舵模式切換(steeringMode 指令、自動舵解除或 acknowledge steeringMode)時發 requiredEventMissed);
       all:                                       #   不以累計的 acknowledge 次數判斷,故障前的任何確認不會讓此項目失效
         - { type: fault, name: steeringGear, active: true }
         - { type: event, kind: requiredEventMissed, itemId: steeringFirstAction }
@@ -181,7 +182,7 @@ assessment:
   required:
     - id: steeringFirstAction
       after: { event: faultInjected, itemId: steeringFail }
-      expect: { any: [ telegraphChange, rpmOrder, thrusterOrder, autopilotOff, { acknowledge: { kind: steeringMode } } ] }
+      expect: { any: [ telegraphChange, rpmOrder, thrusterOrder, steeringModeChange, { acknowledge: { kind: steeringMode } } ] }   # steeringModeChange = steeringMode 指令(可自動偵測)或自動舵解除;acknowledge 為備援
       within_s: "${params:emergency.steeringFailure.firstAction_s}"
       penalty: 20
       latePenaltyPer_s: 0.5

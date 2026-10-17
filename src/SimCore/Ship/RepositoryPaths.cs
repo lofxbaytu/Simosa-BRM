@@ -26,4 +26,18 @@ public static class RepositoryPaths
         => TryFindRoot(start) ?? throw new DirectoryNotFoundException("找不到專案根目錄(需含 Directory.Build.props 與 data/);可設定環境變數 SIMOSA_BRM_ROOT");
 
     public static string RecordsDirectory(string? root = null) => Path.Combine(root ?? FindRoot(), "build", "records");
+
+    /// <summary>
+    /// 專案內的檔案改為相對專案根目錄的路徑(以 '/' 分隔,例如 data/parameters/company-procedures.yaml),
+    /// 供紀錄標頭等對外輸出(不洩漏機器路徑、紀錄可跨機器比對);不在專案內或找不到根目錄時原樣回傳。
+    /// </summary>
+    public static string ToProjectRelative(string path, string? root = null)
+    {
+        root ??= TryFindRoot();
+        if (root is null) return path;
+        var full = Path.GetFullPath(path);
+        var rel = Path.GetRelativePath(root, full);
+        if (rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel)) return path;
+        return rel.Replace('\\', '/');
+    }
 }

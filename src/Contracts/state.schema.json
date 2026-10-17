@@ -259,6 +259,38 @@
         }
       }
     },
+    "steering": {
+      "type": "object",
+      "required": [
+        "mode",
+        "pump"
+      ],
+      "description": "操舵模式(規劃書第 7.2 節操舵模式選擇;C# SimCore 產生,Python 不輸出)。mode 由指令 steeringMode 切換;autopilot 與 autopilot{enabled:true} 同義;rudder 指令會把 autopilot/nfu 切回 fu;emergency 為應急操舵(舵機故障時舵以降低的速率再度可動)",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "fu",
+            "nfu",
+            "autopilot",
+            "emergency"
+          ]
+        },
+        "pump": {
+          "type": "string",
+          "enum": [
+            "1",
+            "2",
+            "both"
+          ],
+          "description": "使用中的舵機泵"
+        },
+        "nfuActive": {
+          "type": "boolean",
+          "description": "nfu 模式時舵是否正被推動(direction port/starboard 中);其他模式省略"
+        }
+      }
+    },
     "targets": {
       "type": "array",
       "description": "已出現的目標船(情境無目標船時省略;規劃書第 5.2 節 Traffic、第 8.3 節避碰指標)。位置/航向/速度為真值;AIS 報告值(含注入錯誤)在 ais,AIS 關或不發送時省略",

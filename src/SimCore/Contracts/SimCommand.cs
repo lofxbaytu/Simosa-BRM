@@ -31,6 +31,8 @@ public enum SimCommandType
     EndExercise,
     /// <summary>查詢目前評估摘要(主控程序直接回覆,不進引擎佇列、不寫 input 行;引擎收到時忽略)</summary>
     GetAssessment,
+    /// <summary>操舵模式(value: fu|nfu|autopilot|emergency;args:pump 1|2|both、nfu 的 direction port|starboard|stop、autopilot 的 heading/rotLimit;規劃書第 7.2 節)</summary>
+    SteeringMode,
 }
 
 /// <summary>
@@ -69,6 +71,11 @@ public sealed record SimCommand
     public static SimCommand EndExercise(string? reason = null)
         => new() { Type = SimCommandType.EndExercise, Args = Obj(new { reason }) };
     public static SimCommand GetAssessment() => new() { Type = SimCommandType.GetAssessment };
+    /// <summary>
+    /// 操舵模式:<paramref name="pump"/> 為 "1"|"2"|"both"(未給時不變);<paramref name="direction"/> 只在 nfu 有效(port|starboard|stop;未給時不變,首次進入 nfu 視為 stop)。
+    /// </summary>
+    public static SimCommand SteeringMode(SteeringMode mode, string? pump = null, string? direction = null, double? heading = null)
+        => new() { Type = SimCommandType.SteeringMode, Value = Str(ContractJson.EnumName(mode)), Args = pump is null && direction is null && heading is null ? null : Obj(new { pump, direction, heading }) };
 
     /// <summary>目標船控制:<paramref name="args"/> 為匿名物件或字典,鍵名見 README「targetControl」。</summary>
     public static SimCommand TargetControl(object args) => new() { Type = SimCommandType.TargetControl, Args = Obj(args) };

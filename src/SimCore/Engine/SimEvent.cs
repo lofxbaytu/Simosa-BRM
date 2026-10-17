@@ -78,6 +78,8 @@ public static class SimEventKinds
     public const string OwnShipOverride = "ownShipOverride";
     public const string TimeScaleChanged = "timeScaleChanged";
     public const string ExerciseEnded = "exerciseEnded";
+    /// <summary>操舵模式變更(指令 steeringMode、autopilot 或 rudder 解除自動舵/NFU;data {from, to, pump})</summary>
+    public const string SteeringModeChanged = "steeringModeChanged";
     // engine
     public const string Grounding = "grounding";
     // assessment
@@ -96,6 +98,8 @@ public static class SimEventKinds
     public const string EncounterStarted = "encounterStarted";
     public const string EncounterFirstAction = "encounterFirstAction";
     public const string EncounterClosed = "encounterClosed";
+    /// <summary>必要事件開始計時(after 事件發生;data {after, afterItemId, afterSeq, start_t, within_s, deadline_t, penalty})</summary>
+    public const string RequiredEventPending = "requiredEventPending";
     public const string RequiredEventMet = "requiredEventMet";
     public const string RequiredEventMissed = "requiredEventMissed";
     public const string HardFail = "hardFail";

@@ -231,7 +231,7 @@ assessment:
 | `rudderOrder` | `input` 指令 `rudder`(舵令變化 ≥ 1°;自動舵產生的舵令不算) |
 | `telegraphChange` / `rpmOrder` | 指令 `telegraph` / `rpm` |
 | `thrusterOrder` | 指令 `thruster`(\|Δ\| ≥ 0.05) |
-| `steeringModeChange` | 指令 `autopilot`(enabled 切換)— 第一版「切換 NFU/應急操舵」以自動舵關閉或 `acknowledge {kind: steeringMode}` 代表(操舵模式選擇器尚未在契約中,第 10 節開放問題) |
+| `steeringModeChange` | 指令 `steeringMode`(fu/nfu/autopilot/emergency 模式變更;D32)、自動舵解除(指令 `autopilot {enabled: false}` 或手動舵令),或備援的 `acknowledge {kind: steeringMode}` |
 | `autopilotOn` / `autopilotOff` | 指令 `autopilot` |
 | `acknowledge: {kind}` | 教官/帶領者指令 `acknowledge`(第 5.2 節);`kind`: verbal \| notifyEcr \| callMaster \| report \| checklist \| steeringMode \| anchorReady \| other |
 | `event: {kind, …}` | 任一核心事件(例如 `faultCleared`、`cpaClear`) |
@@ -458,11 +458,13 @@ public sealed record TrafficEvent : SimEvent { }   // Source 固定 "traffic";Tr
 | assessment | `ukcAlarm` / `ukcClear` | `data: {ukc_m, limit_m, zoneId?}` |
 | assessment | `speedLimitExceeded` / `speedLimitRestored` | `data: {sog_kn, limit_kn, source: leg\|zone, id}` |
 | assessment | `encounterStarted` / `encounterFirstAction` / `encounterClosed` | `targetId`;`data: {range_nm, cpa_nm, tcpa_min, action, headingChange_deg, speedChange_kn}` |
+| assessment | `requiredEventPending` | `after` 事件發生、必要事件開始計時(D33);`itemId` = 規則 id;`data: {after: kind, afterItemId, afterSeq, start_t, within_s(已解析的參數值), deadline_t = start_t + within_s, penalty}`,教官站據此倒數 |
 | assessment | `requiredEventMet` / `requiredEventMissed` | `itemId` = 規則 id;`data: {dt_s, within_s, by: kind}` |
 | assessment | `hardFail` | `itemId` = 規則 id;`data: {rule, value, limit, paramKey}` |
 | assessment | `bandWarn` / `bandFail` | 指標首次進入 warn/fail 帶 |
 | instructor | `acknowledge` | `data: {kind, role, note, itemId}` |
 | instructor | `timelineManual` | `triggerTimeline` 指令收到(成功與否皆記,`data.ok`) |
+| instructor / timeline | `steeringModeChanged` | 操舵模式或泵變更(指令 `steeringMode`、`autopilot` 啟用/解除、`rudder` 把 autopilot/nfu 切回 fu;D32);`data: {from, to, pump}` |
 
 ### 3.3 執行時序(每步)
 
@@ -640,6 +642,8 @@ distToWp = |B − P|;brgToWp = atan2(B − P)
   "xtdLimit_m": {"type":"number"}, "distanceToWaypoint_nm": {"type":"number"}, "bearingToWaypoint_deg": {"type":"number"},
   "legCourse_deg": {"type":"number"}, "speedLimit_kn": {"type":"number"}, "complete": {"type":"boolean"} } }
 ```
+另新增 `steering: {mode: fu|nfu|autopilot|emergency, pump: "1"|"2"|"both", nfuActive?: bool}`(操舵模式,D32;`nfuActive` 只在 nfu 模式輸出)。
+
 `route` 同時滿足第 7.2 節 conning display 的「航跡偏差(XTD)/下一航點」最低資訊;`faults[]` 既有不變。`ContractsTests` 只檢查 required 欄位,新增皆選填 → 不受影響;Python 參考實作不輸出 `scenario`/`route`。
 
 ### 5.2 `command.schema.json`
@@ -654,6 +658,7 @@ distToWp = |B − P|;brgToWp = atan2(B − P)
 | `getAssessment` | — | **查詢**:主控程序直接以 `LatestSummary` 回覆該客戶端 `{"type":"assessment", …}`;不進引擎佇列 | 否 |
 | `setEnvironment` *(擴充)* | `args` 加 `visibility_nm`、`ramp_s` | 第 3.5 節 | 是 |
 | `injectFault` *(擴充)* | `value: string` 或 `args: {name, args}` | 向後相容 | 是 |
+| `steeringMode` *(v0.3,D32)* | `value: fu\|nfu\|autopilot\|emergency`;`args: {pump?: 1\|2\|both, direction?: port\|starboard\|stop(nfu), heading?, rotLimit?(autopilot)}` | 操舵模式選擇(規劃書第 7.2 節);模式/泵變更發 `steeringModeChanged`,並以 `steeringModeChange` 動作餵必要事件與故障應變 | 是 |
 
 WebSocket 新增推送框(與 state 框同通道,以 `type` 區分;`ws-client.ts` 已把非 state 物件交給 `onMessage`):
 - `{"type":"event","event":{…SimEvent}}`:每個事件即時推送給所有客戶端(學員站忽略或只顯示 `visible: true`)。
@@ -664,7 +669,7 @@ WebSocket 新增推送框(與 state 框同通道,以 `type` 區分;`ws-client.ts
 
 | 行 | 變更 |
 |---|---|
-| `header` | `version: 2`;新增 `parameterSet: {id, version, path, sha256, resolved: [...]}`(無參數集時省略);`scenario` 為解析後的完整情境(含 timeline/route/zones/assessment/briefing) |
+| `header` | `version: 2`;新增 `parameterSet: {id, version, path, sha256, resolved: [...]}`(無參數集時省略;`path` 為相對專案根目錄,D34);`scenario` 為解析後的完整情境(含 timeline/route/zones/assessment/briefing) |
 | `input` | 不變;新指令型別自然出現 |
 | `state` | 不變(新增選填欄位) |
 | `event` | `event` 物件為 `SimEvent`(舊欄位不變,新欄位選填) |
@@ -984,7 +989,7 @@ assessment:
   required:
     - id: steeringFirstAction
       after: { event: faultInjected, itemId: steeringFail }
-      expect: { any: [ telegraphChange, rpmOrder, thrusterOrder, autopilotOff, { acknowledge: { kind: steeringMode } } ] }
+      expect: { any: [ telegraphChange, rpmOrder, thrusterOrder, steeringModeChange, { acknowledge: { kind: steeringMode } } ] }   # steeringModeChange = steeringMode 指令(可自動偵測)或自動舵解除;acknowledge 為備援(D32)
       within_s: ${params:emergency.steeringFailure.firstAction_s}
       penalty: 20
       latePenaltyPer_s: 0.5
@@ -1044,7 +1049,7 @@ assessment:
 
 ## 10. 開放問題
 
-1. **操舵模式(FU/NFU/自動舵/應急)**尚未在契約中(規劃書第 7.2 節):E07 的「切換 NFU/應急操舵」第一版以 `acknowledge {kind: steeringMode}` 或教官手動 `emergencySteering` 項目代表;建議下一步加 `steeringMode` 指令與狀態欄位,讓 `steeringModeChange` 可自動偵測。
+1. ~~**操舵模式(FU/NFU/自動舵/應急)**尚未在契約中~~ 已於 v0.3 加入 `steeringMode` 指令與 `state.steering`(D32);仍開放:泵數對速率的影響只在 particulars 有單/雙泵滿舵時間時生效(FSB1/FSB2 目前無),應急操舵速率無資料時取隨動速率一半(待船上實測 `emergencyHardOverTime35_s`);時間表尚無 `steeringMode` 動作。
 2. **`blackout` 組合故障**:是否由引擎展開為 `mainEngine + steeringGear + 儀器失效`(含應急發電 45 s 後部分恢復的子時間表),或以情境時間表組合表達;建議後者(時間表 `injectFault` 多個 + `delay_s`),引擎不加特例。
 3. **只記錄的故障**在儀器端的反應(gyroDrift 等)需各儀器實作;本設計只保證名稱目錄與事件。
 4. **參數集單一檔 vs. 每船覆寫**:schema 預留 `overrides`;何時需要由公司程序決定。
@@ -1089,5 +1094,9 @@ assessment:
 | D29 | 第 5.1 節 `state.scenario.timelinePending` | 核心語意為「待執行(`delay_s` 排程中)的動作數」;教官站時間表面板的「待觸發」由事件推導(armed 且未達 once/max 的項目數),`timelinePending > 0` 另顯示「延遲動作 n」 | 兩端語意原本相反 |
 | D30 | 第 4.2 節到達半徑判定 | 加 `s ≥ 0`(自船已過本航段起點)條件;驗證器警告航段長 ≤ 到達半徑 | 航段短於半徑或從 A 之前接近時提早「通過」B |
 | D31 | 第 6 節 W8 重播檢視 | 紀錄解析依 `state.tick` 遞減切分倒帶分段:倒帶時丟棄 t > 倒帶點的舊分支狀態與事件(保留最終歷史),`rewinds[]` 記錄倒帶點;不再對 states 全域排序。教官站重播檢視常駐(`hidden` 切換,載入的紀錄不因切回即時而遺失),事件流點擊只在重播檢視已載有紀錄時跳轉 | 原本舊分支與新分支依 t 交錯,航跡鋸齒、事件索引錯亂;重播檢視每次切換都重建 |
+
+| D32 | 第 10 節開放問題 1:操舵模式不在契約中 | **v0.3 新增指令 `steeringMode`**(`value: fu\|nfu\|autopilot\|emergency`,`args {pump: 1\|2\|both, direction: port\|starboard\|stop, heading, rotLimit}`)、狀態 `state.steering {mode, pump, nfuActive?}`、事件 `steeringModeChanged {from, to, pump}`(source instructor/timeline)、快照 `Steering {mode, pump, nfuDirection}`。行為:**nfu** 以推桿方向驅動舵——`direction: port/starboard` 把舵令設為該側滿舵(舵以舵機速率移動),`stop` 把舵令設為目前舵角(舵停在原處;首次進入 nfu 未給方向視為 stop);推桿動作幅度 ≥ 1° 視為一次 `rudderOrder`;**autopilot** 等同 `autopilot {enabled: true}`(未給 heading 時保持目前艏向),與 `Autopilot.Enabled` 雙向同步(`autopilot` 指令啟用/解除也發 `steeringModeChanged`);**emergency** 為應急操舵:`steeringGear` 故障下舵不再卡住、以 particulars `rudder.steeringGear.emergencyHardOverTime35_s` 的速率(無資料時隨動速率一半)移動,舵令仍以 `rudder` 指令(電話下令)表示;**fu** 為預設。`rudder` 指令在 autopilot/nfu 模式下視同切回 fu(emergency 保持)。泵:`"1"\|"2"` 用 `hardOverTime35_onePump_s`、`both` 用 `_twoPumps_s` 相對 `HardOverTime35Seconds` 換算速率,無資料時不變。評估:模式變更(學員指令)以 `ObservedAction steeringModeChange` 餵 `AssessmentEngine`/`FaultResponseTracker`(無規則時亦為預設相關動作);`steeringModeChange` expect 仍同時接受自動舵解除與 `acknowledge {kind: steeringMode}`(備援)。雜湊:只在非預設(nfu/emergency 或泵非 1)時於目標船位元組之後追加 `int64 mode, pumpIndex, nfuDirection`(fu/autopilot 不追加,與既有「`Autopilot.Enabled` 不進雜湊、其舵令已在雜湊內」一致,E05/舊紀錄雜湊不變)。E07 `steeringFirstAction.expect` 改為 `[telegraphChange, rpmOrder, thrusterOrder, steeringModeChange, {acknowledge: {kind: steeringMode}}]`;黃金摘要 `assessment-E07-600s.json` 只因腳本 500 s 的 `autopilot` 指令多 1 個 `steeringModeChanged` 事件而更新(`events.total` 20 → 21)。 | 讓 E07 的「切換應急操舵」可自動偵測;最簡單且可測的 NFU 做法 |
+| D33 | 第 3.2 節必要事件只有 met/missed 事件 | 新增 `requiredEventPending`(source assessment,不進雜湊):`after` 事件使規則進入 pending 時立即發出,`data {after, afterItemId, afterSeq, start_t, within_s, deadline_t, penalty}`,`within_s` 為已解析的參數值。引擎 `Raise` 改為「觀察者在觀察途中再發出的事件先排隊、外層事件送完後依序發出」,故 `requiredEventPending.seq` 緊接在觸發事件之後(紀錄與 WebSocket 順序與因果一致);既有程式沒有巢狀發事件,舊紀錄的事件序列不受影響 | 教官站倒數需要計時起點與期限,原本 `within_s` 為參數引用時只能顯示「計時中」 |
+| D34 | 第 2.3 節 `header.parameterSet.path` | 改為**相對專案根目錄**(`data/parameters/company-procedures.yaml`,'/' 分隔;`RepositoryPaths.ToProjectRelative`,專案外的檔案原樣);`ParameterSet.Path` 同 | 原為絕對路徑,洩漏機器路徑且紀錄不能跨機器比對 |
 
 主控程序:`--record [<path>]`、`--parameters <path>`、`--validate`、`--rescore`(與 `--replay` 併用);重播結束碼需雜湊、完整性與事件序列皆一致(重新評分亦同,D23)。驗證紀錄:`build/records/e07-test.jsonl`(E07 300 s ×10,9 個事件、1 行 summary;`--replay` 雜湊/事件/summary 一致;`--rescore` 以 `navigation.xtd.channel_m` 50 → 20 重播:雜湊與事件序列不變、分數 85 → 60)。

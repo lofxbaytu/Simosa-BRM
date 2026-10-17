@@ -1,6 +1,8 @@
 // 自船狀態型別,對應 src/Contracts/state.schema.json(OwnShipState)。
 // 慣例:角度以度、航向 0–360、舵角右正左負、ROT 右轉正(度/分)、轉速倒車負。
 
+import type { TargetState } from './target.js';
+
 export type ShipId = 'FSB1' | 'FSB2';
 
 export const SHIP_IDS: readonly ShipId[] = ['FSB1', 'FSB2'] as const;
@@ -161,4 +163,6 @@ export interface OwnShipState {
   visibility_nm?: number;
   scenario?: ScenarioStatus;
   route?: RouteStatus;
+  /** 已出現的目標船(state.targets[];舊狀態或情境無目標船時為空陣列) */
+  targets: TargetState[];
 }

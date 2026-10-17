@@ -4,7 +4,9 @@
 //  - 手動觸發鈕:manual 項目直接送 triggerTimeline;其他項目需按住「強制」0.8 s(force: true);
 //  - acknowledge 快速鈕列(口頭辨識/通知機控室/呼叫船長/報告/切換操舵模式/備錨)含角色與備註;
 //  - 必要事件倒數:after 事件(例如 faultInjected)發生後依 assessment.required 的 within_s 倒數,
-//    requiredEventMet/Missed 事件更新為達成/逾時。
+//    requiredEventMet/Missed 事件更新為達成/逾時。within_s 為參數引用(教官站不解析)時改由事件 data 取得:
+//    規則 id 的事件(含核心「開始計時」事件)或 after 事件本身的 data.deadline_t 優先,否則 data.within_s + 該事件 t,
+//    都沒有就維持「計時中」(對兩種欄位名寬容,見設計文件第 3.2 節事件表)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -38,7 +40,10 @@ export interface RequiredCountdown {
   rule: RequiredEventRule;
   /** after 事件發生的時間;null = 尚未開始(不適用) */
   startedAt_s: number | null;
+  /** 有效時限(秒):規則數值,或由事件 data 的 deadline_t / within_s 推得;皆無為 null */
   within_s: number | null;
+  /** 期限的模擬時刻(秒);within_s 為 null 時亦為 null */
+  deadline_t: number | null;
   state: 'inactive' | 'counting' | 'overdue' | 'met' | 'missed' | 'late';
   /** 剩餘秒數(counting)或逾時秒數(overdue) */
   remaining_s: number | null;
@@ -87,12 +92,32 @@ export function requiredCountdowns(rules: AssessmentRules, events: readonly SimE
         startIdx = i;
       }
     });
-    const within = rule.within_s?.value ?? null;
-    const out: RequiredCountdown = { rule, startedAt_s: startedAt, within_s: within, state: 'inactive', remaining_s: null };
+    const ruleWithin = rule.within_s?.value ?? null;
+    const out: RequiredCountdown = { rule, startedAt_s: startedAt, within_s: ruleWithin, deadline_t: null, state: 'inactive', remaining_s: null };
     if (startedAt === null) return out;
+    // 期限:規則數值優先;否則從 after 事件本身與之後規則 id 的事件 data 取 deadline_t(優先)或 within_s(+ 該事件 t)
+    let deadline: number | null = ruleWithin !== null ? startedAt + ruleWithin : null;
+    const fromEventData = (e: SimEvent): void => {
+      if (ruleWithin !== null) return;
+      const d = e.data;
+      if (!d) return;
+      const dl = d['deadline_t'];
+      if (typeof dl === 'number' && Number.isFinite(dl)) {
+        deadline = dl;
+        return;
+      }
+      const w = d['within_s'];
+      if (typeof w === 'number' && Number.isFinite(w) && deadline === null) deadline = e.t + w;
+    };
+    fromEventData(events[startIdx]!);
     for (let i = startIdx + 1; i < events.length; i++) {
       const e = events[i]!;
       if (e.itemId !== rule.id) continue;
+      // Met/Missed 的 within_s 是自 after 事件起算的時限(不是自 Met/Missed 事件起算)
+      if (e.kind === 'requiredEventMet' || e.kind === 'requiredEventMissed') {
+        const w = e.data?.['within_s'];
+        if (ruleWithin === null && deadline === null && typeof w === 'number' && Number.isFinite(w)) deadline = startedAt + w;
+      } else fromEventData(e);
       if (e.kind === 'requiredEventMet') {
         out.state = e.data?.['late'] === true ? 'late' : 'met';
         const by = e.data?.['by'];
@@ -101,12 +126,16 @@ export function requiredCountdowns(rules: AssessmentRules, events: readonly SimE
       }
       if (e.kind === 'requiredEventMissed') out.state = 'missed';
     }
+    if (deadline !== null) {
+      out.deadline_t = deadline;
+      out.within_s = deadline - startedAt;
+    }
     if (out.state === 'missed') return out;
-    if (within === null) {
+    if (deadline === null) {
       out.state = 'counting';
       return out;
     }
-    const remaining = startedAt + within - simTime;
+    const remaining = deadline - simTime;
     out.state = remaining >= 0 ? 'counting' : 'overdue';
     out.remaining_s = Math.abs(remaining);
     return out;
@@ -434,7 +463,7 @@ export class TimelinePanel extends LitElement {
       default:
         rem = '';
     }
-    const within = r.within_s ? formatNumberOrParam(r.within_s, 's', 0) : '無時限';
+    const within = c.within_s !== null ? `限 ${Math.round(c.within_s)} s` : r.within_s ? formatNumberOrParam(r.within_s, 's', 0) : '無時限';
     return html`<div class="countdown ${c.state}" data-rule=${r.id}>
       <span class="rid">${r.id}</span>
       <span class="exp" title=${expectLabel(r.expect)}>${expectLabel(r.expect)} · ${within}${c.startedAt_s !== null ? ` · 自 ${shortTime(c.startedAt_s)}` : ''}</span>
