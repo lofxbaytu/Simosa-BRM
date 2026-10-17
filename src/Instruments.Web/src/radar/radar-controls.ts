@@ -213,7 +213,8 @@ export class RadarToolsPanel extends StoreElement {
   override render() {
     const s = this.store;
     const st = s.settings;
-    const hdg = s.headingDeg;
+    // 畫面參考航向(航向無效時 0,與 PPI 畫線一致)
+    const hdg = s.screenHeadingDeg;
     const setEbl = (i: 0 | 1, p: Partial<(typeof st.ebl)[0]>) => {
       const ebl = [...st.ebl] as typeof st.ebl;
       const cur = ebl[i];

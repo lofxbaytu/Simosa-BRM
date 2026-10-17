@@ -27,6 +27,7 @@ import {
   type TruthState,
 } from '../types/alerts.js';
 import { clamp, headingDifference, normalizeHeading } from './angles.js';
+import { formatHeadingDecimal } from './format.js';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -309,13 +310,18 @@ export interface AlertCounts {
   highest: AlertPriority | null;
   /** 有聲響者中的最高優先序(決定聲響型式;無 null) */
   highestAudible: AlertPriority | null;
+  /** 需確認者中的最高優先序(「未確認 N」徽章顏色;已確認者不算;無 null) */
+  highestUnacknowledged: AlertPriority | null;
 }
 
 export function alertCounts(list: readonly AlertItem[] | undefined): AlertCounts {
-  const out: AlertCounts = { total: 0, unacknowledged: 0, audible: 0, highest: null, highestAudible: null };
+  const out: AlertCounts = { total: 0, unacknowledged: 0, audible: 0, highest: null, highestAudible: null, highestUnacknowledged: null };
   for (const a of list ?? []) {
     out.total++;
-    if (alertVisual(a).needsAck) out.unacknowledged++;
+    if (alertVisual(a).needsAck) {
+      out.unacknowledged++;
+      if (out.highestUnacknowledged === null || PRIORITY_RANK[a.priority] < PRIORITY_RANK[out.highestUnacknowledged]) out.highestUnacknowledged = a.priority;
+    }
     if (out.highest === null || PRIORITY_RANK[a.priority] < PRIORITY_RANK[out.highest]) out.highest = a.priority;
     if (a.audible) {
       out.audible++;
@@ -430,6 +436,7 @@ function alertIdOf(e: SimEvent): string {
 /**
  * 由事件流推得警報歷史(每次 alertRaised 一筆,時間先後排列):核心 summary.alerts.records 的即時版。
  * repeat 的 alertRaised(rectifiedUnacknowledged 期間再成立)併入同一筆並標 repeat。
+ * BNWAS 重設(bnwasReset,fromStage ≥ 1)即解除指示、不需再確認:與核心 MetricsCollector 相同,以重設時刻作為該筆 bnwas 的確認時刻。
  */
 export function alertHistory(events: readonly SimEvent[]): AlertHistoryEntry[] {
   const out: AlertHistoryEntry[] = [];
@@ -438,6 +445,16 @@ export function alertHistory(events: readonly SimEvent[]): AlertHistoryEntry[] {
     return undefined;
   };
   for (const e of events) {
+    if (e.kind === 'bnwasReset') {
+      if ((finite(e.data?.['fromStage']) ?? 0) > 0) {
+        const b = lastOf('bnwas');
+        if (b && b.acknowledgedAt_s === undefined) {
+          b.acknowledgedAt_s = e.t;
+          b.ackTime_s = Math.max(0, e.t - b.raisedAt_s);
+        }
+      }
+      continue;
+    }
     if (!(ALERT_EVENT_KINDS as readonly string[]).includes(e.kind)) continue;
     const id = alertIdOf(e);
     if (!id) continue;
@@ -508,7 +525,7 @@ export interface BnwasCounts {
   resets: number;
 }
 
-/** 由事件流計 BNWAS 各階段進入次數與重設次數(核心 summary.alerts.bnwas 的即時版)。 */
+/** 由事件流計 BNWAS 各階段進入次數與重設次數(核心 summary.alerts.bnwas 的即時版;與核心相同只計階段 ≥ 1 的重設,休眠中的 bnwasReset 不計)。 */
 export function bnwasCounts(events: readonly SimEvent[]): BnwasCounts {
   const out: BnwasCounts = { stage1: 0, stage2: 0, stage3: 0, resets: 0 };
   for (const e of events) {
@@ -517,7 +534,7 @@ export function bnwasCounts(events: readonly SimEvent[]): BnwasCounts {
       if (st === 1) out.stage1++;
       else if (st === 2) out.stage2++;
       else if (st === 3) out.stage3++;
-    } else if (e.kind === 'bnwasReset') out.resets++;
+    } else if (e.kind === 'bnwasReset' && (finite(e.data?.['fromStage']) ?? 0) > 0) out.resets++;
   }
   return out;
 }
@@ -624,6 +641,8 @@ export interface SensorComparisonRow {
 export const SENSOR_ERROR_LIMITS = { heading_deg: 1, position_m: 30, speed_kn: 0.3, depth_m: 0.3 } as const;
 
 const fmt = (v: number, digits: number): string => (v === 0 ? 0 : v).toFixed(digits);
+/** 航向類欄位(電羅經、磁羅經、COG 與對應真值):0–360 三位數,跨 0/360 時 359.96 → 000.0°(不顯示 360.0°) */
+const hdg = (v: number): string => formatHeadingDecimal(v, 1);
 const signed = (v: number, digits: number): string => `${v > 0 ? '+' : ''}${fmt(Math.round(v * 10 ** digits) / 10 ** digits, digits)}`;
 
 /**
@@ -642,15 +661,15 @@ export function sensorComparison(s: OwnShipState): SensorComparisonRow[] {
   rows.push({
     key: 'heading',
     label: '航向(電羅經)',
-    indicated: `${fmt(s.heading, 1)}°`,
-    truth: `${fmt(tr.heading, 1)}°`,
+    indicated: hdg(s.heading),
+    truth: hdg(tr.heading),
     error: `${signed(hdgErr, 1)}°`,
     faulty: has('heading') || headingInvalid || Math.abs(hdgErr) > SENSOR_ERROR_LIMITS.heading_deg,
     invalid: headingInvalid,
   });
   if (sen) {
     const magErr = headingDifference(tr.heading, sen.magneticHeading);
-    rows.push({ key: 'magnetic', label: '磁羅經', indicated: `${fmt(sen.magneticHeading, 1)}°`, truth: `${fmt(tr.heading, 1)}°`, error: `${signed(magErr, 1)}°`, faulty: false, invalid: false });
+    rows.push({ key: 'magnetic', label: '磁羅經', indicated: hdg(sen.magneticHeading), truth: hdg(tr.heading), error: `${signed(magErr, 1)}°`, faulty: false, invalid: false });
   }
   const posInvalid = sen ? !sen.positionValid : false;
   const posErr = tr.positionError_m !== 0 ? tr.positionError_m : Math.hypot(s.pos.x - tr.pos.x, s.pos.y - tr.pos.y);
@@ -664,7 +683,7 @@ export function sensorComparison(s: OwnShipState): SensorComparisonRow[] {
     invalid: posInvalid,
   });
   const cogErr = headingDifference(tr.cog, s.cog);
-  rows.push({ key: 'cog', label: 'COG', indicated: `${fmt(s.cog, 1)}°`, truth: `${fmt(tr.cog, 1)}°`, error: `${signed(cogErr, 1)}°`, faulty: posInvalid || (has('position') && Math.abs(cogErr) > SENSOR_ERROR_LIMITS.heading_deg), invalid: posInvalid });
+  rows.push({ key: 'cog', label: 'COG', indicated: hdg(s.cog), truth: hdg(tr.cog), error: `${signed(cogErr, 1)}°`, faulty: posInvalid || (has('position') && Math.abs(cogErr) > SENSOR_ERROR_LIMITS.heading_deg), invalid: posInvalid });
   const sogErr = s.sog - tr.sog;
   rows.push({ key: 'sog', label: 'SOG', indicated: `${fmt(s.sog, 1)} kn`, truth: `${fmt(tr.sog, 1)} kn`, error: `${signed(sogErr, 1)} kn`, faulty: posInvalid || Math.abs(sogErr) > SENSOR_ERROR_LIMITS.speed_kn, invalid: posInvalid });
   const stwInvalid = sen ? !sen.stwValid : false;

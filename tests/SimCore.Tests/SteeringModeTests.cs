@@ -458,4 +458,29 @@ public class SteeringModeTests
         var outside = Path.Combine(Path.GetTempPath(), "x.yaml");
         Assert.Equal(outside, Ship.RepositoryPaths.ToProjectRelative(outside));
     }
+
+    [Fact]
+    public void SteeringModeAutopilotWithoutHeadingHoldsIndicatedHeadingUnderGyroDrift()
+    {
+        // 審查發現:漂移中以 steeringMode autopilot(不帶 heading)接自動舵,設定航向須取電羅經指示值(自動舵與偏航警報都用指示值)
+        var e = TestData.MinimalEngine("alerts: { offHeading_deg: 5, offHeadingDelay_s: 10 }", speedKn: 10);
+        var events = TestData.Capture(e);
+        void Do(SimCommand c) { e.Enqueue(c); e.ProcessPendingCommands(); }
+        Do(SimCommand.Autopilot(true, heading: 0));
+        TestData.RunTo(e, 10);
+        Do(SimCommand.InjectFault("gyroDrift", new { rate_degPerMin = 1.0 }));
+        TestData.RunTo(e, 610);
+        Do(SimCommand.Rudder(0)); // 下舵令解除自動舵
+        Assert.False(e.BuildState().Autopilot!.Enabled);
+        TestData.RunTo(e, 640);
+        Do(SimCommand.SteeringMode(SteeringMode.Autopilot));
+        var s = e.BuildState();
+        Assert.True(s.Autopilot!.Enabled);
+        Assert.Equal(s.Heading, s.Autopilot.SetHeading, 6); // 保持當下羅經讀數
+        var truthAtEngage = s.Truth!.Heading;
+        TestData.RunTo(e, 760);
+        s = e.BuildState();
+        Assert.InRange(Units.WrapDeg180(s.Truth!.Heading - truthAtEngage), -6.0, 6.0); // 120 s 內不會因設定航向錯誤而大幅轉向
+        Assert.DoesNotContain(events, x => x.Kind == SimEventKinds.AlertRaised && x.ItemId == "offHeading");
+    }
 }

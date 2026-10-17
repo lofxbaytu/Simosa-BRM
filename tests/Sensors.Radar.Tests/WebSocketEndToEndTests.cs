@@ -128,6 +128,72 @@ public class WebSocketEndToEndTests
     }
 
     [Fact]
+    public async Task SetUnitsBroadcastsFreshStatus()
+    {
+        // 情境切換(SetUnits)後新雷達的試操船與 CPA/TCPA 限值回到預設;必須廣播新的 status,
+        // 否則客戶端沿用舊 status 的 trial 與 cpaLimit(審查發現:網頁仍顯示「TRIAL 090.0°…」與 0.5 nm)
+        var port = FreeTcpPort();
+        await using var server = new RadarWebSocketServer(port, new[] { "x" }, allInterfaces: false);
+        server.Start();
+        using var service = new RadarService(new[] { RadarFactory.X() }, server, null);
+        var sceneA = new LinearScene { OwnSpeedKn = 8, ScenarioId = "A" };
+        var sceneB = new LinearScene { OwnSpeedKn = 8, ScenarioId = "B" };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var ws = new ClientWebSocket();
+        await ws.ConnectAsync(new Uri($"ws://localhost:{port}/radar/x"), cts.Token);
+        var statuses = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var receiving = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    var (type, data) = await ReceiveAsync(ws, cts.Token);
+                    if (type != WebSocketMessageType.Text) continue;
+                    var txt = Encoding.UTF8.GetString(data);
+                    using var doc = JsonDocument.Parse(txt);
+                    if (doc.RootElement.GetProperty("type").GetString() == "status") statuses.Enqueue(txt);
+                }
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or WebSocketException) { }
+        });
+        // 狀態幀在測試執行緒餵入(與 Host 相同:SetUnits 與 OnState 同一處理執行緒)
+        var t = 0.0;
+        async Task FeedUntil(LinearScene sc, Func<bool> done, int maxStates = 1500)
+        {
+            for (var i = 0; !done() && i < maxStates; i++)
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                service.OnState(sc.StateAt(t));
+                t += 0.04;
+                await Task.Delay(2);
+            }
+        }
+        static bool IsArmed(string s) => s.Contains("\"trial\":{") && s.Contains("\"cpaLimit_nm\":0.5");
+        await FeedUntil(sceneA, () => !statuses.IsEmpty);
+        await ws.SendAsync(Encoding.UTF8.GetBytes("{\"cmd\":\"trialManoeuvre\",\"course\":90,\"speed\":8,\"delay\":1}"), WebSocketMessageType.Text, true, cts.Token);
+        await ws.SendAsync(Encoding.UTF8.GetBytes("{\"cmd\":\"cpaLimits\",\"cpa_nm\":0.5,\"tcpa_min\":6}"), WebSocketMessageType.Text, true, cts.Token);
+        await FeedUntil(sceneA, () => statuses.Any(IsArmed));
+        Assert.Contains(statuses, IsArmed);
+        var before = statuses.Count;
+
+        service.SetUnits(new[] { RadarFactory.X(seed: 7) });
+        t = 0;
+        await FeedUntil(sceneB, () => statuses.Count > before, maxStates: 250); // 10 s 模擬時間內必須收到
+        Assert.True(statuses.Count > before, "SetUnits 後未廣播 status");
+        cts.Cancel();
+        await receiving;
+
+        var last = statuses.Last();
+        Assert.False(IsArmed(last), last);
+        using var lastDoc = JsonDocument.Parse(last);
+        var root = lastDoc.RootElement;
+        Assert.True(!root.TryGetProperty("trial", out var trial) || trial.ValueKind == JsonValueKind.Null, last);
+        Assert.Equal(service.Units[0].Arpa.CpaLimitNm, root.GetProperty("cpaLimit_nm").GetDouble());
+        Assert.Equal(service.Units[0].Arpa.TcpaLimitMin, root.GetProperty("tcpaLimit_min").GetDouble());
+    }
+
+    [Fact]
     public async Task UnknownPathIsRejected()
     {
         var port = FreeTcpPort();

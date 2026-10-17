@@ -18,6 +18,7 @@ import {
   parallelIndexLine,
   polarToScreen,
   pxPerNm,
+  screenHeading,
   screenToPolar,
   vrmReadout,
   ORIENTATION_LABEL,
@@ -394,7 +395,7 @@ export class PpiRenderer {
     if (!v || !this.videoCanvas || v.rangeM <= 0) return;
     const view = inp.view;
     const st = inp.status;
-    const ant = antennaOffsetEnu(inp.headingDeg, st?.antennaFwd_m ?? 0, st?.antennaStbd_m ?? 0);
+    const ant = antennaOffsetEnu(screenHeadingOf(inp), st?.antennaFwd_m ?? 0, st?.antennaStbd_m ?? 0);
     const a = enuToScreen(view, ant.dE, ant.dN);
     const scale = ((v.rangeM / M_PER_NM) * pxPerNm(view)) / v.radius;
     const rot = v.stabilised ? -view.rotationDeg * RAD : 0;
@@ -467,7 +468,7 @@ export class PpiRenderer {
     const gz = inp.status!.guardZone;
     const view = inp.view;
     const k = pxPerNm(view);
-    const sec = guardZoneTrueSector(gz, inp.headingDeg);
+    const sec = guardZoneTrueSector(gz, screenHeadingOf(inp));
     ctx.save();
     ctx.strokeStyle = this.pal.guard;
     ctx.lineWidth = 1.5 * inp.dpr;
@@ -495,7 +496,7 @@ export class PpiRenderer {
     const dpr = inp.dpr;
     // 艏向線(CCRP 到圓邊)
     if (!inp.settings.headingLineOff) {
-      const hl = bearingLine(view, inp.headingValid ? inp.headingDeg : 0);
+      const hl = bearingLine(view, screenHeadingOf(inp));
       ctx.strokeStyle = p.heading;
       ctx.lineWidth = 1.5 * dpr;
       ctx.beginPath();
@@ -548,7 +549,7 @@ export class PpiRenderer {
     ctx.setLineDash([10 * inp.dpr, 6 * inp.dpr]);
     for (const pi of inp.settings.pi) {
       if (!pi.on) continue;
-      const b = pi.ref === 'T' ? pi.bearing : pi.bearing + inp.headingDeg;
+      const b = pi.ref === 'T' ? pi.bearing : pi.bearing + screenHeadingOf(inp);
       const seg = parallelIndexLine(inp.view, b, pi.offsetNm);
       if (!seg) continue;
       ctx.beginPath();
@@ -565,7 +566,7 @@ export class PpiRenderer {
     ctx.save();
     inp.settings.ebl.forEach((e, i) => {
       if (!e.on) return;
-      const { trueDeg } = eblBearings(e, inp.headingDeg);
+      const { trueDeg } = eblBearings(e, screenHeadingOf(inp));
       const seg = bearingLine(view, trueDeg);
       ctx.strokeStyle = this.pal.ebl;
       ctx.lineWidth = 1.3 * dpr;
@@ -788,7 +789,7 @@ export class PpiRenderer {
         y -= lh;
       }
       if (e.on) {
-        ctx.fillText(`EBL${i + 1} ${eblReadout(e, inp.headingDeg)}`, pad, y);
+        ctx.fillText(`EBL${i + 1} ${eblReadout(e, screenHeadingOf(inp))}`, pad, y);
         y -= lh;
       }
     }
@@ -796,7 +797,8 @@ export class PpiRenderer {
     if (inp.cursor) {
       const c = screenToPolar(inp.view, inp.cursor.x, inp.cursor.y);
       ctx.textAlign = 'right';
-      ctx.fillText(`游標 ${formatBearing(c.bearing)} T  ${formatRangeNm(c.range)} NM`, W - pad, H - pad);
+      // 航向無效時畫面為相對座標,游標方位為相對方位(R)
+      ctx.fillText(`游標 ${formatBearing(c.bearing)} ${inp.headingValid ? 'T' : 'R'}  ${formatRangeNm(c.range)} NM`, W - pad, H - pad);
     }
     if (!inp.transmitting) {
       ctx.textAlign = 'center';
@@ -808,6 +810,11 @@ export class PpiRenderer {
     }
     ctx.restore();
   }
+}
+
+/** 畫面參考航向(航向無效時 0;見 geometry.screenHeading) */
+function screenHeadingOf(inp: Pick<PpiDrawInput, 'headingDeg' | 'headingValid'>): number {
+  return screenHeading(inp.headingDeg, inp.headingValid);
 }
 
 export function trailLabel(sec: number): string {

@@ -20,7 +20,12 @@ public sealed class RecordLedger
 public sealed class VisitEntry
 {
     public int Seq { get; set; }
+    /// <summary>本次訪船第一個連線的時間</summary>
     public DateTime Utc { get; set; }
+    /// <summary>本次訪船最後一個連線的時間(null:只有一個連線)</summary>
+    public DateTime? LastUtc { get; set; }
+    /// <summary>本次訪船的連線數(重連、補推更新包、隨身碟)</summary>
+    public int Sessions { get; set; } = 1;
     /// <summary>tcp(直連)或 usb(專用隨身碟)</summary>
     public string Via { get; set; } = "";
     public string? Peer { get; set; }
@@ -79,17 +84,37 @@ public sealed class ShipRecordManager
 
     private DateTime Now => _clock.GetUtcNow().UtcDateTime;
 
+    /// <summary>刪除檔案(測試掛勾:模擬 Windows 上被其他程式鎖定而無法刪除)</summary>
+    internal Action<string> FileDeleter { get; init; } = File.Delete;
+
     public RecordLedger LoadLedger() => File.Exists(_layout.LedgerPath) ? PackageJson.Load<RecordLedger>(_layout.LedgerPath, "records-ledger.json") : new RecordLedger();
 
     private void SaveLedger(RecordLedger l) => PackageJson.SaveAtomic(_layout.LedgerPath, l);
 
-    /// <summary>開始一次訪船(直連 session 或隨身碟匯入);回傳訪船序號。</summary>
+    /// <summary>
+    /// 開始一個連線(直連 session 或隨身碟匯入);回傳訪船序號。距上一個連線不到 <see cref="PackagingConfig.VisitMergeHours"/>
+    /// 小時者視為同一次訪船(同一次訪船中重連、補推更新包不另計訪船間隔,避免保留上限誤發警告)。
+    /// </summary>
     public int BeginVisit(string via, string? peer = null)
     {
         using var _ = _layout.AcquireLock();
         var l = LoadLedger();
+        var now = Now;
+        if (l.Visits.Count > 0)
+        {
+            var last = l.Visits[^1];
+            var lastUtc = last.LastUtc ?? last.Utc;
+            var window = TimeSpan.FromHours(Math.Max(0, _layout.Config.VisitMergeHours));
+            if (now >= lastUtc && now - lastUtc < window)
+            {
+                last.LastUtc = now;
+                last.Sessions++;
+                SaveLedger(l);
+                return last.Seq;
+            }
+        }
         var seq = l.CurrentVisit + 1;
-        l.Visits.Add(new VisitEntry { Seq = seq, Utc = Now, Via = via, Peer = peer });
+        l.Visits.Add(new VisitEntry { Seq = seq, Utc = now, Via = via, Peer = peer });
         SaveLedger(l);
         return seq;
     }
@@ -253,44 +278,74 @@ public sealed class ShipRecordManager
         {
             var l = LoadLedger();
             var now = Now;
-            foreach (var bp in report.Packages)
+            try
             {
-                var p = l.Packages.FirstOrDefault(x => x.PackageId == bp.PackageId);
-                if (p is null)
+                foreach (var bp in report.Packages)
                 {
-                    result.Unknown.Add(bp.PackageId);
-                    continue;
-                }
-                if (!Sha256Hex.Equal(p.Sha256, bp.Sha256))
-                {
-                    result.Mismatched.Add(bp.PackageId);
-                    continue;
-                }
-                if (p.DeletedUtc is not null) continue;
-                var outbox = Path.Combine(_layout.OutboxDir, p.FileName);
-                if (File.Exists(outbox)) File.Delete(outbox);
-                foreach (var f in p.Files)
-                {
-                    var rel = f.Path[RecordPackageManifest.FilePrefix.Length..];
-                    var full = PackagePaths.Combine(_layout.RecordsDir, rel);
-                    // 只刪除內容與打包時相同的檔案(之後被改寫的檔案會在下一次打包時另行處理)
-                    if (File.Exists(full) && Sha256Hex.Equal(Sha256Hex.OfFile(full), f.Sha256))
+                    var p = l.Packages.FirstOrDefault(x => x.PackageId == bp.PackageId);
+                    if (p is null)
                     {
-                        File.Delete(full);
-                        result.DeletedFiles.Add(rel);
+                        result.Unknown.Add(bp.PackageId);
+                        continue;
                     }
+                    if (!Sha256Hex.Equal(p.Sha256, bp.Sha256))
+                    {
+                        result.Mismatched.Add(bp.PackageId);
+                        continue;
+                    }
+                    if (p.DeletedUtc is not null) continue;
+                    p.BackedUpUtc ??= bp.BackedUpUtc ?? now;
+                    p.ReportId = report.ReportId;
+                    // 先刪原始紀錄檔(逐檔;被講評站或防毒鎖住的檔案記入 Failed,不中斷);全部成功才刪紀錄包副本並標記已刪除,
+                    // 否則保留副本與帳冊狀態,下次回報時重試(已刪掉的檔案不會再出現)
+                    var failed = new List<string>();
+                    foreach (var f in p.Files)
+                    {
+                        var rel = f.Path[RecordPackageManifest.FilePrefix.Length..];
+                        try
+                        {
+                            var full = PackagePaths.Combine(_layout.RecordsDir, rel);
+                            // 只刪除內容與打包時相同的檔案(之後被改寫的檔案會在下一次打包時另行處理)
+                            if (File.Exists(full) && Sha256Hex.Equal(Sha256Hex.OfFile(full), f.Sha256))
+                            {
+                                FileDeleter(full);
+                                result.DeletedFiles.Add(rel);
+                            }
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                        {
+                            failed.Add($"{rel}:{ex.Message}");
+                        }
+                    }
+                    if (failed.Count == 0)
+                    {
+                        try
+                        {
+                            var outbox = Path.Combine(_layout.OutboxDir, p.FileName);
+                            if (File.Exists(outbox)) FileDeleter(outbox);
+                            p.DeletedUtc = now;
+                            result.Deleted.Add(p.PackageId);
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            failed.Add($"{p.FileName}:{ex.Message}");
+                        }
+                    }
+                    result.Failed.AddRange(failed.Select(f => $"{p.PackageId} {f}"));
                 }
-                p.BackedUpUtc = bp.BackedUpUtc ?? now;
-                p.DeletedUtc = now;
-                p.ReportId = report.ReportId;
-                result.Deleted.Add(p.PackageId);
+                result.Retained = l.Packages.Where(p => p.DeletedUtc is null).Select(p => p.PackageId).ToList();
             }
-            result.Retained = l.Packages.Where(p => p.DeletedUtc is null).Select(p => p.PackageId).ToList();
-            SaveLedger(l);
+            finally
+            {
+                // 帳冊一定要與實際檔案一致(即使中途發生未預期的錯誤)
+                SaveLedger(l);
+            }
         }
         result.Ok = true;
-        result.Warnings = RetentionWarnings();
-        audit.Write(AuditEvents.BackupReportAccepted, new { result.ReportId, signer = result.Signer, deleted = result.Deleted, files = result.DeletedFiles.Count, result.Retained, result.Mismatched, result.Unknown });
+        if (result.Failed.Count > 0)
+            result.Warnings.Add($"{result.Failed.Count} 個檔案無法刪除(可能被講評站或防毒程式開啟),相關紀錄包保留,下次回報時重試:{string.Join("; ", result.Failed)}");
+        result.Warnings.AddRange(RetentionWarnings());
+        audit.Write(AuditEvents.BackupReportAccepted, new { result.ReportId, signer = result.Signer, deleted = result.Deleted, files = result.DeletedFiles.Count, result.Retained, result.Mismatched, result.Unknown, failed = result.Failed });
         if (result.Deleted.Count > 0) audit.Write(AuditEvents.RecordsDeleted, new { result.ReportId, packages = result.Deleted, files = result.DeletedFiles });
         return result;
     }

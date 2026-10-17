@@ -225,7 +225,7 @@ export class RadarPpi extends LitElement {
       blinkOn,
       cursor: this.cursor,
       transmitting: tx,
-      trial: tr?.trial ?? s.status?.trial,
+      trial: s.trial,
       dpr: this.dpr,
     });
   }
@@ -275,7 +275,8 @@ export class RadarPpi extends LitElement {
     const s = this.store;
     const view = this.view ?? this.computeView();
     if (!insidePpi(view, x, y)) return;
-    const hdg = s.headingDeg;
+    // 畫面參考航向(航向無效時 0):EBL/PI 的 R 參考與畫面一致,不加核心保留的最後航向
+    const hdg = s.screenHeadingDeg;
     const st = s.settings;
     switch (st.tool) {
       case 'select': {

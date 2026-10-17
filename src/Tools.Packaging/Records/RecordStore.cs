@@ -148,6 +148,8 @@ public sealed class RecordStore
         {
             var pkgSha = Sha256Hex.OfFile(sbrecPath);
             using var zip = ZipFile.OpenRead(sbrecPath);
+            // 重複項目(尤其是第二個 manifest.json)會讓解開的內容與驗證的簽章不一致:一律拒絕
+            if (UpdatePackageReader.FindDuplicateEntry(zip) is { } dup) throw new InvalidDataException($"紀錄包內有重複的項目:{dup}");
             var (mb, sig) = UpdatePackageReader.ReadSigned(zip);
             if (sig.FormatError() is { } fe) throw new InvalidDataException(fe);
             var m = PackageJson.FromBytes<RecordPackageManifest>(mb, "紀錄包 manifest.json");
@@ -219,13 +221,16 @@ public sealed class RecordStore
                 var tmp = dest + ".importing";
                 PackagePaths.DeleteDirectory(tmp);
                 System.IO.Directory.CreateDirectory(tmp);
+                // manifest.json/manifest.sig 寫入「已驗證的位元組」,不從 zip 另行解出;其餘只解出已核對雜湊的紀錄檔,不覆寫
+                File.WriteAllBytes(Path.Combine(tmp, "manifest.json"), mb);
+                File.WriteAllBytes(Path.Combine(tmp, "manifest.sig"), UpdatePackageReader.ReadEntry(zip.GetEntry("manifest.sig")!, 64 << 10));
                 foreach (var e in zip.Entries)
                 {
-                    if (e.FullName.EndsWith('/')) continue;
-                    var name = e.FullName is "manifest.json" or "manifest.sig" ? e.FullName : e.FullName[RecordPackageManifest.FilePrefix.Length..];
-                    var target = PackagePaths.Combine(tmp, PackagePaths.Normalize(name));
+                    if (e.FullName.EndsWith('/') || e.FullName is "manifest.json" or "manifest.sig") continue;
+                    var target = PackagePaths.Combine(tmp, PackagePaths.Normalize(e.FullName[RecordPackageManifest.FilePrefix.Length..]));
                     System.IO.Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    e.ExtractToFile(target, overwrite: true);
+                    e.ExtractToFile(target, overwrite: false);
+                    if (!Sha256Hex.Equal(Sha256Hex.OfFile(target), listed[e.FullName].Sha256)) throw new InvalidDataException($"解開後紀錄檔雜湊不符:{e.FullName}");
                 }
                 PackagePaths.DeleteDirectory(dest);
                 System.IO.Directory.Move(tmp, dest);
@@ -317,14 +322,14 @@ public sealed class RecordStore
         return (doc, report);
     }
 
-    /// <summary>船上回報已刪除(cleanupResult)後記錄。</summary>
-    public void MarkShipDeleted(string reportId, IEnumerable<string> packageIds)
+    /// <summary>船上回報已刪除(直連 cleanupResult,或隨身碟上的裝置簽章清理通知)後記錄;<paramref name="shipId"/> 不為 null 時只標記該船的紀錄包。</summary>
+    public void MarkShipDeleted(string reportId, IEnumerable<string> packageIds, string? shipId = null)
     {
         lock (Gate)
         {
             var l = LoadLedger();
             var ids = packageIds.ToHashSet(StringComparer.Ordinal);
-            foreach (var p in l.Packages.Where(p => ids.Contains(p.PackageId)))
+            foreach (var p in l.Packages.Where(p => ids.Contains(p.PackageId) && (shipId is null || string.Equals(p.ShipId, shipId, StringComparison.OrdinalIgnoreCase))))
             {
                 p.ShipDeletedUtc ??= Now;
                 p.ReportedId = reportId;

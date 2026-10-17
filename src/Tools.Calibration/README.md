@@ -64,8 +64,8 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 | `snapshot` / `restore` | `value` 名稱(預設 `default`) | 記憶體快照:運動狀態、控制、環境、主機狀態機、故障、擱淺、陣風係數與亂數狀態;`restore` 無此名稱 `ok=false`。`loadScenario` 後快照清空 | 實作 |
 | `injectFault` | `value` 名稱 | 加入故障(同名不重複)並在 `state.faults` 廣播。會改變行為的三種(`src/SimCore/Engine/FaultNames.cs`):`steeringGear` 舵角停在目前位置(舵令與自動舵照記但不作用);`mainEngine` 轉速令視為 0、軸轉速以停俥時間常數衰減、`engine.state = failed`,車鐘改令無效;`bowThruster` 側推令視為 0、實際推力依延遲衰減。其餘名稱(如 `gyroDrift`、`gpsJump`、`radarFailure`、`blackout`)僅記錄並廣播,由儀器端自行反應,detail 註明 | 實作(三種行為 + 其餘記錄) |
 | `clearFault` | `value` 名稱;省略 / null / 空字串 = 全部 | 清除指定故障(不在清單中仍 `ok=true`,detail 註明)或全部(C# 語意) | 實作 |
-
 | `triggerTimeline` / `acknowledge` / `getAssessment` / `endExercise` | — | 情境引擎指令(C# SimCore 實作);Python 參考實作不執行時間表、不評估,固定 `ok=false`、`detail` 說明未實作,模型不變 | 未實作(回 ok=false) |
+| `alertAcknowledge` / `alertSilence` / `bnwasMode` / `bnwasReset` | — | 警報管理(BAM)與 BNWAS 指令(C# SimCore 實作;docs/design/sensors-alerts.md);Python 不實作感測器層/警報/BNWAS(不輸出 `state.truth/sensors/alerts/bnwas`),固定 `ok=false`、模型不變 | 未實作(回 ok=false) |
 
 未在 `command.schema.json` 的命令回 `ok=false`、`detail` 為「未知命令」。
 
@@ -77,7 +77,7 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 - **參數集** `ParameterSet.load(path)`(預設 `data/parameters/company-procedures.yaml`,schema `src/Contracts/parameter-set.schema.json`):載入即結構檢查(版次 `YYYY.M.n`、單位列舉、來源文件存在、鍵名單位後綴與 `unit` 一致、`min`/`max`),並記錄 `path` 與檔案位元組的 `sha256`(hex 大寫,與 C# 相同)。
 - **引用解析** `parameters.resolve_references(tree, pset)`:整個字串恰為 `"${params:<key>}"`(**必須加引號**,否則 YAML 層已擋)者以參數 `value` 就地取代;未知鍵、欄位後綴(`_nm`、`_m`、`_s`、`_kn`、`_deg`、`_degPerMin`、`_mps`、`_fraction`;慣用欄位 `metres`/`fractionOfDraft`/`passMark`)與參數 `unit` 不符、引用於 `id`/`name`/`seed`/`type`/`rule`/`metric` 等欄位、來源文件缺漏皆 `ValueError`。回傳解析清單 `[{path, key, value, unit, source, revision, clause}]`。
 - **自動載入**:`load_scenario(ref, parameters=None)` 在情境含引用而未給參數集時,依 `assessment.parameterSet`(絕對路徑;否則依序專案根目錄、情境檔目錄、工作目錄;未宣告時預設 `data/parameters/company-procedures.yaml`)尋找,找不到即 `ValueError` 並提示 `--parameters`。無引用的情境不需要參數集。
-- **載入結果**:正規化 dict 新增 `parameterSet`(`{id, version, path, sha256, resolved}`,同紀錄標頭 `header.parameterSet`;無引用時 `None`)與數值已代入的 `timeline` / `route` / `zones` / `assessment` / `briefing` 子樹(原樣保留,**不模擬**)。伺服器 ack 與 `state.scenario.parameterSetVersion` 由此取得。
+- **載入結果**:正規化 dict 新增 `parameterSet`(`{id, version, path, sha256, resolved}`,同紀錄標頭 `header.parameterSet`;無引用時 `None`)與數值已代入的 `timeline` / `route` / `zones` / `assessment` / `briefing` 子樹(原樣保留,**不模擬**),以及補上 C# 預設值(`ScenarioBridge.cs`)的 `sensors` / `alerts` / `bnwas`(結構檢查同 C# `Scenario.StructuralIssues`:秒數/門檻為正、`offHeadingDelay_s` ≥ 0、`dormant_s` 180–720;未設的門檻省略 = 關閉;數值欄位可引用參數,`mode` 不可)。伺服器 ack 與 `state.scenario.parameterSetVersion` 由此取得。
 - **結構檢查** `scenario.structural_issues(raw)`(C# `Scenario.StructuralIssues` 的便宜規則,第一個錯誤即 `ValueError`):時間表 `id` 唯一、`when` 條件型別/必要欄位/參照(區域、航點、目標)、`repeat`、動作名稱在允許清單(`loadScenario`/`reset`/`restore`/`snapshot` 不允許)與各動作必要欄位;航線航點 ≥ 2、`name` 唯一、位置、`startLeg`、相鄰航點不重合;區域 `id` 唯一、`type`、多邊形 3–64 點、水深為正;評估規則 `id` 唯一、`rule`/`metric`/`expect` 名稱、`lessThan`、`zoneId`/`itemId`/`waypoint` 參照、`within_s`;簡報 `roles[].role`、`minParticipants`、`duration_s`。不做初始狀態相關檢查(初始 UKC、禁區、多邊形自交等由 C# `ScenarioValidator` 負責)。
 - **跨語言一致性測試**:對 `data/scenarios/*.yaml` 以 Python 載入+解析,與 C# 紀錄夾具(`src/Instruments.Web/tests/fixtures/record-*-core.jsonl` 第一行 `header.scenario` / `header.parameterSet`)比對解析路徑集合、鍵集合、版次、各已解析數值(1e-9)與 route/zones/assessment/timeline/briefing 的全部葉值(Python 為 C# 輸出的子集)。E07 夾具錄製後 YAML 與參數集又改過(CPA 門檻改用 `navigation.cpa.channel_nm`、ecrPrompt 條件),差異列在測試的 `KNOWN_FIXTURE_DRIFT`,重新錄製夾具後可清空。
 
@@ -94,7 +94,7 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 | `manoeuvres.py` | 迴旋、Z 形、緊急停船、慣性停船、倒車→進車、側推迴轉、速度-轉速 |
 | `identify.py` | scipy `least_squares`(trf,有界)+ 平行有限差分 Jacobian + 先驗殘差 |
 | `report.py` | 驗證報告(markdown、matplotlib png、json) |
-| `server.py` | websockets 即時模擬(25 Hz 廣播、15 種命令、情境載入、故障、快照;情境引擎 4 指令回 ok=false) |
+| `server.py` | websockets 即時模擬(25 Hz 廣播、15 種命令、情境載入、故障、快照;情境引擎 4 指令與警報/BNWAS 4 指令回 ok=false) |
 | `cli.py` | `simosa-brm` 入口 |
 | `tests/` | 單位/正負慣例、確定性、B 系列與 KVLCC2 回歸、速度-轉速、FSB1 迴旋/Z 形/停船黃金測試、FSB2 海報比對、WebSocket、情境載入/故障/陣風/快照(`test_server_scenario_faults.py`)、參數集/引用解析/結構檢查/與 C# 紀錄標頭的跨語言一致性(`test_scenario_params.py`) |
 
@@ -166,7 +166,7 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 4. **試俥功率**:以 B 系列 K_Q 估計的軸功率比試俥低約 17–20%(實際螺槳非 B 系列、PBCF、η_R 等);速度-轉速以推力恆等校準,不受影響,但功率/負荷顯示僅供參考。
 5. **Schilling 舵** 35° 以上升力曲線與滑流不對稱為假設模型;No.1 右迴旋橫距(初期迴轉快、定常圓大的試俥特徵)無法完全重現。
 6. **No.2** 僅海報圖面讀值;舵面積、受風面積、側推推力、換向延遲為估計;取得操縱試驗報告後重跑 `identify`。壓載狀態(兩船)僅有海報車鐘速度,係數為估計(`loading=ballast` 可用,未驗證);艏艉吃水差對導數的影響未納入。
-7. 風為 Blendermann 參數式與估計面積,陣風只是每秒更新的風速係數(無空間/頻譜模型);淺水修正為趨勢用倍率;岸壁效應、浪、拖船、錨纜、4 自由度橫搖未實作(規劃書 6.2 其餘項目)。故障只有 `steeringGear`、`mainEngine`、`bowThruster` 三種改變行為(與 C# 相同),其餘名稱僅記錄;能見度只記錄不用。情境的時間表/航線/區域/評估只做參數解析與結構檢查,不執行(情境引擎由 C# SimCore 負責)。
+7. 風為 Blendermann 參數式與估計面積,陣風只是每秒更新的風速係數(無空間/頻譜模型);淺水修正為趨勢用倍率;岸壁效應、浪、拖船、錨纜、4 自由度橫搖未實作(規劃書 6.2 其餘項目)。故障只有 `steeringGear`、`mainEngine`、`bowThruster` 三種改變行為(與 C# 相同),其餘名稱僅記錄;能見度只記錄不用。情境的時間表/航線/區域/評估與 sensors/alerts/bnwas 設定只做參數解析與結構檢查(後者補 C# 預設值後保留),不執行(情境引擎、感測器故障層、警報與 BNWAS 由 C# SimCore 負責)。
 8. 兩船 `x_G` 設 0(LCG 未知);KVLCC2 回歸測試已用論文值 x_G = 11.2 m,x_G 對迴旋直徑影響約 8–10%,取得兩船 LCG 後應填入 `reference.xG_m`。
 10. **低速/零速艏搖阻尼**只有橫流阻力(C_D = 1.0,未校準)與多項式外推;零速側推的穩態迴轉率約 40–45°/min(海報 20°/min),艏側推 90° 迴轉時間偏短約 16%;側推有效推力(`thruster.effectiveness`)與 C_D 待船長/引水人評價或 VDR 資料校準(規劃書 6.4 將側推列為趨勢項)。側推時船體因「旋轉力的運動學」((m+m_y)v r 耦合)會逐漸獲得前進速度(上限約 推力/((m+m_x)r)),與試俥記錄「約 1 kn」一致。
 11. **倒退(u<0)**:多項式 Y、N 導數沿用前進值(MMG 標準模型未定義倒退),僅阻力方向與舵流向已處理;倒退操縱性未驗證。

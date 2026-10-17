@@ -17,6 +17,8 @@ public sealed class UpdateApplyOptions
     public string Via { get; init; } = "cli";
     /// <summary>測試掛勾:每個元件替換完成後呼叫(丟出例外以模擬中途失敗)</summary>
     public Action<string>? AfterComponentSwap { get; init; }
+    /// <summary>測試掛勾:提交步驟(上一版移入 state/previous)各階段前呼叫(move-previous、delete-stale;丟出例外以模擬檔案鎖定)</summary>
+    public Action<string>? CommitStep { get; init; }
 }
 
 /// <summary>套用結果(同步訊息 updateResult 與 CLI 輸出)。</summary>
@@ -42,6 +44,8 @@ public sealed class PreviousMeta
 {
     public string? ReplacedByPackageId { get; set; }
     public string? ReplacedByVersion { get; set; }
+    /// <summary>取代者的種類(trust 類不可 rollback)</summary>
+    public string? ReplacedByKind { get; set; }
     public DateTime CreatedUtc { get; set; }
     /// <summary>元件 → 套用前是否存在</summary>
     public Dictionary<string, bool> Components { get; set; } = new();
@@ -97,25 +101,41 @@ public sealed class UpdateApplier
             return result;
         }
         var m = v.Manifest!;
-        var staging = Path.Combine(_layout.StagingDir, SafeName(m.PackageId));
+        string staging;
+        try
+        {
+            // packageId 已由 Verify 以白名單檢查;此處再確認暫存目錄仍在 state/staging 之內(縱深防禦)
+            staging = PackagePaths.Combine(_layout.StagingDir, SafeName(m.PackageId));
+        }
+        catch (InvalidDataException ex)
+        {
+            result.Errors.Add(ex.Message);
+            result.Message = "更新包驗證失敗,未套用";
+            audit.Write(AuditEvents.UpdateRejected, new { m.PackageId, m.Version, signer = v.SignerDescription, errors = result.Errors, via = options.Via, options.Operator });
+            return result;
+        }
         var nextRoot = Path.Combine(_layout.StateDir, "next");
         var pendingPrev = Path.Combine(_layout.StateDir, "previous.pending");
+        var committed = false;
+        var preservePending = false;
         try
         {
             PackagePaths.DeleteDirectory(staging);
             PackagePaths.DeleteDirectory(nextRoot);
             PackagePaths.DeleteDirectory(pendingPrev);
+            CleanupStalePrevious();
 
             // 1. 解壓到暫存並重算雜湊(以解出的檔案為準,避免驗證後被替換)
             Directory.CreateDirectory(staging);
             using (var zip = ZipFile.OpenRead(packagePath))
             {
+                if (UpdatePackageReader.FindDuplicateEntry(zip) is { } dup) throw new InvalidDataException($"更新包內有重複的項目:{dup}");
                 foreach (var f in m.Files)
                 {
                     var entry = zip.GetEntry(UpdateManifest.PayloadPrefix + f.Path) ?? throw new InvalidDataException($"更新包缺少檔案:{f.Path}");
                     var dest = PackagePaths.Combine(staging, f.Path);
                     Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    entry.ExtractToFile(dest, overwrite: true);
+                    entry.ExtractToFile(dest, overwrite: false);
                     if (!Sha256Hex.Equal(Sha256Hex.OfFile(dest), f.Sha256)) throw new InvalidDataException($"解壓後檔案雜湊不符:{f.Path}");
                 }
             }
@@ -130,7 +150,8 @@ public sealed class UpdateApplier
                 return result;
             }
 
-            // 3. 建立新元件目錄
+            // 3. 建立新元件目錄:複製現行 → 先刪除 remove(含 trust.remove 推得的金鑰檔)→ 再寫入新檔
+            //    (先刪後寫:新檔與被移除的檔案同名時,新檔不會被當成移除項刪掉)
             var components = m.Files.Select(f => PackagePaths.TopLevel(f.Path)).Concat(removePaths.Select(PackagePaths.TopLevel))
                 .Distinct().OrderBy(c => Array.IndexOf(PackagePaths.UpdateComponents, c)).ToList();
             result.Components = components;
@@ -143,17 +164,28 @@ public sealed class UpdateApplier
                 if (existed[comp]) PackagePaths.CopyDirectory(live, next);
                 else Directory.CreateDirectory(next);
             }
+            foreach (var r in removePaths)
+            {
+                var target = PackagePaths.Combine(nextRoot, r);
+                if (File.Exists(target)) File.Delete(target);
+                else if (Directory.Exists(target)) PackagePaths.DeleteDirectory(target);
+            }
             foreach (var f in m.Files)
             {
                 var dest = PackagePaths.Combine(nextRoot, f.Path);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 File.Copy(PackagePaths.Combine(staging, f.Path), dest, overwrite: true);
             }
-            foreach (var r in removePaths)
+            // trust 類:以實際組出的信任清單目錄重新載入並核對(不只依清單推算)
+            if (m.Kind == UpdateKinds.Trust && m.Trust is { } tc)
             {
-                var target = PackagePaths.Combine(nextRoot, r);
-                if (File.Exists(target)) File.Delete(target);
-                else if (Directory.Exists(target)) PackagePaths.DeleteDirectory(target);
+                CheckResultingTrust(Path.Combine(nextRoot, "config", "trusted-keys"), tc, result);
+                if (result.Errors.Count > 0)
+                {
+                    result.Message = "套用前檢查失敗,未套用";
+                    audit.Write(AuditEvents.UpdateRejected, new { m.PackageId, m.Version, signer = v.SignerDescription, errors = result.Errors, via = options.Via, options.Operator });
+                    return result;
+                }
             }
 
             // 4. 原子替換(目錄改名);失敗時逐一回復
@@ -171,7 +203,7 @@ public sealed class UpdateApplier
                 }
                 PackageJson.SaveAtomic(Path.Combine(pendingPrev, "previous.json"), new PreviousMeta
                 {
-                    ReplacedByPackageId = m.PackageId, ReplacedByVersion = m.Version, CreatedUtc = Now, Components = existed,
+                    ReplacedByPackageId = m.PackageId, ReplacedByVersion = m.Version, ReplacedByKind = m.Kind, CreatedUtc = Now, Components = existed,
                 });
                 if (File.Exists(_layout.InstalledStatePath)) File.Copy(_layout.InstalledStatePath, Path.Combine(pendingPrev, "installed.json"), overwrite: true);
                 UpdateInstalled(installed, m, v);
@@ -188,24 +220,37 @@ public sealed class UpdateApplier
                 return result;
             }
 
-            // 5. 提交:上一版改存 state/previous(只保留一層)
-            PackagePaths.DeleteDirectory(_layout.PreviousDir);
-            Directory.Move(pendingPrev, _layout.PreviousDir);
+            // 5. 提交:新版已上線、installed.json 已寫入。之後的任何失敗都只記警告,不得回報「未變更」
+            committed = true;
             result.Ok = true;
             result.Message = $"已套用 {m.Kind} 更新包 {m.Version}(簽章者 {v.SignerDescription})";
-            audit.Write(AuditEvents.UpdateApplied, new
+            preservePending = !CommitPrevious(pendingPrev, m, options, result);
+            try
             {
-                m.PackageId, m.Version, m.Kind, m.Summary, signer = new { keyId = v.SignerKeyId, name = v.SignerName, role = v.SignerRole },
-                claimedSigner = m.Signer.Name, packageSha256 = v.PackageSha256, smsDocuments = m.SmsDocuments, files = m.Files.Count, components,
-                parameterSet = m.ParameterSet is { } ps ? new { ps.Id, ps.Version, ps.Sha256 } : null, validation = m.Validation.Status,
-                affected = m.AffectedScenarios.Select(a => a.ScenarioId).ToList(), warnings = result.Warnings, via = options.Via, options.Operator,
-            });
-            if (m.Kind == UpdateKinds.Trust && m.Trust is { } t)
-                audit.Write(AuditEvents.TrustRotated, new { m.PackageId, m.Version, signer = v.SignerDescription, added = t.Add, removed = t.Remove, reason = t.Reason });
+                audit.Write(AuditEvents.UpdateApplied, new
+                {
+                    m.PackageId, m.Version, m.Kind, m.Summary, signer = new { keyId = v.SignerKeyId, name = v.SignerName, role = v.SignerRole },
+                    claimedSigner = m.Signer.Name, packageSha256 = v.PackageSha256, smsDocuments = m.SmsDocuments, files = m.Files.Count, components,
+                    parameterSet = m.ParameterSet is { } ps ? new { ps.Id, ps.Version, ps.Sha256 } : null, validation = m.Validation.Status,
+                    affected = m.AffectedScenarios.Select(a => a.ScenarioId).ToList(), warnings = result.Warnings, via = options.Via, options.Operator,
+                });
+                if (m.Kind == UpdateKinds.Trust && m.Trust is { } t)
+                    audit.Write(AuditEvents.TrustRotated, new { m.PackageId, m.Version, signer = v.SignerDescription, added = t.Add, removed = t.Remove, reason = t.Reason });
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                result.Warnings.Add($"已套用,但稽核紀錄寫入失敗:{ex.Message}");
+            }
             return result;
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         {
+            if (committed)
+            {
+                // 不應發生(提交後的步驟各自捕捉例外);保守起見仍回報已套用
+                result.Warnings.Add($"已套用,但提交後的步驟失敗:{ex.Message}");
+                return result;
+            }
             result.Errors.Add(ex.Message);
             result.Message = "套用失敗,未變更安裝目錄";
             audit.Write(AuditEvents.UpdateFailed, new { m.PackageId, m.Version, error = ex.Message, via = options.Via, options.Operator });
@@ -215,8 +260,71 @@ public sealed class UpdateApplier
         {
             TryDelete(staging);
             TryDelete(nextRoot);
-            TryDelete(pendingPrev);
+            if (!preservePending) TryDelete(pendingPrev);
         }
+    }
+
+    /// <summary>
+    /// 提交上一版:舊的 state/previous 先改名移開(state/previous.stale-*)再把 previous.pending 改名為 state/previous,
+    /// 最後盡力刪除舊的;刪不掉只記警告(下次套用時再清理)。上一版無法放入 state/previous 時另存為
+    /// state/previous.unsaved-*(不刪除,供手動回復),並使殘留的舊 state/previous 失效,避免 rollback 回到錯誤的版本。
+    /// 回傳 false 表示 previous.pending 仍保有上一版資料(呼叫端不得刪除)。
+    /// </summary>
+    private bool CommitPrevious(string pendingPrev, UpdateManifest m, UpdateApplyOptions options, UpdateApplyResult result)
+    {
+        string? stale = null;
+        try
+        {
+            options.CommitStep?.Invoke("move-previous");
+            if (Directory.Exists(_layout.PreviousDir))
+            {
+                stale = Path.Combine(_layout.StateDir, $"previous.stale-{Guid.NewGuid().ToString("N")[..8]}");
+                Directory.Move(_layout.PreviousDir, stale);
+            }
+            Directory.Move(pendingPrev, _layout.PreviousDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            var kept = pendingPrev;
+            var movedAway = false;
+            try
+            {
+                var unsaved = Path.Combine(_layout.StateDir, $"previous.unsaved-{SafeName(m.PackageId)}-{Now:yyyyMMdd'T'HHmmss}");
+                Directory.Move(pendingPrev, unsaved);
+                kept = unsaved;
+                movedAway = true;
+            }
+            catch (Exception ex2) when (ex2 is IOException or UnauthorizedAccessException) { }
+            // 殘留的 state/previous 是更早一版的上一版,已不能用來 rollback 現行版本
+            try
+            {
+                var meta = Path.Combine(_layout.PreviousDir, "previous.json");
+                if (File.Exists(meta)) File.Delete(meta);
+            }
+            catch (Exception ex3) when (ex3 is IOException or UnauthorizedAccessException) { }
+            result.Warnings.Add($"新版已套用,但上一版無法存入 state/previous({ex.Message});rollback 不可用,被替換的元件保存在 {kept}(可手動回復)");
+            return movedAway;
+        }
+        if (stale is not null)
+        {
+            try
+            {
+                options.CommitStep?.Invoke("delete-stale");
+                PackagePaths.DeleteDirectory(stale);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                result.Warnings.Add($"已套用;舊的上一版暫存 {stale} 無法刪除({ex.Message}),下次套用時再清理");
+            }
+        }
+        return true;
+    }
+
+    /// <summary>盡力刪除先前提交時刪不掉的 state/previous.stale-*。</summary>
+    private void CleanupStalePrevious()
+    {
+        if (!Directory.Exists(_layout.StateDir)) return;
+        foreach (var d in Directory.EnumerateDirectories(_layout.StateDir, "previous.stale-*")) TryDelete(d);
     }
 
     private List<string> Restore(List<string> attempted, Dictionary<string, bool> existed, string pendingPrev)
@@ -256,7 +364,7 @@ public sealed class UpdateApplier
                 if (File.Exists(live)) set = ParameterSetLoader.FromYaml(File.ReadAllText(live));
             }
         }
-        catch (InvalidDataException ex)
+        catch (Exception ex) when (ex is InvalidDataException or System.Text.Json.JsonException or YamlDotNet.Core.YamlException)
         {
             result.Errors.Add($"參數集無法載入:{ex.Message}");
             return;
@@ -279,26 +387,72 @@ public sealed class UpdateApplier
         }
         if (m.Kind == UpdateKinds.Trust && m.Trust is { } t)
         {
-            var remaining = trust.Keys.Where(k => !t.Remove.Contains(k.KeyId, StringComparer.OrdinalIgnoreCase)).Select(k => k.Role).ToList();
-            remaining.AddRange(t.Add.Select(a => a.Role));
+            // 依「實際套用後的檔案集合」計算:現有檔案 − trust.remove 的金鑰檔 + trust.add(新增或覆寫)
+            var resulting = new Dictionary<string, string>(PathComparer); // 檔名 → 角色
+            foreach (var k in trust.Keys.Where(k => k.FilePath is not null)) resulting[Path.GetFileName(k.FilePath!)] = k.Role;
+            var addNames = t.Add.Select(a => Path.GetFileName(a.Path)).ToHashSet(PathComparer);
             foreach (var r in t.Remove)
             {
-                var k = trust.Find(r);
-                if (k?.FilePath is null)
+                var files = trust.Keys.Where(k => k.FilePath is not null && string.Equals(k.KeyId, r, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (files.Count == 0)
                 {
                     result.Warnings.Add($"要移除的金鑰 {KeyFiles.Short(r)} 不在信任清單");
                     continue;
                 }
-                removePaths.Add(PackagePaths.TrustedKeysPrefix + Path.GetFileName(k.FilePath));
+                foreach (var k in files)
+                {
+                    var name = Path.GetFileName(k.FilePath!);
+                    resulting.Remove(name);
+                    // 同名檔會被 trust.add 的新公鑰取代,不列入移除(否則新公鑰會被刪掉)
+                    if (!addNames.Contains(name)) removePaths.Add(PackagePaths.TrustedKeysPrefix + name);
+                }
             }
             foreach (var a in t.Add)
             {
-                using var parsed = TrustedKey.Parse(File.ReadAllText(PackagePaths.Combine(staging, a.Path)), a.Path, KeyRoles.Primary);
-                if (!string.Equals(parsed.KeyId, a.KeyId, StringComparison.OrdinalIgnoreCase) || parsed.Role != a.Role)
-                    result.Errors.Add($"{a.Path} 的公鑰或角色與 trust.add 不符");
+                var name = Path.GetFileName(a.Path);
+                if (resulting.ContainsKey(name))
+                {
+                    var existing = trust.Keys.FirstOrDefault(k => k.FilePath is not null && PathComparer.Equals(Path.GetFileName(k.FilePath), name));
+                    result.Errors.Add($"trust.add 的 {a.Path} 會覆寫信任清單中現有的金鑰檔(金鑰 {existing?.Describe() ?? name});要更換該金鑰請在 trust.remove 列出其金鑰 ID,或改用其他檔名");
+                    continue;
+                }
+                try
+                {
+                    using var parsed = TrustedKey.Parse(File.ReadAllText(PackagePaths.Combine(staging, a.Path)), a.Path, KeyRoles.Primary);
+                    if (!string.Equals(parsed.KeyId, a.KeyId, StringComparison.OrdinalIgnoreCase) || parsed.Role != a.Role)
+                        result.Errors.Add($"{a.Path} 的公鑰或角色與 trust.add 不符");
+                    else if (!KeyRoles.IsSigner(parsed.Role))
+                        result.Errors.Add($"{a.Path} 的 role 須為 primary 或 backup");
+                }
+                catch (System.Security.Cryptography.CryptographicException ex)
+                {
+                    result.Errors.Add($"{a.Path} 不是有效的公鑰:{ex.Message}");
+                }
+                resulting[name] = a.Role;
             }
-            if (!remaining.Contains(KeyRoles.Backup)) result.Errors.Add("變更後信任清單沒有備援金鑰,拒絕套用(避免無法再輪替)");
-            if (!remaining.Contains(KeyRoles.Primary)) result.Warnings.Add("變更後信任清單沒有主金鑰,之後的更新包須以備援金鑰簽章");
+            if (!resulting.ContainsValue(KeyRoles.Backup)) result.Errors.Add("變更後信任清單沒有備援金鑰,拒絕套用(避免無法再輪替)");
+            if (!resulting.ContainsValue(KeyRoles.Primary)) result.Warnings.Add("變更後信任清單沒有主金鑰,之後的更新包須以備援金鑰簽章");
+        }
+    }
+
+    /// <summary>船上檔名比較(Windows 不分大小寫)。</summary>
+    private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    /// <summary>以組好的新信任清單目錄重新載入核對:須有備援金鑰、新增的金鑰都在、移除的金鑰都不在。</summary>
+    private static void CheckResultingTrust(string dir, TrustChange t, UpdateApplyResult result)
+    {
+        try
+        {
+            using var after = TrustStore.LoadDirectory(dir);
+            if (!after.Keys.Any(k => k.Role == KeyRoles.Backup)) result.Errors.Add("變更後信任清單沒有備援金鑰,拒絕套用(避免無法再輪替)");
+            foreach (var a in t.Add)
+                if (after.Find(a.KeyId) is null) result.Errors.Add($"新增的金鑰 {KeyFiles.Short(a.KeyId)}({a.Name})未出現在變更後的信任清單,拒絕套用");
+            foreach (var r in t.Remove)
+                if (after.Find(r) is not null) result.Errors.Add($"要移除的金鑰 {KeyFiles.Short(r)} 仍在變更後的信任清單,拒絕套用");
+        }
+        catch (System.Security.Cryptography.CryptographicException ex)
+        {
+            result.Errors.Add($"變更後的信任清單無法載入:{ex.Message}");
         }
     }
 
@@ -333,21 +487,58 @@ public sealed class UpdateApplier
         }).Distinct();
     }
 
-    /// <summary>回復到上一版(state/previous;只保留一層)。曾套用最高版本不下降,因此回復後不能重新套用同一版或更舊的更新包。</summary>
+    /// <summary>
+    /// 是否可 rollback:state/previous 須存在、且正是現行更新包取代掉的上一版;上一個套用的是信任清單變更(trust)時不可 rollback
+    /// (否則被撤銷的金鑰會重新受信任;撤回信任變更須以備援金鑰簽章新的 trust 更新包)。
+    /// </summary>
+    public bool CanRollback(out string? reason) => CanRollback(out reason, out _, out _);
+
+    private bool CanRollback(out string? reason, out PreviousMeta? meta, out InstalledState current)
+    {
+        meta = null;
+        current = InstalledState.LoadOrNew(_layout.InstalledStatePath);
+        var metaPath = Path.Combine(_layout.PreviousDir, "previous.json");
+        if (!File.Exists(metaPath))
+        {
+            reason = "沒有可回復的上一版(state/previous 不存在)";
+            return false;
+        }
+        try { meta = PackageJson.Load<PreviousMeta>(metaPath, "previous.json"); }
+        catch (InvalidDataException ex)
+        {
+            reason = $"上一版資料無法讀取:{ex.Message}";
+            return false;
+        }
+        if (meta.ReplacedByPackageId is null || meta.ReplacedByPackageId != current.PackageId)
+        {
+            reason = $"state/previous 不是現行更新包 {current.PackageId ?? "(無)"} 的上一版(屬於 {meta.ReplacedByPackageId ?? "?"}),拒絕回復";
+            return false;
+        }
+        var replacedId = meta.ReplacedByPackageId;
+        var kind = meta.ReplacedByKind ?? current.History.FirstOrDefault(h => h.PackageId == replacedId)?.Kind;
+        if (kind == UpdateKinds.Trust || meta.Components.ContainsKey("config"))
+        {
+            reason = "上一個套用的是信任清單變更(trust),不可 rollback(會讓被撤銷的金鑰重新受信任);要撤回請由備援金鑰簽章新的 trust 更新包";
+            return false;
+        }
+        reason = null;
+        return true;
+    }
+
+    /// <summary>回復到上一版(state/previous;只保留一層)。曾套用最高版本不下降,因此回復後不能重新套用同一版或更舊的更新包。trust 類不可回復。</summary>
     public UpdateApplyResult Rollback(string? operatorName = null)
     {
         using var _ = _layout.AcquireLock();
         var audit = _layout.Audit(_clock);
         var result = new UpdateApplyResult();
-        var metaPath = Path.Combine(_layout.PreviousDir, "previous.json");
-        if (!File.Exists(metaPath))
+        if (!CanRollback(out var reason, out var metaOrNull, out var current))
         {
-            result.Errors.Add("沒有可回復的上一版(state/previous 不存在)");
+            result.Errors.Add(reason!);
             result.Message = "無法回復";
+            if (metaOrNull is not null) audit.Write(AuditEvents.UpdateFailed, new { action = "rollback", error = reason, operatorName });
             return result;
         }
-        var meta = PackageJson.Load<PreviousMeta>(metaPath, "previous.json");
-        var current = InstalledState.LoadOrNew(_layout.InstalledStatePath);
+        var meta = metaOrNull!;
         var discard = Path.Combine(_layout.StateDir, "discard");
         PackagePaths.DeleteDirectory(discard);
         Directory.CreateDirectory(discard);
@@ -403,7 +594,13 @@ public sealed class UpdateApplier
         return PackageVersion.Compare(a, b) >= 0 ? a : b;
     }
 
-    private static string SafeName(string id) => new(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_').ToArray());
+    /// <summary>目錄名:只留英數字與 - _ .,且不得為空或全是點(同 RecordStore)。</summary>
+    private static string SafeName(string id)
+    {
+        var cleaned = new string(id.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_').ToArray());
+        if (cleaned.Length == 0 || cleaned.All(c => c == '.')) throw new InvalidDataException($"不合法的識別字:{id}");
+        return cleaned;
+    }
 
     private static void TryDelete(string dir)
     {

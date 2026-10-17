@@ -928,7 +928,7 @@ export class InstructorApp extends LitElement {
               ${s.scenario?.ended ? html`<span class="caution">練習已結束</span>` : nothing}
               ${this.parameterSetWarning() ? html`<span class="warn-badge param-warning" title=${this.parameterSetWarning()}>參數集不一致</span>` : nothing}
               ${this.issues.length > 0 ? html`<span class="warning" title=${this.issues.join(', ')}>資料可疑 ${this.issues.length}</span>` : nothing}
-              ${alerts.unacknowledged > 0 ? html`<span class="${alerts.highest === 'warning' || alerts.highest === 'caution' ? 'warn-badge' : 'alarm'} alert-badge" title="駕駛台警報需確認">警報未確認 ${alerts.unacknowledged}</span>` : nothing}
+              ${alerts.unacknowledged > 0 ? html`<span class="${alerts.highestUnacknowledged === 'warning' || alerts.highestUnacknowledged === 'caution' ? 'warn-badge' : 'alarm'} alert-badge" title="駕駛台警報需確認">警報未確認 ${alerts.unacknowledged}</span>` : nothing}
               ${s.bnwas && s.bnwas.stage >= 1 ? html`<span class="${s.bnwas.stage >= 2 ? 'alarm' : 'caution'} bnwas-badge">BNWAS 第 ${s.bnwas.stage} 階段</span>` : nothing}
             </div>`
           : nothing}

@@ -10,6 +10,7 @@ import {
   type RadarMessage,
   type RadarStatus,
   type RadarTracks,
+  type TrialSetting,
 } from './protocol.js';
 import type { RadarConnStatus, RadarSource } from './radar-client.js';
 import { pendingAlarms, pruneAcknowledged } from './arpa.js';
@@ -22,7 +23,7 @@ import {
   type PpiSettings,
   type TmAnchor,
 } from './ppi-model.js';
-import type { Motion } from './geometry.js';
+import { screenHeading, type Motion } from './geometry.js';
 
 export interface FrameInfo {
   radarId: string;
@@ -64,6 +65,11 @@ export class RadarStore {
   readonly acknowledged = new Set<string>();
   tm: TmAnchor | null = null;
   ownHistory: { t: number; x: number; y: number }[] = [];
+  /**
+   * 目前的試操船設定:以最新收到的 status 或 tracks 為準(啟用/關閉後 status 立即廣播,tracks 每圈才更新;
+   * 情境切換後伺服器重新廣播不含 trial 的 status,tracks 也不含 trial → 清除,不沿用舊值)。
+   */
+  trial: TrialSetting | undefined = undefined;
   lastError = '';
   /** 最近一次由本頁要求的伺服器影像量程(nm) */
   requestedVideoRange: number | null = null;
@@ -141,8 +147,11 @@ export class RadarStore {
         break;
       case 'tracks':
         this.tracks = m;
+        this.trial = m.trial;
+        // 時間倒退(核心倒帶/重啟):丟棄 t ≥ 新時間的舊時間軸點,維持歷史單調
+        // (相對運動過去位置依時間內插自船位置,混入舊時間軸會換算錯誤)
+        while (this.ownHistory.length > 0 && this.ownHistory[this.ownHistory.length - 1]!.t >= m.t) this.ownHistory.pop();
         this.ownHistory.push({ t: m.t, x: m.ownShip.x, y: m.ownShip.y });
-        if (this.ownHistory.length > 2 && this.ownHistory[0]!.t > m.t) this.ownHistory = [{ t: m.t, x: m.ownShip.x, y: m.ownShip.y }];
         while (this.ownHistory.length > 0 && this.ownHistory[0]!.t < m.t - OWN_HISTORY_S) this.ownHistory.shift();
         pruneAcknowledged(m.targets, this.acknowledged);
         if (this.selectedId !== null && !m.targets.some((t) => t.id === this.selectedId)) this.selectedId = null;
@@ -161,6 +170,7 @@ export class RadarStore {
   private applyStatus(st: RadarStatus): void {
     const first = this.status === null;
     this.status = st;
+    this.trial = st.trial;
     // 影像量程:不是本頁要求的值(第一次或其他客戶端改了)→ 顯示量程跟著伺服器
     if (first || this.requestedVideoRange === null || Math.abs(st.range_nm - this.requestedVideoRange) > 1e-9) {
       this.requestedVideoRange = st.range_nm;
@@ -273,6 +283,11 @@ export class RadarStore {
 
   get headingDeg(): number {
     return this.frame?.headingDeg ?? this.tracks?.ownShip.heading ?? 0;
+  }
+
+  /** 畫面參考航向:航向無效時 0(艏向上未穩定化,方位皆為相對);EBL/PI 換算與點選用 */
+  get screenHeadingDeg(): number {
+    return screenHeading(this.headingDeg, this.headingValid);
   }
 
   ownNow(): OwnNow {

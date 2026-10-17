@@ -81,6 +81,62 @@ public sealed class ApplyRollbackTests : IDisposable
         Assert.True(again.Ok, string.Join(";", again.Errors));
     }
 
+    /// <summary>提交步驟刪不掉舊的上一版(Windows 檔案鎖定):新版已上線,須回報成功加警告,rollback 仍回到正確的上一版。</summary>
+    [Fact]
+    public void CommitStep_StaleDeleteFails_ReportsAppliedAndRollbackWorks()
+    {
+        var ship = _env.NewShip();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(MixedPackage("2026.10.1", "app 2.0\n", "chart A")).Ok);
+        var r = applier.Apply(MixedPackage("2026.10.2", "app 3.0\n", "chart B"), new UpdateApplyOptions
+        {
+            CommitStep = step =>
+            {
+                if (step == "delete-stale") throw new UnauthorizedAccessException("Access to the path 'state/previous/app/locked/x.dll' is denied.");
+            },
+        });
+        Assert.True(r.Ok, string.Join(";", r.Errors));
+        Assert.False(r.RolledBack);
+        Assert.NotEmpty(r.Warnings);
+        Assert.Equal("app 3.0\n", File.ReadAllText(Path.Combine(ship.Root, "app", "version.txt")));
+        Assert.Equal("2026.10.2", InstalledState.LoadOrNew(ship.InstalledStatePath).Version);
+        var events = ship.Audit().ReadAll().Select(l => l["event"]!.GetValue<string>()).ToList();
+        Assert.Equal(2, events.Count(e => e == AuditEvents.UpdateApplied));
+        Assert.DoesNotContain(AuditEvents.UpdateFailed, events);
+
+        var rb = applier.Rollback("測試");
+        Assert.True(rb.Ok, string.Join(";", rb.Errors));
+        Assert.Equal("app 2.0\n", File.ReadAllText(Path.Combine(ship.Root, "app", "version.txt")));
+        Assert.Equal("2026.10.1", InstalledState.LoadOrNew(ship.InstalledStatePath).Version);
+    }
+
+    /// <summary>提交步驟連舊的上一版都移不開:新版已上線(回報成功加警告),上一版元件另存不被刪除,rollback 不會回到錯誤的版本。</summary>
+    [Fact]
+    public void CommitStep_MovePreviousFails_KeepsReplacedComponents_AndRollbackRefusesWrongTarget()
+    {
+        var ship = _env.NewShip();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(MixedPackage("2026.10.1", "app 2.0\n", "chart A")).Ok);
+        var r = applier.Apply(MixedPackage("2026.10.2", "app 3.0\n", "chart B"), new UpdateApplyOptions
+        {
+            CommitStep = step =>
+            {
+                if (step == "move-previous") throw new IOException("The process cannot access the file because it is being used by another process.");
+            },
+        });
+        Assert.True(r.Ok, string.Join(";", r.Errors));
+        Assert.NotEmpty(r.Warnings);
+        Assert.Equal("app 3.0\n", File.ReadAllText(Path.Combine(ship.Root, "app", "version.txt")));
+        Assert.Equal("2026.10.2", InstalledState.LoadOrNew(ship.InstalledStatePath).HighestVersion);
+        // 被替換掉的 2026.10.1 元件仍保存在 state/ 之下某處
+        Assert.Contains(Directory.EnumerateFiles(ship.StateDir, "version.txt", SearchOption.AllDirectories), f => File.ReadAllText(f) == "app 2.0\n");
+
+        var rb = applier.Rollback("測試");
+        Assert.False(rb.Ok);
+        Assert.Equal("app 3.0\n", File.ReadAllText(Path.Combine(ship.Root, "app", "version.txt")));
+        Assert.Equal("2026.10.2", InstalledState.LoadOrNew(ship.InstalledStatePath).Version);
+    }
+
     [Fact]
     public void AuditRecordsSignerVersionAndTime()
     {

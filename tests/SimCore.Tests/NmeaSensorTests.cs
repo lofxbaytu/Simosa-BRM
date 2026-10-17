@@ -96,4 +96,32 @@ public class NmeaSensorTests
         alr = NmeaEncoder.AlrSentences(e.BuildState(), Utc);
         Assert.Equal(new[] { "001,A,A", "010,V,V" }, alr.Select(x => string.Join(",", Fields(x)[2..5])));
     }
+
+    [Fact]
+    public void MwvTrueUsesTrueHeadingNotGyro()
+    {
+        // 審查發現:MWV(T) 為相對船艏的真風角,與電羅經無關;漂移或失效時不得帶入電羅經誤差
+        var e = TestData.MinimalEngine(speedKn: 8);
+        void Do(SimCommand c) { e.Enqueue(c); e.ProcessPendingCommands(); }
+        Do(SimCommand.SetEnvironment(windTrueSpeedKn: 20, windTrueDirDeg: 90));
+        Do(SimCommand.Autopilot(true, heading: 0));
+        TestData.RunTo(e, 10);
+        Do(SimCommand.InjectFault("gyroDrift", new { rate_degPerMin = 2.0 }));
+        TestData.RunTo(e, 310);
+        var s = e.BuildState();
+        Assert.True(Math.Abs(s.Truth!.HeadingErrorDeg) > 5);
+        var expected = NmeaSentence.F1(Units.NormalizeHeadingDeg(s.Wind.TrueDir - s.Truth.Heading));
+        var f = Fields(NmeaEncoder.MwvTrue(s));
+        Assert.Equal((expected, "T", "A"), (f[1], f[2], f[5]));
+
+        Do(SimCommand.InjectFault("gyroFailure"));
+        Do(SimCommand.Rudder(20));
+        TestData.RunTo(e, 400);
+        s = e.BuildState();
+        Assert.False(s.Sensors!.HeadingValid);
+        expected = NmeaSentence.F1(Units.NormalizeHeadingDeg(s.Wind.TrueDir - s.Truth!.Heading));
+        f = Fields(NmeaEncoder.MwvTrue(s));
+        Assert.Equal((expected, "A"), (f[1], f[5]));
+        Assert.True(NmeaSentence.Verify(NmeaEncoder.MwvTrue(s)));
+    }
 }

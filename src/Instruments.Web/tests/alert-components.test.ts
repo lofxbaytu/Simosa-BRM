@@ -86,6 +86,19 @@ describe('<brm-alert-panel> 中央警報面板', () => {
     expect(cmds).toHaveLength(3);
   });
 
+  it('「未確認 N」徽章顏色取需確認者的最高優先序(已確認的 alarm 不算)', async () => {
+    const list = [
+      alert({ id: 'mainEngine', number: 9, state: 'activeAcknowledged', audible: false }),
+      alert({ id: 'echoSounderFailure', number: 3, priority: 'warning', audible: true }),
+    ];
+    const el = await mount('brm-alert-panel', { alerts: list });
+    const badge = q<HTMLElement>(el, '.count');
+    expect(badge.textContent).toContain('未確認 1');
+    expect(badge.classList.contains('warning')).toBe(true);
+    const red = await mount('brm-alert-panel', { alerts: [...list, alert({ id: 'gyroFailure', number: 1 })] });
+    expect(q<HTMLElement>(red, '.count').classList.contains('warning')).toBe(false);
+  });
+
   it('caution 不需確認、不閃;無警報「無警報」;核心不支援時提示', async () => {
     const el = await mount('brm-alert-panel', { alerts: [alert({ id: 'bnwas', priority: 'caution', audible: false })] });
     expect(q(el, '.alert svg rect.shape')).not.toBeNull();

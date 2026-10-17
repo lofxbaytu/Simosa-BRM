@@ -213,7 +213,7 @@ public sealed class Scenario
             var path = $"assessment.required[{i}]";
             if (!ruleIds.Add(r.Id)) Error(path, $"規則 id 重複:{r.Id}");
             if (string.IsNullOrWhiteSpace(r.After.Event)) Error($"{path}.after", "after 需要 event");
-            if (r.After.ItemId is { } aid && !allItemIds.Contains(aid)) Error($"{path}.after", $"after 引用不存在的時間表項目:{aid}");
+            if (r.After.ItemId is { } aid && ItemIdRefersToTimeline(r.After.Event) && !allItemIds.Contains(aid)) Error($"{path}.after", $"after 引用不存在的時間表項目:{aid}");
             if (r.After.Waypoint is { } awp && !wpNames.Contains(awp)) Error($"{path}.after", $"after 引用不存在的航點:{awp}");
             if (r.After.ZoneId is { } azid && !zoneIds.Contains(azid)) Error($"{path}.after", $"after 引用不存在的區域:{azid}");
             if (r.WithinS <= 0) Error(path, "within_s 必須為正");
@@ -221,11 +221,18 @@ public sealed class Scenario
             foreach (var leaf in r.Expect.Leaves())
             {
                 if (leaf.Name is { } n && !ExpectSpec.SimpleNames.Contains(n)) Error($"{path}.expect", $"未知的 expect:{n}");
-                if (leaf.Event is { } ev && ev.ItemId is { } eid && !allItemIds.Contains(eid)) Error($"{path}.expect", $"expect 引用不存在的時間表項目:{eid}");
+                if (leaf.Event is { } ev && ev.ItemId is { } eid && ItemIdRefersToTimeline(ev.Kind) && !allItemIds.Contains(eid)) Error($"{path}.expect", $"expect 引用不存在的時間表項目:{eid}");
             }
         }
         return issues;
     }
+
+    /// <summary>
+    /// 事件的 itemId 是否指時間表項目。警報與 BNWAS 事件(alert*、bnwas*)的 itemId 是警報 id
+    /// (例如 gyroFailure、bnwas;docs/design/sensors-alerts.md),不比對時間表項目。
+    /// </summary>
+    internal static bool ItemIdRefersToTimeline(string? eventKind)
+        => eventKind is null || !(eventKind.StartsWith("alert", StringComparison.Ordinal) || eventKind.StartsWith("bnwas", StringComparison.Ordinal));
 
     private static void CheckCondition(TriggerCondition c, string path, Action<string, string> error,
         HashSet<string> zoneIds, HashSet<string> wpNames, HashSet<string> targetIds)

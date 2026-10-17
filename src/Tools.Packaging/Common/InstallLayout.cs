@@ -83,7 +83,7 @@ public sealed class InstallLayout
 /// <code>
 /// { "role": "ship", "shipId": "FSB1", "deviceId": "FSB1-LT01",
 ///   "listen": "192.168.77.11", "port": 7300, "ships": { "FSB1": "192.168.77.11", "FSB2": "192.168.77.12" },
-///   "maxVisitIntervals": 2, "recordsDir": "build/records", "store": "store" }
+///   "maxVisitIntervals": 2, "visitMergeHours": 12, "recordsDir": "build/records", "store": "store" }
 /// </code>
 /// </summary>
 public sealed class PackagingConfig
@@ -101,6 +101,8 @@ public sealed class PackagingConfig
     public Dictionary<string, string> Ships { get; set; } = new();
     /// <summary>未取得備份回報時船上紀錄的累積上限(訪船間隔數);超過時於 status 與同步回報警告,但不自動刪除</summary>
     public int MaxVisitIntervals { get; set; } = 2;
+    /// <summary>距上一個連線(直連 session 或隨身碟匯入)不到此時數的連線視為同一次訪船(重連、補推更新包);0 表示每個連線各算一次</summary>
+    public double VisitMergeHours { get; set; } = 12;
     public string? RecordsDir { get; set; }
     /// <summary>教官端紀錄庫目錄(相對安裝根目錄;預設 store)</summary>
     public string? Store { get; set; }

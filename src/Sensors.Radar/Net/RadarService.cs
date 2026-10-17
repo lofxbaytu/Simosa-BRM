@@ -28,6 +28,8 @@ public sealed class RadarService : IDisposable
     private readonly UdpClient? _udp;
     private readonly Func<double, DateTime> _utc;
     private readonly Dictionary<string, Stopwatch> _cpu = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>下一次 OnState 必須廣播 status 的雷達(情境切換後;處理執行緒專用)</summary>
+    private readonly HashSet<string> _statusPending = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<RadarUnit> Units => _units;
     public long StatesProcessed { get; private set; }
@@ -53,6 +55,8 @@ public sealed class RadarService : IDisposable
 
     /// <summary>
     /// 換成新的雷達組(情境切換:新種子/新船);沿用舊雷達的操作員設定(量程、增益、雜波、調諧、待機、保護區)。
+    /// 試操船、CPA/TCPA 限值回到預設,天線位置可能隨船改變,所以下一次 <see cref="OnState"/> 處理完後
+    /// 對每台新雷達廣播 status(客戶端才不會沿用舊 status 的 trial/限值/天線位置)。
     /// 必須在處理執行緒呼叫(OnState 之間)。
     /// </summary>
     public void SetUnits(IEnumerable<RadarUnit> units)
@@ -73,6 +77,7 @@ public sealed class RadarService : IDisposable
                 u.Controls.Guard = old.Controls.Guard;
             }
             if (!_cpu.ContainsKey(u.Config.Id)) _cpu[u.Config.Id] = new Stopwatch();
+            _statusPending.Add(u.Config.Id);
         }
         _units = next;
     }
@@ -114,7 +119,7 @@ public sealed class RadarService : IDisposable
             EventRaised?.Invoke(unit, e);
             _server?.PublishJson(id, RadarJson.Utf8(unit.EventMessage(e)));
         }
-        if (r.StatusChanged) _server?.PublishJson(id, RadarJson.Utf8(unit.Status()));
+        if (_statusPending.Remove(id) | r.StatusChanged) _server?.PublishJson(id, RadarJson.Utf8(unit.Status()));
         if (!r.TracksDue) return;
         _server?.PublishJson(id, RadarJson.Utf8(unit.Tracks()));
         TracksPublished?.Invoke(unit, scene);

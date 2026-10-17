@@ -18,9 +18,9 @@ public sealed class SyncTests : IDisposable
 
     private static readonly DateTime Start = new(2026, 10, 12, 1, 30, 0, DateTimeKind.Utc);
 
-    private async Task<SyncServer> StartServer(InstallLayout ship)
+    private async Task<SyncServer> StartServer(InstallLayout ship, TimeProvider? clock = null)
     {
-        var server = new SyncServer(new ShipNode(ship), IPAddress.Loopback, 0) { IdleTimeout = TimeSpan.FromSeconds(20) };
+        var server = new SyncServer(new ShipNode(ship, clock), IPAddress.Loopback, 0) { IdleTimeout = TimeSpan.FromSeconds(20) };
         server.Start();
         await Task.Yield();
         return server;
@@ -31,7 +31,8 @@ public sealed class SyncTests : IDisposable
     {
         var ship = _env.NewShip();
         TestEnv.WriteRecord(ship.RecordsDir, "r1.jsonl", "E01_baseline", Start, 3600, new object[] { "王大副" });
-        await using var server = await StartServer(ship);
+        var clock = new ManualClock(new DateTimeOffset(2026, 10, 17, 1, 0, 0, TimeSpan.Zero));
+        await using var server = await StartServer(ship, clock);
         using var key = _env.Primary();
         var store = new RecordStore(_env.PathIn("store"));
         var pkg = _env.SoftwarePackage("2026.10.1", key);
@@ -56,6 +57,7 @@ public sealed class SyncTests : IDisposable
 
         // 岸上備份後,第二次訪船:送出已備份回報 → 船上刪除副本
         store.MarkBackedUp(null, "加密外接碟");
+        clock.Advance(TimeSpan.FromDays(14));
         var rep2 = await SyncClient.SyncAsync(new SyncOptions { Host = "127.0.0.1", Port = server.Port, InstructorKey = key, Store = store });
         Assert.True(rep2.Ok);
         Assert.Empty(rep2.Pulled);

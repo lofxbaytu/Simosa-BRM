@@ -413,7 +413,7 @@ export class DemoSim {
   apply(cmd: SimCommand): void {
     const s = this.state;
     // 駕駛台操作重設 BNWAS(sensors-alerts.md 第 4 節)
-    if (this.opts.alerts && BNWAS_RESET_COMMANDS.has(cmd.type)) this.bnwas.reset(s.t, cmd.type, 'instructor');
+    if (this.opts.alerts && BNWAS_RESET_COMMANDS.has(cmd.type)) this.bnwas.reset(s.t, cmd.type, 'instructor', this.autopilot.enabled);
     switch (cmd.type) {
       case 'rudder': {
         if (typeof cmd.value === 'number' && Number.isFinite(cmd.value)) {
@@ -590,7 +590,7 @@ export class DemoSim {
         this.bnwas.setMode(cmd.value, cmd.args ?? {}, s.t, 'instructor');
         break;
       case 'bnwasReset':
-        this.bnwas.reset(s.t, 'bnwasReset', 'instructor');
+        this.bnwas.reset(s.t, 'bnwasReset', 'instructor', this.autopilot.enabled);
         break;
       case 'acknowledge': {
         const a = cmd.args ?? {};

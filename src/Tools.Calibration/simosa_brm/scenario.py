@@ -16,6 +16,9 @@
   原樣保留在結果中。與 C# 相同:origin 未給時先以 initial.position 推導再做航點/多邊形幾何檢查;id/name 可為數字(讀成字串)、
   ``repeat`` 不分大小寫、``bands[].fail`` 字串 strip 後再比對、briefing 不檢查數值範圍。
   ``required[].expect`` 必填、``ukc`` 規則的 lessThan 需 metres|fractionOfDraft:C# ``Scenario.StructuralIssues`` 已同步檢查(兩邊一致)。
+- ``sensors`` / ``alerts`` / ``bnwas``(感測器層、BAM、BNWAS;docs/design/sensors-alerts.md 第 8 節)同樣只結構檢查並保留:
+  補 C# 預設值(``ScenarioBridge.cs``;未設的門檻 offHeading_deg / headingMonitor_deg / shallowWater_m 省略 = 關閉)、
+  數值可寫 ``"${params:…}"``(``mode`` 不可)或數值字串、未知鍵忽略、``bnwas.mode`` 不分大小寫並轉小寫。不模擬感測器故障/警報/BNWAS。
 """
 
 from __future__ import annotations
@@ -58,7 +61,16 @@ METRIC_NAMES = (  # Assessment/MetricNames.cs
     "manoeuvring.thrusterOrders", "manoeuvring.thrusterTime_s", "manoeuvring.timeOverSpeedLimit_s", "manoeuvring.maxOverSpeed_kn",
     "manoeuvring.autopilotTime_s", "manoeuvring.autopilotSwitches",
     "general.duration_s", "general.distance_nm", "general.avgSog_kn", "general.maxSog_kn",
+    # 警報與 BNWAS(docs/design/sensors-alerts.md 第 5 節;Python 不計算評估,只供結構檢查辨識名稱)
+    "alerts.meanAckTime_s", "alerts.maxAckTime_s", "alerts.unacknowledged", "alerts.escalations", "bnwas.stage2Count", "bnwas.stage3Count",
 )
+# 感測器/警報/BNWAS 區段(Scenario/ScenarioBridge.cs;sensors-alerts.md 第 8 節):(欄位, 預設值);預設 None = 可為 null(未設 = 關閉)
+SENSORS_FIELDS = (("magneticCompassError_deg", 0.0),)
+ALERTS_FIELDS = (("escalate_s", 300.0), ("silence_s", 30.0), ("offHeading_deg", None), ("offHeadingDelay_s", 10.0),
+                 ("headingMonitor_deg", None), ("shallowWater_m", None))
+BNWAS_FIELDS = (("dormant_s", 720.0), ("stage2_s", 15.0), ("stage3_s", 90.0))
+BNWAS_MODES = ("off", "auto", "on")  # ScenarioBridge.cs BnwasMode(JsonStringEnumConverter 讀取不分大小寫)
+BNWAS_MIN_DORMANT_S, BNWAS_MAX_DORMANT_S = 180.0, 720.0  # ScenarioBnwas.MinDormantS / MaxDormantS(MSC.128(75) 3–12 分鐘)
 _MULTIPLIER = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?x$")  # bands[].fail 的 "<n>x" 倍數寫法
 
 
@@ -241,8 +253,88 @@ def _expect_leaves(e: Any) -> list[Any]:
     return [e]
 
 
+def _lenient_number(v: Any) -> float | None:
+    """數值欄位的寬鬆讀法(C# ContractJson NumberHandling.AllowReadingFromString):數字或可解析為有限數值的字串;其餘 None。"""
+    if _is_num(v):
+        return float(v)
+    if isinstance(v, str) and _is_numeric_text(v):
+        return float(v)
+    return None
+
+
+def _bridge_section(raw: dict[str, Any], name: str, fields: tuple[tuple[str, float | None], ...],
+                    error: Any) -> dict[str, Any]:
+    """sensors / alerts / bnwas 區段 → 補預設值後的 dict(形狀同 C# 序列化:null 欄位省略、未知鍵忽略)。型別錯誤經 ``error`` 回報。"""
+    sec = raw.get(name)
+    out: dict[str, Any] = {}
+    if sec is None:
+        sec = {}
+    elif not isinstance(sec, dict):
+        error(name, f"{name} 須為物件")
+        sec = {}
+    if name == "bnwas":
+        mode = sec.get("mode", "off")
+        if not (isinstance(mode, str) and mode.strip().lower() in BNWAS_MODES):
+            error(f"{name}.mode", f"mode 須為 {' | '.join(BNWAS_MODES)}:{mode!r}")
+            mode = "off"
+        out["mode"] = mode.strip().lower()
+    for key, default in fields:
+        if key not in sec:
+            v: float | None = default
+        elif sec[key] is None and default is None:
+            v = None
+        else:
+            v = _lenient_number(sec[key])
+            if v is None:
+                error(f"{name}.{key}", f"{key} 須為數值:{sec[key]!r}")
+                v = default
+        if v is not None:
+            out[key] = v
+    return out
+
+
+def bridge_sections(raw: dict[str, Any], error: Any | None = None) -> dict[str, dict[str, Any]]:
+    """情境的 sensors / alerts / bnwas(感測器層、BAM、BNWAS;docs/design/sensors-alerts.md 第 8 節)正規化並結構檢查
+    (C# ``Scenario.StructuralIssues`` 的「警報/BNWAS 設定」規則):秒數與門檻必須為正、offHeadingDelay_s 不可為負、
+    dormant_s 在 180–720 s。Python 參考實作不模擬感測器故障、警報與 BNWAS,只保留設定。"""
+    issues: list[tuple[str, str]] = []
+
+    def err(path: str, msg: str) -> None:
+        (error or (lambda p, m: issues.append((p, m))))(path, msg)
+
+    out = {
+        "sensors": _bridge_section(raw, "sensors", SENSORS_FIELDS, err),
+        "alerts": _bridge_section(raw, "alerts", ALERTS_FIELDS, err),
+        "bnwas": _bridge_section(raw, "bnwas", BNWAS_FIELDS, err),
+    }
+    al, bn = out["alerts"], out["bnwas"]
+    for key in ("escalate_s", "silence_s"):
+        if al[key] <= 0:
+            err(f"alerts.{key}", f"{key} 必須為正")
+    if al.get("offHeading_deg") is not None and al["offHeading_deg"] <= 0:
+        err("alerts.offHeading_deg", "offHeading_deg 必須為正")
+    if al["offHeadingDelay_s"] < 0:
+        err("alerts.offHeadingDelay_s", "offHeadingDelay_s 不可為負")
+    for key in ("headingMonitor_deg", "shallowWater_m"):
+        if al.get(key) is not None and al[key] <= 0:
+            err(f"alerts.{key}", f"{key} 必須為正")
+    if not BNWAS_MIN_DORMANT_S <= bn["dormant_s"] <= BNWAS_MAX_DORMANT_S:
+        err("bnwas.dormant_s", f"dormant_s 須在 {BNWAS_MIN_DORMANT_S:g}–{BNWAS_MAX_DORMANT_S:g} s(MSC.128(75):3–12 分鐘)")
+    for key in ("stage2_s", "stage3_s"):
+        if bn[key] <= 0:
+            err(f"bnwas.{key}", f"{key} 必須為正")
+    if error is None and issues:
+        raise ValueError(f"{issues[0][0]}:{issues[0][1]}")
+    return out
+
+
+
+def _item_id_refers_to_timeline(event_kind: Any) -> bool:
+    """事件的 itemId 是否指時間表項目;警報與 BNWAS 事件(alert*、bnwas*)的 itemId 是警報 id(同 C# Scenario.ItemIdRefersToTimeline)。"""
+    return not (isinstance(event_kind, str) and (event_kind.startswith("alert") or event_kind.startswith("bnwas")))
+
 def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None) -> list[tuple[str, str]]:
-    """timeline / route / zones / assessment / briefing 的結構錯誤 ``[(路徑, 訊息)]``(不依賴初始狀態;情境引擎設計第 2.4 節 error 項)。
+    """timeline / route / zones / sensors / alerts / bnwas / assessment / briefing 的結構錯誤 ``[(路徑, 訊息)]``(不依賴初始狀態;情境引擎設計第 2.4 節 error 項)。
     參數引用須已解析(未解析的 "${params:…}" 字串在此視為一般字串)。``origin`` 未給時取 ``raw["origin"]``;航點重合與多邊形自交
     的幾何檢查需要原點(``validate_scenario`` 會先以 initial.position 推導後傳入,與 C# Scenario.Validate 相同)。"""
     issues: list[tuple[str, str]] = []
@@ -395,6 +487,9 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
         if wd is not None and (not _is_num(wd) or wd <= 0):
             error(f"{path}.waterDepth_m", "區域水深必須為正")
 
+    # ---- 感測器/警報/BNWAS 設定(C# 在 zones 之後、assessment 之前檢查)
+    bridge_sections(raw, error)
+
     # ---- assessment
     rule_ids: set[str] = set()
 
@@ -457,7 +552,8 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
         if not isinstance(after, dict) or not str(after.get("event") or "").strip():
             error(f"{path}.after", "after 需要 event")
         else:
-            if isinstance(after.get("itemId"), str) and after["itemId"] not in all_item_ids:
+            if (isinstance(after.get("itemId"), str) and _item_id_refers_to_timeline(after.get("event"))
+                    and after["itemId"] not in all_item_ids):
                 error(f"{path}.after", f"after 引用不存在的時間表項目:{after['itemId']}")
             if isinstance(after.get("waypoint"), str) and after["waypoint"] not in wp_names:
                 error(f"{path}.after", f"after 引用不存在的航點:{after['waypoint']}")
@@ -477,7 +573,8 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
                 if isinstance(leaf.get("name"), str) and leaf["name"] not in EXPECT_NAMES:
                     error(f"{path}.expect", f"未知的 expect:{leaf['name']}")
                 ev = leaf.get("event")
-                if isinstance(ev, dict) and isinstance(ev.get("itemId"), str) and ev["itemId"] not in all_item_ids:
+                if (isinstance(ev, dict) and isinstance(ev.get("itemId"), str)
+                        and _item_id_refers_to_timeline(ev.get("kind")) and ev["itemId"] not in all_item_ids):
                     error(f"{path}.expect", f"expect 引用不存在的時間表項目:{ev['itemId']}")
             else:
                 error(f"{path}.expect", "expect 須為字串或物件")
@@ -499,7 +596,7 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
 def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: dict[str, Any] | None = None) -> dict[str, Any]:
     """檢查必要欄位並補齊預設值(C# Scenario.Validate 相同);回傳正規化後的新 dict(角度為度、速度為節)。
     ``raw`` 的參數引用須已解析(``load_scenario`` 會先做);timeline / route / zones / assessment / briefing 經
-    ``structural_issues`` 檢查(第一個錯誤即 ``ValueError``)後原樣(深拷貝)保留;``parameter_set`` 為參數集摘要(無引用時 None)。"""
+    ``structural_issues`` 檢查(第一個錯誤即 ``ValueError``)後原樣(深拷貝)保留,sensors / alerts / bnwas 補預設值後保留;``parameter_set`` 為參數集摘要(無引用時 None)。"""
     if not isinstance(raw, dict):
         raise ValueError("情境內容必須為物件(YAML mapping)")
     if has_references(raw):
@@ -601,6 +698,8 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         "zones": copy.deepcopy(raw.get("zones") or []),
         "assessment": copy.deepcopy(raw.get("assessment") or {}),
         "briefing": copy.deepcopy(raw.get("briefing")),
+        # 感測器/警報/BNWAS 設定(補 C# 預設值;Python 不模擬,只保留供 state.scenario/講評與跨語言比對)
+        **bridge_sections(raw),
         "parameterSet": copy.deepcopy(parameter_set),
     }
 

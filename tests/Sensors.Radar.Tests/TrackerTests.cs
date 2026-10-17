@@ -229,4 +229,28 @@ public class TrackerTests
         Assert.True(t.Stable);
         Assert.All(t.Past, p => Assert.InRange(p.X, 2900, 3100));
     }
+    [Fact]
+    public void LostTrackDoesNotBlockGuardZoneReacquisition()
+    {
+        // X 頻故障 120–140 s 期間目標失追;失追軌跡在 60 s 保留期內不得以外推位置擋掉保護區候選,
+        // 恢復後應在數圈內重新自動擷取(修正前要等失追軌跡在約 194 s 刪除後才重新擷取)
+        var scene = new LinearScene { OwnSpeedKn = 10 };
+        scene.Targets.Add(new LinearTarget("A", 2000, 6000, 270, 8));
+        var radar = RadarFactory.X();
+        radar.DisplayEnabled = false;
+        Assert.True(radar.Apply("{\"cmd\":\"guardZone\",\"enabled\":true,\"inner_nm\":0.3,\"outer_nm\":8}").Ok);
+        var events = scene.Run(radar, 0, 120).SelectMany(r => r.Events).ToList();
+        var first = Assert.Single(events, e => e.Kind == "newTarget");
+        scene.Faults.Add("radarFailure");
+        events = scene.Run(radar, 120.04, 140).SelectMany(r => r.Events).ToList();
+        Assert.Contains(events, e => e.Kind == "targetLost" && e.TargetId == first.TargetId);
+        scene.Faults.Clear();
+        events = scene.Run(radar, 140.04, 175).SelectMany(r => r.Events).ToList();
+        var again = Assert.Single(events, e => e.Kind == "newTarget");
+        Assert.InRange(again.T, 140, 140 + 10 * radar.Config.ScanPeriodS);
+        Assert.DoesNotContain(events, e => e.Kind == "deleted");
+        // 失追軌跡仍在保留期內(LostHoldS)並列為 lost,新軌跡為 tracking/acquiring
+        Assert.Equal(TrackState.Lost, radar.Arpa.Tracks.Single(t => t.Id == first.TargetId).State);
+        Assert.NotEqual(TrackState.Lost, radar.Arpa.Tracks.Single(t => t.Id == again.TargetId).State);
+    }
 }

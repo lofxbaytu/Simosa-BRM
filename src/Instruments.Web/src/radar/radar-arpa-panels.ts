@@ -165,7 +165,7 @@ export class RadarTrialPanel extends StoreElement {
 
   override render() {
     const s = this.store;
-    const trial = s.tracks?.trial ?? s.status?.trial;
+    const trial = s.trial;
     const sel = s.tracks?.targets.find((t) => t.id === s.selectedId);
     const minTrial = (s.tracks?.targets ?? []).reduce<RadarTrack | null>(
       (m, t) => (t.trialCpa_nm !== undefined && (m === null || t.trialCpa_nm < (m.trialCpa_nm ?? Infinity)) ? t : m),

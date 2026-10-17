@@ -33,6 +33,8 @@ public sealed class Bnwas
     private readonly int _stepsPerSecond;
     private readonly double _dt;
     private readonly Action<string, string?, object> _raise;
+    /// <summary>情境設定(IsDefault 比對休眠期等時序是否仍為情境值)</summary>
+    private ScenarioBnwas _config;
 
     public BnwasState State { get; private set; } = new();
 
@@ -41,6 +43,7 @@ public sealed class Bnwas
         _dt = dt;
         _stepsPerSecond = stepsPerSecond;
         _raise = raise;
+        _config = config;
         State = new BnwasState { Mode = config.Mode, DormantS = config.DormantS, Stage2S = config.Stage2S, Stage3S = config.Stage3S };
     }
 
@@ -48,8 +51,19 @@ public sealed class Bnwas
 
     public bool IsActive(bool autopilotEnabled) => State.Mode == BnwasMode.On || (State.Mode == BnwasMode.Auto && autopilotEnabled);
 
-    /// <summary>預設狀態(off、未作動):雜湊不追加 BNWAS 位元組。</summary>
-    public bool IsDefault => State.Mode == BnwasMode.Off && State.Stage == 0 && !State.WasActive;
+    /// <summary>
+    /// 預設狀態(off、未作動、時序與計時起點仍為情境初值):雜湊不追加 BNWAS 位元組(舊情境雜湊不變)。
+    /// off 模式下以 bnwasMode 改過休眠期/第三階段延遲或計時起點,即非預設,完整進雜湊。
+    /// </summary>
+    public bool IsDefault
+    {
+        get
+        {
+            var s = State;
+            return s.Mode == BnwasMode.Off && s.Stage == 0 && !s.WasActive && s.LastResetTick == 0 && s.StageStartTick == 0
+                   && s.DormantS.Equals(_config.DormantS) && s.Stage2S.Equals(_config.Stage2S) && s.Stage3S.Equals(_config.Stage3S);
+        }
+    }
 
     /// <summary>每步更新(引擎在狀態推進後呼叫)。</summary>
     public void Update(long tick, bool autopilotEnabled)
@@ -158,7 +172,10 @@ public sealed class Bnwas
     public BnwasState CreateSnapshot() => ContractJson.Deserialize<BnwasState>(ContractJson.Serialize(State))!;
 
     public void Restore(BnwasState? s, ScenarioBnwas config)
-        => State = s is null
+    {
+        _config = config;
+        State = s is null
             ? new BnwasState { Mode = config.Mode, DormantS = config.DormantS, Stage2S = config.Stage2S, Stage3S = config.Stage3S }
             : ContractJson.Deserialize<BnwasState>(ContractJson.Serialize(s))!;
+    }
 }

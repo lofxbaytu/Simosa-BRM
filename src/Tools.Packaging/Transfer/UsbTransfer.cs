@@ -22,9 +22,10 @@ public sealed class UsbReport
 /// &lt;dir&gt;/simosa-transfer/to-ship/*.sbupd                 教官 → 船:更新包
 /// &lt;dir&gt;/simosa-transfer/to-ship/&lt;ship&gt;/*.sbbak         教官 → 船:已備份回報
 /// &lt;dir&gt;/simosa-transfer/from-ship/&lt;ship&gt;/*.sbrec       船 → 教官:紀錄包
+/// &lt;dir&gt;/simosa-transfer/from-ship/&lt;ship&gt;/*.sbcln       船 → 教官:清理通知(處理已備份回報後;裝置金鑰簽章)
 /// &lt;dir&gt;/simosa-transfer/from-ship/&lt;ship&gt;/status.json   船 → 教官:版次(資訊用,未簽章)
 /// </code>
-/// 船端套用與教官端匯入時都完整驗證簽章,與直連相同。
+/// 船端套用與教官端匯入時都完整驗證簽章,與直連相同;清理通知讓教官紀錄庫標記「船上已刪除」,不再重複產生回報。
 /// </summary>
 public static class UsbTransfer
 {
@@ -97,7 +98,10 @@ public static class UsbTransfer
                     var c = ship.Records.AcceptBackupReport(File.ReadAllBytes(f));
                     rep.Cleanup = c;
                     rep.Errors.AddRange(c.Errors);
-                    if (c.Ok) File.Delete(f);
+                    rep.Warnings.AddRange(c.Warnings.Where(w => !rep.Warnings.Contains(w)));
+                    if (!c.Ok) continue;
+                    if (c.Deleted.Count > 0) rep.Written.Add(WriteCleanupNotice(ship, fromDir, c));
+                    File.Delete(f);
                 }
             }
         }
@@ -108,6 +112,45 @@ public static class UsbTransfer
             rep.Warnings.AddRange(exp.Warnings);
         }
         return rep;
+    }
+
+    /// <summary>船端:把清理結果(以裝置金鑰簽章)寫到 from-ship/&lt;ship&gt;/&lt;reportId&gt;.sbcln。</summary>
+    private static string WriteCleanupNotice(ShipNode ship, string toDir, CleanupResult c)
+    {
+        var (info, key) = DeviceKeyStore.Load(ship.Layout);
+        using (key)
+        {
+            var now = ship.Clock.GetUtcNow().UtcDateTime;
+            var notice = new CleanupNotice { ShipId = ship.ShipId, DeviceId = info.DeviceId, ReportId = c.ReportId ?? "", Deleted = c.Deleted.ToList(), CreatedUtc = now };
+            var dest = Path.Combine(FromShip(toDir), ship.ShipId);
+            Directory.CreateDirectory(dest);
+            var name = new string((c.ReportId ?? $"cleanup-{now:yyyyMMdd'T'HHmmss}").Select(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_').ToArray());
+            var path = Path.Combine(dest, name + CleanupNotice.Extension);
+            File.WriteAllBytes(path, SignedDocument.Create(notice, key, now).ToBytes());
+            return path;
+        }
+    }
+
+    /// <summary>教官端:驗證清理通知(紀錄庫登錄的裝置公鑰)並標記船上已刪除;回傳錯誤訊息或 null。</summary>
+    private static string? AcceptCleanupNotice(RecordStore store, string shipDirName, string path)
+    {
+        try
+        {
+            var doc = SignedDocument.Parse(File.ReadAllBytes(path), "清理通知");
+            var n = doc.Read<CleanupNotice>("清理通知");
+            if (n.Format != CleanupNotice.FormatId) return $"清理通知格式不支援:{n.Format}";
+            if (!string.Equals(n.ShipId, shipDirName, StringComparison.OrdinalIgnoreCase)) return $"清理通知的船舶 {n.ShipId} 與目錄 {shipDirName} 不符";
+            using var device = store.FindDevice(n.ShipId, n.DeviceId);
+            if (device is null) return $"裝置 {n.ShipId}/{n.DeviceId} 未登錄於紀錄庫,無法驗證清理通知";
+            if (!string.Equals(device.KeyId, doc.Signature.KeyId, StringComparison.OrdinalIgnoreCase) || !doc.Signature.VerifyWith(device.Key, doc.PayloadBytes))
+                return $"清理通知簽章驗證失敗(不是登錄的裝置 {n.ShipId}/{n.DeviceId} 所簽)";
+            store.MarkShipDeleted(n.ReportId, n.Deleted, n.ShipId);
+            return null;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or System.Security.Cryptography.CryptographicException)
+        {
+            return ex.Message;
+        }
     }
 
     /// <summary>船端:打包新紀錄,並把所有待回傳紀錄包與版次寫到隨身碟。</summary>
@@ -148,6 +191,11 @@ public static class UsbTransfer
                 var r = store.Import(f, enrollDevice);
                 rep.Imported.Add(r);
                 rep.Errors.AddRange(r.Errors.Select(e => $"{Path.GetFileName(f)}:{e}"));
+            }
+            foreach (var f in Directory.EnumerateFiles(shipDir, "*" + CleanupNotice.Extension).OrderBy(f => f, StringComparer.Ordinal))
+            {
+                if (AcceptCleanupNotice(store, Path.GetFileName(shipDir), f) is { } err) rep.Errors.Add($"{Path.GetFileName(f)}:{err}");
+                else File.Delete(f);
             }
             var statusPath = Path.Combine(shipDir, "status.json");
             if (File.Exists(statusPath))

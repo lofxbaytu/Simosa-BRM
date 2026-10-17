@@ -43,8 +43,12 @@ TOL = 1e-9
 KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {}
 # 夾具錄製時主控程序以 --timescale 覆寫、或 C# 另行正規化而不比對的欄位
 SKIP_LEAVES = {"timeScale"}
-# 一定要有 C# 紀錄夾具的情境(缺夾具時失敗而非略過;其餘情境無夾具時略過)。2026-10-17 加入 E05(無參數集的情境)。
-REQUIRED_FIXTURES = {"E01_baseline", "E05_pilot_traffic", "E07_steering_failure"}
+# 一定要有 C# 紀錄夾具的情境(缺夾具時失敗而非略過;其餘情境無夾具時略過)。2026-10-17 加入 E05(無參數集的情境)、
+# E08(sensors/alerts/bnwas 區段與 bnwas.dormant_s 參數引用)。
+REQUIRED_FIXTURES = {"E01_baseline", "E05_pilot_traffic", "E07_steering_failure", "E08_gyro_failure", "E09_blackout"}
+# 感測器/警報/BNWAS 區段(第六輪新增):C# 一律序列化(含預設值);第六輪前錄製的夾具(E01/E05/E07)header 無這些鍵,
+# 其 YAML 也沒有這些區段,故只在 header 有該鍵時比對(YAML 有該區段而 header 沒有則為失敗)。
+BRIDGE_SECTIONS = ("sensors", "alerts", "bnwas")
 
 
 def _fixture_header(scenario_id: str) -> dict[str, Any] | None:
@@ -425,6 +429,26 @@ def test_scenarios_load_and_match_csharp_header(scenario_file: Path) -> None:
             assert path in cs_leaves, f"C# 輸出缺少 {path}"
             assert _same(value, cs_leaves[path]), f"{path}: Python {value!r} vs C# {cs_leaves[path]!r}"
 
+    # sensors / alerts / bnwas:Python 補的預設值與 C# 序列化完全相同(鍵集合相同:null 門檻兩邊都省略)
+    for section in BRIDGE_SECTIONS:
+        if section not in cs_sc:
+            assert section not in raw, f"YAML 有 {section} 區段但 C# 夾具 header 沒有:請重新錄製夾具"
+            continue
+        py_leaves, cs_leaves = _leaves(sc[section], section), _leaves(cs_sc[section], section)
+        assert set(py_leaves) == set(cs_leaves), f"{section}: Python {sorted(py_leaves)} vs C# {sorted(cs_leaves)}"
+        for path, value in py_leaves.items():
+            assert _same(value, cs_leaves[path]), f"{path}: Python {value!r} vs C# {cs_leaves[path]!r}"
+
+
+def test_e08_bnwas_dormant_period_comes_from_parameter_set() -> None:
+    """E08 的 bnwas.dormant_s 引用 bridge.bnwas.dormantPeriod_s(540 s);sensors/alerts 照寫、未設的 headingMonitor_deg 省略(關閉)。"""
+    sc = load_scenario("E08_gyro_failure")
+    assert sc["bnwas"] == {"mode": "on", "dormant_s": 540, "stage2_s": 15, "stage3_s": 90}
+    assert sc["sensors"] == {"magneticCompassError_deg": 1.0}
+    assert sc["alerts"] == {"escalate_s": 300, "silence_s": 30, "offHeading_deg": 10, "offHeadingDelay_s": 10, "shallowWater_m": 5.0}
+    ref = next(r for r in sc["parameterSet"]["resolved"] if r["path"] == "bnwas.dormant_s")
+    assert ref["key"] == "bridge.bnwas.dormantPeriod_s" and ref["value"] == 540 and ref["unit"] == "s"
+
 
 # ---------------------------------------------------------------- 結構檢查
 
@@ -508,6 +532,23 @@ def _mutate(fn: Any) -> dict[str, Any]:
         (lambda t: t["assessment"]["required"].append({"id": "r9", "after": {"event": "x"}, "expect": "dance", "within_s": 1}), "assessment.required[1].expect", "未知的 expect"),
         (lambda t: t["assessment"]["required"].append({"id": "r9", "after": {"event": "x"}, "expect": "rpmOrder", "within_s": 0}), "assessment.required[1]", "within_s 必須為正"),
         (lambda t: t["briefing"].update(roles=[{"playedBy": "leader"}]), "briefing.roles[0]", "需要 role"),
+        # 感測器/警報/BNWAS(C# Scenario.StructuralIssues「警報/BNWAS 設定」)
+        (lambda t: t.update(alerts={"escalate_s": 0}), "alerts.escalate_s", "escalate_s 必須為正"),
+        (lambda t: t.update(alerts={"silence_s": -1}), "alerts.silence_s", "silence_s 必須為正"),
+        (lambda t: t.update(alerts={"offHeading_deg": 0}), "alerts.offHeading_deg", "offHeading_deg 必須為正"),
+        (lambda t: t.update(alerts={"offHeadingDelay_s": -0.1}), "alerts.offHeadingDelay_s", "不可為負"),
+        (lambda t: t.update(alerts={"headingMonitor_deg": -5}), "alerts.headingMonitor_deg", "headingMonitor_deg 必須為正"),
+        (lambda t: t.update(alerts={"shallowWater_m": 0}), "alerts.shallowWater_m", "shallowWater_m 必須為正"),
+        (lambda t: t.update(alerts={"escalate_s": "soon"}), "alerts.escalate_s", "須為數值"),
+        (lambda t: t.update(bnwas={"dormant_s": 179}), "bnwas.dormant_s", "180–720"),
+        (lambda t: t.update(bnwas={"dormant_s": 721}), "bnwas.dormant_s", "180–720"),
+        (lambda t: t.update(bnwas={"stage2_s": 0}), "bnwas.stage2_s", "stage2_s 必須為正"),
+        (lambda t: t.update(bnwas={"stage3_s": -90}), "bnwas.stage3_s", "stage3_s 必須為正"),
+        (lambda t: t.update(bnwas={"mode": "sometimes"}), "bnwas.mode", "mode 須為"),
+        (lambda t: t.update(bnwas={"mode": True}), "bnwas.mode", "mode 須為"),
+        (lambda t: t.update(bnwas={"dormant_s": None}), "bnwas.dormant_s", "須為數值"),
+        (lambda t: t.update(bnwas="on"), "bnwas", "bnwas 須為物件"),
+        (lambda t: t.update(sensors={"magneticCompassError_deg": [1]}), "sensors.magneticCompassError_deg", "須為數值"),
     ],
 )
 def test_structural_check_errors(mutate: Any, path: str, message: str) -> None:
@@ -558,6 +599,9 @@ def test_structural_check_rejects_self_intersecting_polygon(with_origin: bool) -
         lambda t: t["assessment"]["bands"][0].update(fail="120"),  # 數值字串
         lambda t: t["zones"].append({"id": 7, "type": "noGo", "polygon": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 0, "y": 1}]}),
         lambda t: t["route"]["waypoints"][0].update(name=1),
+        lambda t: t.update(bnwas={"mode": "ON", "dormant_s": "180"}),  # JsonStringEnumConverter 不分大小寫;AllowReadingFromString
+        lambda t: t.update(bnwas={"dormant_s": 720}, alerts={"offHeadingDelay_s": 0, "offHeading_deg": None}),  # 邊界值;null = 關閉
+        lambda t: t.update(sensors={"magneticCompassError_deg": -2.5, "note": "x"}, alerts={}, bnwas=None),  # 未知鍵忽略;空/null 區段 = 預設
     ],
 )
 def test_structural_check_accepts_csharp_lenient_forms(mutate: Any) -> None:
@@ -579,6 +623,36 @@ def test_structural_check_lenient_ids_still_resolve_references() -> None:
     t["timeline"][1]["repeat"] = "once"
     t["assessment"]["bands"][0]["fail"] = "2 y"
     assert any(p == "assessment.bands[0]" and "<n>x" in m for p, m in structural_issues(t))
+
+
+def test_bridge_sections_defaults_and_normalisation() -> None:
+    """sensors/alerts/bnwas 未給時補 C# 預設值(ScenarioBridge.cs),門檻類省略 = 關閉;mode 轉小寫、數值字串轉數值。"""
+    sc = validate_scenario(_full_tree())
+    assert sc["sensors"] == {"magneticCompassError_deg": 0.0}
+    assert sc["alerts"] == {"escalate_s": 300.0, "silence_s": 30.0, "offHeadingDelay_s": 10.0}
+    assert sc["bnwas"] == {"mode": "off", "dormant_s": 720.0, "stage2_s": 15.0, "stage3_s": 90.0}
+    t = _full_tree()
+    t["bnwas"] = {"mode": "Auto", "dormant_s": "300", "extra": 1}
+    t["alerts"] = {"headingMonitor_deg": 5, "offHeading_deg": None}
+    sc = validate_scenario(t)
+    assert sc["bnwas"] == {"mode": "auto", "dormant_s": 300.0, "stage2_s": 15.0, "stage3_s": 90.0}
+    assert sc["alerts"] == {"escalate_s": 300.0, "silence_s": 30.0, "offHeadingDelay_s": 10.0, "headingMonitor_deg": 5.0}
+
+
+def test_bridge_sections_resolve_parameter_references() -> None:
+    """sensors/alerts/bnwas 的數值欄位可引用參數(單位後綴檢查照常);mode 不可引用。"""
+    tree = _full_tree()
+    tree["bnwas"] = {"mode": "on", "dormant_s": "${params:bridge.bnwas.dormantPeriod_s}"}
+    sc = scenario_from_tree(copy.deepcopy(tree))
+    assert sc["bnwas"]["dormant_s"] == 540
+    assert [r["path"] for r in sc["parameterSet"]["resolved"]] == ["bnwas.dormant_s"]
+    tree["alerts"] = {"offHeading_deg": "${params:bridge.bnwas.dormantPeriod_s}"}  # deg ≠ s
+    with pytest.raises(ValueError, match="單位後綴"):
+        scenario_from_tree(copy.deepcopy(tree))
+    tree.pop("alerts")
+    tree["bnwas"]["mode"] = "${params:bridge.bnwas.dormantPeriod_s}"
+    with pytest.raises(ValueError, match="不允許引用參數"):
+        scenario_from_tree(tree)
 
 
 def test_scenario_from_tree_resolves_then_checks() -> None:
@@ -621,3 +695,21 @@ def test_server_scenario_engine_commands_report_unimplemented() -> None:
     assert srv.ship.state_json()["faults"] == [] and srv.ship.state.tick == 0  # 模型不受影響
     assert srv.apply_command({"type": "loadScenario", "value": "E05_pilot_traffic"})["ok"]
     assert "parameterSetVersion" not in srv.state_json()["scenario"] and srv.state_json()["scenario"]["id"] == "E05_pilot_traffic"
+
+
+def test_server_alert_and_bnwas_commands_report_unimplemented() -> None:
+    """alertAcknowledge / alertSilence / bnwasMode / bnwasReset(command.schema.json;sensors-alerts.md 第 3.3、4 節):
+    Python 不實作 BAM/BNWAS,回 ok=false「未實作」,不當機、模型不變;E08 載入後亦同。"""
+    srv = _server()
+    cmds = ({"type": "alertAcknowledge", "args": {"id": "gyroFailure"}}, {"type": "alertAcknowledge"}, {"type": "alertSilence", "value": "bnwas"},
+            {"type": "alertSilence"}, {"type": "bnwasMode", "value": "on", "args": {"dormant_s": 540}}, {"type": "bnwasReset"})
+    for _ in range(2):
+        before = srv.ship.state_json()
+        for cmd in cmds:
+            ack = srv.apply_command(cmd)
+            assert ack["ok"] is False and "未實作" in ack["detail"] and ack["command"] == cmd["type"], ack
+        assert srv.ship.state_json() == before
+        for key in ("alerts", "bnwas", "truth", "sensors"):
+            assert key not in srv.state_json()
+        assert srv.apply_command({"type": "loadScenario", "value": "E08_gyro_failure"})["ok"]
+        assert srv.scenario["bnwas"]["dormant_s"] == 540

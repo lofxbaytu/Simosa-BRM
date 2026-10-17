@@ -38,6 +38,10 @@ public sealed class UpdateManifest
     public const string SignatureEntry = "manifest.sig";
     public const string PayloadPrefix = "payload/";
 
+    /// <summary>packageId 白名單:英數字開頭,只含英數字 . _ -,最多 128 字元(用於 state/staging/&lt;packageId&gt; 等目錄名,不得為 ".." 之類)。</summary>
+    public static bool IsValidPackageId(string? id)
+        => id is { Length: >= 1 and <= 128 } && char.IsAsciiLetterOrDigit(id[0]) && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+
     public string Format { get; set; } = FormatId;
     public string PackageId { get; set; } = "";
     /// <summary>單調遞增(1–4 段數字);船上拒絕不大於曾套用最高版本者</summary>

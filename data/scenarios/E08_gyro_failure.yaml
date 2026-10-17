@@ -38,7 +38,7 @@ alerts:
   shallowWater_m: 5.0                           # 測深儀淺水警報(龍骨下水深)
 bnwas:
   mode: "on"                                    # 夜航當值(常規命令:航行中 BNWAS 一律開啟)
-  dormant_s: 540                                # = 參數 bridge.bnwas.dormantPeriod_s(Python 參考實作尚未保留 bnwas 區段,引用會使跨語言檢查失敗;支援後改為 "${params:…}")
+  dormant_s: "${params:bridge.bnwas.dormantPeriod_s}"   # 休眠期 540 s(MSC.128(75) 3–12 分鐘;來源 ASSUMED-E08,待公司程序)
   stage2_s: 15
   stage3_s: 90
 briefing:
@@ -141,7 +141,7 @@ assessment:
       latePenaltyPer_s: 0.1
     - id: alarmAck
       after: { event: faultInjected, itemId: gyroFail }
-      expect: { event: { kind: alertAcknowledged } }                         # BAM 警報確認(alertAcknowledge 指令)
+      expect: { event: { kind: alertAcknowledged, itemId: gyroFailure } }    # 確認的必須是電羅經失效警報本身(BAM alertAcknowledge)
       within_s: "${params:emergency.gyroFailure.alarmAck_s}"
       penalty: 10
       latePenaltyPer_s: 0.2

@@ -8,6 +8,9 @@ namespace SimosaBRM.Packaging.Records;
 /// 自 JSON Lines 紀錄檔讀出練習摘要(只解析 header、最後一行 state/footer 與 summary 是否存在;不依賴 SimCore 型別,
 /// 以便舊版/新版紀錄都能打包)。完整性:footer.sha256 與 footer 前所有行(含換行)的 SHA-256 比對(同 RecordReader)。
 /// 參與者:header.participants(字串陣列或 {name, role} 物件陣列;日後由練習啟動畫面寫入)。
+/// 起訖與時長一律用<b>牆鐘</b>(供轉錄至船上工時/休息時間紀錄;倍速或凍結時模擬時間與實際經過時間不同):
+/// 開始 = header.createdUtc;結束 = footer.closedUtc(SimCore 寫入時)→ 否則紀錄檔最後修改時間(估計值)→ 否則開始 + 模擬時長(估計值)。
+/// 模擬時長(footer.finalTick × dt,無 footer 時取最後一行 state 的 t)另列為 simDurationS。
 /// </summary>
 public static class RecordInspector
 {
@@ -68,14 +71,33 @@ public static class RecordInspector
                 }
                 if (h.TryGetProperty("restHoursConfirmation", out var rc)) s.RestHoursConfirmation = rc.Clone();
                 double? dtStep = h.TryGetProperty("dt", out var d) && d.ValueKind == JsonValueKind.Number ? d.GetDouble() : null;
+                DateTime? closedUtc = null;
                 if (footer is not null)
                 {
                     var f = footer.RootElement;
-                    if (f.TryGetProperty("finalTick", out var ft) && ft.ValueKind == JsonValueKind.Number && dtStep is { } step) s.DurationS = ft.GetInt64() * step;
+                    if (f.TryGetProperty("finalTick", out var ft) && ft.ValueKind == JsonValueKind.Number && dtStep is { } step) s.SimDurationS = ft.GetInt64() * step;
                     s.IntegrityOk = f.TryGetProperty("sha256", out var fs) && fs.ValueKind == JsonValueKind.String && string.Equals(fs.GetString(), computed, StringComparison.OrdinalIgnoreCase);
+                    if (f.TryGetProperty("closedUtc", out var cu) && cu.ValueKind == JsonValueKind.String && cu.TryGetDateTime(out var cdt)) closedUtc = cdt.ToUniversalTime();
                 }
-                s.DurationS ??= lastStateT;
-                if (s.StartUtc is { } st && s.DurationS is { } dur) s.EndUtc = st.AddSeconds(dur);
+                s.SimDurationS ??= lastStateT;
+                if (s.StartUtc is { } st)
+                {
+                    var fileTime = File.GetLastWriteTimeUtc(path);
+                    if (closedUtc is { } closed && closed >= st) s.EndUtc = closed;
+                    else
+                    {
+                        s.EndEstimated = true;
+                        if (fileTime >= st) s.EndUtc = fileTime;
+                        else if (s.SimDurationS is { } simDur) s.EndUtc = st.AddSeconds(simDur);
+                    }
+                    if (s.EndUtc is { } end) s.DurationS = (end - st).TotalSeconds;
+                }
+                else
+                {
+                    // 沒有開始時間:無法得到牆鐘時長,只能以模擬時長估計
+                    s.DurationS = s.SimDurationS;
+                    s.EndEstimated = true;
+                }
             }
         }
         finally
@@ -123,7 +145,11 @@ public static class RecordInspector
     public static TrainingHours Summarize(IEnumerable<ExerciseSummary> exercises)
     {
         var list = exercises.ToList();
-        var hours = new TrainingHours { ExerciseCount = list.Count, TotalS = list.Sum(e => e.DurationS ?? 0) };
+        var hours = new TrainingHours
+        {
+            ExerciseCount = list.Count, TotalS = list.Sum(e => e.DurationS ?? 0), SimTotalS = list.Sum(e => e.SimDurationS ?? 0),
+            Estimated = list.Any(e => e.EndEstimated),
+        };
         var byName = new Dictionary<string, ParticipantHours>(StringComparer.Ordinal);
         foreach (var e in list)
         {
@@ -133,7 +159,7 @@ public static class RecordInspector
                 if (!byName.TryGetValue(k, out var ph)) byName[k] = ph = new ParticipantHours { Name = p.Name, Role = p.Role };
                 ph.Exercises++;
                 ph.TotalS += e.DurationS ?? 0;
-                ph.Sessions.Add(new Session { ScenarioId = e.ScenarioId, StartUtc = e.StartUtc, EndUtc = e.EndUtc, DurationS = e.DurationS });
+                ph.Sessions.Add(new Session { ScenarioId = e.ScenarioId, StartUtc = e.StartUtc, EndUtc = e.EndUtc, DurationS = e.DurationS, SimDurationS = e.SimDurationS, EndEstimated = e.EndEstimated });
             }
         }
         hours.Participants = byName.Values.OrderBy(p => p.Name, StringComparer.Ordinal).ToList();

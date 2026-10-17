@@ -158,4 +158,52 @@ public class BnwasTests
         Assert.Equal(reference.StateHash, b.StateHash);
         Assert.Equal(2, b.Bnwas.State.Stage); // 第二階段 195 s、第三階段 285 s
     }
+
+    [Fact]
+    public void BnwasResetCountsAsHandledNotUnacknowledged()
+    {
+        // 審查發現:BNWAS 重設即解除指示(第 3.2 節),該筆紀錄不得算進 alerts.unacknowledged
+        var e = TestData.MinimalEngine("bnwas: { mode: \"on\", dormant_s: 180 }");
+        TestData.RunTo(e, 182);
+        Assert.Equal(1, e.Bnwas.State.Stage);
+        Do(e, SimCommand.BnwasReset());
+        e.Step();
+        var a = e.Assessment!.BuildSummary(e.Tick, false).Alerts;
+        Assert.Equal((1, 1, 0, 1), (a.Raised, a.Acknowledged, a.Unacknowledged, a.Bnwas.Resets));
+        var rec = a.Records.Single(r => r.Id == AlertIds.Bnwas);
+        Assert.Equal(182.0, rec.AcknowledgedAtS!.Value, 6);
+        Assert.Equal(182.0 - rec.RaisedAtS, rec.AckTimeS!.Value, 6);
+
+        // 一般駕駛台操作(舵令)重設第 2 階段也一樣
+        TestData.RunTo(e, 182 + 180 + 16);
+        Assert.Equal(2, e.Bnwas.State.Stage);
+        Do(e, SimCommand.Rudder(3));
+        e.Step();
+        a = e.Assessment!.BuildSummary(e.Tick, false).Alerts;
+        Assert.Equal((2, 2, 0, 2), (a.Raised, a.Acknowledged, a.Unacknowledged, a.Bnwas.Resets));
+    }
+
+    [Fact]
+    public void BnwasModeOffSettingsEnterHash()
+    {
+        // 審查發現:off 模式下以 bnwasMode 改休眠期/計時起點,狀態雜湊須能區分
+        var a = TestData.MinimalEngine();
+        var b = TestData.MinimalEngine();
+        TestData.RunTo(a, 5);
+        TestData.RunTo(b, 5);
+        Do(b, SimCommand.BnwasMode(BnwasMode.Off, dormantS: 180));
+        TestData.RunTo(a, 60);
+        TestData.RunTo(b, 60);
+        Assert.Equal((720.0, 180.0), (a.BuildState().Bnwas!.DormantS, b.BuildState().Bnwas!.DormantS));
+        Assert.True(a.Bnwas.IsDefault);
+        Assert.NotEqual(a.StateHash, b.StateHash);
+
+        // 快照還原後仍與原引擎一致
+        var snap = EngineSnapshot.FromJson(b.CreateSnapshot().ToJson());
+        var c = TestData.MinimalEngine();
+        c.Restore(snap);
+        TestData.RunTo(b, 80);
+        TestData.RunTo(c, 80);
+        Assert.Equal(b.StateHash, c.StateHash);
+    }
 }

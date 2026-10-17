@@ -60,6 +60,54 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public void MalformedYaml_IsErrorExitCode1_NotCrash()
+    {
+        // 少一個引號(YAML 語法錯誤)與型別錯誤(sources 為陣列):依約定回 1 並顯示錯誤,不得以未捕捉例外中止
+        var badSyntax = _env.PathIn("bad-syntax.yaml");
+        File.WriteAllText(badSyntax, "id: x\nversion: \"2026.10.2\nparameters: {}\n");
+        var badType = _env.PathIn("bad-type.yaml");
+        File.WriteAllText(badType, "id: x\nversion: \"2026.10.2\"\nsources: [1,2]\nparameters: {}\n");
+
+        foreach (var bad in new[] { badSyntax, badType })
+        {
+            var impact = Run("impact", "--parameters", bad, "--data-root", _env.InstructorRoot);
+            Assert.Equal(1, impact.Code);
+            Assert.Contains("錯誤", impact.Err);
+
+            var keyBase = _env.PathIn("keys", "k" + Path.GetFileNameWithoutExtension(bad));
+            Assert.Equal(0, Run("keygen", "--out", keyBase, "--name", "k", "--role", "primary").Code);
+            var pack = Run("pack", "--kind", "parameters", "--version", "2026.10.2", "--summary", "x", "--sms", "DWO-007:4:DPA",
+                "--file", $"data/parameters/company-procedures.yaml={bad}", "--data-root", _env.InstructorRoot, "--key", keyBase + ".key.pem", "--out", _env.PathIn("p.sbupd"));
+            Assert.Equal(1, pack.Code);
+
+            var scenario = Path.Combine(_env.InstructorRoot, "data", "scenarios", "E01_baseline.yaml");
+            var ver = Run("verification", "add", "--file", _env.PathIn("ver.json"), "--scenario", scenario, "--parameters", bad, "--by", "測試");
+            Assert.Equal(1, ver.Code);
+        }
+    }
+
+    [Fact]
+    public void BooleanFlagBeforePositional_DoesNotSwallowIt()
+    {
+        var ship = _env.NewShip();
+        using var key = _env.Primary();
+        var pkg = _env.SoftwarePackage("2026.10.1", key);
+        var verify = Run("verify", "--allow-unverified", pkg, "--root", ship.Root);
+        Assert.Equal(0, verify.Code);
+        var apply = Run("apply", "--allow-unverified", pkg, "--root", ship.Root);
+        Assert.Equal(0, apply.Code);
+        Assert.DoesNotContain("用法錯誤", apply.Err);
+        Assert.Equal("app 2.0\n", File.ReadAllText(Path.Combine(ship.Root, "app", "version.txt")));
+
+        // --flag=false 形式仍可關閉
+        var args = new CliArgs(new[] { "--json=false", "--enroll-device", "x.sbrec", "--store", "st" });
+        Assert.False(args.Flag("json"));
+        Assert.True(args.Flag("enroll-device"));
+        Assert.Equal("x.sbrec", args.Pos(0, "紀錄包"));
+        Assert.Equal("st", args.Get("store"));
+    }
+
+    [Fact]
     public void UnknownCommand_IsUsageError()
     {
         Assert.Equal(2, Run("frobnicate").Code);

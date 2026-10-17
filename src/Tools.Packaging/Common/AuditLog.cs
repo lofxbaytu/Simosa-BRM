@@ -68,6 +68,9 @@ public static class AuditEvents
     public const string SyncSessionStart = "sync.session.start";
     public const string SyncSessionEnd = "sync.session.end";
     public const string SyncAuthFailed = "sync.auth.failed";
+    /// <summary>未驗證的失敗嘗試超過速率上限:之後只計數(phase start/end,end 含被略過的次數)</summary>
+    public const string SyncAuthThrottled = "sync.auth.throttled";
+    public const string SyncSessionError = "sync.session.error";
     public const string StoreImported = "store.imported";
     public const string StoreImportRejected = "store.importRejected";
     public const string StoreDeviceEnrolled = "store.deviceEnrolled";

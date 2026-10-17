@@ -47,7 +47,7 @@ SimCore.Host ──ws://127.0.0.1:8765(state 25 Hz)──► SimStateClient ─�
 - **偵測**:ARPA 影像強度 ≥ 門檻(增益門檻以上 7.5 dB)的連續段,依掃描時間順序與前一條線 8 連通合併(串流連通元件,跨 2047→0 自然連續);元件結束時以(強度 − 門檻)加權求質心,每段先以該線的指示航向與天線位置換成 ENU,距離扣除半個脈衝長(脈衝展寬偏差)。格數 < 3、方位線 < 2 為雜訊;徑向或橫向 > 800 m 或 > 256 條線為大面積回波(陸地/雨區),不擷取也不更新追蹤。
 - **追蹤**:等速卡爾曼(x, y, vx, vy),過程雜訊 2e-4 m²/s³;量測共變異數依距離/方位(σ_r = 0.3 格 + 2 m、σ_θ = 0.03°)與回波大小。關聯:每圈每目標一次,預測閘門 Mahalanobis² < 16 或距離 < 40 m ×(1 + 漏掃描),上限 600 m;一個偵測落入兩個閘門、或兩目標距離 < 250 m → `swapRisk`。
 - **操船偵測**:(1) NIS > 9.2 連續 2 次 → 過程雜訊 0.5、速度共變異數 +4 m²/s²、30 s;(2) 並行快速濾波器(q = 0.02),精確濾波器 NIS 指數平均 > 3 倍快速者(且 > 0.2)→ 改用快速濾波器狀態、30 s 內 q = 0.02;(3) 新息指數平均偏差檢定。`manoeuvring` 旗標輸出。
-- **擷取**:手動 `acquire{bearing, range}`(搜尋半徑 300 m,3 圈無回波 → `acquireFailed`);保護區 `guardZone`:候選須 ≥ 10 格,5 次命中(7 圈內),第 3 次起須落在等速外推 50 m 內(排除海雜波斑點)→ `newTarget`。最多 40 目標(MSC.192(79) ≥ 30),編號 1–99 重用。
+- **擷取**:手動 `acquire{bearing, range}`(搜尋半徑 300 m,3 圈無回波 → `acquireFailed`);保護區 `guardZone`:候選須 ≥ 10 格,5 次命中(7 圈內),第 3 次起須落在等速外推 50 m 內(排除海雜波斑點)→ `newTarget`;追蹤中軌跡外推位置 300 m(2 × GuardGateM)內的回波不作候選(失追軌跡不算,否則雷達故障或航向無效恢復後要等失追軌跡保留期屆滿才會重新擷取)。最多 40 目標(MSC.192(79) ≥ 30),編號 1–99 重用。
 - **狀態**:`acquiring`(擷取後 60 s 且 ≥ 5 次命中前不給向量)→ `tracking`(`stable` = 追蹤 ≥ 180 s)→ 連續 6 圈漏掃描 `lost`(保留 60 s 後 `deleted`)。
 - **輸出**:真向量(course/speed)、相對向量、CPA/TCPA/BCR/BCT(`Encounter.Compute`,BCR 以自船艏向線、正 = 艏前通過)、過去位置(每 30 s,10 點)、危險目標(CPA < 1.0 nm 且 0 ≤ TCPA ≤ 12 分,可由 `cpaLimits` 改)。
 - **試操船**:`trialManoeuvre{course, speed, delay(分)}`:自船以目前速度向量航行 delay 後瞬間改為新向量,兩段相對運動各取最近點(`ArpaTracker.TrialCpa`,與暴力取樣比對);`trialCpa_nm`/`trialTcpa_min`。
@@ -93,7 +93,7 @@ for (let j = 0; j < count; j++) {
 
 ## 5. JSON 訊息(radar.schema.json)
 
-連線後伺服器先送 `status`;之後 `tracks`(模擬時間 1 Hz)、`event`、`ack`(只給送指令的客戶端),設定成功後廣播新的 `status`。
+連線後伺服器先送 `status`;之後 `tracks`(模擬時間 1 Hz)、`event`、`ack`(只給送指令的客戶端),設定成功後廣播新的 `status`;情境切換(`RadarService.SetUnits`,試操船與 CPA/TCPA 限值回到預設、天線位置可能隨船改變)後下一個狀態幀也對每台新雷達廣播 `status`。客戶端的試操船設定以最新收到的 `status` 或 `tracks` 為準(兩者都在無試操船時省略 `trial`)。
 
 ```json
 {"type":"status","radar":"x","band":"X","frequency_GHz":9.41,"transmitting":true,"standby":false,"failed":false,"degraded":false,"headingValid":true,

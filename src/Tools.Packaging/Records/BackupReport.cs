@@ -46,6 +46,27 @@ public sealed class CleanupResult
     public List<string> Mismatched { get; set; } = new();
     /// <summary>船上沒有的紀錄包 ID</summary>
     public List<string> Unknown { get; set; } = new();
+    /// <summary>無法刪除的檔案(「路徑:原因」;該紀錄包保留,下次回報時重試)</summary>
+    public List<string> Failed { get; set; } = new();
     public List<string> Warnings { get; set; } = new();
     public List<string> Errors { get; set; } = new();
+}
+
+/// <summary>
+/// 船上清理通知(隨身碟途徑;.sbcln = SignedDocument,以船上裝置金鑰簽章):船上處理已備份回報後寫到
+/// from-ship/&lt;ship&gt;/,教官端匯入時以紀錄庫登錄的裝置公鑰驗證,標記紀錄包「船上已刪除」(直連同步則由 cleanupResult 回報)。
+/// </summary>
+public sealed class CleanupNotice
+{
+    public const string FormatId = "simosa-cleanup/1";
+    public const string Extension = ".sbcln";
+
+    public string Format { get; set; } = FormatId;
+    public string ShipId { get; set; } = "";
+    public string DeviceId { get; set; } = "";
+    /// <summary>所處理的已備份回報 ID</summary>
+    public string ReportId { get; set; } = "";
+    /// <summary>船上已刪除副本的紀錄包</summary>
+    public List<string> Deleted { get; set; } = new();
+    public DateTime CreatedUtc { get; set; }
 }

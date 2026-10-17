@@ -1,8 +1,18 @@
 namespace SimosaBRM.Packaging.Cli;
 
-/// <summary>簡易參數解析:<c>--name value</c>(可重複)、<c>--flag</c>(無值)、其餘為位置參數。</summary>
+/// <summary>
+/// 簡易參數解析:<c>--name value</c>(可重複)、<c>--flag</c>(無值)、其餘為位置參數。
+/// 布林旗標(<see cref="BooleanFlags"/>)不取下一個參數為值,因此可寫在位置參數之前(例如 <c>apply --allow-unverified x.sbupd</c>);
+/// 要關閉時用 <c>--flag=false</c>。
+/// </summary>
 public sealed class CliArgs
 {
+    /// <summary>simosa-pkg 所有的布林旗標</summary>
+    public static readonly IReadOnlySet<string> BooleanFlags = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "all", "allow-unverified", "enroll-device", "force", "json", "no-pull", "no-report", "overwrite", "pem", "help",
+    };
+
     private readonly Dictionary<string, List<string>> _opts = new(StringComparer.Ordinal);
 
     public CliArgs(IEnumerable<string> args)
@@ -21,7 +31,7 @@ public sealed class CliArgs
                     value = name[(eq + 1)..];
                     name = name[..eq];
                 }
-                else if (i + 1 < list.Count && !list[i + 1].StartsWith("--", StringComparison.Ordinal))
+                else if (!BooleanFlags.Contains(name) && i + 1 < list.Count && !list[i + 1].StartsWith("--", StringComparison.Ordinal))
                 {
                     value = list[++i];
                 }

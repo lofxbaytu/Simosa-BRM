@@ -120,8 +120,10 @@ public sealed class CliApp
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or InvalidOperationException
                                        or UnauthorizedAccessException or PlatformNotSupportedException or SyncException
-                                       or System.Net.Sockets.SocketException or ArgumentException)
+                                       or System.Net.Sockets.SocketException or ArgumentException
+                                       or YamlDotNet.Core.YamlException or System.Text.Json.JsonException)
         {
+            // 參數集/情境 YAML 語法錯誤(YamlException,含行列)與型別錯誤(JsonException)也依約定回 1,不以未捕捉例外中止
             _err.WriteLine($"錯誤:{ex.Message}");
             return 1;
         }

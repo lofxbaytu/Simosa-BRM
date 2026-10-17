@@ -46,7 +46,12 @@ public sealed class ExerciseSummary
     public string? Loading { get; set; }
     public DateTime? StartUtc { get; set; }
     public DateTime? EndUtc { get; set; }
+    /// <summary>牆鐘時長(秒;結束 − 開始)</summary>
     public double? DurationS { get; set; }
+    /// <summary>模擬時間長度(footer.finalTick × dt;倍速或凍結時與牆鐘時長不同)</summary>
+    public double? SimDurationS { get; set; }
+    /// <summary>結束時間為估計值(紀錄沒有 footer.closedUtc,以檔案最後修改時間或模擬時長推算)</summary>
+    public bool EndEstimated { get; set; }
     public List<Participant> Participants { get; set; } = new();
     /// <summary>footer 存在且 sha256 與內容一致</summary>
     public bool IntegrityOk { get; set; }
@@ -65,8 +70,13 @@ public sealed class Participant
 public sealed class TrainingHours
 {
     public int ExerciseCount { get; set; }
+    /// <summary>牆鐘總時長(秒)</summary>
     public double TotalS { get; set; }
     public double TotalHours => Math.Round(TotalS / 3600.0, 2);
+    /// <summary>模擬時間總長(秒;倍速/凍結時與 totalS 不同,僅供參考)</summary>
+    public double SimTotalS { get; set; }
+    /// <summary>有練習的結束時間為估計值(見 <see cref="ExerciseSummary.EndEstimated"/>)</summary>
+    public bool Estimated { get; set; }
     public List<ParticipantHours> Participants { get; set; } = new();
 }
 
@@ -86,7 +96,10 @@ public sealed class Session
     public string? ScenarioId { get; set; }
     public DateTime? StartUtc { get; set; }
     public DateTime? EndUtc { get; set; }
+    /// <summary>牆鐘時長(秒)</summary>
     public double? DurationS { get; set; }
+    public double? SimDurationS { get; set; }
+    public bool EndEstimated { get; set; }
 }
 
 public sealed class DeviceKeyRef

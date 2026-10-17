@@ -287,6 +287,8 @@ export class BrmApp extends LitElement {
     this.staleTimer = setInterval(() => {
       const isStale = this.status === 'connected' && this.hasReceived && performance.now() - this.lastStateAt > STALE_MS;
       if (isStale !== this.stale) this.stale = isStale;
+      // 資料逾時:最後一筆狀態的警報已不可信(靜音/確認也無從生效)→ 停止聲響;收到新狀態時由 onState 恢復
+      if (isStale) this.sounder.update(undefined);
     }, 500);
     this.addEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.addEventListener('autopilot-changed', this.onAutopilotChanged as EventListener);
@@ -353,6 +355,8 @@ export class BrmApp extends LitElement {
       source.onStatus((status, detail) => {
         this.status = status;
         this.statusDetail = detail ?? '';
+        // 斷線/重連中:停止警報聲響(否則依最後一筆狀態一直響,且靜音指令只能暫存送不出去);重連後收到新狀態由 onState 恢復
+        if (status !== 'connected') this.sounder.update(undefined);
       }),
     );
     if (source.onMessage) this.unsubscribe.push(source.onMessage((msg) => this.onMessage(msg)));
@@ -458,7 +462,7 @@ export class BrmApp extends LitElement {
           ${faults.map((f) => html`<span class="alarm">故障:${f}</span>`)}
           ${s.visibility_nm !== undefined && s.visibility_nm < 2 ? html`<span class="warning">能見度 ${s.visibility_nm.toFixed(1)} nm</span>` : nothing}
           ${this.issues.length > 0 ? html`<span class="warning" title=${this.issues.join(', ')}>資料可疑 ${this.issues.length}</span>` : nothing}
-          ${counts.unacknowledged > 0 ? html`<span class="alert-badge ${counts.highest === 'warning' || counts.highest === 'caution' ? 'warning' : ''}" title="中央警報面板:需確認的警報">警報未確認 ${counts.unacknowledged}</span>` : nothing}
+          ${counts.unacknowledged > 0 ? html`<span class="alert-badge ${counts.highestUnacknowledged === 'warning' || counts.highestUnacknowledged === 'caution' ? 'warning' : ''}" title="中央警報面板:需確認的警報">警報未確認 ${counts.unacknowledged}</span>` : nothing}
           ${s.bnwas && s.bnwas.stage >= 2 ? html`<span class="alert-badge">BNWAS 第 ${s.bnwas.stage} 階段</span>` : nothing}
         </div>
         <span class="spacer"></span>

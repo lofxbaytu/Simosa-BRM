@@ -16,6 +16,8 @@ public static class SyncProtocol
 {
     public const int Version = 1;
     public const int MaxMessageBytes = 1 << 20;
+    /// <summary>握手階段(驗證前)hello/auth 訊息上限:未驗證的對方不能讓船端讀入或記錄大量資料</summary>
+    public const int HandshakeMaxMessageBytes = 4 << 10;
     public const long DefaultMaxFileBytes = 8L << 30;
     public const string Context = "simosa-sync/1";
 
@@ -48,12 +50,12 @@ public static class SyncProtocol
         await s.FlushAsync(ct).ConfigureAwait(false);
     }
 
-    public static async Task<JsonObject> ReadAsync(Stream s, CancellationToken ct)
+    public static async Task<JsonObject> ReadAsync(Stream s, CancellationToken ct, int maxBytes = MaxMessageBytes)
     {
         var len = new byte[4];
         await s.ReadExactlyAsync(len, ct).ConfigureAwait(false);
         var n = BinaryPrimitives.ReadUInt32BigEndian(len);
-        if (n == 0 || n > MaxMessageBytes) throw new InvalidDataException($"訊息長度不合法:{n}");
+        if (n == 0 || n > maxBytes) throw new InvalidDataException($"訊息長度不合法:{n}");
         var buf = new byte[n];
         await s.ReadExactlyAsync(buf, ct).ConfigureAwait(false);
         JsonNode? node;
@@ -198,7 +200,10 @@ public sealed record RecordListMessage
 {
     public string Type { get; init; } = SyncTypes.RecordList;
     public List<Records.OutstandingPackage> Packages { get; init; } = new();
+    /// <summary>打包時的問題</summary>
     public List<string> Warnings { get; init; } = new();
+    /// <summary>保留上限警告(處理已備份回報之前的狀態;教官端有送回報時改用 cleanupResult 的警告)</summary>
+    public List<string> RetentionWarnings { get; init; } = new();
 }
 
 public sealed record UpdateResultMessage

@@ -585,7 +585,7 @@ public sealed class SimulationEngine
                 if (mode == SteeringMode.Autopilot)
                 {
                     if (cmd.ArgAsDouble("heading") is { } hdg) { Autopilot.HeadingRad = Units.DegToRad(Units.NormalizeHeadingDeg(hdg)); headingGiven = true; }
-                    else if (!wasAutopilot) Autopilot.HeadingRad = Motion.Psi; // 未給航向時保持目前艏向(不視為改航向動作)
+                    else if (!wasAutopilot) Autopilot.HeadingRad = IndicatedHeadingRad(); // 未給航向時保持目前羅經讀數(電羅經指示值,與自動舵/偏航警報同一來源;不視為改航向動作)
                     if (cmd.ArgAsDouble("rotLimit") is { } lim) Autopilot.RotLimitDegPerMin = Math.Max(1.0, Math.Abs(lim));
                 }
                 SetSteeringMode(mode, pump, source, itemId, observe: fromInstructor);

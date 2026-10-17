@@ -68,6 +68,20 @@ public class ScenarioValidatorTests
     }
 
     [Fact]
+    public void AlertEventItemIdIsAlertIdNotTimelineItem()
+    {
+        // 警報/BNWAS 事件的 itemId 是警報 id(E08 alarmAck 限定 gyroFailure),不比對時間表項目
+        foreach (var ok in new[] {
+            "assessment:\n  required: [ { id: r, after: { event: alertRaised, itemId: gyroFailure }, expect: { event: { kind: alertAcknowledged, itemId: gyroFailure } }, within_s: 30 } ]",
+            "assessment:\n  required: [ { id: r, after: { event: bnwasStage, itemId: bnwas }, expect: rudderOrder, within_s: 30 } ]",
+        })
+            Assert.DoesNotContain(Check(ok), i => i.Severity == ScenarioIssueSeverity.Error);
+        // 時間表類事件仍檢查
+        HasError("assessment:\n  required: [ { id: r, after: { event: faultInjected, itemId: nope }, expect: rudderOrder, within_s: 10 } ]", "after 引用不存在的時間表項目");
+        HasError("assessment:\n  required: [ { id: r, after: { event: faultInjected }, expect: { event: { kind: timelineTriggered, itemId: nope } }, within_s: 10 } ]", "expect 引用不存在的時間表項目");
+    }
+
+    [Fact]
     public void InitialStateHardFailsAreErrors()
     {
         HasError("zones:\n  - { id: z, type: noGo, polygon: [ { x: -10, y: -10 }, { x: 10, y: -10 }, { x: 10, y: 10 }, { x: -10, y: 10 } ] }\nassessment:\n  hardFail: [ { id: n, rule: zoneEntered, zoneId: z } ]", "禁區");

@@ -83,6 +83,8 @@ public static class UpdatePackageBuilder
         PackageVersion.Parse(req.Version);
         if (!UpdateKinds.All.Contains(req.Kind)) throw new PackageBuildException($"kind 須為 {string.Join("|", UpdateKinds.All)}:{req.Kind}");
         if (string.IsNullOrWhiteSpace(req.Summary)) throw new PackageBuildException("需提供變更摘要(--summary)");
+        if (req.PackageId is { } pid && !UpdateManifest.IsValidPackageId(pid))
+            throw new PackageBuildException($"--package-id 格式不合法(須為英數字開頭,只含英數字 . _ -,最多 128 字元):{pid}");
         foreach (var d in req.SmsDocuments)
             if (string.IsNullOrWhiteSpace(d.DocumentId) || string.IsNullOrWhiteSpace(d.Revision) || string.IsNullOrWhiteSpace(d.ApprovedBy))
                 throw new PackageBuildException("SMS 文件須含編號、版次與核准人(--sms 編號:版次:核准人[:核准日])");
@@ -101,8 +103,7 @@ public static class UpdatePackageBuilder
             var p = PackagePaths.NormalizeInstallPath(f.InstallPath);
             if (!prefixes.Any(pre => p.StartsWith(pre, StringComparison.Ordinal)))
                 throw new PackageBuildException($"{req.Kind} 更新包不可包含 {p}(允許:{string.Join("、", prefixes)})");
-            if (req.Kind != UpdateKinds.Trust && p.StartsWith(PackagePaths.TrustedKeysPrefix, StringComparison.Ordinal))
-                throw new PackageBuildException("信任清單只能以 trust 更新包變更");
+            if (UpdatePackageReader.ProtectedPathError(p, req.Kind) is { } pe) throw new PackageBuildException(pe);
             if (!seen.Add(p)) throw new PackageBuildException($"重複的安裝路徑:{p}");
             if (!File.Exists(f.SourcePath)) throw new PackageBuildException($"找不到檔案:{f.SourcePath}");
             files.Add((p, Path.GetFullPath(f.SourcePath)));
@@ -116,7 +117,7 @@ public static class UpdatePackageBuilder
             trust = new TrustChange { Reason = req.TrustReason, Remove = req.RemoveKeyIds.Select(k => k.ToLowerInvariant()).ToList() };
             foreach (var (p, src) in files)
             {
-                if (!p.EndsWith(".pem", StringComparison.OrdinalIgnoreCase)) throw new PackageBuildException($"信任清單只接受 .pem:{p}");
+                if (!p.EndsWith(".pem", StringComparison.OrdinalIgnoreCase) || p.Count(c => c == '/') != 2) throw new PackageBuildException($"信任清單只接受 config/trusted-keys/ 下的 .pem:{p}");
                 using var tk = TrustedKey.Parse(File.ReadAllText(src), src, KeyRoles.Primary);
                 if (!KeyRoles.IsSigner(tk.Role)) throw new PackageBuildException($"{p} 的 role 須為 primary 或 backup");
                 trust.Add.Add(new TrustKeyEntry { KeyId = tk.KeyId, Name = tk.Name, Role = tk.Role, Holder = tk.Holder, Path = p });
@@ -161,7 +162,7 @@ public static class UpdatePackageBuilder
                     baseline = newSet;
                 }
             }
-            catch (InvalidDataException ex)
+            catch (Exception ex) when (ex is InvalidDataException or System.Text.Json.JsonException or YamlDotNet.Core.YamlException)
             {
                 throw new PackageBuildException($"參數集檢查失敗:{ex.Message}");
             }

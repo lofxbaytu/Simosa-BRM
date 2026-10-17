@@ -192,7 +192,8 @@ export class AlertPanel extends LitElement {
   override render() {
     const list = sortAlerts(this.alerts);
     const counts = alertCounts(list);
-    const countTone = counts.highest === 'warning' || counts.highest === 'caution' ? 'warning' : '';
+    // 徽章數字是需確認者,顏色也只看需確認者(已確認的 alarm 不讓徽章變紅)
+    const countTone = counts.highestUnacknowledged === 'warning' || counts.highestUnacknowledged === 'caution' ? 'warning' : '';
     return html`
       <div class="tile" role="region" aria-label="中央警報面板">
         <div class="head">

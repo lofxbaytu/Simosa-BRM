@@ -22,7 +22,8 @@
 指令(含時間表動作)在推進前處理;故障注入當步即改變指示值與自動舵,警報在**下一步**成立(t + 0.02 s)。
 
 確定性:無新亂數;漂移以封閉式 `drift = base + rate × (tick − start) × dt / 60` 計算;所有計時以 tick 為單位。感測器/警報/BNWAS 的雜湊位元組只在
-「非預設」時追加(感測器有偏差、有警報或滯後狀態、BNWAS 非 off),**無這些狀態的舊情境雜湊與舊版完全相同**(`HashCompatibilityTests` 仍通過)。
+「非預設」時追加(感測器有偏差、有警報或滯後狀態、BNWAS 非 off 或曾被 `bnwasMode` 改過——off 模式下改了 `dormant_s`/`stage3_s` 或計時起點也算非預設),
+**無這些狀態的舊情境雜湊與舊版完全相同**(`HashCompatibilityTests` 仍通過)。
 
 ## 2. 感測器層:真值與指示值
 
@@ -60,6 +61,8 @@
 - `gyroFailure` 或 `autopilotFailure` 注入時若自動舵啟用:發 `autopilotTripped {reason: headingInvalid|autopilotFailure, fault}`(source engine)、舵令同步到目前舵角、
   `steeringModeChanged autopilot → fu`(source engine,不視為學員動作);故障期間 `autopilot{enabled:true}` 與 `steeringMode autopilot` 被拒:
   `commandRejected {command, reason: "autopilotUnavailable"}`。
+- `steeringMode autopilot` 未帶 `heading` 且原本未啟用自動舵時,設定航向 = **當下的電羅經指示航向**(實船接上自動舵保持羅經讀數,不轉向);
+  漂移/凍結期間不可取真航向,否則一接上就以累積誤差轉向並誤發偏航警報。電羅經未受影響時兩者相同(舊情境位元不變)。
 
 ### 2.4 磁羅經
 
@@ -102,6 +105,9 @@
 ```
 
 - 有聲響(`audible`)= activeUnacknowledged 且優先序為 emergencyAlarm/alarm/warning;caution 只有視覺。
+  網頁操船台(`AlertSounder`)依最新 `state.alerts` 發聲;與核心斷線/重連中或資料逾時(> 2 s 未收到狀態)時停止聲響
+  (最後一筆狀態已不可信,靜音/確認指令也送不出去;畫面以「連線中/資料逾時」提示),收到新狀態後恢復。
+  「未確認 N」徽章(中央警報面板、頁首、教官站)的顏色取**需確認者**的最高優先序(`alertCounts().highestUnacknowledged`),已確認的 alarm 不讓徽章變紅。
 - 升級:warning 在 activeUnacknowledged/activeSilenced 持續 `alerts.escalate_s`(預設 300 s,自最近一次成立起算)未確認 → alarm、`escalated = true`、
   回到 activeUnacknowledged(`alertEscalated {from: warning, to: alarm, reason: unacknowledged, after_s}`)。BNWAS 第 2 階段同樣以 `alertEscalated {reason: source}` 表示。
 - BNWAS 警報例外:BNWAS 重設即解除指示(直接 normal,不經 rectifiedUnacknowledged)。
@@ -162,7 +168,7 @@
 - 重設:`bnwasReset` 指令,或任何學員/教官經指令佇列下的駕駛台操作:`rudder`、`telegraph`、`rpm`、`thruster`、`autopilot`、`steeringMode`、`alertAcknowledge`、`alertSilence`。
   時間表動作(`ownShip`、`autopilot` 覆寫)不是駕駛台上的人為操作,不重設;`acknowledge`(教官記錄口頭動作)也不重設。
 - 事件:`bnwasStage {stage, from, reason: dormantElapsed|notReset|inactive}`(source engine)、`bnwasReset {fromStage, by: 指令名}`(source = 指令來源;
-  一般操作只在階段 ≥ 1 時發事件,`bnwasReset` 指令一律發)、`bnwasModeChanged {from, to, fromStage, dormant_s, stage2_s, stage3_s}`。
+  作動中一般操作只在階段 ≥ 1 時發事件,`bnwasReset` 指令一律發;未作動(off,或 auto 而自動舵未啟用)時重設不動作、不發事件,網頁示範模式相同)、`bnwasModeChanged {from, to, fromStage, dormant_s, stage2_s, stage3_s}`。
 - 指令:
 
 ```json
@@ -196,13 +202,20 @@
 }
 ```
 
+BNWAS 警報不需確認(重設即解除指示,第 3.2 節):`bnwasReset` 事件(`fromStage` ≥ 1;不論由 `bnwasReset` 鍵、一般駕駛台操作或 `alertAcknowledge` 觸發)
+把該筆 bnwas 紀錄的 `acknowledgedAt_s`/`ackTime_s` 填為重設時刻,因此正確重設的 BNWAS 計入 `acknowledged`、不計入 `unacknowledged`;
+只有未經重設就解除(切 off、auto 下解除自動舵)或至結束仍成立的 bnwas 紀錄才算未確認(上例的 bnwas 紀錄即屬後者)。
+`bnwas.resets` 只計階段 ≥ 1 的重設(休眠中按重設鍵仍發 `bnwasReset {fromStage: 0}` 事件,但不計次)。教官站由事件流推得的
+警報歷史(`alertHistory`)與次數(`bnwasCounts`)依同一規則。
+
 `faultResponses[]` 新增 `alertAckAt_s`、`alertAckDt_s`(該故障對應警報的第一次確認時刻與距注入秒數)。容許帶可引用的新指標(`MetricNames`):
 `alerts.meanAckTime_s`、`alerts.maxAckTime_s`、`alerts.unacknowledged`、`alerts.escalations`、`bnwas.stage2Count`、`bnwas.stage3Count`
 (Python `scenario.py` 的 `METRIC_NAMES` 尚未加入,資料夾內情境暫勿在 bands 引用)。
 
 ## 6. NMEA(`Gateway.Nmea`)
 
-所有句型取指示值。無效時(依 IEC 61162-1):
+所有句型取指示值(MWV(T) 例外:相對船艏的真風角由相對風與船速在船體座標推得、不經電羅經,故以真航向 `truth.heading` 計算,
+電羅經漂移/凍結/失效不影響,狀態維持 A)。無效時(依 IEC 61162-1):
 
 | 句型 | 正常 | 無效 |
 |---|---|---|
@@ -277,3 +290,6 @@ bnwas:
 7. Python 參考實作(`src/Tools.Calibration`)尚未實作感測器層/警報/BNWAS(不輸出 truth/sensors/alerts/bnwas,新指令應回 ok=false),
    `METRIC_NAMES`、情境 `sensors/alerts/bnwas` 區段待補;網頁儀器/教官站待讀取 `state.truth/sensors/alerts/bnwas` 與送新指令。
 8. ALF/ALC 句型、HDG(磁羅經)句型未輸出。
+9. E08 必要事件 `alarmAck` 的 `expect` 為 `{ event: { kind: alertAcknowledged } }`,未限定 `itemId`:變化題(`alerts.headingMonitor_deg: 5`)下只確認
+   headingMonitor 也會判 met,而 gyroFailure 警報仍未確認(`faultResponses` 的 `alertAckAt_s` 為 null)。應改為 `itemId: gyroFailure`
+   (`data/scenarios/E08_gyro_failure.yaml` 與 Python 情境檢查由另一位工程師負責,`GyroFailureScenarioTests` 的 by 標籤不變),待該檔更新。

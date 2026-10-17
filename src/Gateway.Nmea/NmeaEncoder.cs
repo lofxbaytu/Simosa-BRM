@@ -104,9 +104,13 @@ public static class NmeaEncoder
     public static string MwvRelative(OwnShipState s)
         => NmeaSentence.Build(TalkerWind, "MWV", NmeaSentence.F1(s.Wind.RelDir ?? 0.0), "R", NmeaSentence.F1(s.Wind.RelSpeed ?? 0.0), "N", "A");
 
-    /// <summary>MWV(T):真風角(真風來向相對艏向)與真風速 kn(NMEA 定義的 T 為相對船艏的真風)。</summary>
+    /// <summary>
+    /// MWV(T):真風角(真風來向相對艏向)與真風速 kn(NMEA 定義的 T 為相對船艏的真風)。
+    /// 相對船艏的真風由相對風與船速在船體座標推得,不經電羅經:以真航向(state.truth.heading)計算,
+    /// 電羅經漂移/凍結/失效不影響此句(頂層 heading 為電羅經指示值,不可使用;無 truth 區塊時才退回)。
+    /// </summary>
     public static string MwvTrue(OwnShipState s)
-        => NmeaSentence.Build(TalkerWind, "MWV", NmeaSentence.F1(Units.NormalizeHeadingDeg(s.Wind.TrueDir - s.Heading)), "T",
+        => NmeaSentence.Build(TalkerWind, "MWV", NmeaSentence.F1(Units.NormalizeHeadingDeg(s.Wind.TrueDir - (s.Truth?.Heading ?? s.Heading))), "T",
             NmeaSentence.F1(s.Wind.TrueSpeed), "N", "A");
 
     /// <summary>RSA:右舵(單舵)舵角,右正,狀態 A;左舵欄位無效。</summary>

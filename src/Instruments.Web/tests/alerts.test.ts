@@ -121,8 +121,8 @@ describe('警報排序與狀態顯示', () => {
 
   it('alertCounts 與靜音倒數', () => {
     const list = [alert({ priority: 'warning', audible: true }), alert({ priority: 'alarm', state: 'activeAcknowledged', audible: false }), alert({ priority: 'caution', audible: false })];
-    expect(alertCounts(list)).toEqual({ total: 3, unacknowledged: 1, audible: 1, highest: 'alarm', highestAudible: 'warning' });
-    expect(alertCounts(undefined)).toEqual({ total: 0, unacknowledged: 0, audible: 0, highest: null, highestAudible: null });
+    expect(alertCounts(list)).toEqual({ total: 3, unacknowledged: 1, audible: 1, highest: 'alarm', highestAudible: 'warning', highestUnacknowledged: 'warning' });
+    expect(alertCounts(undefined)).toEqual({ total: 0, unacknowledged: 0, audible: 0, highest: null, highestAudible: null, highestUnacknowledged: null });
     expect(silenceRemaining(alert({ state: 'activeSilenced', silencedUntil_s: 585 }), 570.4)).toBeCloseTo(14.6);
     expect(silenceRemaining(alert({}), 1)).toBeUndefined();
   });
@@ -186,8 +186,16 @@ describe('由事件流推得警報歷史與 BNWAS 次數;事件文字', () => {
     const h = alertHistory(events);
     expect(h.map((x) => x.id)).toEqual(['gyroFailure', 'bnwas']);
     expect(h[0]).toMatchObject({ priority: 'alarm', acknowledgedAt_s: 560, ackTime_s: 79.98, silences: 1, rectifiedAt_s: 700, open: false, text: '電羅經失效' });
-    expect(h[1]).toMatchObject({ priority: 'alarm', escalated: true, open: false, rectifiedAt_s: 560.02 });
-    expect(h[1]!.ackTime_s).toBeUndefined();
+    // BNWAS 由 alertAcknowledge 的重設清除(fromStage 2):重設時刻即確認時刻(與核心 summary.alerts.records 一致)
+    expect(h[1]).toMatchObject({ priority: 'alarm', escalated: true, open: false, rectifiedAt_s: 560.02, acknowledgedAt_s: 560 });
+    expect(h[1]!.ackTime_s).toBeCloseTo(19.98, 6);
+    // 休眠中的重設(fromStage 0)不影響紀錄;未經重設即解除(例如切 off)仍為未確認
+    const off = alertHistory([
+      ev('alertRaised', 10, { id: 'bnwas', priority: 'caution', raisedAt_s: 10, repeat: false }),
+      ev('bnwasReset', 11, { fromStage: 0, by: 'bnwasReset' }),
+      ev('alertRectified', 12, { id: 'bnwas', state: 'normal' }),
+    ]);
+    expect(off[0]!.ackTime_s).toBeUndefined();
   });
 
   it('再成立(repeat)併入同一筆;中途連線缺 alertRaised 時補一筆', () => {
@@ -205,6 +213,14 @@ describe('由事件流推得警報歷史與 BNWAS 次數;事件文字', () => {
 
   it('bnwasCounts 與事件文字/嚴重度', () => {
     expect(bnwasCounts(events)).toEqual({ stage1: 1, stage2: 1, stage3: 0, resets: 1 });
+    // 與核心 MetricsCollector 一致:只計階段 ≥ 1 的重設(休眠中按 BNWAS 重設鍵仍發事件,但不計次)
+    const dormant = [
+      ev('bnwasReset', 100, { fromStage: 0, by: 'bnwasReset' }, { source: 'instructor' }),
+      ev('bnwasReset', 200, { fromStage: 0, by: 'bnwasReset' }, { source: 'instructor' }),
+      ev('bnwasStage', 800, { stage: 1, from: 0, reason: 'dormantElapsed' }),
+      ev('bnwasReset', 805, { fromStage: 1, by: 'rudder' }, { source: 'instructor' }),
+    ];
+    expect(bnwasCounts(dormant)).toEqual({ stage1: 1, stage2: 0, stage3: 0, resets: 1 });
     expect(eventLabel(events[0]!)).toBe('警報成立:電羅經失效');
     expect(eventSeverity(events[0]!)).toBe('alarm');
     expect(eventLabel(events[5]!)).toBe('警報升級:BNWAS 值班警報 注意 → 警報(來源升級)');
@@ -227,11 +243,18 @@ describe('真值 vs 指示值', () => {
     const s = parseState(JSON.parse(JSON.stringify(e08Frame)))!.state;
     const rows = sensorComparison(s);
     const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
-    expect(byKey['heading']).toMatchObject({ indicated: '28.3°', truth: '37.2°', error: '-8.9°', faulty: true, invalid: true });
-    expect(byKey['magnetic']).toMatchObject({ indicated: '38.2°', error: '+1.0°', faulty: false });
+    expect(byKey['heading']).toMatchObject({ indicated: '028.3°', truth: '037.2°', error: '-8.9°', faulty: true, invalid: true });
+    expect(byKey['magnetic']).toMatchObject({ indicated: '038.2°', error: '+1.0°', faulty: false });
     expect(byKey['position']).toMatchObject({ error: '0 m', faulty: false });
     expect(byKey['stw']!.faulty).toBe(false);
     expect(sensorComparison(defaultState('FSB1'))).toEqual([]);
+  });
+  it('航向類欄位跨 0/360:359.96° 顯示 000.0°(不顯示 360.0°)', () => {
+    const s = { ...defaultState('FSB1'), heading: 359.96, cog: 359.97, sensors: { headingValid: true, positionValid: true, depthValid: true, stwValid: true, magneticHeading: 359.99 }, truth: { heading: 0.02, pos: { lat: 0, lon: 0, x: 0, y: 0 }, cog: 359.951, sog: 0, stw: 0, depthBelowKeel: 0, headingError_deg: -0.06, positionError_m: 0 } };
+    const byKey = Object.fromEntries(sensorComparison(s).map((r) => [r.key, r]));
+    expect(byKey['heading']).toMatchObject({ indicated: '000.0°', truth: '000.0°', error: '-0.1°' });
+    expect(byKey['magnetic']).toMatchObject({ indicated: '000.0°', truth: '000.0°' });
+    expect(byKey['cog']).toMatchObject({ indicated: '000.0°', truth: '000.0°' });
   });
   it('GNSS 跳點:位置差距與故障標紅', () => {
     const s = { ...defaultState('FSB1'), pos: { lat: 0, lon: 0, x: 500, y: 0 }, faults: ['gpsJump'], truth: { heading: 0, pos: { lat: 0, lon: 0, x: 0, y: 0 }, cog: 0, sog: 0, stw: 0, depthBelowKeel: 0, headingError_deg: 0, positionError_m: 500 } };
@@ -392,6 +415,27 @@ describe('示範模式的警報與 BNWAS 循環', () => {
     expect(ev[3]!.data).toMatchObject({ fromStage: 3, by: 'demoAutoReset' });
     expect(sim.output().bnwas!.stage).toBe(0);
     expect(sim.output().bnwas!.remaining_s).toBeCloseTo(179, 0);
+  });
+
+  it('BNWAS 未作動(off、或 auto 而自動舵未啟用)時 bnwasReset 不發事件、不改計時(與核心 Bnwas.Reset 一致)', () => {
+    const sim = new DemoSim({ alerts: true });
+    sim.apply({ type: 'bnwasMode', value: 'off' });
+    sim.step();
+    sim.takeEvents();
+    sim.apply({ type: 'bnwasReset' });
+    sim.apply({ type: 'rudder', value: 5 });
+    expect(sim.takeEvents().filter((e) => e.kind === 'bnwasReset')).toHaveLength(0);
+    sim.apply({ type: 'bnwasMode', value: 'auto' });
+    sim.step();
+    sim.takeEvents();
+    sim.apply({ type: 'bnwasReset' });
+    expect(sim.takeEvents().filter((e) => e.kind === 'bnwasReset')).toHaveLength(0);
+    // 作動中(on)休眠期按重設鍵仍一律發事件
+    sim.apply({ type: 'bnwasMode', value: 'on' });
+    sim.step();
+    sim.takeEvents();
+    sim.apply({ type: 'bnwasReset' });
+    expect(sim.takeEvents().filter((e) => e.kind === 'bnwasReset').map((e) => e.data)).toEqual([{ fromStage: 0, by: 'bnwasReset' }]);
   });
 
   it('gyroFailure:自動舵脫開(autopilotTripped + steeringModeChanged)、指示航向保持、不可再啟用;清除後恢復', () => {

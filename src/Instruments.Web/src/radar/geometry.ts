@@ -59,6 +59,15 @@ export function orientationRotation(
   }
 }
 
+/**
+ * 畫面參考航向:畫面上「船首」對應的真方位基準。航向有效時為航向;無效時影像未穩定化、
+ * 畫面為相對座標(正上方 = 船首),所以為 0。天線偏移、EBL/PI 的 R 參考、保護區相對扇區、點選換算都用這個值,
+ * 不可用電羅經失效時核心保留的最後指示航向。
+ */
+export function screenHeading(headingDeg: number, headingValid: boolean): number {
+  return headingValid ? headingDeg : 0;
+}
+
 export function pxPerNm(view: Pick<PpiView, 'radiusPx' | 'rangeNm'>): number {
   return view.radiusPx / view.rangeNm;
 }

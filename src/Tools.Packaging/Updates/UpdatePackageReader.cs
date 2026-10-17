@@ -36,6 +36,18 @@ public static class UpdatePackageReader
         return (mb, sig);
     }
 
+    /// <summary>
+    /// zip 內重複的項目名稱(不分大小寫;Windows 解壓時同名會互相覆寫)。重複的 manifest.json/manifest.sig 會讓
+    /// 「驗證的 manifest」與「解出的 manifest」不是同一份,一律拒絕。回傳第一個重複的名稱或 null。
+    /// </summary>
+    internal static string? FindDuplicateEntry(ZipArchive zip)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in zip.Entries)
+            if (!seen.Add(e.FullName.Replace('\\', '/'))) return e.FullName;
+        return null;
+    }
+
     internal static byte[] ReadEntry(ZipArchiveEntry e, long max)
     {
         if (e.Length > max) throw new InvalidDataException($"{e.FullName} 過大");
@@ -71,6 +83,11 @@ public static class UpdatePackageReader
         }
         using (zip)
         {
+            if (FindDuplicateEntry(zip) is { } dup)
+            {
+                v.Errors.Add($"更新包內有重複的項目:{dup}(拒絕,避免驗證與套用的內容不一致)");
+                return v;
+            }
             byte[] mb;
             SignatureEnvelope sig;
             try { (mb, sig) = ReadSigned(zip); }
@@ -114,8 +131,10 @@ public static class UpdatePackageReader
             if (!PackageVersion.TryParse(m.Version, out var ver)) v.Errors.Add($"版本格式錯誤:{m.Version}");
             if (!UpdateKinds.All.Contains(m.Kind)) v.Errors.Add($"未知的更新包種類:{m.Kind}");
             if (string.IsNullOrWhiteSpace(m.PackageId)) v.Errors.Add("manifest 缺少 packageId");
+            else if (!UpdateManifest.IsValidPackageId(m.PackageId)) v.Errors.Add($"packageId 格式不合法(須為英數字開頭,只含英數字 . _ -,最多 128 字元):{m.PackageId}");
 
-            // 檔案清單 ↔ zip 內容
+            // 檔案清單 ↔ zip 內容(安裝路徑與移除路徑一律以正規化後的值檢查種類前綴與保護路徑)
+            var prefixes = UpdateKinds.AllowedPrefixes(m.Kind);
             var listed = new Dictionary<string, PackageFile>(StringComparer.Ordinal);
             foreach (var f in m.Files)
             {
@@ -128,13 +147,28 @@ public static class UpdatePackageReader
                 }
                 if (p != f.Path) v.Errors.Add($"檔案路徑未正規化:{f.Path}");
                 if (!listed.TryAdd(p, f)) v.Errors.Add($"檔案重複列出:{p}");
-                var prefixes = UpdateKinds.AllowedPrefixes(m.Kind);
                 if (!prefixes.Any(pre => p.StartsWith(pre, StringComparison.Ordinal))) v.Errors.Add($"{m.Kind} 更新包不可包含 {p}");
+                if (ProtectedPathError(p, m.Kind) is { } pe) v.Errors.Add(pe);
+                if (m.Kind == UpdateKinds.Trust && (p.Count(c => c == '/') != 2 || !p.EndsWith(".pem", StringComparison.OrdinalIgnoreCase)))
+                    v.Errors.Add($"信任清單檔案須為 config/trusted-keys/ 下的 .pem:{p}");
             }
             foreach (var r in m.Remove)
             {
-                try { PackagePaths.NormalizeInstallPath(r); }
-                catch (InvalidDataException ex) { v.Errors.Add(ex.Message); }
+                string p;
+                try { p = PackagePaths.NormalizeInstallPath(r); }
+                catch (InvalidDataException ex)
+                {
+                    v.Errors.Add(ex.Message);
+                    continue;
+                }
+                if (p != r) v.Errors.Add($"移除路徑未正規化:{r}");
+                if (m.Kind == UpdateKinds.Trust)
+                {
+                    v.Errors.Add($"信任更新包不可使用 remove(請以 trust.remove 列出要移除的金鑰 ID):{r}");
+                    continue;
+                }
+                if (!prefixes.Any(pre => p.StartsWith(pre, StringComparison.Ordinal))) v.Errors.Add($"{m.Kind} 更新包不可移除 {p}");
+                if (ProtectedPathError(p, m.Kind) is { } pe) v.Errors.Add(pe);
             }
             var payloadSeen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var e in zip.Entries)
@@ -200,9 +234,23 @@ public static class UpdatePackageReader
                         if (!m.Trust.Add.Any(a => a.Path == p)) v.Errors.Add($"信任清單檔案 {p} 未列於 trust.add");
                 }
             }
-            else if (m.Files.Any(f => f.Path.StartsWith(PackagePaths.TrustedKeysPrefix, StringComparison.Ordinal)) || m.Remove.Any(r => r.StartsWith(PackagePaths.TrustedKeysPrefix, StringComparison.Ordinal)))
-                v.Errors.Add("信任清單只能以 trust 更新包變更");
         }
         return v;
     }
+
+    /// <summary>
+    /// 保護路徑(縱深防禦,不分大小寫比對,目錄本身也算):裝置金鑰 config/device 與 config/packaging.json 任何更新包都不得觸及;
+    /// 信任清單 config/trusted-keys 只有 trust 類可變更(設計文件第 2 節)。
+    /// </summary>
+    internal static string? ProtectedPathError(string normalized, string kind)
+    {
+        if (IsAtOrUnder(normalized, "config/device") || IsAtOrUnder(normalized, "config/packaging.json"))
+            return $"更新包不可變更裝置金鑰或 packaging.json:{normalized}";
+        if (kind != UpdateKinds.Trust && IsAtOrUnder(normalized, PackagePaths.TrustedKeysPrefix.TrimEnd('/')))
+            return "信任清單只能以 trust 更新包變更";
+        return null;
+    }
+
+    private static bool IsAtOrUnder(string path, string dir)
+        => path.Equals(dir, StringComparison.OrdinalIgnoreCase) || path.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase);
 }

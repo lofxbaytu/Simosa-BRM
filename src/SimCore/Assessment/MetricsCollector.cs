@@ -1,3 +1,4 @@
+using SimosaBRM.SimCore.Alerts;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Engine;
 
@@ -100,7 +101,7 @@ public sealed class MetricsCollector
 
     /// <summary>
     /// 警報/BNWAS 事件(引擎 source = engine):alertRaised 開一筆紀錄(每次成立一筆)、alertAcknowledged 填確認時間、
-    /// alertEscalated/alertSilenced 計數、alertRectified 記解除時刻;bnwasStage 計各階段次數、bnwasReset 計重設(階段 ≥ 1 時)。
+    /// alertEscalated/alertSilenced 計數、alertRectified 記解除時刻;bnwasStage 計各階段次數、bnwasReset 計重設(階段 ≥ 1 時;並以重設時刻填入該筆 bnwas 紀錄的確認時間)。
     /// </summary>
     public void OnAlertEvent(SimEvent e)
     {
@@ -138,7 +139,16 @@ public sealed class MetricsCollector
                 }
                 break;
             case SimEventKinds.BnwasReset:
-                if (e.DataNumber("fromStage") is > 0) st.BnwasResets++;
+                if (e.DataNumber("fromStage") is > 0)
+                {
+                    st.BnwasResets++;
+                    // BNWAS 重設即解除指示(sensors-alerts.md 第 3.2 節,不需再確認):重設時刻視為該筆 bnwas 警報的確認時刻
+                    if (Open(AlertIds.Bnwas) is { } br)
+                    {
+                        br.AcknowledgedAtS = e.T;
+                        br.AckTimeS = e.T - br.RaisedAtS;
+                    }
+                }
                 break;
         }
     }

@@ -6,7 +6,8 @@
   README「WebSocket 服務命令支援」。
 - 每筆命令回 {"type": "ack", "command": ..., "ok": bool, "detail": ..., "tick": ...};未支援或失敗者回 ok=false
   並在 detail 說明,模型狀態不變。情境引擎指令 triggerTimeline / acknowledge / getAssessment / endExercise 固定回 ok=false
-  (Python 參考實作不模擬時間表與評估;情境引擎設計第 2.3 節)。
+  (Python 參考實作不模擬時間表與評估;情境引擎設計第 2.3 節);警報/BNWAS 指令 alertAcknowledge / alertSilence / bnwasMode /
+  bnwasReset 亦固定回 ok=false(不實作感測器層、BAM 與 BNWAS,不輸出 state.truth/sensors/alerts/bnwas;sensors-alerts.md 第 9 節)。
 - 已載入情境時 state JSON 加 scenario {id, phase: "normal", parameterSetVersion?}(state.schema.json 的 scenario 物件;
   Python 不推進階段,phase 固定 normal)。
 """
@@ -36,6 +37,11 @@ UNIMPLEMENTED_DETAIL = {
     "acknowledge": "未實作:Python 參考實作不記錄確認事件、不評估必要事件",
     "getAssessment": "未實作:Python 參考實作不計算評估指標與分數",
     "endExercise": "未實作:Python 參考實作無情境結束/講評摘要",
+    # 警報管理(MSC.302(87))與 BNWAS(MSC.128(75)):docs/design/sensors-alerts.md 第 3.3、4 節;由 C# SimCore 執行
+    "alertAcknowledge": "未實作:Python 參考實作無警報管理(BAM),不輸出 state.alerts",
+    "alertSilence": "未實作:Python 參考實作無警報管理(BAM),不輸出 state.alerts",
+    "bnwasMode": "未實作:Python 參考實作無 BNWAS(情境 bnwas 設定只保留、不模擬)",
+    "bnwasReset": "未實作:Python 參考實作無 BNWAS(情境 bnwas 設定只保留、不模擬)",
 }
 
 

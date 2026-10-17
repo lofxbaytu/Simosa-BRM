@@ -174,12 +174,15 @@ public sealed class RecordPackageTests : IDisposable
     {
         var ship = _env.NewShip(maxVisitIntervals: 2);
         TestEnv.WriteRecord(ship.RecordsDir, "a.jsonl", "E01_baseline", Start, 600);
-        var mgr = new ShipRecordManager(ship);
+        var clock = new ManualClock(new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero));
+        var mgr = new ShipRecordManager(ship, clock);
         mgr.BeginVisit("tcp");             // 訪船 #1:打包取回
         var p = mgr.PackPending()!;
         Assert.Equal(1, p.VisitSeq);
+        clock.Advance(TimeSpan.FromDays(14));
         mgr.BeginVisit("tcp");             // 訪船 #2:教官筆電未回報
         Assert.Empty(mgr.RetentionWarnings());
+        clock.Advance(TimeSpan.FromDays(14));
         mgr.BeginVisit("usb");             // 訪船 #3:已累積兩個間隔
         var w = Assert.Single(mgr.RetentionWarnings());
         Assert.Contains(p.PackageId, w);

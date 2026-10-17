@@ -366,7 +366,7 @@ export class DemoBnwas {
     if (this.stage === 0 && t - this.periodStart_t >= this.dormant_s) this.setStage(1, 'dormantElapsed', t);
     else if (this.stage === 1 && t - this.stageStart_t >= this.stage2_s) this.setStage(2, 'notReset', t);
     else if (this.stage === 2 && t - this.stageStart_t >= this.stage3_s) this.setStage(3, 'notReset', t);
-    else if (this.stage === 3 && t - this.stageStart_t >= DEMO_BNWAS_AUTO_RESET_S) this.reset(t, 'demoAutoReset', 'engine');
+    else if (this.stage === 3 && t - this.stageStart_t >= DEMO_BNWAS_AUTO_RESET_S) this.reset(t, 'demoAutoReset', 'engine', autopilotEnabled);
   }
 
   private setStage(stage: BnwasStage, reason: string, t: number): void {
@@ -377,8 +377,12 @@ export class DemoBnwas {
     this.emit('bnwasStage', 'engine', { itemId: 'bnwas', visible: true, data: { stage, from, reason } });
   }
 
-  /** 重設:一般操作只在階段 ≥ 1 時發事件;bnwasReset 指令一律發。 */
-  reset(t: number, by: string, source: SimEventSource): void {
+  /**
+   * 重設:未作動(off,或 auto 而自動舵未啟用)時不動作、不發事件(與核心 Bnwas.Reset 一致);
+   * 作動中一般操作只在階段 ≥ 1 時發事件,bnwasReset 指令一律發。
+   */
+  reset(t: number, by: string, source: SimEventSource, autopilotEnabled: boolean): void {
+    if (!this.active(autopilotEnabled)) return;
     const fromStage = this.stage;
     this.stage = 0;
     this.periodStart_t = t;

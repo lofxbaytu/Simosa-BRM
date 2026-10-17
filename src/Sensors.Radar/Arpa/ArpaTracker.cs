@@ -241,10 +241,11 @@ public sealed class ArpaTracker
         var rangeNm = Math.Sqrt(ox * ox + oy * oy) / Units.MetresPerNauticalMile;
         var brg = Units.NormalizeHeadingDeg(Units.RadToDeg(Math.Atan2(ox, oy)));
         if (!g.Contains(rangeNm, brg, _own.HeadingDeg)) return;
-        // 已追蹤目標附近的回波不作候選(避免同一目標重複擷取)
+        // 已追蹤目標附近的回波不作候選(避免同一目標重複擷取)。失追軌跡不參與關聯,
+        // 若仍以外推位置擋候選,雷達故障/航向無效恢復後要等保留期(LostHoldS)屆滿才會重新擷取,故排除。
         foreach (var tr in _tracks)
         {
-            if (tr.Kf is null) continue;
+            if (tr.Kf is null || tr.State == TrackState.Lost) continue;
             var (px, py) = tr.Kf.PredictPosition(d.T);
             if ((d.X - px) * (d.X - px) + (d.Y - py) * (d.Y - py) < a.GuardGateM * a.GuardGateM * 4) return;
         }

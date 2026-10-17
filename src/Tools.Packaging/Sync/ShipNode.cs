@@ -43,7 +43,7 @@ public sealed class ShipNode
             HighestVersion = installed.HighestVersion, Components = installed.Components, ParameterSet = installed.ParameterSet, SmsDocuments = installed.SmsDocuments,
             TrustedKeys = trust.Keys.Select(k => new TrustedKeyInfo(k.KeyId, k.Name, k.Role, k.Holder)).ToList(),
             OutstandingRecordPackages = Records.Outstanding().Count, VisitSeq = Records.LoadLedger().CurrentVisit,
-            RollbackAvailable = File.Exists(Path.Combine(Layout.PreviousDir, "previous.json")),
+            RollbackAvailable = Updates.CanRollback(out _),
             Warnings = warnings,
         };
     }

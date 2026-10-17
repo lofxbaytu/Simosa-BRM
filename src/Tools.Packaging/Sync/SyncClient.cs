@@ -119,12 +119,14 @@ public static class SyncClient
 
         // 3. 紀錄包
         var outstanding = new List<OutstandingPackage>();
+        var retentionWarnings = new List<string>();
         if (o.PullRecords || o.SendBackupReport)
         {
             await SyncProtocol.WriteAsync(s, new { type = SyncTypes.ListRecords }, ct).ConfigureAwait(false);
             var list = SyncProtocol.As<RecordListMessage>(Expect(await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false), SyncTypes.RecordList));
             outstanding = list.Packages;
             report.Warnings.AddRange(list.Warnings);
+            retentionWarnings = list.RetentionWarnings;
         }
         if (o.PullRecords)
         {
@@ -178,11 +180,17 @@ public static class SyncClient
                 await s.FlushAsync(ct).ConfigureAwait(false);
                 var res = SyncProtocol.As<CleanupResultMessage>(Expect(await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false), SyncTypes.CleanupResult)).Result;
                 report.Cleanup = res;
-                if (res.Ok) o.Store.MarkShipDeleted(c.Report.ReportId, res.Deleted);
-                report.Warnings.AddRange(res.Warnings);
+                if (res.Ok)
+                {
+                    o.Store.MarkShipDeleted(c.Report.ReportId, res.Deleted, ch.ShipId);
+                    retentionWarnings = res.Warnings; // 清理後的保留上限警告(及無法刪除的檔案)取代清理前的
+                }
+                else report.Warnings.AddRange(res.Warnings);
                 o.Log?.WriteLine($"  已備份回報 {c.Report.ReportId}:" + (res.Ok ? $"船上刪除 {res.Deleted.Count} 個紀錄包,保留 {res.Retained.Count} 個" : string.Join(";", res.Errors)));
             }
         }
+
+        report.Warnings.AddRange(retentionWarnings);
 
         // 5. 狀態 → 兩船版次清單
         await SyncProtocol.WriteAsync(s, new { type = SyncTypes.Status }, ct).ConfigureAwait(false);

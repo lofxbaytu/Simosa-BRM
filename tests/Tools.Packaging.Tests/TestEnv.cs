@@ -129,8 +129,13 @@ public sealed class TestEnv : IDisposable
             ParameterSetSha256 = set.Sha256, Method = "run", Result = "pass", VerifiedBy = "測試", VerifiedUtc = DateTime.UtcNow,
         });
 
-    /// <summary>寫一個合成的練習紀錄(header + state + footer;footer.sha256 與 RecordReader 相同算法)。</summary>
-    public static string WriteRecord(string dir, string fileName, string scenarioId, DateTime startUtc, double durationS, object[]? participants = null, bool footer = true)
+    /// <summary>
+    /// 寫一個合成的練習紀錄(header + state + footer;footer.sha256 與 RecordReader 相同算法)。
+    /// 有 footer 時把檔案修改時間設為牆鐘結束時間(預設 = 起始 + 模擬時長,即 1 倍速;<paramref name="wallS"/> 可指定實際經過秒數),
+    /// 與 SimCore 實際寫檔的結果一致;<paramref name="closedUtc"/> 不為 null 時在 footer 寫入牆鐘結束時間。
+    /// </summary>
+    public static string WriteRecord(string dir, string fileName, string scenarioId, DateTime startUtc, double durationS, object[]? participants = null, bool footer = true,
+                                     double? wallS = null, DateTime? closedUtc = null)
     {
         Directory.CreateDirectory(dir);
         var lines = new List<string>
@@ -151,9 +156,14 @@ public sealed class TestEnv : IDisposable
             h.AppendData("\n"u8);
         }
         if (footer)
-            lines.Add(JsonSerializer.Serialize(new { kind = "footer", finalTick = ticks, stateHash = "00", lines = lines.Count, inputs = 0, sha256 = Convert.ToHexString(h.GetHashAndReset()) }));
+        {
+            var f = new Dictionary<string, object?> { ["kind"] = "footer", ["finalTick"] = ticks, ["stateHash"] = "00", ["lines"] = lines.Count, ["inputs"] = 0, ["sha256"] = Convert.ToHexString(h.GetHashAndReset()) };
+            if (closedUtc is { } c) f["closedUtc"] = c.ToString("O");
+            lines.Add(JsonSerializer.Serialize(f));
+        }
         var path = Path.Combine(dir, fileName);
         File.WriteAllText(path, string.Join("\n", lines) + "\n");
+        if (footer) File.SetLastWriteTimeUtc(path, startUtc.AddSeconds(wallS ?? durationS));
         return path;
     }
 
@@ -185,6 +195,23 @@ public sealed class TestEnv : IDisposable
         File.Move(tmp, path, overwrite: true);
     }
 
+    /// <summary>
+    /// 修改更新包 manifest 後以 <paramref name="key"/> 重新簽章(模擬持有有效金鑰者自行組出的 manifest,例如 builder 不會產生的 remove 或 packageId)。
+    /// </summary>
+    public static void ResignManifest(string path, IKeyProvider key, Action<UpdateManifest> edit)
+    {
+        byte[] mb;
+        using (var zip = ZipFile.OpenRead(path))
+            mb = UpdatePackageReader.ReadSigned(zip).ManifestBytes;
+        var m = PackageJson.FromBytes<UpdateManifest>(mb, "manifest.json");
+        edit(m);
+        m.Signer = new SignerRef { KeyId = key.KeyId, Name = key.DisplayName };
+        var nb = PackageJson.ToBytes(m);
+        var sig = PackageJson.ToBytes(SignatureEnvelope.Create(key, nb, DateTime.UtcNow));
+        RewriteZip(path, UpdateManifest.ManifestEntry, _ => nb);
+        RewriteZip(path, UpdateManifest.SignatureEntry, _ => sig);
+    }
+
     /// <summary>在 zip 中加一個項目。</summary>
     public static void AddZipEntry(string path, string entryName, byte[] content)
     {
@@ -200,4 +227,16 @@ public sealed class TestEnv : IDisposable
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }
+}
+
+/// <summary>可手動推進的時鐘(訪船間隔等需要時間差的測試)。</summary>
+public sealed class ManualClock : TimeProvider
+{
+    private DateTimeOffset _now;
+
+    public ManualClock(DateTimeOffset start) => _now = start;
+
+    public override DateTimeOffset GetUtcNow() => _now;
+
+    public void Advance(TimeSpan by) => _now += by;
 }
