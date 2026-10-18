@@ -88,6 +88,11 @@ public sealed class SimulationEngine
     private readonly List<ExternalEvent> _externalEvents = new();
     // 岸壁效應(設計文件 docs/design/physics-bank-effect.md);情境有 banks 區段時建立,Initialize/Restore 時依情境重建
     private BankEffectModel? _bank;
+    private RadarEnvironmentState? _radarEnvironment;
+    // state.radarEnvironment 廣播關鍵幀(只影響廣播/紀錄內容,不進快照與雜湊):載入/重設/倒帶後第一幀與之後每秒一次帶出,
+    // 其他幀省略(內容練習中不變;雷達服務視省略為不變,時間倒退或情境切換時清除)。避免 25 Hz 每幀重複整份雨區定義
+    private bool _radarEnvironmentPending = true;
+    private long _radarEnvironmentSentTick;
     /// <summary>外力模組 + 岸壁的和(兩者皆 Active 時用;_external/_bank 重建時一併重建)</summary>
     private SumForceField? _sumField;
 
@@ -299,6 +304,9 @@ public sealed class SimulationEngine
         _external = CreateExternal();
         _bank = CreateBank();
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
+        // 雷達環境:只來自情境、練習中不變(不進快照與雜湊;重播由紀錄 header 的情境重建;廣播只在關鍵幀帶出)
+        _radarEnvironment = ScenarioRadarEnvironmentBuilder.Build(sc, _projection);
+        _radarEnvironmentPending = true;
         _externalEvents.Clear();
         _startsRemaining = Ship.Engine.MaxConsecutiveStarts;
         AttachTraffic(TrafficManager.FromScenario(sc, _projection, Options.Dt));
@@ -1206,7 +1214,7 @@ public sealed class SimulationEngine
         Stepped?.Invoke(this);
 
         if (Broadcast is not null && Tick % Options.BroadcastDivider == 0)
-            Broadcast.Invoke(this, BuildState());
+            Broadcast.Invoke(this, BuildState(includeRadarEnvironment: RadarEnvironmentKeyframe()));
 
         if (Options.AutoSnapshotIntervalTicks > 0 && Tick % Options.AutoSnapshotIntervalTicks == 0)
             TakeSnapshot();
@@ -1410,6 +1418,7 @@ public sealed class SimulationEngine
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
 
         Tick = s.Tick;
+        _radarEnvironmentPending = true;
         Motion = new StateVector(s.Motion.U, s.Motion.V, s.Motion.R, s.Motion.X, s.Motion.Y, s.Motion.Psi);
         _act = new ActuatorModel(ActuatorParametersForDynamics())
         {
@@ -1531,8 +1540,23 @@ public sealed class SimulationEngine
         };
     }
 
-    /// <summary>組出 state.schema.json 的自船狀態(引擎執行緒)。</summary>
-    public OwnShipState BuildState()
+    /// <summary>
+    /// 廣播幀是否帶出 state.radarEnvironment:情境有 environment.radar 時,載入/重設/倒帶後第一幀與距上次帶出 ≥ 1 s(模擬時間)的幀;
+    /// 以 tick 判定(與牆鐘無關),相同輸入紀錄重播得到相同的廣播內容。
+    /// </summary>
+    private bool RadarEnvironmentKeyframe()
+    {
+        if (_radarEnvironment is null) return false;
+        if (!_radarEnvironmentPending && Tick - _radarEnvironmentSentTick < _stepsPerSecond) return false;
+        _radarEnvironmentPending = false;
+        _radarEnvironmentSentTick = Tick;
+        return true;
+    }
+
+    /// <summary>組出 state.schema.json 的自船狀態(引擎執行緒;含完整 radarEnvironment,廣播則只在關鍵幀帶出)。</summary>
+    public OwnShipState BuildState() => BuildState(includeRadarEnvironment: true);
+
+    private OwnShipState BuildState(bool includeRadarEnvironment)
     {
         var m = Motion;
         var env = Environment;
@@ -1648,6 +1672,7 @@ public sealed class SimulationEngine
             Anchors = _external.AnchorStates(_projection),
             Berth = _external.BerthState(),
             Bank = _bank is { Active: true } bank ? bank.State() : null,
+            RadarEnvironment = includeRadarEnvironment ? _radarEnvironment : null,
         };
     }
 }

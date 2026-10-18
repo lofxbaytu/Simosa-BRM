@@ -1,0 +1,7 @@
+# 由 export_external_reference.py 產生(請勿手改):右錨送到鏈端、左錨 heave 經離底到收妥(400 s)
+id: ext_anchor_heave_house
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 0, telegraph: STOP }
+environment: { wind: { trueSpeed: 0, trueDir: 180, gustiness: 0 }, current: { set: 0, drift: 0.3 }, waterDepth: 14, seabed: sand }

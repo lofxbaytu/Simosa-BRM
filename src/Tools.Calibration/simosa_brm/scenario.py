@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 from . import paths
+from .external import normalise_sections
+from .external import structural_issues as external_structural_issues
 from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship
 from .parameters import ParameterSet, find_parameter_set, has_references, resolve_references, yaml_to_tree
 
@@ -67,7 +69,8 @@ METRIC_NAMES = (  # Assessment/MetricNames.cs
     "berthing.maxLateralSpeed_mps", "berthing.maxLateralSpeed_kn", "berthing.maxContactSpeed_mps", "berthing.maxEnergy_kNm",
     "berthing.maxEnergyRatio", "berthing.fenderContacts", "berthing.fenderOverloads", "berthing.quayContacts",
     "berthing.lineBreaks", "berthing.maxLineTensionRatio", "berthing.tugLineBreaks", "berthing.maxTugForce_t",
-    "berthing.tugWorkingTime_s", "berthing.allFastPositionError_m", "anchoring.letGoCount", "anchoring.maxLetGoSog_kn",
+    "berthing.tugWorkingTime_s", "berthing.allFastPositionError_m", "berthing.maxReContactSpeed_mps",
+    "anchoring.letGoCount", "anchoring.maxLetGoSog_kn",
     "anchoring.dragEvents", "anchoring.dragTime_s", "anchoring.maxChainTension_t", "anchoring.minScopeRatio",
     "anchoring.dragResponseTime_s",
 )
@@ -600,7 +603,8 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
     return issues
 
 
-def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: dict[str, Any] | None = None) -> dict[str, Any]:
+def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: dict[str, Any] | None = None,
+                      base_directory: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """檢查必要欄位並補齊預設值(C# Scenario.Validate 相同);回傳正規化後的新 dict(角度為度、速度為節)。
     ``raw`` 的參數引用須已解析(``load_scenario`` 會先做);timeline / route / zones / assessment / briefing 經
     ``structural_issues`` 檢查(第一個錯誤即 ``ValueError``)後原樣(深拷貝)保留,sensors / alerts / bnwas 補預設值後保留;``parameter_set`` 為參數集摘要(無引用時 None)。"""
@@ -649,6 +653,11 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
     issues = structural_issues(raw, origin=origin)
     if issues:
         raise ValueError(f"{issues[0][0]}:{issues[0][1]}")
+    # 外力區段(拖船/錨/泊位/岸壁/底質):補 C# 預設值、berth.file 與 banks.file 解析內嵌,再做 C# 相同的結構檢查
+    ext_sections = normalise_sections(raw, base_directory)
+    ext_issues = external_structural_issues(ext_sections)
+    if ext_issues:
+        raise ValueError(f"{ext_issues[0][0]}:{ext_issues[0][1]}")
     heading = _num(init, "heading", where="initial")
     if heading is None:
         raise ValueError("情境缺少 initial.heading")
@@ -708,6 +717,8 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         # 感測器/警報/BNWAS 設定(補 C# 預設值;Python 不模擬,只保留供 state.scenario/講評與跨語言比對)
         **bridge_sections(raw),
         "parameterSet": copy.deepcopy(parameter_set),
+        # 外力區段(external.normalise_sections;未定義者為 None):apply_scenario 交給 MMGShip.configure_external
+        "external": ext_sections,
     }
 
 
@@ -737,7 +748,7 @@ def scenario_from_tree(raw: dict[str, Any], default_id: str = "", parameters: Pa
             pset = ParameterSet.load(found)
     resolved = resolve_references(raw, pset)
     info = pset.info(resolved) if pset is not None and resolved else None
-    return validate_scenario(raw, default_id=default_id, parameter_set=info)
+    return validate_scenario(raw, default_id=default_id, parameter_set=info, base_directory=base_directory)
 
 
 def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
@@ -755,6 +766,9 @@ def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
         x, y = ship.ltp.to_local(init["lat"], init["lon"])
     heading, speed = init["heading"], init["speed"]
     telegraph, rpm0 = init["telegraph"], init["rpm"]
+    # 直航平衡轉速以情境水深(淺水修正)、無風計算(C# ResolveInitialPropulsion:SteadyRpmForSpeed(u, scenario waterDepth));
+    # 先前在 reset 之後才設水深,淺水情境的初始轉速取到深水值(外力一致性測試 ext_bank_suction 發現,h/T 1.4 時差約 9 rpm)
+    ship.set_environment(wind_speed_kn=0.0, water_depth_m=sc["environment"]["waterDepth"])
     if rpm0 is not None:
         ship.reset(x, y, heading, speed, rpm=rpm0)
         if telegraph is not None:
@@ -772,6 +786,8 @@ def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
     env = sc["environment"]
     ship.set_environment(env["wind"]["trueSpeed"], env["wind"]["trueDir"], env["current"]["set"], env["current"]["drift"],
                          env["waterDepth"], gustiness=env["wind"]["gustiness"], visibility_nm=env["visibility_nm"])
+    # 外力模組:以情境初始狀態與水深建立(拖船 initial、初始已錨泊、繫纜 initial fast、岸壁;C# Initialize)
+    ship.configure_external(sc.get("external"))
 
 
 def ship_from_scenario(sc: dict[str, Any], dt: float = 0.02, coeffs: dict[str, Any] | None = None,

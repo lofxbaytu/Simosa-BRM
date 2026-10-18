@@ -1,0 +1,218 @@
+# E17 颱風準備與離港決策 — 高雄港南端油品碼頭(規劃書第 8.1 節 E17 與「設計規則」、第 3.4 節高雄港「颱風 7 至 10 月」;設計 docs/design/scenario-library.md 第 11 節;
+#   docs/design/physics-tugs-anchors-mooring.md 第 2、4、7 節;schema src/Contracts/scenario.schema.json)
+# FSB1 壓載(卸貨完畢)右舷靠高雄港南端油品碼頭 KHH-SOB-1(data/areas/kaohsiung-south-oil-berth.json,示意,待 ENC 校正:碼頭線 000°、長 150 m、水域在西、9 個 H 0.8 m 錐型碰墊),
+# 艏向北、4 纜已繫。中央氣象署發布颱風警報(海上);西風 15 kn 自水側吹向碼頭(吹攏)。原訂兩艘拖船:TG1 高港11號(本船 tugs[],左舷艉帶纜,尚未靠上)、
+# TUG2 高港12號(在港內待命的目標船;改派他船後駛離,以目標船表示「不可用」——教官對 TUG2 下 tugControl 會被 unknownTug 拒絕)。
+# 時間表(壓縮時間:颱風數小時的演變以分鐘表示):T+1 交班 → T+1 min 港務/VTS 要求油輪離港(決策點)→ T+4 公司詢問可否留港(不確定下的壓力)→
+#   T+7 degraded(tugReduced:拖船可用數 2 → 1 + 風力漸增 15 → 25 kn,10 分鐘)→ T+25 emergency(outerBands:颱風外圍環流 25 → 40 kn、陣風 0.35,10 分鐘)
+#   → 離開泊位區(船舯離碼頭 > 110 m)後 60 s 結束;或擱淺、T+45 時間到。
+# 評估:決策時機(港方要求 → 通報公司/代理行;主機備便;拖船縮減後修正計畫;強風前離開泊位區 typhoon.e17.departBy_s)、離泊安全(碼頭硬接觸、斷纜為硬性失敗;
+#   碰墊能量比與纜繩張力 lineTension 容許帶)、拖船使用(拖船縮減後須下拖船令;summary.berthing.tugs 記錄工作時間與最大出力)。
+# 風力時間剖面以 setEnvironment ramp 表示(核心無颱風風場模型)。外圍環流(T+25–T+35)為吹攏風:船壓在碰墊上、纜繩鬆弛,強風中才離泊易碼頭硬接觸;
+#   T+35 外圍環流漸強完成後颱風接近、風向轉為離岸(windVeer:250° → 100°,10 分鐘,持續到 T+45 結束之後),沒有離泊而留在泊位時 4 纜張力上升
+#   (無人操作約 MBL 的 70 %,超過工作負荷限值 50 % MBL 為 lineTension 容許帶 warn;斷纜 = 硬性失敗)。
+id: E17_typhoon_departure_kaohsiung
+name: 高雄港颱風準備與離港決策
+description: >-
+  高雄港南端油品碼頭靠泊中,中央氣象署發布颱風警報、港方要求油輪離港:在公司詢問留港、拖船可用數由 2 艘縮減為 1 艘、
+  吹攏風逐步增強的不確定情況下決定離港時機,以一艘拖船與俥舵/側推安全離泊;練習不確定下的決策、風險評估與公司溝通。
+seed: 20260917
+startTimeUtc: "2026-09-17T02:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: ballast
+origin: { lat: 22.515, lon: 120.338 }            # 泊位碼頭線起點(里程 0,碼頭線向北;示意)
+initial:
+  position: { x: -9.75, y: 75 }                  # 右舷靠在碰墊上:碰墊 0.8 m + 半船寬 9 m − 壓縮 0.05 m;船舯在里程 75 m
+  heading: 0
+  speed: 0
+  telegraph: STOP
+  rudder: 0
+environment:
+  wind: { trueSpeed: 15, trueDir: 260, gustiness: 0.2 }
+  current: { set: 180, drift: 0.1 }
+  waterDepth: 12
+  visibility_nm: 6
+tugs:
+  - id: TG1
+    name: 高港11號
+    bollardPull_t: 40
+    attach: aftPort                              # 左舷艉帶纜(艉以艏倒纜與俥舵開出後,拉住艉抵抗吹攏風)
+    lineLength_m: 30
+    modes: [push, pull]
+    modeChange_s: 30
+    connect_s: 90
+    initial: { mode: free, direction_deg: 270, power_pct: 0 }   # 尚未帶纜:下 pull/push 後 90 s 帶妥
+berth:
+  file: data/areas/kaohsiung-south-oil-berth.json
+  id: KHH-SOB-1
+  lines:
+    - { id: HEAD, fairlead: fwdStbd, bollard: P6, mbl_t: 40, length_m: 120, initial: fast }
+    - { id: FWDSPRING, fairlead: fwdStbd, bollard: P3, mbl_t: 40, length_m: 120, initial: fast }
+    - { id: AFTSPRING, fairlead: aftStbd, bollard: P4, mbl_t: 40, length_m: 120, initial: fast }
+    - { id: STERN, fairlead: aftStbd, bollard: P1, mbl_t: 40, length_m: 120, initial: fast }
+briefing:
+  text: |
+    交班(10:00 地方時):No.1 卸貨完畢(壓載,艏 2.03 / 艉 5.41 m)右舷靠高雄港南端油品碼頭 KHH-SOB-1(泊位與碰墊為示意值),艏向北,4 纜已繫。
+    中央氣象署已發布颱風海上警報,颱風預計 18 小時後最接近;港方颱風期間三階段封港(24/12/6 小時)。西風 15 kn 自水側吹向碼頭(吹攏),預報持續增強。
+    離泊計畫(書面):拖船兩艘(TG1 高港11號 左舷艉、TUG2 高港12號 左舷艏)、解纜順序(先單綁再解)、側推 325 kW、主機備便時間約 10 分鐘;
+    預報:颱風接近後風向將由西轉為東南東(離岸),風力 8 級以上。離港後在外海避颱或依公司指示。接班者完成交班檢查表後由教官確認(acknowledge checklist)。
+  attachments:
+    - { title: "離泊計畫(拖船兩艘,示意)", file: docs/unberthing-plan-E17.pdf }
+    - { title: "中央氣象署颱風警報(海上)", file: docs/typhoon-warning-E17.pdf }
+    - { title: "公司惡劣天候/颱風檢查表", file: docs/heavy-weather-checklist.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: mooring, playedBy: leader }
+    - { role: tug, playedBy: voiceScript }
+    - { role: vts, playedBy: voiceScript }
+    - { role: company, playedBy: voiceScript }
+    - { role: ecr, playedBy: voiceScript }
+  minParticipants: 2
+  duration_s: 2700
+zones:
+  - id: berthArea
+    name: 泊位區(示意;船舯離碼頭 110 m 內)
+    type: reporting
+    polygon:
+      - { x: -110, y: -80 }
+      - { x: 5, y: -80 }
+      - { x: 5, y: 230 }
+      - { x: -110, y: 230 }
+  - id: harbour
+    name: 港內速限區(示意)
+    type: speedLimit
+    speedLimit_kn: "${params:port.kaohsiung.berthSpeedLimit_kn}"
+    polygon:
+      - { x: -900, y: -900 }
+      - { x: 5, y: -900 }
+      - { x: 5, y: 900 }
+      - { x: -900, y: 900 }
+timeline:
+  - id: handover
+    name: 交班(颱風警報)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:卸貨完畢,右舷靠,四條纜。氣象署發布颱風海上警報,西風十五節吹攏,會越來越大。離泊計畫用兩艘拖船。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對颱風警報、離泊計畫、拖船與主機備便時間、公司颱風程序,完成後按「檢查表」", severity: info }
+  - id: portOrder
+    name: 港方要求油輪離港
+    when: { type: time, atLeast: "${params:typhoon.e17.portOrderAt_s}" }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "高雄港 VTS 通知:颱風警報,港區所有油輪請於兩小時內離港。FS Bitumen No.1 請回報預計離泊時間。", lang: zh-TW }
+      - message: { to: instructor, text: "決策點:觀察船長是否決定離港並通報公司/代理行(acknowledge notifyCompany 或 report)、通知機艙主機備便(acknowledge notifyEcr)", severity: warning }
+  - id: companyQuery
+    name: 公司詢問可否留港
+    when: { type: time, atLeast: 240 }
+    actions:
+      - voiceScript: { role: company, channel: phone, text: "我是公司海務,下一航次的貨要明天早上才確定。能不能先留在碼頭加纜,等明天再走?你評估一下。", lang: zh-TW }
+      - message: { to: instructor, text: "公司壓力:觀察船長是否依港方要求與風險評估維持離港決定,並說明理由(講評引導問題)", severity: info }
+  - id: tugReduced
+    name: 拖船可用數縮減(2 → 1)與風力增強
+    phase: degraded
+    when: { type: time, atLeast: "${params:typhoon.e17.tugReductionAt_s}" }
+    actions:
+      - setEnvironment: { wind: { trueSpeed: 25, trueDir: 260, gustiness: 0.25 }, ramp_s: 600 }
+      - voiceScript: { role: tug, channel: vhfPort, text: "拖船調度:高港十二號被調去協助另一艘出港,你們只剩高港十一號一艘,大約要排十五分鐘。", lang: zh-TW }
+      - targetControl: { id: TUG2, behaviour: { mode: waypoints, stopAtEnd: false, waypoints: [ { x: -600, y: -400, speed: 8 }, { x: -1500, y: -1500, speed: 10 } ] } }
+      - message: { to: instructor, text: "拖船 2 → 1 + 風 15 → 25 kn(10 分鐘):觀察是否修正離泊計畫(拖船位置、側推、俥舵)並回報(acknowledge verbal 或 report);TUG2 已駛離", severity: warning }
+  - id: outerBands
+    name: 颱風外圍環流強風
+    phase: emergency
+    when: { type: time, atLeast: "${params:typhoon.e17.stormAt_s}" }
+    actions:
+      - setEnvironment: { wind: { trueSpeed: 40, trueDir: 250, gustiness: 0.35 }, ramp_s: 600 }
+      - message: { to: all, text: "颱風外圍環流:風力增強至 8 級以上、陣風。", severity: alarm }
+      - message: { to: instructor, text: "強風 25 → 40 kn(吹攏):以一艘拖船離泊困難(碼頭硬接觸風險);稍後風向轉為離岸,仍在泊位時纜繩張力將上升;觀察決策(加纜留港或冒險離泊)與風險溝通", severity: alarm }
+  - id: windVeer
+    name: 颱風接近、風向轉為離岸
+    when: { type: time, atLeast: 601, since: { event: timelineTriggered, itemId: outerBands } }   # 外圍環流漸強(600 s)完成後
+    actions:
+      - setEnvironment: { wind: { trueSpeed: 40, trueDir: 100, gustiness: 0.35 }, ramp_s: 600 }
+      - message: { to: all, text: "颱風接近:風向由西轉東南東(離岸),陣風 50 kn 以上。", severity: alarm }
+      - message: { to: instructor, text: "風向轉為離岸(250° → 100°,10 分鐘):仍在泊位時纜繩張力上升(lineTension 容許帶;斷纜 = 硬性失敗),觀察是否監看纜繩、加纜或請求拖船頂住", severity: alarm }
+  - id: firstTugOrder
+    name: 拖船令(首次)
+    when: { type: event, kind: tugCommand }
+    actions:
+      - voiceScript: { role: tug, channel: vhfPort, text: "高港十一號收到,前往左舷艉帶纜。", lang: zh-TW }
+  - id: clearOfBerth
+    name: 離開泊位區
+    when: { type: zone, id: berthArea, inside: false }
+    actions:
+      - message: { to: all, text: "已離開泊位區,前往港口出港。", severity: info }
+  - id: endAfterClear
+    name: 離泊完成(結束)
+    delay_s: 60
+    when: { type: event, kind: timelineTriggered, itemId: clearOfBerth }
+    actions:
+      - endExercise: { reason: 離泊完成 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - endExercise: { reason: 擱淺 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 2700 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: quayContact, rule: event, kind: quayContact }
+    - { id: mooringLineParted, rule: event, kind: mooringLineParted }
+  bands:
+    - { id: contactEnergy, metric: berthing.maxEnergyRatio, warn: 0.8, fail: 1.0, penalty: 10, failPenalty: 25 }
+    - { id: lineTension, metric: berthing.maxLineTensionRatio, warn: 0.5, fail: 0.8, penalty: 10, failPenalty: 20 }   # 纜繩最大張力 / MBL;0.5 = 工作負荷限值(OCIMF MEG4 合成纖維纜 WLL;假設值,待公司繫泊程序)
+    - { id: speed, metric: manoeuvring.timeOverSpeedLimit_s, warn: 0, fail: 60, penalty: 5, failPenalty: 10 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: departureDecision
+      after: { event: timelineTriggered, itemId: portOrder }
+      expect: { any: [ { acknowledge: { kind: notifyCompany } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:typhoon.departureDecision_s}"
+      penalty: 10
+    - id: engineStandby
+      after: { event: timelineTriggered, itemId: portOrder }
+      expect: { acknowledge: { kind: notifyEcr } }
+      within_s: "${params:typhoon.engineStandby_s}"
+      penalty: 10
+    - id: tugPlan
+      after: { event: timelineTriggered, itemId: tugReduced }
+      expect: { any: [ { acknowledge: { kind: verbal } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:typhoon.tugPlanReport_s}"
+      penalty: 5
+    - id: tugUsed
+      after: { event: timelineTriggered, itemId: tugReduced }
+      expect: { event: { kind: tugCommand } }
+      within_s: "${params:typhoon.e17.departBy_s}"
+      penalty: 10
+    - id: departBeforeStorm
+      after: { event: timelineTriggered, itemId: portOrder }
+      expect: { event: { kind: timelineTriggered, itemId: clearOfBerth } }
+      within_s: "${params:typhoon.e17.departBy_s}"
+      penalty: 20
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: TUG2
+    name: 高港12號
+    mmsi: 416517002
+    shipType: tug
+    loa: 32
+    beam: 10
+    draft: 4
+    initial:
+      position: { x: -250, y: -150 }               # 港內待命(示意);T+7 改派他船後駛離
+      heading: 0
+      speed: 0
+    behaviour: { mode: hold }

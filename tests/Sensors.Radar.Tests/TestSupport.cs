@@ -35,6 +35,8 @@ internal sealed class LinearScene
     public string ScenarioId { get; init; } = "T_radar";
     /// <summary>電羅經指示誤差(度;指示 = 真 + 誤差)</summary>
     public double HeadingErrorDeg { get; set; }
+    /// <summary>情境雷達環境(state.radarEnvironment;null = 情境未給)</summary>
+    public SimosaBRM.SimCore.Scenario.RadarEnvironmentState? RadarEnvironment { get; set; }
 
     public (double X, double Y) OwnAt(double t)
     {
@@ -103,6 +105,7 @@ internal sealed class LinearScene
                 HeadingErrorDeg = HeadingErrorDeg, PositionErrorM = 0,
             },
             Sensors = new SensorStatus { HeadingValid = true, PositionValid = true, DepthValid = true, StwValid = true, MagneticHeading = OwnCourseDeg },
+            RadarEnvironment = RadarEnvironment,
         };
     }
 

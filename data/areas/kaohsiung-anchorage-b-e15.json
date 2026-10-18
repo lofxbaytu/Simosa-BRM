@@ -1,0 +1,31 @@
+{
+  "id": "kaohsiung-anchorage-b-e15",
+  "description": "高雄外錨地 B 區示意定義(E15 干擾與工作負荷過載專用;規劃書第 3.4、8.1 節 E15)。位於高雄第二港口引航進港航線(kaohsiung-second-port-inbound.json route)北側:南界距航線 820 m(走廊半寬 navigation.xtd.pilotage_m 450 m 之外約 0.2 nm)、北界距航線 2600 m,沿航線自 START 西方 300 m 至 FW2 附近(4.6 km);漲潮向西北的流壓未修正(停俥漂流等)時會進入,供 VTS「你船已偏到錨地邊緣」提醒。範圍、水深與底質皆為示意值,非港方公告錨地或海圖資料,不可用於實際航行或評估;取得港方錨地公告與 ENC 後取代,待 ENC 校正。E15 的 zones[anchorageB] 多邊形與此檔 anchorages[0].polygon 相同(測試檢查一致);外錨地 A 區仍見 kaohsiung-anchorage.json(航線西北方約 2.4 nm 以上)。",
+  "source": "示意(由 kaohsiung-second-port-inbound.json 航線(航向 070.13°)向北偏移產生,非公告錨地;待 ENC 校正)",
+  "anchorages": [
+    {
+      "id": "KHH-B-E15",
+      "name": "高雄外錨地 B 區(示意,E15 專用)",
+      "waterDepth_m": 25,
+      "seabed": "mud",
+      "polygon": [
+        {
+          "lat": 22.53341,
+          "lon": 120.23258
+        },
+        {
+          "lat": 22.54847,
+          "lon": 120.2774
+        },
+        {
+          "lat": 22.56361,
+          "lon": 120.27151
+        },
+        {
+          "lat": 22.54855,
+          "lon": 120.22669
+        }
+      ]
+    }
+  ]
+}

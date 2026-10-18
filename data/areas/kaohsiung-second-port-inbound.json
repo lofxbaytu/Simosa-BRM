@@ -1,0 +1,38 @@
+{
+  "id": "kaohsiung-second-port-inbound",
+  "description": "高雄第二港口引航進港示意定義(供 E15 干擾與工作負荷過載;規劃書第 3.4、8.1 節 E15)。航線自 Charlie 引水站(kaohsiung-south-approach.json)南方約 0.15 nm 起,沿出港航道延長線(軸 250°/070°)的南半側(軸線南方 0.12 nm,第 9 條靠右)至口門外 0.4 nm;位置依公開地理常識描繪,非港方公告/ENC 資料,不可用於實際航行或評估,待 ENC 與高雄港 VTS/引水規定校正。E15 的 route 航點與此檔 route 相同、zones[anchorage] 與 kaohsiung-anchorage.json 相同(測試檢查一致)。",
+  "source": "示意(由 kaohsiung-south-approach.json 的口門 KHH-2 與航道軸線偏移產生;誤差可達數百公尺;待 ENC 校正)",
+  "harbourEntrance": {
+    "id": "KHH-2",
+    "lat": 22.552,
+    "lon": 120.305,
+    "inboundCourse_deg": 70
+  },
+  "route": [
+    {
+      "name": "START",
+      "lat": 22.52736,
+      "lon": 120.23803,
+      "note": "Charlie 引水站南方約 0.15 nm、航道延長線南半側(口門外 4.0 nm;引水人已登船,E15 開場)"
+    },
+    {
+      "name": "FW1",
+      "lat": 22.53305,
+      "lon": 120.25496,
+      "note": "航道延長線南半側,口門外 3.0 nm"
+    },
+    {
+      "name": "FW2",
+      "lat": 22.54158,
+      "lon": 120.28035,
+      "note": "口門外 1.5 nm"
+    },
+    {
+      "name": "OUTER",
+      "lat": 22.54784,
+      "lon": 120.29897,
+      "note": "口門外 0.4 nm(E15 結束)"
+    }
+  ],
+  "anchorageFile": "data/areas/kaohsiung-anchorage.json"
+}

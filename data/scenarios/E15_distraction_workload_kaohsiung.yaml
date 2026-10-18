@@ -1,0 +1,290 @@
+# E15 干擾與工作負荷過載 — 高雄第二港口引航進港(規劃書第 8.1 節 E15 與「設計規則」、第 3.4 節高雄港;設計 docs/design/scenario-library.md 第 9 節;schema src/Contracts/scenario.schema.json)
+# 航線(Charlie 引水站 → 出港航道延長線南半側 → 口門外 0.4 nm)、口門與外錨地皆為示意值(data/areas/kaohsiung-second-port-inbound.json、kaohsiung-anchorage.json、
+#   kaohsiung-anchorage-b-e15.json;示意,待 ENC 校正):外錨地 A 區在航線西北方 2.4 nm 以上,B 區(E15 專用)在航線北側、走廊外約 0.2 nm 起。
+# FSB2 滿載(7.2 m)引水人已在 Charlie 登船(帶領者扮演),HAH 約 9 kn、自動舵 074°(含流壓修正);漲潮流向西北 0.8 kn(壓向左舷、外錨地 B 區側)、東北風 18 kn。
+# 時間表:每 2 分鐘一次干擾(T+2 起至 T+22;貨物計畫電話、港口國管制(PSC)郵件、代理行 VHF、公司電話、機艙電話、ECDIS 警報氾濫……),
+#   以 voiceScript / message 表示(ECDIS 警報氾濫 ecdisAlarmFlood 為只記錄故障,為使 --validate 無警告改以重複訊息表示,不注入故障);
+#   T+8 degraded(ecdisAlarmFlood:警報氾濫 + 漲潮增強至 1.4 kn,未再修正時航跡偏差);T+13 起右舷貨船 X1 改向橫越(關鍵事件,藏在干擾中);
+#   X1 距自船 1.0 nm 內或 T+21 emergency(crossingCloseQuarters;時間後備 bridge.e15.emergencyAt_s);漂入外錨地(A 或 B 區)時 VTS 提醒;到達口門外 OUTER 或 T+30 結束。
+# 評估:關鍵事件的偵測(acknowledge lookoutReport / report 或對 X1 的首次行動)與反應時間(X1 encounterFirstAction)、航跡(XTD 走廊)、CPA、
+#   「無干擾駕駛台」:貨物計畫電話/PSC 郵件/公司電話/警報氾濫各須在期限內由值班駕駛員授權他人處理或拒絕(acknowledge verbal,note 記錄處置)。
+id: E15_distraction_workload_kaohsiung
+name: 高雄引航進港中的干擾與工作負荷過載
+description: >-
+  引水人在船、沿高雄第二港口航道延長線進港,每 2 分鐘一次電話、郵件、VHF 與 ECDIS 警報干擾;
+  漲潮流壓增強造成航跡偏差,右舷貨船改向橫越藏在噪音中。練習工作負荷管理、授權、無干擾駕駛台與關鍵事件偵測。
+seed: 20261215
+startTimeUtc: "2026-12-15T01:30:00Z"
+timeScale: 1
+ship:
+  id: FSB2
+  loading: full
+origin: { lat: 22.5300, lon: 120.2400 }          # Charlie 引水站(與 E04/E05 相同,示意)
+initial:
+  position: { lat: 22.52736, lon: 120.23803 }    # 航線 START(Charlie 南方約 0.15 nm)
+  heading: 74
+  speed: 9.0
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 18, trueDir: 30, gustiness: 0.15 }
+  current: { set: 315, drift: 0.8 }              # 漲潮向西北(規劃書第 3.4 節:最大 1.8 kn);T+8 增強至 1.4 kn
+  waterDepth: 25
+  visibility_nm: 8
+briefing:
+  text: |
+    交班(09:30 地方時):No.2 滿載瀝青(吃水 7.2 m),引水人已於 Charlie 引水站登船並完成 MPX,HAH 約 9 kn,自動舵 074°(已含流壓修正),沿出港航道延長線南半側進港。
+    書面航程計畫:START(Charlie 南方)→ FW1 → FW2 → OUTER(航向 070°)(口門外 0.4 nm);走廊半寬見參數集 navigation.xtd.pilotage_m;漲潮向西北約 0.8 kn(預報稍後增強);航線北側(走廊外約 0.2 nm 起)為外錨地 B 區,西北方約 2.5 nm 為外錨地 A 區。
+    船長常規命令:引航進港期間為「無干擾駕駛台」(sterile bridge),與航行無關的電話、郵件、VHF 由值班駕駛員授權他人處理或延後回覆;交通與航跡優先。
+    今日已知的干擾來源:卸貨計畫修改、明日 PSC 檢查、代理行、公司海務、機艙換油。接班者完成交班檢查表後由教官確認(acknowledge checklist)。
+  attachments:
+    - { title: "航程計畫(Charlie → 第二港口,示意)", file: docs/passage-plan-E15.pdf }
+    - { title: "船長常規命令(無干擾駕駛台)", file: docs/standing-orders-sterile-bridge.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: helmsman }
+    - { role: cargoOffice, playedBy: voiceScript }
+    - { role: agent, playedBy: voiceScript }
+    - { role: company, playedBy: voiceScript }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: vts, playedBy: voiceScript }
+    - { role: crew, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 1800
+route:
+  name: 高雄第二港口引航進港(示意)
+  xtdLimit_m: "${params:navigation.xtd.pilotage_m}"
+  waypoints:                                      # 與 data/areas/kaohsiung-second-port-inbound.json route 相同
+    - { name: START, lat: 22.52736, lon: 120.23803 }
+    - { name: FW1, lat: 22.53305, lon: 120.25496 }
+    - { name: FW2, lat: 22.54158, lon: 120.28035, checkpoint: true }
+    - { name: OUTER, lat: 22.54784, lon: 120.29897, arrivalRadius_m: 300 }
+zones:
+  - id: anchorage
+    name: 高雄外錨地 A 區(示意,同 kaohsiung-anchorage.json)
+    type: reporting
+    polygon:
+      - { lat: 22.57, lon: 120.205 }
+      - { lat: 22.6, lon: 120.205 }
+      - { lat: 22.6, lon: 120.24 }
+      - { lat: 22.57, lon: 120.24 }
+  - id: anchorageB
+    name: 高雄外錨地 B 區(示意,E15 專用;同 kaohsiung-anchorage-b-e15.json)
+    type: reporting
+    polygon:                                      # 航線北側,南界距航線 820 m(走廊 450 m 外約 0.2 nm)
+      - { lat: 22.53341, lon: 120.23258 }
+      - { lat: 22.54847, lon: 120.2774 }
+      - { lat: 22.56361, lon: 120.27151 }
+      - { lat: 22.54855, lon: 120.22669 }
+timeline:
+  - id: handover
+    name: 交班(引水人在船)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:引水人已在船,自動舵 074 已修正流壓,HAH 九節,沿航道延長線南側進港。漲潮往西北零點八節。引航中是無干擾駕駛台,電話郵件請授權別人處理。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對航程計畫、流壓、交通與無干擾駕駛台安排,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 074°(交班狀態,含流壓修正)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 74 }    # 航線 070°,已含漲潮 0.8 kn 與風的流壓修正(約 4°)
+  - id: cargoPlanCall
+    name: 干擾 1 — 卸貨計畫電話
+    when: { type: time, atLeast: 120 }
+    actions:
+      - voiceScript: { role: cargoOffice, channel: phone, text: "駕駛台,貨控室:碼頭改了卸貨順序,要先卸二號艙,請船長現在確認並簽字。", lang: zh-TW }
+      - message: { to: instructor, text: "干擾 1:觀察是否授權大副處理/延後(acknowledge verbal,note 記錄處置),而非離開瞭望與監控", severity: info }
+  - id: pscEmail
+    name: 干擾 2 — PSC 檢查郵件
+    when: { type: time, atLeast: 240 }
+    actions:
+      - message: { to: all, text: "電子郵件(代理行轉):港口國管制(PSC)檢查官預定明日 08:00 登輪,請於一小時內回覆證書與紀錄清單。", severity: info }
+      - message: { to: instructor, text: "干擾 2:觀察是否延後回覆或交給船長/大副(acknowledge verbal)", severity: info }
+  - id: agentVhf
+    name: 干擾 3 — 代理行 VHF
+    when: { type: time, atLeast: 360 }
+    actions:
+      - voiceScript: { role: agent, channel: vhfPort, text: "FS Bitumen No.2,代理行呼叫,請報靠泊後淡水與伙食需求,另外海關要船員名單。", lang: zh-TW }
+  - id: ecdisAlarmFlood
+    name: ECDIS 警報氾濫與漲潮增強
+    phase: degraded
+    when: { type: time, atLeast: "${params:bridge.e15.alarmFloodAt_s}" }
+    actions:
+      - setEnvironment: { current: { set: 315, drift: 1.4 }, ramp_s: 300 }
+      - message: { to: all, text: "ECDIS 警報:安全等深線、偏航、區域進入、AIS 目標遺失……(警報氾濫;ecdisAlarmFlood 以訊息表示)", severity: alarm }
+      - message: { to: instructor, text: "警報氾濫 + 漲潮 0.8 → 1.4 kn(5 分鐘漸變):觀察是否指派專人處理/確認警報(acknowledge verbal 或 report)而不忽略航跡偏差", severity: warning }
+  - id: alarmFloodRepeat
+    name: ECDIS 警報持續(重複)
+    repeat: { every_s: 20, max: 8 }
+    when: { type: event, kind: timelineTriggered, itemId: ecdisAlarmFlood }
+    actions:
+      - message: { to: all, text: "ECDIS 警報:多項警報未確認(重複)", severity: warning }
+  - id: companyCall
+    name: 干擾 4 — 公司海務電話
+    when: { type: time, atLeast: 600 }
+    actions:
+      - voiceScript: { role: company, channel: phone, text: "我是公司海務,油公司明天要做 vetting 檢查,請船長現在把上次檢查的缺失改正報告寄給我。", lang: zh-TW }
+      - message: { to: instructor, text: "干擾 4:觀察是否說明正在引航進港、約定稍後回電(acknowledge verbal)", severity: info }
+  - id: ecrCall
+    name: 干擾 5 — 機艙電話
+    when: { type: time, atLeast: 720 }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室:換油完成。請問大概幾點要備車到碼頭?發電機要不要並車?", lang: zh-TW }
+  - id: bosunCall
+    name: 干擾 6 — 艏樓報告
+    when: { type: time, atLeast: 840 }
+    actions:
+      - voiceScript: { role: crew, channel: bridge, text: "艏樓報告:繫纜人員就位,錨備便完成。請問拖船從哪一舷帶纜?", lang: zh-TW }
+  - id: vtsInfo
+    name: 干擾 7 — VTS 廣播
+    when: { type: time, atLeast: 960 }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "高雄 VTS 廣播:第二港口口門內有拖帶船隊出港,各船注意。", lang: zh-TW }
+  - id: agentVhf2
+    name: 干擾 8 — 代理行泊位變更
+    when: { type: time, atLeast: 1080 }
+    actions:
+      - voiceScript: { role: agent, channel: vhfPort, text: "代理行再呼叫:泊位可能改到隔壁,詳細等一下用電郵通知,請船長回覆收到。", lang: zh-TW }
+  - id: ecdisAlarmFlood2
+    name: 干擾 9 — ECDIS 警報再次氾濫
+    when: { type: time, atLeast: 1200 }
+    actions:
+      - message: { to: all, text: "ECDIS 警報:區域進入、安全等深線、AIS 目標遺失(再次氾濫)", severity: alarm }
+  - id: pscFollowup
+    name: 干擾 10 — PSC 追問
+    when: { type: time, atLeast: 1320 }
+    actions:
+      - message: { to: all, text: "電子郵件(代理行):PSC 檢查官追問油類紀錄簿影本,請盡快回覆。", severity: info }
+  - id: crossingTurn
+    name: X1 改向橫越(關鍵事件,教官可見)
+    when: { type: time, atLeast: 780 }             # 與 X1 script t = 780 相同
+    actions:
+      - message: { to: instructor, text: "關鍵事件:X1 由右舷改向橫越自船航道(自船為讓路船);觀察偵測(瞭望/雷達報告)與反應時間", severity: warning }
+  - id: crossingCloseQuarters
+    name: X1 近距離橫越
+    phase: emergency
+    when:
+      any:
+        - { type: ownDistance, target: X1, lessThan: "${params:bridge.e15.closeQuarters_nm}" }
+        - { type: time, atLeast: "${params:bridge.e15.emergencyAt_s}" }
+    actions:
+      - voiceScript: { role: pilot, channel: bridge, text: "船長,右舷那艘船在橫越我們!", lang: zh-TW }
+      - message: { to: instructor, text: "X1 進入 1 nm(或時間後備):緊急階段;引水人提醒", severity: alarm }
+  - id: anchorageEntered
+    name: 漂入外錨地
+    when:
+      any:
+        - { type: zone, id: anchorageB, inside: true }   # 航線北側 B 區(漲潮流壓未修正時)
+        - { type: zone, id: anchorage, inside: true }    # 西北方 A 區
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.2,高雄 VTS,你船已偏到錨地邊緣,請確認航向。", lang: zh-TW }
+  - id: arrived
+    name: 到達口門外
+    when: { type: ownDistance, waypoint: OUTER, lessThan: 0.15 }
+    actions:
+      - endExercise: { reason: 到達口門外 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 1800 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  encounter:
+    detectionRange_nm: "${params:navigation.encounter.detectionRange_nm}"
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: collision, rule: collision }
+    - { id: cpaHard, rule: cpa, lessThan: "${params:navigation.cpa.hardFail_nm}" }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.pilotage_m}", fail: 2x, penalty: 10, failPenalty: 20 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 180, penalty: 5, failPenalty: 15 }
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.pilotage_nm}", fail: "${params:navigation.cpa.hardFail_nm}", penalty: 10, failPenalty: 30 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: sterileCargoCall
+      after: { event: timelineTriggered, itemId: cargoPlanCall }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.distraction.response_s}"
+      penalty: 5
+    - id: sterilePscEmail
+      after: { event: timelineTriggered, itemId: pscEmail }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.distraction.response_s}"
+      penalty: 5
+    - id: alarmFloodManaged
+      after: { event: timelineTriggered, itemId: ecdisAlarmFlood }
+      expect: { any: [ { acknowledge: { kind: verbal } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:bridge.distraction.alarmFloodResponse_s}"
+      penalty: 5
+    - id: sterileCompanyCall
+      after: { event: timelineTriggered, itemId: companyCall }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.distraction.response_s}"
+      penalty: 5
+    - id: crossingDetected
+      after: { event: encounterStarted, targetId: X1 }
+      expect: { any: [ { acknowledge: { kind: lookoutReport } }, { acknowledge: { kind: report } }, { event: { kind: encounterFirstAction, targetId: X1 } } ] }
+      within_s: "${params:bridge.distraction.criticalDetection_s}"
+      penalty: 10
+      latePenaltyPer_s: 0.05
+    - id: crossingAction
+      after: { event: encounterStarted, targetId: X1 }
+      expect: { event: { kind: encounterFirstAction, targetId: X1 } }
+      within_s: "${params:navigation.encounter.earlyAction_s}"
+      penalty: 10
+      latePenaltyPer_s: 0.05
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: X1
+    name: TAI HO
+    mmsi: 416515001
+    shipType: cargo
+    loa: 98
+    beam: 16
+    draft: 6
+    callSign: BTHO
+    destination: KAOHSIUNG ANCH
+    initial:
+      position: { lat: 22.52346, lon: 120.29694 }  # 自船航線右側約 1.5 nm、前方 2.8 nm 漂航等候(會遇關注門檻外);T+13 起步橫越(位置由無人操作時的自船航跡決定)
+      heading: 340
+      speed: 0
+    behaviour:
+      mode: scripted
+      script:
+        - { t: 0, heading: 340, speed: 0 }
+        - { t: 780, heading: 340, speed: 10 }    # 起步前往外錨地,橫越自船航道(自船為讓路船);不避讓
+  - id: ANC1
+    name: EVER GLORY
+    mmsi: 416515002
+    shipType: cargo
+    loa: 200
+    beam: 32
+    draft: 11
+    initial:
+      position: { lat: 22.5800, lon: 120.2200 }   # 外錨地錨泊船
+      heading: 30
+      speed: 0
+    behaviour: { mode: anchored }
+  - id: ANC2
+    name: CHANG LIN
+    mmsi: 416515003
+    shipType: tanker
+    loa: 180
+    beam: 30
+    draft: 10
+    initial:
+      position: { lat: 22.5900, lon: 120.2330 }
+      heading: 30
+      speed: 0
+    behaviour: { mode: anchored }

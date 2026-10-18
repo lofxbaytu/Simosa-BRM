@@ -271,7 +271,7 @@
         "mode",
         "pump"
       ],
-      "description": "操舵模式(規劃書第 7.2 節操舵模式選擇;C# SimCore 產生,Python 不輸出)。mode 由指令 steeringMode 切換;autopilot 與 autopilot{enabled:true} 同義;rudder 指令會把 autopilot/nfu 切回 fu;emergency 為應急操舵(舵機故障時舵以降低的速率再度可動)",
+      "description": "操舵模式(規劃書第 7.2 節操舵模式選擇;C# SimCore 與 Python 參考實作皆輸出)。mode 由指令 steeringMode 切換;autopilot 與 autopilot{enabled:true} 同義;rudder 指令會把 autopilot/nfu 切回 fu;emergency 為應急操舵(舵機故障時舵以降低的速率再度可動)",
       "properties": {
         "mode": {
           "type": "string",
@@ -645,7 +645,7 @@
     },
     "tugs": {
       "type": "array",
-      "description": "拖船(情境 tugs[];無拖船時省略;C# 產生,Python 不輸出;docs/design/physics-tugs-anchors-mooring.md 第 2、5 節)。力以噸力(t)、方向相對船艏順時針(度)",
+      "description": "拖船(情境 tugs[];無拖船時省略;C# 與 Python 參考實作皆輸出(simosa_brm/external.py);docs/design/physics-tugs-anchors-mooring.md 第 2、5 節)。力以噸力(t)、方向相對船艏順時針(度)",
       "items": {
         "type": "object",
         "required": ["id", "mode", "status", "force_t", "direction_deg"],
@@ -667,7 +667,7 @@
     },
     "anchors": {
       "type": "array",
-      "description": "左右錨(particulars 有 anchors 資料時一律輸出;C# 產生,Python 不輸出;第 3、5 節)",
+      "description": "左右錨(particulars 有 anchors 資料時一律輸出;C# 與 Python 參考實作皆輸出;第 3、5 節)",
       "items": {
         "type": "object",
         "required": ["side", "status", "length_m", "tension_t", "onBottom_m"],
@@ -729,7 +729,7 @@
     },
     "bank": {
       "type": "object",
-      "description": "岸壁效應(情境有 banks 區段且動力學接受外力時輸出;C# 產生,Python 不輸出;docs/design/physics-bank-effect.md 第 5 節)。力為船體座標:Y 右舷正、N 艏向右正(與 u/v/r 相同)",
+      "description": "岸壁效應(情境有 banks 區段且動力學接受外力時輸出;C# 與 Python 參考實作皆輸出;docs/design/physics-bank-effect.md 第 5 節)。力為船體座標:Y 右舷正、N 艏向右正(與 u/v/r 相同)",
       "required": ["Y_kN", "N_kNm", "side", "parameter"],
       "properties": {
         "Y_kN": { "type": "number", "description": "岸壁橫向力(kN,右舷正;向岸吸力)" },
@@ -744,6 +744,29 @@
         "starboard_m": { "type": "number", "minimum": 0, "description": "右舷最近等效岸壁距離(船舯,m)" },
         "depthRatio": { "type": "number", "description": "水深吃水比 h/T" },
         "influence_m": { "type": "number", "description": "影響寬度 y_inf(自船舯,m)" }
+      }
+    },
+    "radarEnvironment": {
+      "type": "object",
+      "description": "雷達環境(情境 environment.radar 換算為本地 ENU;情境未給時省略;C# 產生,Python 不輸出;docs/design/radar-arpa.md 第 2.1 節)。只來自情境、練習中不變(不進雜湊);廣播與紀錄只在關鍵幀帶出 — 載入/重設/倒帶後第一幀與之後每秒(50 步)一次 — 其他幀省略 = 不變(雷達服務於模擬時間倒退或 scenario.id 改變時清除,待下一個關鍵幀重新套用);雷達服務據以產生雨雜波與雨衰減、覆寫海況(教官 environment 指令優先)",
+      "required": ["rainAreas"],
+      "properties": {
+        "rainAreas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "intensity", "rate_mmh"],
+            "properties": {
+              "id": { "type": "string", "description": "雨區 id(情境未給時 rain1、rain2…)" },
+              "intensity": { "type": "number", "minimum": 0, "maximum": 1, "description": "降雨強度 0–1(情境值)" },
+              "rate_mmh": { "type": "number", "minimum": 0, "description": "降雨率(mm/h)= 16 × intensity" },
+              "polygon": { "type": "array", "items": { "$ref": "#/properties/pos" }, "description": "多邊形雨區頂點(與 center + radius_m 二擇一)" },
+              "center": { "$ref": "#/properties/pos", "description": "圓形雨區中心" },
+              "radius_m": { "type": "number", "exclusiveMinimum": 0, "description": "圓形雨區半徑(m)" }
+            }
+          }
+        },
+        "seaState": { "type": "number", "minimum": 0, "maximum": 9, "description": "海況覆寫(Douglas 0–9;省略 = 雷達服務依真風速推估)" }
       }
     }
   },

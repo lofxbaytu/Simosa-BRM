@@ -18,6 +18,10 @@ namespace SimosaBRM.SimCore.Assessment;
 /// 未繫妥,且該碰墊自上次接觸(或情境開始)以來曾離開 ≥ <see cref="LandingClearanceM"/>。</item>
 /// <item>繫妥(allFast):所有已設定的纜繩皆受力(fast / heaving / slacking)且本次靠泊船舯前、後的碰墊皆已接觸(每秒評估);記下時刻、船舯里程與泊位中心(碰墊列中點)的偏差。
 /// 繫妥期間的接觸不是接近接觸;全部纜繩解除(無纜受力)後解除。</item>
+/// <item>已離開泊位(departed;E14 離泊後再碰回):曾接觸過泊位後,於評估步(每秒)所有碰墊壓縮為 0、無碼頭硬接觸、未繫妥,且船體外形距碼頭線(有限線段)
+/// &gt; <see cref="DepartedDistanceM"/>(情境 <c>berth.departedDistance_m</c>,預設 <see cref="DefaultDepartedDistanceM"/>)時成立並鎖定(再次繫妥時解除)。
+/// 已離開泊位後的碰墊/碼頭接觸為再碰回(contacts[].reContact),其接觸點法向速度最大值為 <c>berthing.maxReContactSpeed_mps</c>
+/// (與 maxLateralSpeed 分開;離泊過程中艉擺碰墊不算再碰回)。</item>
 /// <item>碼頭硬接觸次數、斷纜次數、各纜最大張力 / MBL(每秒取樣與 mooringLineParted 事件張力)、各拖船工作時間(status working 的秒數)與最大出力、拖纜斷裂次數。</item>
 /// <item>錨泊:每次 letGo 時的對地速度、帶上(anchorBroughtUp)時鏈長與水深比(scope)、走錨次數與累計時間(每秒取樣 dragging)、
 /// 錨鏈孔最大張力、首次走錨到學員第一個反應(車令/舵令/側推/錨指令)的時間。</item>
@@ -28,6 +32,8 @@ public sealed class BerthingTracker
 {
     /// <summary>新的靠上 / 接近接觸所需的離開距離(m;船體與碰墊面,每秒取樣):小於此值的分離視為同一次靠泊的反覆輕碰</summary>
     public const double LandingClearanceM = 0.5;
+    /// <summary>「已離開泊位」的船體距碼頭線門檻預設值(m;情境 berth.departedDistance_m 可覆寫;約 1 倍船寬)</summary>
+    public const double DefaultDepartedDistanceM = 20.0;
 
     private readonly SimulationEngine _engine;
     private readonly Scenario.Scenario _scenario;
@@ -37,6 +43,8 @@ public sealed class BerthingTracker
     public bool BerthingEnabled { get; }
     /// <summary>情境有 anchors 區段(summary.anchoring 一律輸出;否則錨曾被使用後才輸出)</summary>
     public bool AnchoringDeclared { get; }
+    /// <summary>「已離開泊位」的船體距碼頭線門檻(m)</summary>
+    public double DepartedDistanceM { get; }
     public BerthingState State { get; private set; } = new();
 
     public BerthingTracker(SimulationEngine engine, Scenario.Scenario scenario, double loa)
@@ -46,6 +54,7 @@ public sealed class BerthingTracker
         _halfLoa = 0.5 * loa;
         BerthingEnabled = scenario.Berth is not null || scenario.Tugs is { Count: > 0 };
         AnchoringDeclared = scenario.Anchors is not null;
+        DepartedDistanceM = scenario.Berth?.DepartedDistanceM ?? DefaultDepartedDistanceM;
     }
 
     /// <summary>summary.anchoring 是否輸出(情境宣告 anchors,或錨曾被使用)。</summary>
@@ -80,6 +89,11 @@ public sealed class BerthingTracker
                     MaxReactionKN = e.DataNumber("maxReaction_kN"), DeflectionPct = e.DataNumber("deflection_pct"), Overload = e.DataBool("overload") == true,
                 });
                 if (approach) Approached(speed);
+                if (st.Departed)
+                {
+                    st.Contacts[^1] = st.Contacts[^1] with { ReContact = true };
+                    ReContacted(speed);
+                }
                 break;
             }
             case SimEventKinds.QuayContact:
@@ -95,6 +109,7 @@ public sealed class BerthingTracker
                 {
                     if (st.QuayMaxSpeedMps is null || qv > st.QuayMaxSpeedMps) st.QuayMaxSpeedMps = qv;
                     if (approach) Approached(qv);
+                    if (st.Departed) ReContacted(qv);
                 }
                 break;
             }
@@ -217,6 +232,13 @@ public sealed class BerthingTracker
                 if (st.HeldFenders.Count == 0 && !contact && !st.AllFast && !(berth.Lines.Count > 0 && berth.Lines.All(l => l.Loaded)))
                     st.FwdLanded = st.AftLanded = false;
                 UpdateAllFast(sit.Time);
+                // 已離開泊位:曾接觸過泊位、所有碰墊壓縮為 0 且無碼頭接觸、未繫妥、船體距碼頭線 > DepartedDistanceM(鎖定;再次繫妥時解除)
+                if (st.AllFast) st.Departed = false;
+                else if (!st.Departed && !contact && st.Landings.Count > 0 && HullDistanceFromQuay(berth) > DepartedDistanceM)
+                {
+                    st.Departed = true;
+                    st.DepartedAtS ??= sit.Time;
+                }
                 foreach (var l in berth.Lines)
                 {
                     var line = Line(l.Id);
@@ -283,6 +305,56 @@ public sealed class BerthingTracker
         var l = st.Landings[i];
         if (l.Initial || (l.ContactSpeedMps is { } c && c >= speedMps)) return;
         st.Landings[i] = l with { ContactSpeedMps = speedMps, ContactSpeedKn = Units.MpsToKn(speedMps) };
+    }
+
+    /// <summary>已離開泊位後的再碰回(碰墊或碼頭):接觸點法向速度計入 maxReContactSpeed。</summary>
+    private void ReContacted(double speedMps)
+    {
+        var st = State;
+        st.ReContacts++;
+        if (st.MaxReContactSpeedMps is null || speedMps > st.MaxReContactSpeedMps) st.MaxReContactSpeedMps = speedMps;
+    }
+
+    /// <summary>
+    /// 船體外形(BerthModel.Hull 多邊形各邊)至碼頭線(有限線段)的最近距離(m;只讀)。以船體而非船舯判定:沿碼頭向前/向後駛離時,
+    /// 船舯已越過碼頭端但艉/艏仍在碰墊旁,不應視為已離開泊位。
+    /// </summary>
+    private double HullDistanceFromQuay(BerthModel berth)
+    {
+        Span<(double E, double N)> hull = stackalloc (double, double)[berth.Hull.Length];
+        berth.HullEnu(_engine.Motion, hull);
+        var best = double.PositiveInfinity;
+        foreach (var q in berth.Segments)
+        {
+            var (bx, by) = (q.Ax + q.Length * q.Tx, q.Ay + q.Length * q.Ty);
+            for (var i = 0; i < hull.Length; i++)
+            {
+                var (p, r) = (hull[i], hull[(i + 1) % hull.Length]);
+                best = Math.Min(best, SegmentDistance(p.E, p.N, r.E, r.N, q.Ax, q.Ay, bx, by));
+            }
+        }
+        return best;
+    }
+
+    /// <summary>兩線段距離(相交時 0)。</summary>
+    private static double SegmentDistance(double ax, double ay, double bx, double by, double cx, double cy, double dx, double dy)
+    {
+        static double Cross(double ox, double oy, double px, double py, double qx, double qy) => (px - ox) * (qy - oy) - (py - oy) * (qx - ox);
+        var d1 = Cross(cx, cy, dx, dy, ax, ay);
+        var d2 = Cross(cx, cy, dx, dy, bx, by);
+        var d3 = Cross(ax, ay, bx, by, cx, cy);
+        var d4 = Cross(ax, ay, bx, by, dx, dy);
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0.0;
+        static double PointSeg(double px, double py, double ux, double uy, double vx, double vy)
+        {
+            var (ex, ey) = (vx - ux, vy - uy);
+            var l2 = ex * ex + ey * ey;
+            var t = l2 > 0 ? Math.Clamp(((px - ux) * ex + (py - uy) * ey) / l2, 0.0, 1.0) : 0.0;
+            var (fx, fy) = (ux + t * ex - px, uy + t * ey - py);
+            return Math.Sqrt(fx * fx + fy * fy);
+        }
+        return Math.Min(Math.Min(PointSeg(ax, ay, cx, cy, dx, dy), PointSeg(bx, by, cx, cy, dx, dy)),
+                        Math.Min(PointSeg(cx, cy, ax, ay, bx, by), PointSeg(dx, dy, ax, ay, bx, by)));
     }
 
     /// <summary>碰墊接觸在船舯之前或之後:記下本次靠泊艏端 / 艉端已靠上(繫妥判定用)。</summary>
@@ -474,6 +546,8 @@ public sealed class BerthingTracker
             case "berthing.maxLateralSpeed_mps": return MaxLateralSpeedMps();
             case "berthing.maxLateralSpeed_kn": return MaxLateralSpeedMps() is { } v ? Units.MpsToKn(v) : null;
             case "berthing.maxContactSpeed_mps": return MaxOf(st.Contacts, c => c.NormalSpeedMps);
+            // 已離開泊位後再碰回(碰墊/碼頭)的接觸點法向速度最大值;未再碰回時 null
+            case "berthing.maxReContactSpeed_mps": return st.MaxReContactSpeedMps;
             case "berthing.maxEnergy_kNm": return MaxOf(st.Contacts, c => c.EnergyKNm);
             case "berthing.maxEnergyRatio": return MaxOf(st.Contacts, c => c.EnergyRatio);
             case "berthing.fenderContacts": return st.Contacts.Count;
@@ -505,6 +579,7 @@ public sealed class BerthingTracker
         "berthing.maxLateralSpeed_mps", "berthing.maxLateralSpeed_kn", "berthing.maxContactSpeed_mps", "berthing.maxEnergy_kNm", "berthing.maxEnergyRatio",
         "berthing.fenderContacts", "berthing.fenderOverloads", "berthing.quayContacts", "berthing.lineBreaks", "berthing.maxLineTensionRatio",
         "berthing.tugLineBreaks", "berthing.maxTugForce_t", "berthing.tugWorkingTime_s", "berthing.allFastPositionError_m",
+        "berthing.maxReContactSpeed_mps",
         "anchoring.letGoCount", "anchoring.maxLetGoSog_kn", "anchoring.dragEvents", "anchoring.dragTime_s", "anchoring.maxChainTension_t",
         "anchoring.minScopeRatio", "anchoring.dragResponseTime_s",
     };
@@ -519,6 +594,7 @@ public sealed class BerthingTracker
             BerthId = _scenario.Berth?.Definition?.Id ?? _scenario.Berth?.Id,
             MaxLateralSpeedMps = max, MaxLateralSpeedKn = max is { } m ? Units.MpsToKn(m) : null,
             MaxContactSpeedMps = MaxOf(st.Contacts, c => c.NormalSpeedMps),
+            DepartedAtS = st.DepartedAtS, ReContacts = st.ReContacts > 0 ? st.ReContacts : null, MaxReContactSpeedMps = st.MaxReContactSpeedMps,
             MaxEnergyKNm = MaxOf(st.Contacts, c => c.EnergyKNm), MaxEnergyRatio = MaxOf(st.Contacts, c => c.EnergyRatio),
             FenderContacts = st.Contacts.Count, FenderOverloads = st.Contacts.Count(c => c.Overload),
             QuayContacts = st.QuayContacts, QuayMaxPenetrationM = st.QuayContacts > 0 ? st.QuayMaxPenetrationM : null, QuayMaxSpeedMps = st.QuayMaxSpeedMps,
@@ -602,6 +678,13 @@ public sealed class BerthingState
     public double? DragDetectedAtS { get; set; }
     public double? DragResponseAtS { get; set; }
     public string? DragResponseBy { get; set; }
+    /// <summary>已離開泊位(曾接觸後所有碰墊壓縮為 0、未繫妥、船體距碼頭線 &gt; DepartedDistanceM;再次繫妥時解除)。預設值不寫出(舊快照格式不變)</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool Departed { get; set; }
+    /// <summary>第一次成立「已離開泊位」的時刻</summary>
+    public double? DepartedAtS { get; set; }
+    /// <summary>已離開泊位後的再碰回次數(碰墊 + 碼頭)與接觸點法向速度最大值(berthing.maxReContactSpeed_mps)</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int ReContacts { get; set; }
+    public double? MaxReContactSpeedMps { get; set; }
 }
 
 public sealed record ApproachSample
@@ -648,6 +731,8 @@ public sealed record FenderContactMetric
     [JsonPropertyName("maxReaction_kN")] public double? MaxReactionKN { get; init; }
     [JsonPropertyName("deflection_pct")] public double? DeflectionPct { get; init; }
     [JsonPropertyName("overload")] public bool Overload { get; init; }
+    /// <summary>已離開泊位後再碰回(berthing.maxReContactSpeed_mps;false 時不寫出)</summary>
+    [JsonPropertyName("reContact"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool ReContact { get; init; }
 }
 
 public sealed class MooringLineMetric
@@ -705,6 +790,11 @@ public sealed record SummaryBerthing
     [JsonPropertyName("maxLateralSpeed_mps")] public double? MaxLateralSpeedMps { get; init; }
     [JsonPropertyName("maxLateralSpeed_kn")] public double? MaxLateralSpeedKn { get; init; }
     [JsonPropertyName("maxContactSpeed_mps")] public double? MaxContactSpeedMps { get; init; }
+    /// <summary>第一次「已離開泊位」(曾接觸後所有碰墊壓縮為 0、未繫妥、船體距碼頭線 &gt; departedDistance_m)的時刻;未離開時 null</summary>
+    [JsonPropertyName("departedAt_s")] public double? DepartedAtS { get; init; }
+    /// <summary>已離開泊位後再碰回的次數(碰墊 + 碼頭;無時 null)與接觸點法向速度最大值(berthing.maxReContactSpeed_mps)</summary>
+    [JsonPropertyName("reContacts")] public int? ReContacts { get; init; }
+    [JsonPropertyName("maxReContactSpeed_mps")] public double? MaxReContactSpeedMps { get; init; }
     [JsonPropertyName("maxEnergy_kNm")] public double? MaxEnergyKNm { get; init; }
     [JsonPropertyName("maxEnergyRatio")] public double? MaxEnergyRatio { get; init; }
     [JsonPropertyName("fenderContacts")] public int FenderContacts { get; init; }

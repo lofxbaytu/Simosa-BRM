@@ -1,0 +1,222 @@
+# E21 瀝青船特有:貨物加熱系統故障下的到港壓力 — 安平港(規劃書第 8.1 節 E21 與「設計規則」;1.39 壓力/決策、MRM;設計 docs/design/scenario-library.md 第 13 節;
+#   schema src/Contracts/scenario.schema.json)
+# 與 E18 同一進港幾何(data/areas/anping-approach.json;示意,待 ENC 校正):口門外 5.5 nm 起,沿岸淺水(基底水深 = 維護水深 CD 7.0 m + 潮高)。
+# FSB1 滿載(5.7 m)瀝青貨溫約 150 °C,FAH 約 10 kn、自動舵 077°;進港潮窗:潮高 +0.6 m 且正在退潮(setEnvironment waterDepth 漸變 7.6 → 7.2 → 6.6 m;潮窗已過時 → 6.2 m)。
+# 時間表:T+2 熱油鍋爐跳脫(cargoHeatingFailure:fault-catalogue 為只記錄故障,為使 --validate 無警告以訊息/語音表示,不注入故障)→ T+5 機艙回報修復時間不定(2–6 小時)
+#   → T+10 degraded(companyPressure:公司催促全速進港趕潮窗、「航道速限不用管」、潮位續降)→ 通過航道外端 OUTER(或 T+25)emergency(tideWindowClosing:潮窗將過、
+#   貨溫警報、公司再催)→ 潮窗將過 30 分鐘後仍在沙洲(BAR)外側的航道內時 windowClosed(潮窗已過:→ 6.2 m,5 分鐘;SAH 時 UKC 低於政策、FAH 時低於 5 % 吃水)
+#   → 到達迴船池、擱淺或 T+65 結束;貨溫下降以每 5 分鐘一次的訊息表示(核心無貨物熱力模型)。
+#   windowClosed 只在仍未通過沙洲且在航道內時觸發:沙洲段為控制水深(已通過沙洲的船不受影響),在航道外錨泊等候(放棄進港)也不受 UKC 扣分;等候後再進入航道即觸發。
+# 評估:壓力下的決策(熱油鍋爐故障通報船長/公司;對公司不當指示提出質疑、安全優先;潮窗決定:依計畫進港或放棄、錨泊等候 — acknowledge verbal / notifyCompany / anchorDecision)、
+#   航道速限遵守(超速幅度)、UKC(低於政策 10 % 吃水的超限時間、ukc.min_m);硬性失敗:擱淺、UKC < 5 % 吃水。
+id: E21_cargo_heating_pressure_anping
+name: 貨物加熱故障下的到港壓力(安平)
+description: >-
+  滿載瀝青進港途中熱油鍋爐故障、貨溫下降、機艙修復時間不定,公司以貨損壓力催促全速趕潮窗;
+  練習壓力下的短期策略、對上級的質疑(安全優先)與淺水航道的速限/UKC 遵守。
+seed: 20261121
+startTimeUtc: "2026-11-21T06:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.9920, lon: 120.1530 }          # 安平港口門(示意,同 E18)
+initial:
+  position: { lat: 22.97611, lon: 120.05511 }     # 航線 SEA(口門外 5.5 nm)
+  heading: 77
+  speed: 10.0
+  telegraph: FAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 14, trueDir: 30, gustiness: 0.15 }
+  current: { set: 170, drift: 0.3 }
+  waterDepth: 7.6                                 # 維護水深 CD 7.0 m + 潮高 0.6 m(退潮中,示意)
+  visibility_nm: 8
+alerts:
+  shallowWater_m: "${params:navigation.ukc.shallowAlarm_m}"
+briefing:
+  text: |
+    交班(14:00 地方時):No.1 滿載瀝青(5.7 m,貨溫約 150 °C)抵安平港,口門外 5.5 nm,FAH 約 10 kn,自動舵 077°。
+    書面航程計畫(潮窗):維護水深 CD 7.0 m + 潮高 0.6 m(退潮中),預計一小時內降到 −0.4 m;公司 UKC 政策航道內 ≥ 10 % 吃水(0.57 m,含 squat)。
+    航道外端(OUTER)前減至航道速限(參數集 port.anping.channelSpeedLimit_kn)以內,依計畫可在潮窗內抵達迴船池;若無法在潮窗內安全進港,放棄並在港外錨泊等候下一個潮。
+    貨物:瀝青須保持 140 °C 以上才能卸貨,熱油鍋爐一台運轉;停止作業權(stop work authority)與公司 DPA 聯絡方式見附件。
+    接班者完成交班檢查表後由教官確認(acknowledge checklist)。
+  attachments:
+    - { title: "航程計畫與潮窗計算(安平港,示意)", file: docs/passage-plan-E21.pdf }
+    - { title: "貨物加熱計畫與貨溫紀錄", file: docs/cargo-heating-plan.pdf }
+    - { title: "公司 DPA 聯絡與停止作業權程序", file: docs/company-dpa-contact.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: chiefEngineer, playedBy: voiceScript }
+    - { role: company, playedBy: voiceScript }
+    - { role: portControl, playedBy: voiceScript }
+    - { role: helmsman }
+  minParticipants: 2
+  duration_s: 3900
+route:
+  name: 安平港油品碼頭進港(示意,同 E18)
+  xtdLimit_m: "${params:navigation.xtd.dredgedChannel_m}"
+  waypoints:                                      # data/areas/anping-approach.json route(SEA 起全程)
+    - { name: SEA, lat: 22.97611, lon: 120.05511 }
+    - { name: APPROACH, lat: 22.98044, lon: 120.08181 }
+    - { name: OUTER, lat: 22.98333, lon: 120.09961, checkpoint: true, report: "安平港控制台:航道外端報告(示意)" }
+    - { name: BAR, lat: 22.98853, lon: 120.13164, checkpoint: true }
+    - { name: ENTRANCE, lat: 22.992, lon: 120.153 }
+    - { name: BASIN, lat: 22.99316, lon: 120.16012, arrivalRadius_m: 200 }
+zones:
+  - id: channel
+    name: 浚深航道(UKC 政策 10 % 吃水;示意)
+    type: ukcPolicy
+    ukcMin: { fractionOfDraft: "${params:navigation.ukc.channel_fraction}" }
+    polygon:                                      # 與 data/areas/anping-approach.json channel.polygon 相同
+      - { lat: 22.98364, lon: 120.09588 }
+      - { lat: 22.99461, lon: 120.16351 }
+      - { lat: 22.99285, lon: 120.16385 }
+      - { lat: 22.98188, lon: 120.09622 }
+  - id: channelSpeed
+    name: 航道速限區(示意)
+    type: speedLimit
+    speedLimit_kn: "${params:port.anping.channelSpeedLimit_kn}"
+    polygon:                                      # 與 channel 相同
+      - { lat: 22.98364, lon: 120.09588 }
+      - { lat: 22.99461, lon: 120.16351 }
+      - { lat: 22.99285, lon: 120.16385 }
+      - { lat: 22.98188, lon: 120.09622 }
+  - id: northShoal
+    name: 航道北側淺灘(ECDIS 安全等深線以外,示意)
+    type: ukcPolicy
+    waterDepth_m: 5.0
+    polygon:                                      # 與 data/areas/anping-approach.json shoals[northShoal] 相同
+      - { lat: 22.98435, lon: 120.09575 }
+      - { lat: 22.99532, lon: 120.16337 }
+      - { lat: 23.007, lon: 120.16114 }
+      - { lat: 22.99603, lon: 120.09351 }
+  - id: southShoal
+    name: 航道南側淺灘(ECDIS 安全等深線以外,示意)
+    type: ukcPolicy
+    waterDepth_m: 5.0
+    polygon:                                      # 與 data/areas/anping-approach.json shoals[southShoal] 相同
+      - { lat: 22.98117, lon: 120.09635 }
+      - { lat: 22.99214, lon: 120.16399 }
+      - { lat: 22.98046, lon: 120.16622 }
+      - { lat: 22.96949, lon: 120.09859 }
+timeline:
+  - id: handover
+    name: 交班(潮窗與貨溫)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:口門外五點五浬,FAH 十節,自動舵 077。潮在退,潮窗大約一小時。航道外端前要減到航道速限。貨溫一百五十度,熱油鍋爐一台運轉。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對潮窗、UKC 計算、航道速限、貨物加熱狀態與放棄進港的條件,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 077°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 77 }
+  - id: cargoHeatingFailure
+    name: 熱油鍋爐跳脫(貨物加熱系統故障)
+    when: { type: time, atLeast: "${params:cargo.e21.heatingFailureAt_s}" }
+    actions:
+      - voiceScript: { role: chiefEngineer, channel: phone, text: "駕駛台,輪機長:熱油鍋爐跳脫,燃燒器點不著,貨艙加熱停了。我們在查原因。", lang: zh-TW }
+      - message: { to: all, text: "警報:熱油鍋爐跳脫(cargoHeatingFailure;只記錄故障,以訊息表示)", severity: alarm }
+      - message: { to: instructor, text: "熱油鍋爐故障:觀察是否通知船長並通報公司(acknowledge callMaster 或 notifyCompany),而不忽略航行", severity: warning }
+  - id: repairUncertain
+    name: 機艙回報修復時間不定
+    when: { type: time, atLeast: 300 }
+    actions:
+      - voiceScript: { role: chiefEngineer, channel: phone, text: "輪機長報告:可能是燃油泵或火焰偵測器,要拆開才知道。修好可能兩小時,也可能六小時以上,現在說不準。", lang: zh-TW }
+  - id: cargoTemp
+    name: 貨溫下降(每 5 分鐘)
+    repeat: { every_s: 300, max: 12 }
+    when: { type: event, kind: timelineTriggered, itemId: cargoHeatingFailure }
+    actions:
+      - message: { to: all, text: "貨溫紀錄:各艙平均溫度持續下降(約每小時 2 °C;140 °C 以下卸貨困難)", severity: info }
+  - id: companyPressure
+    name: 公司催促全速趕潮窗
+    phase: degraded
+    when: { type: time, atLeast: "${params:cargo.e21.companyPressureAt_s}" }
+    actions:
+      - setEnvironment: { waterDepth: 7.2, ramp_s: 900 }
+      - voiceScript: { role: company, channel: phone, text: "我是公司營運:貨主說瀝青一旦凝固整船貨都報廢,今天一定要靠。請保持全速進港趕潮窗,航道速限不用管,出了事我負責。", lang: zh-TW }
+      - message: { to: instructor, text: "公司不當指示(違反速限與 UKC 計畫):觀察船長是否提出質疑、說明安全優先(acknowledge verbal 或 notifyCompany);潮位 7.6 → 7.2 m(15 分鐘)", severity: warning }
+  - id: tideWindowClosing
+    name: 潮窗將過
+    phase: emergency
+    when:
+      any:
+        - { type: routeLeg, passedWaypoint: OUTER }
+        - { type: time, atLeast: "${params:cargo.e21.emergencyAt_s}" }
+    actions:
+      - setEnvironment: { waterDepth: 6.6, ramp_s: 1500 }
+      - voiceScript: { role: portControl, channel: vhfPort, text: "安平港控制台:潮位還在下降,沙洲段再過約三十分鐘就不足滿載船通過,請船長決定是否進港。", lang: zh-TW }
+      - voiceScript: { role: company, channel: phone, text: "公司再確認:不要停,直接進來,碼頭在等。", lang: zh-TW }
+      - message: { to: instructor, text: "潮窗將過 + 公司再催:觀察決定(依計畫航速進港或放棄、錨泊等候;acknowledge verbal、anchorDecision 或 notifyCompany),以及航道速限/UKC 遵守", severity: alarm }
+  - id: ukcBelowPolicy
+    name: UKC 低於政策
+    when: { type: ukc, lessThanFractionOfDraft: "${params:navigation.ukc.channel_fraction}" }
+    actions:
+      - message: { to: instructor, text: "UKC(含 squat)低於公司政策 10 % 吃水", severity: warning }
+  - id: windowClosed
+    name: 潮窗已過(沙洲段水深不足滿載船通過)
+    when:
+      all:
+        - { type: time, atLeast: 1800, since: { event: timelineTriggered, itemId: tideWindowClosing } }   # 港控所稱「約三十分鐘」
+        - { type: zone, id: channel, inside: true }
+        - { not: { type: routeLeg, passedWaypoint: BAR } }
+    actions:
+      - setEnvironment: { waterDepth: 6.2, ramp_s: 300 }
+      - voiceScript: { role: portControl, channel: vhfPort, text: "安平港控制台:潮位已低於滿載船通過沙洲段的水深,尚未通過沙洲的船請勿進港。", lang: zh-TW }
+      - message: { to: instructor, text: "潮窗已過:潮位 6.6 → 6.2 m(5 分鐘);仍在沙洲外側航道內,SAH 時 UKC 低於政策、FAH 時低於 5 % 吃水(硬性失敗)", severity: alarm }
+  - id: arrived
+    name: 到達迴船池
+    when: { type: ownDistance, waypoint: BASIN, lessThan: 0.1 }
+    actions:
+      - endExercise: { reason: 到達迴船池 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - endExercise: { reason: 擱淺 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 3900 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  ukc:
+    min: { fractionOfDraft: "${params:navigation.ukc.channel_fraction}" }
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: ukcHard, rule: ukc, lessThan: { fractionOfDraft: "${params:navigation.ukc.hardFail_fraction}" } }
+  bands:
+    - { id: speed, metric: manoeuvring.maxOverSpeed_kn, warn: 0.5, fail: 2.0, penalty: 10, failPenalty: 20 }
+    - { id: ukcMin, metric: ukc.min_m, direction: below, warn: "${params:navigation.ukc.minWarn_m}", fail: "${params:navigation.ukc.minFail_m}", penalty: 10, failPenalty: 25 }
+    - { id: ukcTime, metric: ukc.timeBelowLimit_s, warn: 0, fail: 120, penalty: 5, failPenalty: 15 }
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.dredgedChannel_m}", fail: 1.4x, penalty: 10, failPenalty: 20 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: heatingFailureReport
+      after: { event: timelineTriggered, itemId: cargoHeatingFailure }
+      expect: { any: [ { acknowledge: { kind: callMaster } }, { acknowledge: { kind: notifyCompany } } ] }
+      within_s: "${params:cargo.heatingFailureReport_s}"
+      penalty: 5
+    - id: companyChallenge
+      after: { event: timelineTriggered, itemId: companyPressure }
+      expect: { any: [ { acknowledge: { kind: verbal } }, { acknowledge: { kind: notifyCompany } } ] }
+      within_s: "${params:management.challenge_s}"
+      penalty: 15
+    - id: windowDecision
+      after: { event: timelineTriggered, itemId: tideWindowClosing }
+      expect: { any: [ { acknowledge: { kind: verbal } }, { acknowledge: { kind: anchorDecision } }, { acknowledge: { kind: notifyCompany } } ] }
+      within_s: "${params:management.windowDecision_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

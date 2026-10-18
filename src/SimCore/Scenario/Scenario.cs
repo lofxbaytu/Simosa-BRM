@@ -195,6 +195,8 @@ public sealed class Scenario
         ScenarioExternalForces.CheckStructure(this, Error);
         // 岸壁(設計文件 physics-bank-effect.md)
         ScenarioBankLoader.CheckStructure(this, Error);
+        // 雷達環境(radar-arpa.md 第 2.1 節)
+        ScenarioRadarEnvironmentBuilder.CheckStructure(this, Error);
 
         var ruleIds = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < Assessment.HardFail.Count; i++)
@@ -390,6 +392,8 @@ public sealed class ScenarioEnvironment
     [JsonPropertyName("visibility_nm")] public double? VisibilityNm { get; set; }
     /// <summary>海床底質(mud | sand | clay | rock;錨抓著係數與鏈摩擦;未給 = sand)</summary>
     public string? Seabed { get; set; }
+    /// <summary>雷達環境(雨區、海況;無物理效果,以 state.radarEnvironment 廣播給雷達服務;ScenarioRadarEnvironment.cs)</summary>
+    public ScenarioRadarEnvironment? Radar { get; set; }
 }
 
 public enum ScenarioIssueSeverity

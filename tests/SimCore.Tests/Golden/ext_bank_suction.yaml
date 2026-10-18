@@ -1,0 +1,11 @@
+# 由 export_external_reference.py 產生(請勿手改):6 kn 沿右舷垂直岸壁與左舷淹沒斜坡岸航行,h/T 1.4(300 s)
+id: ext_bank_suction
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 6 }
+environment: { wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }, current: { set: 0, drift: 0 }, waterDepth: 8 }
+banks:
+  lines:
+    - { id: EAST, type: vertical, line: [ { x: 42, y: -500 }, { x: 42, y: 3000 } ], waterSide: left }
+    - { id: WEST, type: sloped, slope: 3, topDepth_m: 2, line: [ { x: -75, y: -500 }, { x: -75, y: 3000 } ], waterSide: right }

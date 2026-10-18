@@ -16,6 +16,16 @@
   rotLimit 兩條路徑都取 max(1, |值|) 度/分。
 - 已載入情境時 state JSON 加 scenario {id, phase: "normal", parameterSetVersion?}(state.schema.json 的 scenario 物件;
   Python 不推進階段,phase 固定 normal)。
+- 外力指令 tugControl {id, mode, direction_deg, power_pct} / anchor {side, action, targetLength_shackles | length_m} /
+  mooring {lineId, action, bollard, tension_t, length_m}(command.schema.json;physics-tugs-anchors-mooring.md 第 6 節):
+  語意與 C# ExternalForceModel 相同,拒絕時 ok=false、detail 為「拒絕(原因):…」,原因字串同 C# commandRejected
+  (unknownTug、unknownTugMode、invalidPower、tugModeUnavailable、tugLineParted、noAnchorData、unknownAnchor、unknownAction、
+  invalidTarget、anchorAlreadyOut、anchorStowed、chainFullyOut、noBerth、unknownMooringLine、unknownBollard、bollardOutOfReach、
+  mooringLineNotFast、mooringLineParted);接受時 ack 附 event(tugCommand / anchorLetGo / anchorCommand / mooringCommand)。
+  injectFault tugLineBreak 的 args.args.id 指定拖船(不存在 → 拒絕 unknownTug;故障參數只讀 args.args 物件,與 C# FaultArgString
+  相同);clearFault 的名稱為 value 或 args.name(C# SimCommand.FaultName),兩者都缺或為 all 時清除全部;清除 tugLineBreak
+  後斷纜拖船可重新帶纜。
+  state 輸出 tugs[] / anchors[] / berth / bank(external.py;與 C# BuildState 相同的輸出條件)。
 """
 
 from __future__ import annotations
@@ -33,6 +43,7 @@ from .mmg import (
     FAULT_STEERING_FU_ONLY,
     FAULT_STEERING_GEAR,
     FAULT_STEERING_PUMP,
+    FAULT_TUG_LINE_BREAK,
     CommandRejected,
     MMGShip,
     make_ship,
@@ -71,6 +82,37 @@ UNIMPLEMENTED_DETAIL = {
 STEERING_MODE_LABEL = {"fu": "隨動(FU)", "nfu": "非隨動(NFU)", "autopilot": "自動舵", "emergency": "應急操舵"}
 NFU_LABEL = {-1: "推左舵", 0: "停", 1: "推右舵"}
 REJECT_DETAIL = "拒絕({reason}):{msg};狀態不變"
+
+
+def _arg_str(args: dict[str, Any], name: str) -> str | None:
+    """C# SimCommand.ArgAsString:只認 JSON 字串。"""
+    v = args.get(name)
+    return v if isinstance(v, str) else None
+
+
+def _arg_num(args: dict[str, Any], *names: str) -> float | None:
+    """C# SimCommand.ArgAsDouble:數值或數值字串(布林不算);多個名稱依序取第一個有值者。"""
+    for name in names:
+        v = args.get(name)
+        if isinstance(v, bool) or v is None:
+            continue
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            try:
+                return float(v.strip())
+            except ValueError:
+                continue
+    return None
+
+
+def _value_str(v: Any) -> str | None:
+    """C# SimCommand.ValueAsString:字串原樣,其他非 null 值取文字。"""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    return json.dumps(v)
 
 
 class SimServer:
@@ -116,6 +158,7 @@ class SimServer:
         ship = self.ship
         ok = True
         detail = ""
+        event: dict[str, Any] | None = None
         try:
             if t == "rudder":
                 ship.set_rudder(float(v))
@@ -198,23 +241,35 @@ class SimServer:
                     ship.restore(self.snapshots[name])
                     detail = f"已還原快照 {name}"
             elif t == "injectFault":
+                if v is None and isinstance(args.get("name"), str):
+                    v = args["name"]  # C# SimCommand.FaultName:value 或 args.name
                 name = str(v).strip() if v is not None else ""
                 if not name:
                     ok, detail = False, "故障名稱不可為空"
                 else:
                     was_autopilot = ship.ctl.autopilot
-                    modelled = ship.inject_fault(name)
+                    # 故障參數只讀 args.args 物件(C# FaultArgString);args.id 等非正規寫法視為未指定
+                    fargs = args.get("args") if isinstance(args.get("args"), dict) else None
+                    n_events = len(ship.external_events)
+                    modelled = ship.inject_fault(name, fargs)
                     if modelled:
                         detail = FAULT_DETAIL[name]
                     elif name in AUTOPILOT_BLOCKING_FAULTS:
                         detail = AUTOPILOT_FAULT_DETAIL
+                    elif name == FAULT_TUG_LINE_BREAK:
+                        parted = list(ship.external_events)[n_events:]
+                        detail = ("已套用:" + parted[0]["message"]) if parted else "已記錄:沒有可斷纜的拖船(拉中/待命中)"
+                        if parted:
+                            event = parted[0]
                     else:
                         detail = RECORD_ONLY_DETAIL
                     if was_autopilot and not ship.ctl.autopilot:
                         detail += ";自動舵跳脫:舵停在目前舵角,操舵模式回 fu"
             elif t == "clearFault":
+                if v is None and isinstance(args.get("name"), str):
+                    v = args["name"]  # 與 injectFault 相同:value 或 args.name(C# SimCommand.FaultName)
                 name = str(v).strip() if v is not None else ""
-                if name:
+                if name and name.lower() != "all":
                     n = ship.clear_fault(name)
                     detail = f"已清除 {name}" if n else f"{name} 不在故障清單中"
                 else:
@@ -243,6 +298,20 @@ class SimServer:
                         detail = (f"已載入情境 {sc['id']}" + (f"({sc['name']})" if sc.get("name") else "")
                                   + f":{sc['ship']['id']}/{sc['ship']['loading']},時間倍率 {self.time_scale:g}"
                                   + (f";參數集 {ps['id']} {ps['version']}({len(ps['resolved'])} 處引用)" if ps else ""))
+            elif t == "tugControl":
+                tid = _arg_str(args, "id") or _value_str(v)
+                event = ship.tug_control(tid, _arg_str(args, "mode"), _arg_num(args, "direction_deg", "direction"),
+                                         _arg_num(args, "power_pct", "power"))
+                detail = event["message"]
+            elif t == "anchor":
+                side = _arg_str(args, "side") or _value_str(v)
+                event = ship.anchor_command(side, _arg_str(args, "action"), _arg_num(args, "targetLength_shackles"), _arg_num(args, "length_m"))
+                detail = event["message"]
+            elif t == "mooring":
+                lid = _arg_str(args, "lineId") or _arg_str(args, "id")
+                event = ship.mooring_command(lid, _arg_str(args, "action"), _arg_str(args, "bollard"), _arg_num(args, "tension_t"),
+                                             _arg_num(args, "length_m"))
+                detail = event["message"]
             elif t in UNIMPLEMENTED_DETAIL:
                 ok, detail = False, UNIMPLEMENTED_DETAIL[t]
             else:
@@ -251,7 +320,10 @@ class SimServer:
             ok, detail = False, REJECT_DETAIL.format(reason=exc.reason, msg=exc)
         except Exception as exc:  # noqa: BLE001 - 回報給客戶端
             ok, detail = False, f"{type(exc).__name__}: {exc}"
-        return {"type": "ack", "command": t, "ok": ok, "detail": detail, "tick": self.ship.state.tick}
+        ack = {"type": "ack", "command": t, "ok": ok, "detail": detail, "tick": self.ship.state.tick}
+        if ok and event is not None:
+            ack["event"] = event  # 外力指令接受時的事件(C# tugCommand / anchorLetGo / anchorCommand / mooringCommand / tugLineParted)
+        return ack
 
     # ---- 迴圈 ----
     async def handler(self, ws: Any) -> None:

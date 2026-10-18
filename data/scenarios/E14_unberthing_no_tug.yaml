@@ -7,7 +7,7 @@
 #   開始即繫妥(4 纜受力、艏艉靠在碰墊上):繫泊中在纜繩上的擺盪(T+300 s 轉吹開風後離開碰墊再碰回)逐筆記入 contacts[] 但 approach = false,
 #   不計入 berthing.maxLateralSpeed;解纜後離開碰墊 ≥ 0.5 m 再碰回(離泊時艏/艉擺回碼頭)才是接近接觸。
 #   硬性失敗:擱淺、碼頭硬接觸、繫纜斷裂(纜未解完即動車);必要事件:離泊前簡報(檢查表)、起動失敗後通知機控室/船長、風向改變後首個操船反應。
-# 容許帶 berthing.*(離泊接觸速度、能量)待 Python scenario.py METRIC_NAMES 同步後啟用(C# 已支援,見本檔末段註解)。
+# 容許帶:離泊後再碰回速度 berthing.maxReContactSpeed_mps(已離開泊位 = 所有碰墊壓縮為 0 且船體距碼頭線 > berth.departedDistance_m 之後的接觸)、接觸能量比。
 id: E14_unberthing_no_tug
 name: 麥寮小型油碼頭無拖船離泊
 description: >-
@@ -34,6 +34,7 @@ environment:
 berth:
   file: data/areas/mailiao-small-oil-berth.json
   id: MLO-SOB-1
+  departedDistance_m: 20                         # 評估用:曾接觸後所有碰墊壓縮為 0 且船體(艏艉含)距碼頭線 > 20 m 即「已離開泊位」,之後的接觸計入 berthing.maxReContactSpeed_mps
   lines:
     - { id: HEAD, fairlead: fwdStbd, bollard: P6, mbl_t: 40, length_m: 120, initial: fast }
     - { id: FWDSPRING, fairlead: fwdStbd, bollard: P3, mbl_t: 40, length_m: 120, initial: fast }
@@ -130,8 +131,8 @@ assessment:
       within_s: "${params:unberthing.windShiftResponse_s}"
       penalty: 10
   bands:
-  # 「離泊後再碰回速度」容許帶暫不啟用:berthing.maxLateralSpeed_mps 目前包含離泊過程中艉擺碰墊(正確離泊的參考腳本即超過 0.20 m/s 而被扣 25 分),
-  # 待 BerthingTracker 能區分「已離開泊位後再接觸」再啟用:
-  #   - { id: reContactSpeed, metric: berthing.maxLateralSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }  # 離泊後再碰回(不含繫泊中擺盪;maxContactSpeed 含擺盪,不操船時約 0.14 m/s)
+    # 離泊後再碰回速度:berthing.maxReContactSpeed_mps = 「已離開泊位」(曾接觸後所有碰墊壓縮為 0 且船體距碼頭線 > berth.departedDistance_m)之後
+    # 再碰回碰墊/碼頭的接觸點法向速度最大值;離泊過程中艉擺碰墊(maxLateralSpeed)與繫泊中擺盪(maxContactSpeed)不計;未再碰回時 null(不扣分)
+    - { id: reContactSpeed, metric: berthing.maxReContactSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }
     - { id: contactEnergy, metric: berthing.maxEnergyRatio, warn: 0.8, fail: 1.0, penalty: 10, failPenalty: 25 }
   scoring: { start: 100, passMark: "${params:assessment.passMark}" }

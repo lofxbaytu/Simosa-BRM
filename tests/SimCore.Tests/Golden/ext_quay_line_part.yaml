@@ -1,0 +1,20 @@
+# 由 export_external_reference.py 產生(請勿手改):無碰墊碼頭硬接觸、艏纜超過 MBL 斷裂、艉纜鬆到最大長度、拖船由 free 帶纜(500 s)
+id: ext_quay_line_part
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 14 }, heading: 90, speed: 0, telegraph: STOP }
+environment: { wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }, current: { set: 0, drift: 0 }, waterDepth: 15 }
+tugs:
+  - { id: TG1, bollardPull_t: 50, attach: midStbd, riseTime_s: 10, initial: { mode: push, direction_deg: 270, power_pct: 100 } }
+  - { id: TG2, bollardPull_t: 40, attach: aftStbd, connect_s: 30, initial: { mode: free } }
+berth:
+  definition:
+    id: QB
+    quay: [ { x: -200, y: 30 }, { x: 0, y: 31 }, { x: 200, y: 30 } ]
+    waterSide: right
+    quayStiffness_kNpm: 5000
+    bollards: [ { id: B1, chainage_m: 100, setback_m: 3 }, { id: B2, chainage_m: 300, setback_m: 3 } ]
+  lines:
+    - { id: HEAD, fairlead: fwdPort, bollard: B2, mbl_t: 6, length_m: 150, winchPull_t: 5, heaveRate_mPerMin: 20 }
+    - { id: STERN, fairlead: aftPort, bollard: B1, mbl_t: 80, length_m: 100 }

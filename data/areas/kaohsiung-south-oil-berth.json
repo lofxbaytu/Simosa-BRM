@@ -1,0 +1,190 @@
+{
+  "id": "kaohsiung-south-oil-berth",
+  "description": "高雄港南端油品碼頭泊位示意定義(供 E17 颱風準備與離港決策;規劃書第 3.4 節高雄港「油品碼頭在南端」、第 8.1 節 E17)。碼頭線(南北向 000°/180°、長 150 m、水域在西)、碰墊(9 個 H 0.8 m 錐型,型式曲線沿用 mailiao-small-oil-berth.json 的示意型式)、繫船柱位置與能力皆為示意值,非港方或碼頭設計資料,不可用於實際操船或評估;取得港方泊位圖與碰墊規格後取代,待 ENC 校正。注意:kaohsiung-approach.json 的示意陸地輪廓未挖出港內水域,雷達在此泊位會顯示陸地回波(待 ENC 海岸線)。",
+  "source": "示意(位置依公開地理常識放在高雄港南端;碼頭線與碰墊配置比照 mailiao-small-oil-berth.json;待 ENC 校正)",
+  "fenderTypes": {
+    "cone-800": {
+      "description": "示意:錐型碰墊 H 0.8 m 一般型式曲線(額定壓縮 72 %、額定反力 640 kN;額定能量依 H 1.0 m 型式以 H³ 比例縮小);非特定廠牌型錄值",
+      "height_m": 0.8,
+      "width_m": 2.0,
+      "ratedReaction_kN": 640,
+      "ratedDeflection_pct": 72,
+      "ratedEnergy_kNm": 282.3,
+      "curve": [
+        [
+          0,
+          0
+        ],
+        [
+          5,
+          19
+        ],
+        [
+          10,
+          37
+        ],
+        [
+          15,
+          53
+        ],
+        [
+          20,
+          66
+        ],
+        [
+          25,
+          77
+        ],
+        [
+          30,
+          85
+        ],
+        [
+          35,
+          91
+        ],
+        [
+          40,
+          95
+        ],
+        [
+          45,
+          97
+        ],
+        [
+          50,
+          98
+        ],
+        [
+          55,
+          98
+        ],
+        [
+          60,
+          98
+        ],
+        [
+          65,
+          99
+        ],
+        [
+          72,
+          100
+        ]
+      ],
+      "damping_kNs_per_m": 250,
+      "dampingSource": "示意:以黏性阻尼近似橡膠碰墊遲滯;fenderContact 能量仍以靜態曲線積分",
+      "friction": 0.2
+    }
+  },
+  "berths": [
+    {
+      "id": "KHH-SOB-1",
+      "name": "高雄港南端油品碼頭 1 號泊位(示意)",
+      "quay": [
+        {
+          "lat": 22.515,
+          "lon": 120.338
+        },
+        {
+          "lat": 22.516354338,
+          "lon": 120.338
+        }
+      ],
+      "waterSide": "left",
+      "quayStiffness_kNpm": 20000,
+      "fenders": [
+        {
+          "id": "S01",
+          "type": "cone-800",
+          "chainage_m": 15.0
+        },
+        {
+          "id": "S02",
+          "type": "cone-800",
+          "chainage_m": 30.0
+        },
+        {
+          "id": "S03",
+          "type": "cone-800",
+          "chainage_m": 45.0
+        },
+        {
+          "id": "S04",
+          "type": "cone-800",
+          "chainage_m": 60.0
+        },
+        {
+          "id": "S05",
+          "type": "cone-800",
+          "chainage_m": 75.0
+        },
+        {
+          "id": "S06",
+          "type": "cone-800",
+          "chainage_m": 90.0
+        },
+        {
+          "id": "S07",
+          "type": "cone-800",
+          "chainage_m": 105.0
+        },
+        {
+          "id": "S08",
+          "type": "cone-800",
+          "chainage_m": 120.0
+        },
+        {
+          "id": "S09",
+          "type": "cone-800",
+          "chainage_m": 135.0
+        }
+      ],
+      "bollards": [
+        {
+          "id": "P1",
+          "chainage_m": 2,
+          "setback_m": 3.0,
+          "swl_t": 40
+        },
+        {
+          "id": "P2",
+          "chainage_m": 40,
+          "setback_m": 3.0,
+          "swl_t": 40
+        },
+        {
+          "id": "P3",
+          "chainage_m": 65,
+          "setback_m": 3.0,
+          "swl_t": 40
+        },
+        {
+          "id": "P4",
+          "chainage_m": 90,
+          "setback_m": 3.0,
+          "swl_t": 40
+        },
+        {
+          "id": "P5",
+          "chainage_m": 115,
+          "setback_m": 3.0,
+          "swl_t": 40
+        },
+        {
+          "id": "P6",
+          "chainage_m": 148,
+          "setback_m": 3.0,
+          "swl_t": 40
+        }
+      ]
+    }
+  ],
+  "departure": {
+    "basinCentre": {
+      "x": -300,
+      "y": 75
+    },
+    "note": "離泊後迴船水域(示意;泊位區外 110 m 以西)"
+  }
+}

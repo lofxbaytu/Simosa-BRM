@@ -1,0 +1,124 @@
+{
+  "id": "anping-approach",
+  "description": "安平港油品碼頭進港航道示意定義(供 E18 油碼頭進港 UKC/squat 限制、E21 貨物加熱故障下的到港壓力;規劃書第 3.4 節「安平淺窄且淤積」、第 8.1 節 E18/E21)。口門、浚深航道(軸 080°、底寬 200 m、維護水深 CD 7.0 m)、航道兩側淺灘(CD 約 5 m,ECDIS 安全等深線以外)、航道速限區與迴船池皆為示意值,非港方浚深圖/ENC/潮汐表資料,不可用於實際航行或評估,待 ENC、港方水深公告與中央氣象署潮汐預報校正。情境以基底水深 = 維護水深 + 潮高表示潮汐(setEnvironment waterDepth 漸變),淺灘以 ukcPolicy 區域水深覆寫(固定,不隨潮)。E18/E21 的 route 航點為此檔 route 的連續子序列、zones 的 channel/channelSpeed/northShoal/southShoal 多邊形與此檔相同(測試檢查一致)。不含 land。",
+  "source": "示意(航道與淺灘由口門位置與航道軸線偏移產生;水深為假設;待 ENC 校正)",
+  "harbourEntrance": {
+    "id": "ANP",
+    "lat": 22.992,
+    "lon": 120.153,
+    "inboundCourse_deg": 80
+  },
+  "chartDatum": {
+    "channelMaintainedDepth_m": 7.0,
+    "shoalDepth_m": 5.0,
+    "note": "示意;潮高以情境基底水深表示"
+  },
+  "route": [
+    {
+      "name": "SEA",
+      "lat": 22.97611,
+      "lon": 120.05511,
+      "note": "口門外 5.5 nm(E21 開場)"
+    },
+    {
+      "name": "APPROACH",
+      "lat": 22.98044,
+      "lon": 120.08181,
+      "note": "口門外 4.0 nm(E18 開場)"
+    },
+    {
+      "name": "OUTER",
+      "lat": 22.98333,
+      "lon": 120.09961,
+      "note": "航道外端浮標,口門外 3.0 nm"
+    },
+    {
+      "name": "BAR",
+      "lat": 22.98853,
+      "lon": 120.13164,
+      "note": "沙洲段(淤積),口門外 1.2 nm"
+    },
+    {
+      "name": "ENTRANCE",
+      "lat": 22.992,
+      "lon": 120.153,
+      "note": "口門"
+    },
+    {
+      "name": "BASIN",
+      "lat": 22.99316,
+      "lon": 120.16012,
+      "note": "迴船池(油品碼頭前,結束)"
+    }
+  ],
+  "channel": {
+    "axis_deg": 80,
+    "halfWidth_m": 100,
+    "polygon": [
+      {
+        "lat": 22.98364,
+        "lon": 120.09588
+      },
+      {
+        "lat": 22.99461,
+        "lon": 120.16351
+      },
+      {
+        "lat": 22.99285,
+        "lon": 120.16385
+      },
+      {
+        "lat": 22.98188,
+        "lon": 120.09622
+      }
+    ]
+  },
+  "shoals": [
+    {
+      "id": "northShoal",
+      "name": "航道北側淺灘(示意)",
+      "depth_m": 5.0,
+      "polygon": [
+        {
+          "lat": 22.98435,
+          "lon": 120.09575
+        },
+        {
+          "lat": 22.99532,
+          "lon": 120.16337
+        },
+        {
+          "lat": 23.007,
+          "lon": 120.16114
+        },
+        {
+          "lat": 22.99603,
+          "lon": 120.09351
+        }
+      ]
+    },
+    {
+      "id": "southShoal",
+      "name": "航道南側淺灘(示意)",
+      "depth_m": 5.0,
+      "polygon": [
+        {
+          "lat": 22.98117,
+          "lon": 120.09635
+        },
+        {
+          "lat": 22.99214,
+          "lon": 120.16399
+        },
+        {
+          "lat": 22.98046,
+          "lon": 120.16622
+        },
+        {
+          "lat": 22.96949,
+          "lon": 120.09859
+        }
+      ]
+    }
+  ]
+}

@@ -230,6 +230,55 @@
           ],
           "default": "sand",
           "description": "海床底質:錨抓著係數與躺底鏈摩擦(docs/design/physics-tugs-anchors-mooring.md 第 3.3 節);Python 參考實作忽略"
+        },
+        "radar": {
+          "type": "object",
+          "description": "雷達環境(docs/design/radar-arpa.md 第 2.1 節):核心不影響物理,只把它換算為本地 ENU 並以 state.radarEnvironment 廣播與記錄(關鍵幀:載入/重設/倒帶後第一幀與每秒一次,其他幀省略 = 不變;未給時省略,舊情境狀態不變);雷達服務(Sensors.Radar)據以產生雨雜波與雨衰減、覆寫海況。Python 參考實作忽略",
+          "properties": {
+            "rainAreas": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "intensity"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "polygon": {
+                    "type": "array",
+                    "minItems": 3,
+                    "items": {
+                      "$ref": "#/$defs/position"
+                    },
+                    "description": "雨區多邊形(與 center + radius_nm 二擇一)"
+                  },
+                  "center": {
+                    "$ref": "#/$defs/position",
+                    "description": "圓形雨區中心(與 radius_nm 一起給)"
+                  },
+                  "radius_nm": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "圓形雨區半徑(nm)"
+                  },
+                  "intensity": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "降雨強度 0–1:雷達服務以降雨率 16 × intensity mm/h 計算(1 = 大雨 16 mm/h、0.25 = 中雨 4 mm/h)"
+                  }
+                }
+              }
+            },
+            "seaState": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 9,
+              "description": "雷達海雜波用海況(Douglas 0–9;省略 = 雷達服務依真風速推估;教官 environment 指令優先)"
+            }
+          }
         }
       }
     },
@@ -484,6 +533,11 @@
           "items": {
             "$ref": "#/$defs/mooringLine"
           }
+        },
+        "departedDistance_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "評估用(不影響物理與雜湊):「已離開泊位」的船體距碼頭線門檻(m;省略 = 20;給定時須為有限正數,C# 結構檢查 berth.departedDistance_m 對 0 或負值報錯)。曾接觸泊位後,評估步(每秒)所有碰墊壓縮為 0、無碼頭接觸、未繫妥且船體外形(艏艉含)距碼頭線(有限線段)最近距離超過此值時成立(不以船舯判定:沿碼頭駛離時船舯越過碼頭端而艉仍在碰墊旁)(再次繫妥時解除);之後的碰墊/碼頭接觸為再碰回,計入 berthing.maxReContactSpeed_mps(E14 離泊後再碰回;docs/design/physics-tugs-anchors-mooring.md 第 7 節)"
         }
       }
     },
@@ -1782,7 +1836,7 @@
         "id",
         "metric"
       ],
-      "description": "指標(summary 的 段.欄位,例如 track.maxXtd_m、collisionAvoidance.minCpa_nm、manoeuvring.timeRotOverLimit_s)超過 warn/fail 門檻時扣分;fail 可寫 \"2x\" = warn × 2;direction above(預設,值越大越差)| below。操縱量測指標 manoeuvres.<量測 id>.<鍵>(同 id 多筆時取最近一次完整且有可比比較的 measured,其次最近一次完整者,再其次最近一次 measured 的 values,例如 manoeuvres.turning35.port.tacticalDiameter_m、manoeuvres.crashStop.trackReach_m、manoeuvres.manOverboard.returnTime_s)與彙總 manoeuvres.count / compared / outsideTolerance / maxAbsDeviation_pct(C# MetricNames;Python 結構檢查尚未加入)。靠泊/錨泊指標(summary.berthing / anchoring;docs/design/physics-tugs-anchors-mooring.md 第 7 節;C# MetricNames,Python 結構檢查尚未加入,data/scenarios 暫勿引用):berthing.maxLateralSpeed_mps / maxLateralSpeed_kn(接近接觸 — 未繫妥且離開碰墊 ≥ 0.5 m 後的碰墊接觸與碼頭硬接觸 — 的接觸點法向速度最大值;不含艏/舯/艉端點速度與繫泊中擺盪;無接近接觸時 null)、berthing.maxContactSpeed_mps(全部碰墊接觸)、berthing.allFastPositionError_m(繫妥 — 所有纜繩受力且艏艉皆已靠上 — 時船舯與泊位中心(碰墊列中點)的距離;未繫妥時 null;參數集 berthing.allFastPositionTolerance_m)、berthing.maxEnergy_kNm、berthing.maxEnergyRatio(接觸能量 / 額定能量)、berthing.fenderContacts、berthing.fenderOverloads、berthing.quayContacts、berthing.lineBreaks、berthing.maxLineTensionRatio(張力 / MBL)、berthing.tugLineBreaks、berthing.maxTugForce_t、berthing.tugWorkingTime_s、anchoring.letGoCount、anchoring.maxLetGoSog_kn(放錨時對地速度)、anchoring.dragEvents、anchoring.dragTime_s、anchoring.maxChainTension_t、anchoring.minScopeRatio(帶上時鏈長 / 水深,direction below 與參數集 anchoring.scopeMultiplier 比較)、anchoring.dragResponseTime_s(首次走錨到首個反應;未反應時為經過時間)。碼頭硬接觸、斷纜等事件以 hardFail {rule: event, kind: quayContact | mooringLineParted} 判定",
+      "description": "指標(summary 的 段.欄位,例如 track.maxXtd_m、collisionAvoidance.minCpa_nm、manoeuvring.timeRotOverLimit_s)超過 warn/fail 門檻時扣分;fail 可寫 \"2x\" = warn × 2;direction above(預設,值越大越差)| below。操縱量測指標 manoeuvres.<量測 id>.<鍵>(同 id 多筆時取最近一次完整且有可比比較的 measured,其次最近一次完整者,再其次最近一次 measured 的 values,例如 manoeuvres.turning35.port.tacticalDiameter_m、manoeuvres.crashStop.trackReach_m、manoeuvres.manOverboard.returnTime_s)與彙總 manoeuvres.count / compared / outsideTolerance / maxAbsDeviation_pct(C# MetricNames;Python 結構檢查尚未加入)。靠泊/錨泊指標(summary.berthing / anchoring;docs/design/physics-tugs-anchors-mooring.md 第 7 節;C# MetricNames,Python 結構檢查尚未加入,data/scenarios 暫勿引用):berthing.maxLateralSpeed_mps / maxLateralSpeed_kn(接近接觸 — 未繫妥且離開碰墊 ≥ 0.5 m 後的碰墊接觸與碼頭硬接觸 — 的接觸點法向速度最大值;不含艏/舯/艉端點速度與繫泊中擺盪;無接近接觸時 null)、berthing.maxContactSpeed_mps(全部碰墊接觸)、berthing.maxReContactSpeed_mps(已離開泊位 — 曾接觸後所有碰墊壓縮為 0、船體距碼頭線 > berth.departedDistance_m — 之後再碰回的碰墊/碼頭接觸點法向速度最大值;與 maxLateralSpeed 分開,離泊過程中艉擺碰墊不計;未再碰回時 null)、berthing.allFastPositionError_m(繫妥 — 所有纜繩受力且艏艉皆已靠上 — 時船舯與泊位中心(碰墊列中點)的距離;未繫妥時 null;參數集 berthing.allFastPositionTolerance_m)、berthing.maxEnergy_kNm、berthing.maxEnergyRatio(接觸能量 / 額定能量)、berthing.fenderContacts、berthing.fenderOverloads、berthing.quayContacts、berthing.lineBreaks、berthing.maxLineTensionRatio(張力 / MBL)、berthing.tugLineBreaks、berthing.maxTugForce_t、berthing.tugWorkingTime_s、anchoring.letGoCount、anchoring.maxLetGoSog_kn(放錨時對地速度)、anchoring.dragEvents、anchoring.dragTime_s、anchoring.maxChainTension_t、anchoring.minScopeRatio(帶上時鏈長 / 水深,direction below 與參數集 anchoring.scopeMultiplier 比較)、anchoring.dragResponseTime_s(首次走錨到首個反應;未反應時為經過時間)。碼頭硬接觸、斷纜等事件以 hardFail {rule: event, kind: quayContact | mooringLineParted} 判定",
       "properties": {
         "id": {
           "type": "string"

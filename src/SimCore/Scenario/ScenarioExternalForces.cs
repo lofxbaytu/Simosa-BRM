@@ -147,6 +147,12 @@ public sealed class ScenarioBerth
     public BerthDefinition? Definition { get; set; }
     /// <summary>自船繫纜(導纜孔、預設繫船柱、MBL、初始狀態)</summary>
     public List<ScenarioMooringLine> Lines { get; set; } = new();
+    /// <summary>
+    /// 「已離開泊位」的船體距碼頭線門檻(m;評估用,不影響物理與雜湊;省略 = BerthingTracker.DefaultDepartedDistanceM):
+    /// 曾接觸後所有碰墊壓縮為 0 且船體外形距碼頭線(有限線段)超過此值,之後的接觸計入 berthing.maxReContactSpeed_mps。
+    /// 給定時須為有限正數(結構檢查 berth.departedDistance_m)
+    /// </summary>
+    [JsonPropertyName("departedDistance_m")] public double? DepartedDistanceM { get; set; }
 }
 
 /// <summary>泊位定義(data/areas/*.json berths[] 的元素;單位 SI,反力 kN、能量 kN·m)。</summary>
@@ -309,6 +315,8 @@ public static class ScenarioExternalForces
             if (!(an.DragSpeedMps > 0)) error("anchors.dragSpeed_mps", "dragSpeed_mps 必須為正");
         }
         if (sc.Berth is not { } b) return;
+        // 評估門檻(scenario.schema.json exclusiveMinimum 0):0 或負值會使離泊中艉擺碰墊被誤判為「已離開泊位」後再碰回,改變 E14 評分
+        if (b.DepartedDistanceM is { } dd && !(double.IsFinite(dd) && dd > 0)) error("berth.departedDistance_m", "departedDistance_m 必須為有限正數(m)");
         if (b.Definition is not { } d)
         {
             error("berth", "berth 需要 definition,或 file(+ id)由載入時解析");

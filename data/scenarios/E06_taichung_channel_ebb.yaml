@@ -2,6 +2,7 @@
 # 漲潮版見 E06_taichung_channel_flood.yaml(同一幾何、同一時間表,只差流向/流速/初始車令與自動舵修正角)。
 # 航道中心線 125°(WP0–WP3)、口門寬 350 m、北/南防波堤(禁區,水深 2 m)與導燈皆為示意值(data/areas/taichung-harbour-entrance.json,示意,待 ENC 校正);
 # 迴船池前減速區與出港船設計航跡(中心線北側 110 m)見 data/areas/taichung-inner-harbour.json(示意,待 ENC 校正)。
+# 岸壁效應:banks 引用 data/areas/taichung-harbour-entrance.json banks[](外航道兩側浚深邊坡、南北防波堤港內側岸壁;示意,係數為估計值,見 docs/design/physics-bank-effect.md);航道中線上不受岸壁力,偏離中線約 90 m 以上才明顯。
 # FSB1 滿載進港,引水人在船(帶領者扮演,下舵令/車令);逆流故以 FAH 約 10.5 kn 接近;東北風 6 級(25 kn);退潮流 265°:港外 1.8 kn,進入外航道後增至 3.0 kn(右舷橫流約 1.9 kn、逆流約 2.3 kn,壓向南防波堤)。
 # 三步升級:normal(交班、MPX 已完成)→ 進入航段 1 degraded(流速增加 setEnvironment 漸變、導燈被遮蔽)
 #          → 距口門 0.8 nm 或 degraded 後 navigation.channel.e06.emergencyAfter_s emergency(出港船 OUT1 已在航道內);過口門後防波堤內流壓消失(漸變至 0.3 kn)。
@@ -85,6 +86,8 @@ zones:
       - { lat: 24.28697, lon: 120.50051 }
       - { lat: 24.28438, lon: 120.49854 }
       - { lat: 24.28905, lon: 120.49127 }
+banks:                                            # 岸壁效應(docs/design/physics-bank-effect.md;係數為估計值,未校正):外航道兩側浚深邊坡(1:5,坡頂 10 m)與南北防波堤港內側岸壁
+  file: data/areas/taichung-harbour-entrance.json # banks[]:TCH-CH-N/S(邊坡坡腳 = 航道多邊形南北邊,至堤頭)、TCH-BW-N-IN/S-IN(示意,待 ENC 校正)
 timeline:
   - id: handover
     name: 交班(引水人在船,MPX 已完成)

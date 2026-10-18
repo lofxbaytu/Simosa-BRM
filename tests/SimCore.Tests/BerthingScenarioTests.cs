@@ -374,23 +374,7 @@ public class BerthingScenarioTests
     [Fact]
     public void E14_ScriptedUnberthingWithStartDelayReplays()
     {
-        var (e, events, path) = Run("E14_unberthing_no_tug", 1200, (eng, ev, t) =>
-        {
-            switch (t)
-            {
-                case 10: eng.Enqueue(SimCommand.Acknowledge("checklist")); break;
-                case 40:
-                    foreach (var l in new[] { "HEAD", "AFTSPRING", "STERN" }) eng.Enqueue(SimCommand.Mooring(l, "letGo"));
-                    break;
-                case 50: eng.Enqueue(SimCommand.Rudder(35)); eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.DSAH)); break;
-                case 60: eng.Enqueue(SimCommand.Acknowledge("notifyEcr")); break;
-                case 150: eng.Enqueue(SimCommand.Mooring("FWDSPRING", "letGo")); eng.Enqueue(SimCommand.Rudder(0)); eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.SAS)); break;
-                case 310: eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.STOP)); break;
-                case 330: eng.Enqueue(SimCommand.Thruster(0.3)); break;
-                case 420: eng.Enqueue(SimCommand.Thruster(0)); break;
-                case 490: eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.DSAH)); eng.Enqueue(SimCommand.Rudder(-35)); break;
-            }
-        });
+        var (e, events, path) = Run("E14_unberthing_no_tug", 1200, E14Reference);
         Dump(events);
         Assert.Equal(1.0, events.Single(x => x.Kind == SimEventKinds.FaultInjected).T);
         var dsah = 49.0; // t = 50 時送入的指令於引擎時間 49 s 套用
@@ -424,6 +408,55 @@ public class BerthingScenarioTests
         AssertReplays(path!);
     }
 
+    /// <summary>E14 參考離泊腳本(見 <see cref="E14_ScriptedUnberthingWithStartDelayReplays"/>)。</summary>
+    private static void E14Reference(SimulationEngine eng, List<SimEvent> ev, int t)
+    {
+        switch (t)
+        {
+            case 10: eng.Enqueue(SimCommand.Acknowledge("checklist")); break;
+            case 40:
+                foreach (var l in new[] { "HEAD", "AFTSPRING", "STERN" }) eng.Enqueue(SimCommand.Mooring(l, "letGo"));
+                break;
+            case 50: eng.Enqueue(SimCommand.Rudder(35)); eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.DSAH)); break;
+            case 60: eng.Enqueue(SimCommand.Acknowledge("notifyEcr")); break;
+            case 150: eng.Enqueue(SimCommand.Mooring("FWDSPRING", "letGo")); eng.Enqueue(SimCommand.Rudder(0)); eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.SAS)); break;
+            case 310: eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.STOP)); break;
+            case 330: eng.Enqueue(SimCommand.Thruster(0.3)); break;
+            case 420: eng.Enqueue(SimCommand.Thruster(0)); break;
+            case 490: eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.DSAH)); eng.Enqueue(SimCommand.Rudder(-35)); break;
+        }
+    }
+
+    /// <summary>
+    /// E14 離泊後再碰回(berthing.maxReContactSpeed_mps;容許帶 reContactSpeed):參考離泊腳本在離泊過程中艉擺碰墊(maxLateralSpeed &gt; 0.20 m/s)
+    /// 但那時尚未「已離開泊位」(船體距碼頭線 ≤ departedDistance_m 20 m);之後船體離開超過門檻(departedAt_s)且不再碰回 → 指標 null、容許帶 ok、100 分。
+    /// 再碰回的計分見 BerthingAssessmentTests.ReContactAfterDepartureIsSeparateFromApproachSpeed;不操船(繫泊中擺盪)見 E14_IdleAlongsideRangingIsNotALanding。
+    /// </summary>
+    [Fact]
+    public void E14_ReContactSpeedCountsOnlyAfterDeparture()
+    {
+        var sc = Load("E14_unberthing_no_tug");
+        Assert.Equal(20.0, sc.Berth!.DepartedDistanceM);
+        var band = sc.Assessment.Bands.Single(b => b.Id == "reContactSpeed");
+        Assert.Equal("berthing.maxReContactSpeed_mps", band.Metric);
+        Assert.True(MetricNames.IsKnown(band.Metric));
+
+        // 參考腳本:離泊過程艉擺接觸不算再碰回
+        var (e, _, _) = Run("E14_unberthing_no_tug", 1200, E14Reference, record: false);
+        var s = e.Assessment!.BuildSummary(e.Tick, final: true);
+        var b = s.Berthing!;
+        _out.WriteLine($"departedAt {b.DepartedAtS} maxLateral {b.MaxLateralSpeedMps:F3} reContact {b.MaxReContactSpeedMps}");
+        Assert.True(b.MaxLateralSpeedMps > 0.20, "離泊過程中艉擺碰墊(maxLateralSpeed)仍記錄");
+        Assert.NotNull(b.DepartedAtS);                   // 船體離碼頭線 > 20 m(約 T+486 s),之後到出泊位區前不再碰回
+        Assert.True(b.Contacts.All(c => c.TS < b.DepartedAtS));
+        Assert.Null(b.MaxReContactSpeedMps);
+        Assert.Null(b.ReContacts);
+        Assert.All(b.Contacts, c => Assert.False(c.ReContact));
+        Assert.Null(e.Assessment.MetricValue("berthing.maxReContactSpeed_mps", null!));
+        Assert.Equal("ok", s.Assessment.Bands.Single(x => x.Id == "reContactSpeed").State);
+        Assert.Equal(100, s.Assessment.Score);
+    }
+
     /// <summary>
     /// E14 不操船 600 s(4 纜已繫、右舷靠在碰墊上;T+300 s 轉吹開風):船在纜繩上離開碰墊再碰回(繫泊中擺盪)仍逐筆記入 contacts[],
     /// 但不是新的靠上(landings 只有開始即接觸的 initial 一筆),也不計入橫向接近速度(berthing.maxLateralSpeed_mps 為 null,不會觸發 approachSpeed 容許帶)。
@@ -441,6 +474,8 @@ public class BerthingScenarioTests
         Assert.All(b.Contacts, c => Assert.False(c.Approach));
         Assert.Null(landing.ContactSpeedMps);
         Assert.True(b.MaxContactSpeedMps > 0.10, "contacts[] 仍記錄擺盪接觸(maxContactSpeed 為全部接觸)");
+        Assert.Null(b.DepartedAtS);                      // 繫泊中從未離開泊位:擺盪不是再碰回
+        Assert.Null(b.MaxReContactSpeedMps);
         // 情境開始即繫妥(4 纜 fast、右舷靠在碰墊上;船舯里程 75 m = 碰墊列 15–135 m 中點)
         Assert.Equal(1.0, b.AllFastAtS);                 // 第一個評估步
         Assert.Equal(75.0, b.BerthCentreChainageM!.Value, 6);

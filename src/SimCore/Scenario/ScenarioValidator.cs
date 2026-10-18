@@ -20,7 +20,7 @@ public static class ScenarioValidator
     {
         "steeringGear", "steeringFuOnly", "steeringPumpFailure", "mainEngine", "engineStartFailure", "bowThruster",
         "gyroDrift", "gyroFreeze", "gyroFailure", "autopilotFailure", "gpsJump", "gpsOffset", "gpsFailure",
-        "radarFailure", "radarDegraded", "aisFailure", "ecdisFreeze", "ecdisAlarmFlood", "echoSounderFailure", "logFailure",
+        "radarFailure", "radarDegraded", "radarFailureS", "radarDegradedS", "aisFailure", "ecdisFreeze", "ecdisAlarmFlood", "echoSounderFailure", "logFailure",
         "vhfFailure", "ecrPhoneFailure", "blackout", "fireAlarmEngineRoom", "cargoHeatingFailure", "tugLineBreak",
     };
 

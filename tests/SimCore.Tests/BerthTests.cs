@@ -271,4 +271,20 @@ public class BerthTests
         Assert.Throws<InvalidDataException>(() => Sc(LinearBerthYaml().Replace("type: lin, chainage_m: 180", "type: nope, chainage_m: 180")));
         Assert.Throws<InvalidDataException>(() => Sc("", seabed: "gravel"));
     }
+
+    /// <summary>
+    /// berth.departedDistance_m 須為有限正數(scenario.schema.json exclusiveMinimum 0):0 或負值會讓離泊過程中的艉擺碰墊被當成
+    /// 「已離開泊位」後再碰回而改變 E14 評分,故載入時即以結構錯誤拒絕;省略時用預設值、正值照用
+    /// (.nan/.inf 在 YAML → JSON 轉換時即被 ContractJson 拒絕,結構檢查另以 double.IsFinite 防護)。
+    /// </summary>
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-5")]
+    public void BerthDepartedDistanceMustBeFinitePositive(string value)
+    {
+        var ex = Assert.Throws<InvalidDataException>(() => Sc(LinearBerthYaml() + $"\n  departedDistance_m: {value}"));
+        Assert.Contains("berth.departedDistance_m", ex.Message);
+        Assert.Equal(15.0, Sc(LinearBerthYaml() + "\n  departedDistance_m: 15").Berth!.DepartedDistanceM);
+        Assert.Null(Sc(LinearBerthYaml()).Berth!.DepartedDistanceM);
+    }
 }

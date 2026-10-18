@@ -102,6 +102,9 @@ public sealed class RadarUnit
         _lastT = scene.T;
         LastScene = scene;
         Environment.Anchor(scene.IndLat, scene.IndLon, scene.IndX, scene.IndY);
+        // 核心只在關鍵幀(載入/重設/倒帶後第一幀與每秒一次)帶出 state.radarEnvironment:省略 = 不變;
+        // 時間倒退或情境切換(reset)時以該幀內容重設(無則清除,待下一個關鍵幀重新套用)
+        if (reset || scene.RadarEnvironment is not null) Environment.ApplyScenario(scene.RadarEnvironment);
 
         Failed = Config.FailureFaults.Any(f => scene.Faults.Contains(f));
         Degraded = Config.DegradedFaults.Any(f => scene.Faults.Contains(f));
@@ -143,7 +146,7 @@ public sealed class RadarUnit
 
     private void GenerateSpokes(RadarScene scene, long target, double hInd, RadarStepResult result)
     {
-        var seaState = Environment.SeaStateOverride ?? VideoGrid.SeaStateFromWind(scene.WindSpeedKn);
+        var seaState = Environment.EffectiveSeaState ?? VideoGrid.SeaStateFromWind(scene.WindSpeedKn);
         SeaState = seaState;
         _arpaGrid.UpdateClutter(seaState);
         _arpaGrid.UpdateStc(Controls.Sea);
@@ -385,7 +388,7 @@ public sealed class RadarUnit
             ArpaRangeNm = Config.ArpaRangeNm,
             MaxTracks = Config.Arpa.MaxTracks,
             SeaState = SeaState,
-            RainCells = Environment.RainCells.Count,
+            RainCells = Environment.RainCells.Count + Environment.ScenarioRainCells.Count + Environment.ScenarioRainPolygons.Count,
             LandPolygons = Environment.Land.Count,
             Frame = new FrameFormatReport("SRAD", SpokeFrame.Version, SpokeFrame.HeaderBytes),
         };

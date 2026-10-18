@@ -14,7 +14,7 @@
 - **數值係數為文獻量級的估計值**:FS Bitumen No.1 / No.2 沒有岸壁模型試驗;本專案離線開發(CLAUDE.md:不連網際網路取資料),未能逐式核對原文的回歸係數,
   因此下文第 4 節的係數是依公開文獻常見的無因次量級(Y′ 約 0.01–0.1、作用點在船舯後 0.1–0.3 L、h/T → 1 時數倍放大)選定,並在程式中集中於
   `BankEffectCoefficients`。**取得原文係數、模型試驗或引水人/船長在麥寮航道的經驗後必須校正**;情境 `banks.scale` 可先整體調整。
-- 只有情境有 `banks` 區段時才計算;沒有此區段的情境(現有全部 `data/scenarios/*.yaml`)雜湊、狀態與事件與舊版逐位元相同。
+- 只有情境有 `banks` 區段時才計算;沒有此區段的情境(E06 兩版以外的現有 `data/scenarios/*.yaml`)雜湊、狀態與事件與舊版逐位元相同。
 
 | 項目 | 本模型 | 狀態 |
 |---|---|---|
@@ -62,6 +62,8 @@ banks:
 ```
 
 元素格式同 `bankDefinition`;檔案頂層 `source` 補到未標來源的岸壁。雷達服務讀同資料夾時只取 `land`,忽略 `banks`。
+`taichung-harbour-entrance.json`(**示意**,E06)除 `channel`/`breakwaters`/`land` 外另含 `banks[]`:`TCH-CH-N`/`TCH-CH-S`(sloped,1:5,`topDepth_m` 10、`channelDepth_m` 14,
+坡腳 = 航道多邊形南北邊至堤頭;等效岸壁在坡腳向陸側 5·(14 − 10)/2 = 10 m,強度倍率 4/14)、`TCH-BW-N-IN`/`TCH-BW-S-IN`(vertical,防波堤港內側邊)。
 
 `mailiao-channel-banks.json`(**示意**):以 F03/E07 航線 WP1→WP2→WP3→BERTH 為中心線,假設浚深底寬 250 m(兩側各 125 m 為坡腳)、邊坡 1:5、航道水深 12.5 m
 (與 F03 `zones.channel` 相同)、坡頂外淺灘 5 m;`MLC-N`(北側邊坡 WP1–WP3)、`MLC-S`(南側邊坡 WP1–BERTH)、`MLC-N-WALL`(WP3 以東北側垂直護岸,終止於
@@ -154,7 +156,7 @@ L = 垂標間長、B = 型寬、T = 該裝載平均吃水、ρ = 1025 kg/m³。X
 **量級**(FSB1 滿載、6 kn、SAH 80 rpm、h/T 2.19、右舷 32 m 垂直岸壁 = 船側距岸 23 m):Y_B = 33.5 kN、N_B = −903 kN·m(作用點船舯後 27 m)。
 F03 示意航道(北側坡腳 30 m、7.5 kn、自動舵):Y_B = −13.8 kN、N_B = +363 kN·m,自動舵需多約 1.6° 左舵抵銷,船偏離北岸後漸減為 0。
 
-## 5. 狀態(`state.schema.json` `properties.bank`;C# 產生,Python 不輸出)
+## 5. 狀態(`state.schema.json` `properties.bank`;C# 產生,Python 參考實作同樣輸出,見第 10 節)
 
 情境有 `banks` 區段且動力學接受外力(MMG、暫代模型)時輸出;數值為該步步末的計算結果。
 
@@ -256,10 +258,29 @@ F03 示意航道(左舷北側邊坡):
 ## 9. 已知限制與後續
 
 - **係數未校正**(第 1、4 節):優先取得 Lataire/Vantorre 原文回歸係數或 Flanders Hydraulics 的同型船試驗,並以引水人在麥寮航道的經驗(所需舵角、偏航趨勢)檢查量級。
-- **Python 參考實作尚未實作**岸壁效應(`src/Tools.Calibration` 忽略 `banks`);C#↔Python 一致性只涵蓋無岸壁情境。
+- Python 參考實作已實作岸壁效應(第 10 節;2026-10-18 前 `src/Tools.Calibration` 忽略 `banks`)。係數仍為同一組估計值,一致性不代表正確性。
 - 不含:運河阻力增加(X 方向)、岸壁造成的額外 sinkage/trim(squat 仍為 ICORELS)、船間交互作用(會船/追越;第 458 行同類經驗模型,另案)、
   非定常效應(岸壁突變時的記憶效應)、岸壁對螺槳倒車流的影響、橫搖。
 - 加權窗 [−L, +L] 與三角權重、前後半分配為本案選定的離散化(Lataire 2008 對不規則岸壁使用沿船長的加權),未經試驗驗證。
 - 只有直線段折線;彎道岸以多段近似。水深取自船所在位置(`zones` 水深),不隨岸壁剖面變化。
-- 情境 `data/scenarios/*.yaml` 尚無使用 `banks` 者(F03 類航道情境可加 `banks: { file: data/areas/mailiao-channel-banks.json }`,待示意岸壁經船長/引水人確認後啟用);
-  網頁端尚未顯示 `state.bank`。
+- 使用 `banks` 的情境:E06 兩版(`banks: { file: data/areas/taichung-harbour-entrance.json }`;外航道南北邊坡 1:5、坡頂 10 m,與南北防波堤港內側垂直岸壁,示意;
+  見 `docs/design/scenario-library.md` 第 5 節)。沿中心線操船時岸壁力為 0,偏離中心線約 90 m 以上才有吸力;無人操作漲潮版擱淺提前 3.5 s(983.7 s)。
+  F03 類航道情境可加 `banks: { file: data/areas/mailiao-channel-banks.json }`,待示意岸壁經船長/引水人確認後啟用;網頁端尚未顯示 `state.bank`。
+
+## 10. Python 參考實作(`src/Tools.Calibration/simosa_brm/external.py` `BankEffectModel`)
+
+- 與 C# `BankEffectModel` 逐式對應:`BankLine`(等效垂直岸壁偏移、φ)、y_inf 型加權距離(每段 3 點 Gauss–Legendre、小段 ≤ 0.1 L)、
+  β 淡出、h/T 修正、前導/後隨對調、螺槳項;係數預設值 `BANK_DEFAULTS` 與 `BankEffectCoefficients.Default` 相同,`banks.scale` 整體倍率。
+- 接線同 C#:情境有 `banks`(`lines` 或 `file + ids` 解析後的 `definitions`)時建立;步首記下轉速(四個 RK4 階段共用,`pre_step`),
+  每階段以該階段狀態與步首水深計算 Y、N;步末以步末狀態、水深與實際轉速更新 `last`(state 與雜湊)。使用中才追加雜湊區塊
+  (標記、岸壁數、步首轉速、D、D_fore、D_aft、Y、N、y_inf),state 輸出 `bank`(欄位同第 5 節)。
+- 與拖船/錨/泊位同時使用時兩者相加(C# `SumForceField`)。
+- 一致性黃金檔 `tests/SimCore.Tests/Golden/ext_bank_suction.*`:FSB1 滿載 6 kn、h/T 1.4,右舷 42 m 垂直岸壁、左舷 75 m 淹沒斜坡岸(1:3、坡頂 2 m),
+  100 s 後右舵 5°,300 s(航程 920 m)。C# `ExternalForceGoldenTests` 比對:最大位置差 1.6e-14 m(1.7e-15 % 航程)、Y/N/D 最大相對差 ≤ 6e-13 %。
+  比對中發現的初始化差異(淺水情境初始平衡轉速,非岸壁方程式)見 `physics-tugs-anchors-mooring.md` 第 10.3 節。
+- 倒俥黃金檔 `tests/SimCore.Tests/Golden/ext_bank_astern.*`:FSB1 滿載 3 kn、航向 010°、水深 9 m(160 s 時改 12 m),
+  右舷約 40 m 折線斜坡岸(1:2)、左舷 50 m 垂直岸壁;40 s 後全速倒俥(FAS),u 由 +1.8 m/s 轉為 −1.2 m/s,涵蓋 u < 0 時前導/後隨對調與力矩反號、
+  折線岸的分段加權。C# `ExternalForceGoldenCoverageTests` 比對:最大位置差 5.3e-12 m(1.4e-12 % 航程)。
+- 解析值測試(`src/Tools.Calibration/tests/test_external.py`):對稱運河兩岸抵消、深水 ∝ u²、平行岸壁 C_Y = c_lead + c_trail 與 C_N、
+  `scale: 0` 為 0、螺槳項 ∝ (nD)²、h/T = 2 時 F_Y = 1.4。
+

@@ -1,0 +1,21 @@
+# 由 export_external_reference.py 產生(請勿手改):拖船推頂原地迴轉、推拉換位、解纜與斷纜(600 s)
+id: ext_tug_push_turn
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 2, telegraph: DSAH }
+environment: { wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }, current: { set: 0, drift: 0 }, waterDepth: 15 }
+tugs:
+  - id: TG1
+    bollardPull_t: 40
+    attach: fwdStbd
+    lineLength_m: 30
+    riseTime_s: 25
+    modeChange_s: 60
+    initial: { mode: standby, direction_deg: 270, power_pct: 0 }
+  - id: TG2
+    bollardPull_t: 35
+    attach: aftPort
+    lineLength_m: 30
+    turnRate_degPerSec: 3
+    initial: { mode: push, direction_deg: 90, power_pct: 50 }

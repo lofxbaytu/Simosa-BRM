@@ -39,6 +39,8 @@ public sealed class RadarScene
     public IReadOnlyList<TargetState>? TruthTargets { get; init; }
     public LoadingCondition Loading { get; init; } = LoadingCondition.Full;
     public double? DraftMeanM { get; init; }
+    /// <summary>情境雷達環境(state.radarEnvironment:雨區與海況;情境未給時 null)</summary>
+    public SimCore.Scenario.RadarEnvironmentState? RadarEnvironment { get; init; }
 
     /// <summary>由 SimCore 狀態廣播建立場景(src/Contracts/state.schema.json)。</summary>
     public static RadarScene FromState(OwnShipState s, RadarBand band)
@@ -75,6 +77,7 @@ public sealed class RadarScene
             TruthTargets = s.Targets,
             Loading = s.Loading,
             DraftMeanM = s.Draft is { } d ? (d.Fore + d.Aft) / 2.0 : null,
+            RadarEnvironment = s.RadarEnvironment,
         };
     }
 }

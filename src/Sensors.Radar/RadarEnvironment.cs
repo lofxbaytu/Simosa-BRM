@@ -16,6 +16,9 @@ public sealed class LandPolygon
 /// <summary>雨區(圓形;中心 ENU m、半徑 m、降雨率 mm/h)。</summary>
 public sealed record RainCell(double X, double Y, double RadiusM, double RateMmH);
 
+/// <summary>雨區(多邊形;頂點 ENU m、降雨率 mm/h;情境 environment.radar.rainAreas[].polygon)。</summary>
+public sealed record RainPolygon(string Id, (double X, double Y)[] Points, double RateMmH);
+
 /// <summary>
 /// 雷達環境(radar.schema.json <c>$defs/environment</c>):陸地多邊形、雨區、海況覆寫。
 /// 檔案中的座標可為經緯度(points: [[lat, lon], …])或本地 ENU(pointsXY: [[x, y], …]);
@@ -32,8 +35,16 @@ public sealed class RadarEnvironment
 
     public List<LandPolygon> Land { get; } = new();
     public List<RainCell> RainCells { get; } = new();
-    /// <summary>海況覆寫(Douglas 0–9;null 依真風速推估)</summary>
+    /// <summary>海況覆寫(Douglas 0–9;null 依情境 state.radarEnvironment.seaState,再其次依真風速推估)。來自檔案或教官 environment 指令</summary>
     public double? SeaStateOverride { get; set; }
+    /// <summary>情境雨區(state.radarEnvironment;座標為核心本地 ENU):圓形與多邊形。與檔案/教官雨區(<see cref="RainCells"/>)相加</summary>
+    public List<RainCell> ScenarioRainCells { get; } = new();
+    public List<RainPolygon> ScenarioRainPolygons { get; } = new();
+    /// <summary>情境海況(state.radarEnvironment.seaState;<see cref="SeaStateOverride"/> 優先)</summary>
+    public double? ScenarioSeaState { get; private set; }
+    /// <summary>雷達使用的海況覆寫:檔案/教官 &gt; 情境;null = 依真風速推估</summary>
+    public double? EffectiveSeaState => SeaStateOverride ?? ScenarioSeaState;
+    private SimCore.Scenario.RadarEnvironmentState? _scenarioState;
     /// <summary>變更序號(雨區/海況變更時遞增,影像產生器據以重算表)</summary>
     public int Version { get; private set; }
 
@@ -122,6 +133,41 @@ public sealed class RadarEnvironment
     {
         SeaStateOverride = seaState;
         Version++;
+    }
+
+    /// <summary>
+    /// 套用情境雷達環境(RadarUnit 於帶有 radarEnvironment 的關鍵幀,及時間倒退/情境切換時呼叫;內容相同時不變更)。座標已是核心本地 ENU,不需錨定;null(情境無 environment.radar)時清除情境雨區與海況。
+    /// 教官 environment 指令(<see cref="SetRainCells"/>、<see cref="SetSeaState"/>)不影響情境雨區;海況以教官值優先。
+    /// </summary>
+    public void ApplyScenario(SimCore.Scenario.RadarEnvironmentState? state)
+    {
+        if (SameScenario(_scenarioState, state)) return;
+        _scenarioState = state;
+        ScenarioRainCells.Clear();
+        ScenarioRainPolygons.Clear();
+        ScenarioSeaState = state?.SeaState is { } ss ? Math.Clamp(ss, 0, 9) : null;
+        if (state is not null)
+            foreach (var a in state.RainAreas)
+            {
+                var rate = Math.Max(0.0, a.RateMmH);
+                if (a.Polygon is { Count: >= 3 } poly) ScenarioRainPolygons.Add(new RainPolygon(a.Id, poly.Select(p => (p.X, p.Y)).ToArray(), rate));
+                else if (a.Center is { } c && a.RadiusM is > 0) ScenarioRainCells.Add(new RainCell(c.X, c.Y, a.RadiusM.Value, rate));
+            }
+        Version++;
+    }
+
+    private static bool SameScenario(SimCore.Scenario.RadarEnvironmentState? a, SimCore.Scenario.RadarEnvironmentState? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null || a.SeaState != b.SeaState || a.RainAreas.Count != b.RainAreas.Count) return false;
+        for (var i = 0; i < a.RainAreas.Count; i++)
+        {
+            var (x, y) = (a.RainAreas[i], b.RainAreas[i]);
+            if (x.Id != y.Id || x.RateMmH != y.RateMmH || x.RadiusM != y.RadiusM || x.Center != y.Center) return false;
+            var (px, py) = (x.Polygon ?? Array.Empty<GeoPosition>(), y.Polygon ?? Array.Empty<GeoPosition>());
+            if (!px.SequenceEqual(py)) return false;
+        }
+        return true;
     }
 
     /// <summary>直接加入 ENU 陸地(測試用)。</summary>

@@ -35,12 +35,47 @@ SimCore.Host ──ws://127.0.0.1:8765(state 25 Hz)──► SimStateClient ─�
 2. **方位線幾何**(每條線,與距離格無關):
    - 波束:雙程高斯主瓣 σ_b = BW/3.33,目標角寬內積分以 erf 計算(只對角度範圍 ±4.5σ_b 內的目標);角寬小於波束寬的目標每條線都照到整個船體,距離段為船體近遠距離。
    - 陸地(`data/areas`):射線與多邊形交點,波束寬內取最近入射點(海岸展寬);高於地平線遮蔽高度才可見;入射點後 3 km 內以 1.5 km 衰減(地形遮蔽近似),其後無回波;陸地後方的目標與海面被遮蔽。
-   - 雨區(圓):射線交段、Z = 200 R^1.6、雙程衰減 2kR^α(X:k 0.0101、α 1.276;S 頻幾乎無衰減)。
+   - 雨區(圓:射線交段;情境多邊形:射線與各邊交點排序後成對取段,天線在雨區內時自 0 起,凹多邊形可有多段):Z = 200 R^1.6、雙程衰減 2kR^α(X:k 0.0101、α 1.276;S 頻幾乎無衰減)。
    - 陰影扇區:預設艉向一個(X 174–186°、S 172–188°,衰減 60 dB),參數化(`RadarConfig.ShadowSectors`)。
    - 海雜波方位調制:迎風 +3 dB、背風 −3 dB。
 3. **畫到距離格**(`SpokeRenderer`,只查表):目標段 [近, 遠 + 脈衝長] 以覆蓋比例累加 σ·波束因子·R⁻⁴ 增益表;海雜波平均表(依海況:1 nm 處 X 頻 SS1 5 dB … SS6 30 dB,R⁻³ 至臨界距離 0.3 + 0.25 SS nm 後 R⁻⁷;S 頻 −10 dB);雨(S 頻 −19.5 dB);雜訊 Exp(1);僅含回波格取對數,其餘查 dB 表;STC = sea% × min(60, 40 log(3 nm/R)) dB;FTC = 減去前段 2 倍脈衝長平均的 rain% × 0.9;增益門檻 40 − 0.43 × gain dB;強度 = (dB − 門檻) × 255/30。調諧損失 20((tune − 50)/50)² dB(自動調諧為 0);`radarDegraded` −15 dB。
 4. **脈衝**:≤ 0.75 nm 短(10.5 m)、≤ 3 nm 中(45 m)、≤ 12 nm 中長(75 m)、以上長(180 m)。ARPA 處理影像固定 16 nm、2048 格(14.5 m)、中脈衝 45 m,動態範圍 80 dB(不飽和,質心有次格精度)。
-5. **效能**:預算表(R⁻⁴、雜波、STC、陸地、雨、sin/cos)+ 每目標每線少量運算;實測單台(顯示 + ARPA、3 目標、雨、陸地、18 kn 風)每圈 ≈ 0.2 s / 2.5 s(約 8% 單核,`SingleRadarUsesLessThanOneCore`);E05 實跑兩台 + 強制顯示各約 3% 單核。無客戶端時不產生顯示影像。
+5. **效能**(不變):預算表(R⁻⁴、雜波、STC、陸地、雨、sin/cos)+ 每目標每線少量運算;實測單台(顯示 + ARPA、3 目標、雨、陸地、18 kn 風)每圈 ≈ 0.2 s / 2.5 s(約 8% 單核,`SingleRadarUsesLessThanOneCore`);E05 實跑兩台 + 強制顯示各約 3% 單核。無客戶端時不產生顯示影像。
+
+### 2.1 情境雨區與海況(scenario `environment.radar` → `state.radarEnvironment`)
+
+**選擇**:核心把情境的雷達環境換算後放進狀態幀(`state.radarEnvironment`),雷達服務只讀狀態;不採「雷達服務依 `state.scenario.id` 讀情境檔」。
+理由:(1) 雷達服務不需知道情境檔路徑(情境可由 `--scenario <路徑>`、`loadScenario` 或紀錄 header 載入,id 與檔名不一定對應),重播紀錄時情境定義已在 header,
+雷達接上重播串流即得到相同雨區;(2) 座標由核心以情境原點換算為本地 ENU(與 `pos.x/y`、目標相同座標系),雷達不需以自船位置錨定經緯度(檔案雨區的錨定誤差不適用);
+(3) 內容只來自情境、練習中不變,為核心狀態的純函數,雷達影像仍是「核心狀態序列 + 種子 + 操作員設定」的確定性函數。
+
+```yaml
+environment:                                     # 情境原點 23.80N 120.05E(RadarEnvironmentScenarioTests)
+  radar:
+    seaState: 4                                  # 選填:Douglas 0–9;省略 = 依真風速推估
+    rainAreas:
+      - { id: SQ1, intensity: 0.75, polygon: [ { lat: 23.82, lon: 120.04 }, { lat: 23.82, lon: 120.06 }, { lat: 23.84, lon: 120.06 }, { lat: 23.84, lon: 120.04 } ] }
+      - { intensity: 0.25, center: { x: 3000, y: -2000 }, radius_nm: 1.5 }   # 圓形;id 省略 = rain2
+```
+
+```json
+"radarEnvironment": { "rainAreas": [
+    { "id": "SQ1", "intensity": 0.75, "rate_mmh": 12, "polygon": [ { "lat": 23.82, "lon": 120.04, "x": -1019.08, "y": 2215.11 }, … ] },
+    { "id": "rain2", "intensity": 0.25, "rate_mmh": 4, "center": { "lat": 23.781942, "lon": 120.079438, "x": 3000, "y": -2000 }, "radius_m": 2778 } ],
+  "seaState": 4 }
+```
+
+- 強度 → 降雨率:`rate_mmh = 16 × intensity`(1 = 大雨 16 mm/h、0.25 = 中雨 4 mm/h;`ScenarioRadarEnvironmentBuilder.MaxRainRateMmH`),其後與檔案/教官雨區相同(Z、衰減、FTC、S 頻 −19.5 dB)。
+- 結構檢查(情境載入為 error):`polygon`(≥ 3 點)與 `center` + `radius_nm`(> 0)二擇一、`intensity` 0–1、`seaState` 0–9、`id` 不重複。
+- 核心:`environment.radar` 不影響物理;引擎初始化時建立一次,以 `state.radarEnvironment` 廣播與記錄(情境未給時省略 → 舊情境狀態 JSON 與雜湊不變)。
+  **只在關鍵幀帶出**:載入/重設/倒帶(快照還原)後第一個廣播幀,以及距上次帶出 ≥ 1 s 模擬時間(50 步)的廣播幀;其他幀省略此欄位(以 tick 判定,重播得到相同的廣播內容)。
+  理由:內容練習中不變,25 Hz 每幀重複整份雨區定義(每個多邊形頂點含經緯度與 x/y)會使紀錄與 WebSocket 流量倍增(兩個 24 點多邊形 + 一個圓:每狀態行 2.0 kB → 5.8 kB;30 分鐘紀錄約 91 MB → 262 MB);
+  關鍵幀只增加約 1/25 的量(`RadarEnvironmentScenarioTests.RecordStateLinesDoNotRepeatRadarEnvironmentEveryFrame`:有/無雨區每行平均相差 < 5 %)。直接呼叫 `BuildState()` 仍帶完整內容(教官快照、測試)。
+  內容只來自情境(紀錄 header 有完整定義)、練習中不變,**不進雜湊與快照**(有/無此區段的同一情境雜湊逐步相同,`RadarEnvironmentScenarioTests`)。Python 參考實作忽略。
+- 雷達:`RadarEnvironment.ApplyScenario`(帶有 `radarEnvironment` 的幀;內容相同時不變更版本;**省略 = 不變**)→ `ScenarioRainCells`、`ScenarioRainPolygons`、`ScenarioSeaState`;與檔案/教官雨區**相加**;
+  海況優先序:教官 `environment` 指令 / 環境檔 `seaState` > 情境 `seaState` > 依真風速推估。模擬時間倒退(重設/倒帶)或情境切換(`state.scenario.id` 改變)時以該幀內容重設、該幀無此欄位則清除,待下一個關鍵幀(≤ 1 s)重新套用;
+  雷達服務中途連線時,最遲 1 s 內收到關鍵幀(`ScenarioWeatherAndSBandFaultTests.ScenarioEnvironmentPersistsBetweenKeyframesAndClearsOnReset`)。
+- 只支援靜態雨區;移動雨胞、`setEnvironment` 改雨區為後續。
 
 ## 3. ARPA
 
@@ -155,7 +190,9 @@ for (let j = 0; j < count; j++) {
 | `radarDegraded`(目錄名)、`radarDegradedX` | 靈敏度 −15 dB,flags bit2 | — |
 | `radarDegradedS` | — | 靈敏度 −15 dB |
 
-目錄只有 `radarFailure`/`radarDegraded`,對應「一台雷達失效」(X 頻,主雷達);`radarFailureS` 等名稱目前不在 `fault-catalogue.json`(情境檢查會視為未知名稱),需要時由協調者加入目錄。故障清除後自動恢復發射(`radarRestored`)。
+目錄(`src/Contracts/fault-catalogue.json`)含 `radarFailure`/`radarDegraded`(「一台雷達失效」= X 頻,主雷達)與 `radarFailureS`/`radarDegradedS`(S 頻單獨故障);
+四者在核心都是只記錄(modelled: false,只進 `state.faults`、廣播與紀錄,`ScenarioValidator` 提示「只記錄」),由雷達服務依上表反應。`radarFailureX`/`radarDegradedX`
+為雷達服務接受的別名,不在目錄。故障清除後自動恢復發射(`radarRestored`)。測試:`ScenarioWeatherAndSBandFaultTests`(S 頻停發/降敏只影響 S 頻、X 頻影像逐值不變)。
 
 ## 8. 主控程式與驗證
 
@@ -183,7 +220,7 @@ dotnet build/bin/Sensors.Radar.Host/Release/net8.0/SimosaBRM.Sensors.Radar.Host.
 ## 9. 限制與後續
 
 - 無旁瓣、多路徑(lobing)、閃爍(glint)、二次掃描回波、RACON/SART、目標間遮蔽;陸地為多邊形 + 高度,非 DEM。量測雜訊因此比實船小,ARPA 精度偏佳。
-- 海況由真風速推估(核心尚無浪場);雨區由環境檔/教官指令給定(情境 schema 尚無雨區欄位,需要時可在 scenario.schema.json 增加 `environment.radar` 指向雷達環境)。
+- 海況由真風速推估(核心尚無浪場),情境可以 `environment.radar.seaState` 覆寫;雨區由情境 `environment.radar.rainAreas`(第 2.1 節)、環境檔或教官指令給定,皆為靜態。
 - 雷達控制指令只在雷達服務內,不進核心紀錄;重播時畫面一致(同種子、同狀態),但學員的雷達操作需另行記錄(後續:雷達服務寫 `build/records/*.radar.jsonl` 或經核心 `command` 轉送)。
 - 本機無 Windows URL ACL 時 HttpListener 退回 localhost(與 SimCore.Host 相同);教官筆電直連需 `netsh http add urlacl url=http://*:8766/radar/ user=Everyone`。
 - 網頁 PPI(WebGL/Canvas)、EBL/VRM、平行索引線、AIS 目標融合由網頁端依本協定實作。

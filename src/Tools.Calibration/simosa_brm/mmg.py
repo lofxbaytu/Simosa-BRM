@@ -13,6 +13,10 @@
   舵以舵機速率走向滿舵或停在原處)/ autopilot(⇔ 自動舵啟用)/ emergency(應急操舵:速率降低、舵機故障時仍可動、不可接自動舵);
   舵機泵 "1" / "2" / "both" 依 particulars 單/雙泵轉舵時間換算速率。非預設模式/泵才加入狀態雜湊(舊情境雜湊不變)。
 - 對外狀態欄位依 src/Contracts/state.schema.json(度、節、航向 0–360、舵右正、ROT 度/分)。
+- 外力(拖船、錨與錨鏈、碰墊/碼頭硬接觸/繫纜、岸壁效應;``external.py``,與 C# ``Physics/External`` 逐式對應):
+  RK4 每個階段以該階段狀態重算後加入 X/Y/N(C# ``Rk4Integrator.Step(..., IExternalForceField)``);拖船出力在步首、
+  錨/泊位跨步狀態在步末更新。只在情境使用(有拖船/泊位、錨曾被使用、有岸壁)時才走含外力的積分並把外力狀態加入雜湊,
+  未使用者狀態與雜湊與舊版逐位元相同。
 """
 
 from __future__ import annotations
@@ -25,7 +29,10 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any
 
+from collections import deque
+
 from .coefficients import r0_prime
+from .external import BankEffectModel, Env, ExternalForceModel, Kin
 from .particulars import GRAVITY, KN_TO_MPS, ShipParticulars
 from .propeller import PropellerModel
 
@@ -40,6 +47,8 @@ FAULT_BOW_THRUSTER = "bowThruster"  # 艏側推不可用
 FAULT_STEERING_FU_ONLY = "steeringFuOnly"  # FU 失效只剩 NFU:隨動迴路(fu 與自動舵)動不了舵,nfu 與 emergency 可動
 FAULT_STEERING_PUMP = "steeringPumpFailure"  # 舵機泵失效:所有模式舵機速率減半
 MODELLED_FAULTS = (FAULT_STEERING_GEAR, FAULT_MAIN_ENGINE, FAULT_BOW_THRUSTER, FAULT_STEERING_FU_ONLY, FAULT_STEERING_PUMP)
+# 拖纜斷裂(physics-tugs-anchors-mooring.md 第 2.3 節;外力模組處理,不在 MODELLED_FAULTS 的 ack 說明表內)
+FAULT_TUG_LINE_BREAK = "tugLineBreak"
 
 # 操舵模式(state.schema.json steering.mode;順序與 C# SteeringMode 列舉相同,雜湊用索引)與舵機泵(steering.pump)
 STEERING_MODES = ("fu", "nfu", "autopilot", "emergency")
@@ -222,6 +231,12 @@ class MMGShip:
         self._n_target = 0.0
         self._n_tau = 1.0
         self._prepare()
+        # 外力(external.py):情境區段(normalise_sections 的結果)、模組與最近的外力事件(kind、itemId、message、data、tick)
+        self.external_sections: dict[str, Any] = {}
+        self.external: ExternalForceModel | None = None
+        self.bank: BankEffectModel | None = None
+        self.external_events: deque[dict[str, Any]] = deque(maxlen=1000)
+        self._build_external()
 
     @property
     def origin_lat(self) -> float:
@@ -232,8 +247,10 @@ class MMGShip:
         return self.ltp.origin_lon
 
     def set_origin(self, lat: float, lon: float) -> None:
-        """重設本地 ENU 原點(情境 origin);x、y 不變,只影響經緯度輸出。"""
+        """重設本地 ENU 原點(情境 origin);x、y 不變,只影響經緯度輸出(以經緯度定義的泊位/岸壁需 ``configure_external`` 重建)。"""
         self.ltp = LocalTangentPlane(lat, lon)
+        if getattr(self, "external", None) is not None:
+            self.external.ltp = self.ltp
 
     # ------------------------------------------------------------------
     # 常數前處理
@@ -414,6 +431,77 @@ class MMGShip:
         self._eng_timer = 0.0
         self._n_target = self.state.n
         self._n_tau = self.n_tau
+        # 外力模組回到情境初始(拖船 initial、錨收存或初始已錨泊、繫纜 initial;C# Initialize 的 CreateExternal / CreateBank)
+        self._build_external()
+
+    # ------------------------------------------------------------------
+    # 外力(拖船 / 錨 / 泊位 / 岸壁;external.py)
+    # ------------------------------------------------------------------
+    def _water_depth_or_inf(self) -> float:
+        return self.env.water_depth if self.env.water_depth is not None else math.inf
+
+    def _kin(self) -> Kin:
+        s = self.state
+        return Kin(s.x, s.y, s.psi, s.u, s.v, s.r)
+
+    def _env_sample(self) -> Env:
+        ce, cn = self.env.current_en
+        return Env(ce, cn, self._water_depth_or_inf())
+
+    def _build_external(self) -> None:
+        """依 ``external_sections`` 與目前狀態/水深建立外力模組(C# CreateExternal、CreateBank 與 RefreshBank)。"""
+        sec = self.external_sections or {}
+        load = self.sp.loading.name
+        depth = self._water_depth_or_inf()
+        k = self._kin()
+        self.external = ExternalForceModel(self.sp.raw, load, sec, self.ltp, self.dt, k, depth)
+        bk = sec.get("banks")
+        has_banks = isinstance(bk, dict) and (bool(bk.get("lines")) or bool(bk.get("definitions")))
+        self.bank = BankEffectModel(self.sp.raw, load, bk, self.ltp) if has_banks else None
+        if self.bank is not None and self.bank.active:
+            rpm = self.state.n * 60.0
+            self.bank.pre_step(rpm)
+            self.bank.update_last(k, depth, rpm)
+
+    def configure_external(self, sections: dict[str, Any] | None) -> None:
+        """設定情境的外力區段(``external.normalise_sections`` 的結果;None = 無)並以目前狀態重建模組。"""
+        self.external_sections = dict(sections or {})
+        self.external_events.clear()
+        self._build_external()
+
+    @property
+    def external_active(self) -> bool:
+        return (self.external is not None and self.external.active) or (self.bank is not None and self.bank.active)
+
+    def _emit(self, ev: dict[str, Any] | None) -> dict[str, Any] | None:
+        if ev is not None:
+            ev = dict(ev, tick=self.state.tick)
+            self.external_events.append(ev)
+        return ev
+
+    def tug_control(self, tug_id: str | None, mode: str | None = None, direction_deg: float | None = None,
+                    power_pct: float | None = None) -> dict[str, Any]:
+        """tugControl 指令(C# ExternalForceModel.TugControl);拒絕時 ``CommandRejected``(原因同 C#),接受時回傳 tugCommand 事件。"""
+        reason, ev = self.external.tug_control(tug_id, mode, direction_deg, power_pct)
+        if reason is not None:
+            raise CommandRejected(reason, f"tugControl 被拒:{reason}")
+        return self._emit(ev)
+
+    def anchor_command(self, side: str | None, action: str | None, target_shackles: float | None = None,
+                       length_m: float | None = None) -> dict[str, Any]:
+        """anchor 指令(C# ExternalForceModel.AnchorCommand);接受時回傳 anchorLetGo / anchorCommand 事件。"""
+        reason, ev = self.external.anchor_command(side, action, target_shackles, length_m)
+        if reason is not None:
+            raise CommandRejected(reason, f"anchor 被拒:{reason}")
+        return self._emit(ev)
+
+    def mooring_command(self, line_id: str | None, action: str | None, bollard: str | None = None, tension_t: float | None = None,
+                        length_m: float | None = None) -> dict[str, Any]:
+        """mooring 指令(C# ExternalForceModel.MooringCommand);接受時回傳 mooringCommand 事件。"""
+        reason, ev = self.external.mooring_command(line_id, action, bollard, tension_t, length_m, self._kin(), self._env_sample())
+        if reason is not None:
+            raise CommandRejected(reason, f"mooring 被拒:{reason}")
+        return self._emit(ev)
 
     def _telegraph_for_rpm(self, rpm: float) -> str:
         if abs(rpm) < 1e-6:
@@ -577,28 +665,43 @@ class MMGShip:
     # ------------------------------------------------------------------
     # 故障、快照
     # ------------------------------------------------------------------
-    def inject_fault(self, name: str) -> bool:
+    def inject_fault(self, name: str, args: dict[str, Any] | None = None) -> bool:
         """加入故障(同名不重複,與 C# InjectFault 相同);回傳該名稱是否會改變模型行為(``MODELLED_FAULTS``)。
 
         自動舵啟用中注入使自動舵不可用的故障(autopilotFailure / gyroFailure)時自動舵跳脫:舵令同步到目前舵角、
-        模式回 fu(C# TripAutopilot;是否跳脫可由呼叫前後的 ``ctl.autopilot`` 判斷)。"""
+        模式回 fu(C# TripAutopilot;是否跳脫可由呼叫前後的 ``ctl.autopilot`` 判斷)。
+        ``tugLineBreak``:``args`` 是指令的 args.args 物件(C# FaultArgString;呼叫端不得把 args 本身傳入),
+        其 ``id`` 指定的拖船須存在(否則 ``CommandRejected`` unknownTug、不加入 faults);
+        斷該船(省略 = 第一艘拉中/待命中的拖船)的拖纜,tugLineParted 事件記入 ``external_events``。"""
         name = str(name)
+        tug_id = args.get("id") if isinstance(args, dict) and isinstance(args.get("id"), str) else None
+        if name == FAULT_TUG_LINE_BREAK and tug_id is not None:
+            if not self.external.supported:
+                raise CommandRejected("externalForcesUnsupported", "動力學模型不支援外力")
+            if self.external.tug(tug_id) is None:
+                raise CommandRejected("unknownTug", f"沒有拖船 {tug_id}")
         if name not in self.faults:
             self.faults.append(name)
         if self.ctl.autopilot and not self.autopilot_available:
             self._hold_rudder()
             self._set_steering_mode("fu", None)
+        if name == FAULT_TUG_LINE_BREAK:
+            self._emit(self.external.part_tug_line(tug_id))
         return name in MODELLED_FAULTS
 
     def clear_fault(self, name: str | None = None) -> int:
-        """清除故障:``name`` 為 None 或空字串時清除全部(C# ClearFault 無 value 的語意);回傳清除的筆數。"""
-        if name is None or str(name) == "":
+        """清除故障:``name`` 為 None、空字串或 all(不分大小寫)時清除全部(C# ClearFault 的語意);回傳清除的筆數。"""
+        if name is None or str(name) == "" or str(name).lower() == "all":
             n = len(self.faults)
+            if FAULT_TUG_LINE_BREAK in self.faults:
+                self.external.restore_tug_lines()
             self.faults = []
             return n
         name = str(name)
         n = self.faults.count(name)
         self.faults = [f for f in self.faults if f != name]
+        if n and name == FAULT_TUG_LINE_BREAK:
+            self.external.restore_tug_lines()  # 斷纜的拖船可重新帶纜(C# RestoreTugLines)
         return n
 
     def snapshot(self) -> dict[str, Any]:
@@ -612,6 +715,10 @@ class MMGShip:
             "faults": list(self.faults),
             "gust_factor": self.gust_factor,
             "rng": self.rng.getstate(),
+            # 外力模組(拖船出力/方向/計時、錨位/鏈長/旗標、碰墊接觸事件、繫纜狀態、岸壁步首轉速;C# ExternalForceSnapshot)
+            "external_sections": copy.deepcopy(self.external_sections),
+            "external": copy.deepcopy(self.external),
+            "bank": copy.deepcopy(self.bank),
         }
 
     def restore(self, snap: dict[str, Any]) -> None:
@@ -625,6 +732,12 @@ class MMGShip:
         self.gust_factor = float(snap["gust_factor"])
         self.rng.setstate(snap["rng"])
         self._update_shallow()
+        if "external" in snap:
+            self.external_sections = copy.deepcopy(snap["external_sections"])
+            self.external = copy.deepcopy(snap["external"])
+            self.bank = copy.deepcopy(snap["bank"])
+        else:  # 舊快照:外力模組回到初始
+            self._build_external()
 
     # ------------------------------------------------------------------
     # 穩態輔助
@@ -830,8 +943,9 @@ class MMGShip:
     # 積分
     # ------------------------------------------------------------------
     def _derivs(self, s: tuple[float, ...], delta_cmd: float, n_target: float, n_tau: float, thr_cmd: float,
-                rudder_rate: float | None = None) -> tuple[float, ...]:
-        """狀態導數。``rudder_rate`` 為本步的舵機速率(rad/s;舵機故障時 0,舵角不動),None 取係數檔值。"""
+                rudder_rate: float | None = None, ext: tuple[float, float, float] | None = None) -> tuple[float, ...]:
+        """狀態導數。``rudder_rate`` 為本步的舵機速率(rad/s;舵機故障時 0,舵角不動),None 取係數檔值。
+        ``ext`` 為該 RK4 階段的船體座標外力 (X, Y, N)(拖船/錨/泊位/岸壁;None = 無外力,與舊版逐位元相同)。"""
         if rudder_rate is None:
             rudder_rate = self.delta_rate
         x, y, psi, u, v, r, delta, n, thr, _track = s
@@ -840,6 +954,10 @@ class MMGShip:
         ug_e = u * sp_ + v * cp_ + ce
         ug_n = u * cp_ - v * sp_ + cn_
         X, Y, N, _ = self.forces(u, v, r, delta, n, thr, psi, ug_e, ug_n)
+        if ext is not None:
+            X += ext[0]
+            Y += ext[1]
+            N += ext[2]
         m, mx, my = self.m, self.mx, self.my
         xg = self.xG
         du = (X + (m + my) * v * r + xg * m * r * r) / (m + mx)
@@ -957,13 +1075,34 @@ class MMGShip:
         dcmd, nt, ntau = self.ctl.rudder_order, self._n_target, self._n_tau
         tcmd = 0.0 if thruster_failed else self.ctl.thruster_order  # 側推故障:令視為 0,實際推力依延遲衰減
         rate = 0.0 if rudder_jammed else self.rudder_rate_for_step()  # 舵機故障:速率 0,舵角停在目前位置(舵令照記)
-        k1 = self._derivs(y0, dcmd, nt, ntau, tcmd, rate)
+        ext = self.external if self.external is not None and self.external.active else None
+        bank = self.bank if self.bank is not None and self.bank.active else None
+        field = None
+        env_s = None
+        if ext is not None or bank is not None:
+            # 外力(C# Advance):環境取樣於步首;拖船出力以步首對水速度更新;岸壁螺槳項用步首轉速(四階段共用)
+            env_s = self._env_sample()
+            if ext is not None:
+                ext.pre_step(Kin(y0[0], y0[1], y0[2], y0[3], y0[4], y0[5]), dt)
+            if bank is not None:
+                bank.pre_step(y0[7] * 60.0)
+
+            def field(y: tuple[float, ...]) -> tuple[float, float, float]:
+                k = Kin(y[0], y[1], y[2], y[3], y[4], y[5])
+                if bank is None:
+                    return ext.evaluate(k, env_s)
+                fb = bank.evaluate(k, env_s)
+                if ext is None:
+                    return fb
+                fa = ext.evaluate(k, env_s)
+                return (fa[0] + fb[0], fa[1] + fb[1], fa[2] + fb[2])
+        k1 = self._derivs(y0, dcmd, nt, ntau, tcmd, rate, field(y0) if field else None)
         y1 = tuple(a + 0.5 * dt * b for a, b in zip(y0, k1))
-        k2 = self._derivs(y1, dcmd, nt, ntau, tcmd, rate)
+        k2 = self._derivs(y1, dcmd, nt, ntau, tcmd, rate, field(y1) if field else None)
         y2 = tuple(a + 0.5 * dt * b for a, b in zip(y0, k2))
-        k3 = self._derivs(y2, dcmd, nt, ntau, tcmd, rate)
+        k3 = self._derivs(y2, dcmd, nt, ntau, tcmd, rate, field(y2) if field else None)
         y3 = tuple(a + dt * b for a, b in zip(y0, k3))
-        k4 = self._derivs(y3, dcmd, nt, ntau, tcmd, rate)
+        k4 = self._derivs(y3, dcmd, nt, ntau, tcmd, rate, field(y3) if field else None)
         yn = tuple(a + dt / 6.0 * (b1 + 2.0 * b2 + 2.0 * b3 + b4) for a, b1, b2, b3, b4 in zip(y0, k1, k2, k3, k4))
         s.x, s.y, s.psi, s.u, s.v, s.r, s.delta, s.n, s.thr, s.track = yn
         if s.psi >= TWO_PI or s.psi < 0.0:
@@ -977,6 +1116,14 @@ class MMGShip:
             s.delta = -self.delta_max
         s.t += dt
         s.tick += 1
+        if ext is not None:
+            # 步末:錨(鏈長/走錨/事件)、泊位(碰墊事件/硬接觸/繫纜);環境為步首取樣(C# 相同)
+            events: list[dict[str, Any]] = []
+            ext.post_step(self._kin(), env_s, dt, events)
+            for ev in events:
+                self._emit(ev)
+        if bank is not None:
+            bank.update_last(self._kin(), self._water_depth_or_inf(), s.n * 60.0)
         # 擱淺/水深檢查
         if self.env.water_depth is not None and self.depth_below_keel() <= 0.0:
             self.aground = True
@@ -1022,6 +1169,11 @@ class MMGShip:
         c = self.ctl
         if c.steering_mode in ("nfu", "emergency") or c.steering_pump != "1":
             payload += struct.pack("<3q", STEERING_MODES.index(c.steering_mode), STEERING_PUMPS.index(c.steering_pump), c.nfu_direction)
+        # 外力與岸壁:只在使用時追加(欄位與順序同 C# ExternalForceModel.WriteHash / BankEffectModel.WriteHash),未使用的情境雜湊不變
+        if self.external is not None and self.external.active:
+            payload += self.external.hash_bytes()
+        if self.bank is not None and self.bank.active:
+            payload += self.bank.hash_bytes()
         return hashlib.sha256(payload).hexdigest()
 
     def state_json(self) -> dict[str, Any]:
@@ -1075,7 +1227,22 @@ class MMGShip:
             "faults": list(self.faults),
             "flags": {"frozen": self.ctl.frozen, "aground": self.aground, "collision": False},
             "steering": self.steering_json(),
+            **self.external_state_json(),
         }
+
+    def external_state_json(self) -> dict[str, Any]:
+        """state.tugs[] / anchors[] / berth / bank(C# BuildState:拖船有定義才輸出、錨在 particulars 有錨資料時輸出、
+        泊位有定義才輸出、岸壁使用中才輸出)。"""
+        out: dict[str, Any] = {}
+        if self.external is not None:
+            k = self._kin()
+            for key, val in (("tugs", self.external.tug_states(k)), ("anchors", self.external.anchor_states()),
+                             ("berth", self.external.berth_state())):
+                if val is not None:
+                    out[key] = val
+        if self.bank is not None and self.bank.active:
+            out["bank"] = self.bank.state()
+        return out
 
 
 def make_ship(ship_id: str, loading: str = "full", dt: float = 0.02, coeffs: dict[str, Any] | None = None,

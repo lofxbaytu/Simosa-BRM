@@ -1,0 +1,239 @@
+# E16 夜間進港燈光混淆 — 基隆港北口(規劃書第 8.1 節 E16 與「設計規則」、第 3.4 節基隆港;設計 docs/design/scenario-library.md 第 10 節;schema src/Contracts/scenario.schema.json)
+# 口門、導航線 195°、導燈、西側/東側淺礁區、漁船作業區與引水人登船點皆為示意值(data/areas/keelung-approach.json;示意,待 ENC 校正)。
+# FSB1 滿載(5.7 m)20:30 地方時自口門外 4.5 nm 依導航線進港至引水人登船點(口門外 0.8 nm),HAH 約 7.8 kn、自動舵 193°(含流壓修正);
+# 東北季風 25 kn(陣風)、沿岸流向西南西 0.6 kn(壓向右舷 = 西側淺礁)、東北湧浪(核心無湧浪模型,以訊息表示)、背景岸燈(視景另行實作)。
+# 時間表:自船距 F1 1.2 nm 時無燈漁船 F1 出現在雷達(湧浪雜波中,無 AIS;aisOn: false,啟動時以 targetControl lights: none 關燈 — schema targets[].lights 尚無 none 列舉,待契約負責人加入後改在 targets[] 宣告)→
+#   通過 K1 degraded(leadingLightsOut:後導燈熄滅 — 未讀的航船布告,岸燈混淆;風浪增強)→ 距 PILOT 1.0 nm(或 T+25)emergency(outboundAndSet:出港船 OUT1 + 流壓增強)
+#   → 到達登船點、擱淺或 T+35 結束。
+# 評估:瞭望報告(F1 會遇開始 → acknowledge lookoutReport / report)、K1 VTS 報告、導燈異常回報船長(callMaster / verbal)、出港船應變、航跡走廊、CPA、淺礁(ukcPolicy 水深 4 m → 擱淺)。
+id: E16_night_approach_keelung
+name: 基隆港夜間進港燈光混淆
+description: >-
+  東北季風夜間依導航線進基隆港:背景岸燈與漁船集魚燈混淆、無燈無 AIS 的漁船只在雷達上出現、
+  後導燈熄滅(航船布告未讀)、出港船與流壓增強;練習視覺狀況覺知、瞭望報告與航程危險複審。
+seed: 20261220
+startTimeUtc: "2026-12-20T12:30:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 25.1540, lon: 121.7450 }          # 基隆港北口口門(示意)
+initial:
+  position: { lat: 25.22631, lon: 121.76641 }     # 航線 START(口門外 4.5 nm)
+  heading: 193
+  speed: 7.8
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 25, trueDir: 40, gustiness: 0.25 }
+  current: { set: 250, drift: 0.6 }
+  waterDepth: 30
+  visibility_nm: 6
+briefing:
+  text: |
+    交班(20:30 地方時,夜間):No.1 滿載瀝青(吃水 5.7 m)自台中到基隆,口門外 4.5 nm,HAH 約 7.8 kn,自動舵 193°(導航線 195°,已修正向西南西的沿岸流約 0.6 kn)。
+    書面航程計畫:START → K1(VTS 報告點,口門外 2.5 nm,導航線起點)→ PILOT(引水人登船點,口門外 0.8 nm);走廊半寬見參數集 navigation.xtd.harbourApproach_m。
+    東北季風 25 kn、東北湧浪,港口朝東北;研究顯示此風況下減速進港易偏向西側。航線西側(右舷)約 0.35 nm 為外木山外淺礁、東側為和平島外淺礁(ECDIS 安全等深線以外)。
+    夜間命令:岸上燈光與漁船集魚燈多,導燈須以雷達/ECDIS 交叉核對;本週航船布告(未讀)在海圖桌上。接班者完成交班檢查表後由教官確認(acknowledge checklist)。
+  attachments:
+    - { title: "航程計畫(基隆港北口夜間進港,示意)", file: docs/passage-plan-E16.pdf }
+    - { title: "航船布告(本週,含基隆港後導燈熄滅;交班時未讀)", file: docs/notice-to-mariners-E16.pdf }
+    - { title: 船長夜間命令, file: docs/night-orders.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: lookout, required: true }
+    - { role: helmsman }
+    - { role: vts, playedBy: voiceScript }
+    - { role: otherShip, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 2100
+route:
+  name: 基隆港北口導航線(示意)
+  xtdLimit_m: "${params:navigation.xtd.harbourApproach_m}"
+  waypoints:                                      # 與 data/areas/keelung-approach.json route 相同
+    - { name: START, lat: 25.22631, lon: 121.76641 }
+    - { name: K1, lat: 25.19417, lon: 121.75689, checkpoint: true, report: "基隆 VTS 報告點 K1(示意)" }
+    - { name: PILOT, lat: 25.16686, lon: 121.74881, arrivalRadius_m: 300 }
+zones:
+  - id: westShoal
+    name: 西側淺礁區(外木山外,示意)
+    type: ukcPolicy
+    waterDepth_m: 4                               # 安全等深線以外(滿載吃水 5.7 m → 擱淺)
+    polygon:                                      # 與 data/areas/keelung-approach.json shoals[westShoal] 相同
+      - { lat: 25.16515, lon: 121.74164 }
+      - { lat: 25.19129, lon: 121.74748 }
+      - { lat: 25.19366, lon: 121.73771 }
+      - { lat: 25.16752, lon: 121.73187 }
+  - id: eastShoal
+    name: 東側淺礁區(和平島外,示意)
+    type: ukcPolicy
+    waterDepth_m: 4
+    polygon:                                      # 與 data/areas/keelung-approach.json shoals[eastShoal] 相同
+      - { lat: 25.1617, lon: 121.75584 }
+      - { lat: 25.18056, lon: 121.76333 }
+      - { lat: 25.17862, lon: 121.77132 }
+      - { lat: 25.15933, lon: 121.7656 }
+timeline:
+  - id: handover
+    name: 交班(夜間進港)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:口門外四點五浬,自動舵 193 修正流壓,HAH。東北風二十五節有湧浪,右舷那邊是淺礁。岸上燈很多,導燈要用雷達核對。航船布告在海圖桌上。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對航程計畫、航船布告(後導燈熄滅)、流壓修正、淺礁與夜間命令,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 193°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 193 }
+  - id: f1OnRadar
+    name: 無燈漁船 F1 出現在雷達
+    when: { type: event, kind: targetActivated, targetId: F1 }
+    actions:
+      - targetControl: { id: F1, lights: none }     # 無燈:schema targets[].lights 尚無 none 列舉,啟動時以 targetControl 關燈(未指定時核心依 shipType 推定為 fishing)
+      - message: { to: instructor, text: "F1(無燈、無 AIS 漁船)在湧浪雜波中出現於雷達,位於導航線上;觀察瞭望/雷達報告(acknowledge lookoutReport)與避讓", severity: warning }
+  - id: leadingLightsOut
+    name: 後導燈熄滅(未讀航船布告)與風浪增強
+    phase: degraded
+    when: { type: routeLeg, passedWaypoint: K1 }
+    actions:
+      - setEnvironment: { wind: { trueSpeed: 30, trueDir: 40, gustiness: 0.3 }, current: { set: 250, drift: 0.9 }, ramp_s: 300 }
+      - voiceScript: { role: lookout, channel: bridge, text: "報告:正前方只看到一盞燈,後面那盞導燈看不到,跟岸上的燈混在一起分不出來。", lang: zh-TW }
+      - message: { to: instructor, text: "導燈熄滅(航船布告未讀)+ 風 25 → 30 kn、流 0.6 → 0.9 kn(5 分鐘漸變):觀察是否通知船長、查航船布告、改用雷達平行指標/ECDIS", severity: warning }
+  - id: outboundAndSet
+    name: 出港船與流壓增強
+    phase: emergency
+    when:
+      any:
+        - { type: ownDistance, waypoint: PILOT, lessThan: "${params:navigation.e16.emergencyRange_nm}" }
+        - { type: time, atLeast: "${params:navigation.e16.emergencyAt_s}" }
+    actions:
+      - setEnvironment: { current: { set: 250, drift: 1.2 }, ramp_s: 240 }
+      - targetControl: { id: OUT1, activate: true }
+      - voiceScript: { role: vts, channel: vhfPort, text: "基隆 VTS 廣播:貨櫃船 MING HUA 出港中,航向 015,請進港船保持導航線右側。", lang: zh-TW }
+      - message: { to: instructor, text: "OUT1 出港(左舷對左舷)+ 流 0.9 → 1.2 kn:觀察是否回應(舵令/車令/口頭)並修正向西的流壓", severity: alarm }
+  - id: shoalWarning
+    name: 接近西側淺礁
+    when: { type: xtd, greaterThan: "${params:navigation.xtd.harbourApproach_m}", side: starboard }
+    actions:
+      - message: { to: instructor, text: "自船偏到導航線西側(右舷)超出走廊,接近外木山淺礁", severity: warning }
+  - id: arrived
+    name: 到達引水人登船點
+    when: { type: ownDistance, waypoint: PILOT, lessThan: 0.15 }
+    actions:
+      - endExercise: { reason: 到達引水人登船點 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - endExercise: { reason: 擱淺 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 2100 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  encounter:
+    detectionRange_nm: "${params:navigation.encounter.detectionRange_nm}"
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: collision, rule: collision }
+    - { id: cpaHard, rule: cpa, lessThan: "${params:navigation.cpa.hardFail_nm}" }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.harbourApproach_m}", fail: 1.3x, penalty: 10, failPenalty: 20 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 180, penalty: 5, failPenalty: 15 }
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.pilotage_nm}", fail: "${params:navigation.cpa.hardFail_nm}", penalty: 10, failPenalty: 30 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: lookoutReportF1
+      after: { event: encounterStarted, targetId: F1 }
+      expect: { any: [ { acknowledge: { kind: lookoutReport } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:navigation.night.lookoutReport_s}"
+      penalty: 10
+      latePenaltyPer_s: 0.05
+    - id: vtsReport
+      after: { event: reportPointPassed, waypoint: K1 }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:navigation.vts.report_s}"
+      penalty: 5
+    - id: leadingLightReport
+      after: { event: timelineTriggered, itemId: leadingLightsOut }
+      expect: { any: [ { acknowledge: { kind: callMaster } }, { acknowledge: { kind: verbal } } ] }
+      within_s: "${params:navigation.night.leadingLightReport_s}"
+      penalty: 10
+    - id: outboundResponse
+      after: { event: timelineTriggered, itemId: outboundAndSet }
+      expect: { any: [ rudderOrder, telegraphChange, rpmOrder, { acknowledge: { kind: verbal } } ] }
+      within_s: "${params:navigation.channel.outboundResponse_s}"
+      penalty: 5
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: F1
+    name: F1
+    shipType: fishing
+    loa: 12
+    beam: 3.5
+    draft: 1.2
+    aisOn: false                                  # 無 AIS;無燈(schema lights 列舉尚無 none,待辦),只能以雷達/瞭望發現
+    initial:
+      position: { lat: 25.18587, lon: 121.75561 }  # 導航線上(東 0.06 nm)、口門外 2.0 nm
+      heading: 100
+      speed: 0.5
+    behaviour: { mode: hold }
+    trigger: { type: ownDistance, point: { lat: 25.18587, lon: 121.75561 }, lessThan: 1.2 }   # 湧浪雜波中 1.2 nm 才在雷達上出現
+  - id: F2
+    name: HSIN FA 12
+    mmsi: 416516002
+    shipType: fishing
+    loa: 22
+    beam: 6
+    draft: 2
+    lights: fishing
+    initial:
+      position: { lat: 25.1932, lon: 121.76803 }   # 漁船作業區(集魚燈,左舷)
+      heading: 60
+      speed: 1
+    behaviour: { mode: hold }
+  - id: F3
+    name: HSIN FA 16
+    mmsi: 416516003
+    shipType: fishing
+    loa: 22
+    beam: 6
+    draft: 2
+    lights: fishing
+    initial:
+      position: { lat: 25.20154, lon: 121.7762 }
+      heading: 240
+      speed: 1
+    behaviour: { mode: hold }
+  - id: OUT1
+    name: MING HUA
+    mmsi: 416516004
+    shipType: cargo
+    loa: 170
+    beam: 27
+    draft: 9
+    callSign: BMHA
+    destination: NAHA
+    initial:
+      position: { lat: 25.1557, lon: 121.75216 }   # 口門外 0.2 nm、導航線東 0.35 nm
+      heading: 15
+      speed: 9
+    behaviour:
+      mode: waypoints
+      waypoints:
+        - { lat: 25.23241, lon: 121.77678, speed: 10 }
+      stopAtEnd: false
+    trigger: { type: time, time: 86400 }          # 不自動出現:由時間表 outboundAndSet 以 targetControl activate 啟動

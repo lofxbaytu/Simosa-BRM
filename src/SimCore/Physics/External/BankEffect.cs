@@ -372,7 +372,7 @@ public sealed class SumForceField : IExternalForceField
 }
 
 /// <summary>
-/// 岸壁效應狀態(state.bank;情境有 banks 區段且動力學接受外力時輸出;C# 產生,Python 不輸出;設計文件 physics-bank-effect.md 第 5 節)。
+/// 岸壁效應狀態(state.bank;情境有 banks 區段且動力學接受外力時輸出;C# 與 Python 參考實作皆輸出;設計文件 physics-bank-effect.md 第 5 節)。
 /// 力為船體座標:Y 右舷正、N 艏向右正(與 u/v/r、MMG 相同慣例)。
 /// </summary>
 public sealed record BankEffectState

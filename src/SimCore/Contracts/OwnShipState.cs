@@ -83,6 +83,8 @@ public sealed record OwnShipState
     [JsonPropertyName("berth")] public BerthStatusState? Berth { get; init; }
     /// <summary>岸壁效應(情境無 banks 時省略;設計文件 physics-bank-effect.md 第 5 節)</summary>
     [JsonPropertyName("bank")] public Physics.External.BankEffectState? Bank { get; init; }
+    /// <summary>雷達環境(情境 environment.radar 換算為 ENU;情境未給時省略;docs/design/radar-arpa.md 第 2.1 節)</summary>
+    [JsonPropertyName("radarEnvironment")] public SimosaBRM.SimCore.Scenario.RadarEnvironmentState? RadarEnvironment { get; init; }
 }
 
 /// <summary>真值區塊(state.schema.json <c>truth</c>)。</summary>

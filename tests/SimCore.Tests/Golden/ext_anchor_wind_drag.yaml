@@ -1,0 +1,11 @@
+# 由 export_external_reference.py 產生(請勿手改):右錨已錨泊受 35 kn 風擺盪與走錨、鬆鏈、左錨 letGo(600 s)
+id: ext_anchor_wind_drag
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 0, telegraph: STOP }
+environment: { wind: { trueSpeed: 35, trueDir: 60, gustiness: 0 }, current: { set: 200, drift: 0.8 }, waterDepth: 25, seabed: mud }
+anchors:
+  starboard: { length_shackles: 4, bearing_deg: 10 }
+  holdingFactor: 0.5
+  dragSpeed_mps: 0.4

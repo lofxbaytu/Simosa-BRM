@@ -289,22 +289,71 @@ internal sealed class SceneGeometry
             g.AddSeg(tIn, tOut, p.Sigma * beam);
         }
 
-        // 雨區(圓):射線與圓的交段
-        foreach (var rc in _env.RainCells)
+        // 雨區(圓;檔案/教官與情境):射線與圓的交段
+        foreach (var rc in _env.RainCells) AddRainCell(g, rc, sinT, cosT);
+        foreach (var rc in _env.ScenarioRainCells) AddRainCell(g, rc, sinT, cosT);
+        // 雨區(多邊形;情境):射線與多邊形的交段(凹多邊形可有多段;天線在雨區內時自 0 起)
+        foreach (var rp in _env.ScenarioRainPolygons) AddRainPolygon(g, rp, sinT, cosT);
+    }
+
+    private void AddRainCell(SpokeGeometry g, RainCell rc, double sinT, double cosT)
+    {
+        var cxr = rc.X - _antX;
+        var cyr = rc.Y - _antY;
+        var proj = cxr * sinT + cyr * cosT;
+        var perp2 = cxr * cxr + cyr * cyr - proj * proj;
+        var r2 = rc.RadiusM * rc.RadiusM;
+        if (perp2 >= r2) return;
+        var h = Math.Sqrt(r2 - perp2);
+        var r0 = Math.Max(0.0, proj - h);
+        var r1 = proj + h;
+        if (r1 <= 0 || rc.RateMmH <= 0) return;
+        AddRainSegment(g, r0, r1, rc.RateMmH);
+    }
+
+    /// <summary>雨段:反射率 Z = 200 R^1.6(Marshall–Palmer)、雙程衰減 2·k·R^α dB/km。</summary>
+    private void AddRainSegment(SpokeGeometry g, double r0, double r1, double rateMmH)
+    {
+        var z = 200.0 * Math.Pow(rateMmH, 1.6);
+        var gamma = 2.0 * _cfg.RainAttenK * Math.Pow(rateMmH, _cfg.RainAttenAlpha) / 1000.0; // 雙程 dB/m
+        g.AddRain(r0, r1, z, gamma);
+    }
+
+    private readonly List<double> _rainHits = new();
+
+    private void AddRainPolygon(SpokeGeometry g, RainPolygon rp, double sinT, double cosT)
+    {
+        if (rp.RateMmH <= 0) return;
+        var pts = rp.Points;
+        _rainHits.Clear();
+        var inside = false;
+        for (var i = 0; i < pts.Length; i++)
         {
-            var cxr = rc.X - _antX;
-            var cyr = rc.Y - _antY;
-            var proj = cxr * sinT + cyr * cosT;
-            var perp2 = cxr * cxr + cyr * cyr - proj * proj;
-            var r2 = rc.RadiusM * rc.RadiusM;
-            if (perp2 >= r2) continue;
-            var h = Math.Sqrt(r2 - perp2);
-            var r0 = Math.Max(0.0, proj - h);
-            var r1 = proj + h;
-            if (r1 <= 0 || rc.RateMmH <= 0) continue;
-            var z = 200.0 * Math.Pow(rc.RateMmH, 1.6);
-            var gamma = 2.0 * _cfg.RainAttenK * Math.Pow(rc.RateMmH, _cfg.RainAttenAlpha) / 1000.0; // 雙程 dB/m
-            g.AddRain(r0, r1, z, gamma);
+            var (ax, ay) = pts[i];
+            var (bx, by) = pts[(i + 1) % pts.Length];
+            ax -= _antX; ay -= _antY; bx -= _antX; by -= _antY;
+            // 天線(原點)是否在多邊形內(射線法,水平向右)
+            if ((ay > 0) != (by > 0) && ax + (0 - ay) * (bx - ax) / (by - ay) > 0) inside = !inside;
+            var ex = bx - ax;
+            var ey = by - ay;
+            var den = sinT * ey - cosT * ex;
+            if (Math.Abs(den) < 1e-12) continue;
+            // 射線 t·(sinT, cosT) = a + u·e
+            var t = (ax * ey - ay * ex) / den;
+            var u = (ax * cosT - ay * sinT) / den;
+            if (u < 0 || u >= 1 || t <= 0) continue;
+            _rainHits.Add(t);
+        }
+        _rainHits.Sort();
+        var start = inside ? 0.0 : double.NaN;
+        foreach (var t in _rainHits)
+        {
+            if (double.IsNaN(start)) start = t;
+            else
+            {
+                if (t > start) AddRainSegment(g, start, t, rp.RateMmH);
+                start = double.NaN;
+            }
         }
     }
 

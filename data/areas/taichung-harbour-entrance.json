@@ -1,6 +1,6 @@
 {
   "id": "taichung-harbour-entrance",
-  "description": "台中港防波堤口與進港航道示意定義(供 E06 狹窄航道/防波堤口橫流;規劃書第 3.4、8.1 節 E06)。航道中心線 125°(WP0–WP3)、口門寬 350 m、北/南防波堤、導燈與海岸線皆為示意值,依公開地理常識概略放置,非 ENC/港方資料,不可用於實際航行或評估,待 ENC 與台中港港口規定校正。E06 兩個版本(漲潮 085° 2.5 kn、退潮 265° 3.0 kn)的 route 航點與此檔 channel.centreline 相同、防波堤禁區多邊形與 breakwaters 相同(測試檢查一致)。land 供雷達陸地回波(Sensors.Radar RadarEnvironment)。",
+  "description": "台中港防波堤口與進港航道示意定義(供 E06 狹窄航道/防波堤口橫流;規劃書第 3.4、8.1 節 E06)。航道中心線 125°(WP0–WP3)、口門寬 350 m、北/南防波堤、導燈與海岸線皆為示意值,依公開地理常識概略放置,非 ENC/港方資料,不可用於實際航行或評估,待 ENC 與台中港港口規定校正。E06 兩個版本(漲潮 085° 2.5 kn、退潮 265° 3.0 kn)的 route 航點與此檔 channel.centreline 相同、防波堤禁區多邊形與 breakwaters 相同(測試檢查一致)。land 供雷達陸地回波(Sensors.Radar RadarEnvironment)。 banks 供岸壁效應(SimCore BankEffect;E06 兩版以 banks.file 引用):航道兩側浚深邊坡(坡腳 = channel.polygon 南北兩邊,自航道西端至防波堤堤頭;1:5、航道水深 14 m、坡頂外 10 m,示意假設)與南北防波堤港內側垂直岸壁(= breakwaters 多邊形的港內側邊);防波堤外側面與港內迴船池周邊不定義(斜向/正面接近不在岸壁模型範圍)。",
   "source": "示意(位置誤差可達數百公尺;待 ENC 校正)",
   "channel": {
     "name": "台中港進港航道(示意)",
@@ -190,6 +190,78 @@
           24.29367,
           120.48377
         ]
+      ]
+    }
+  ],
+  "banks": [
+    {
+      "id": "TCH-CH-N",
+      "name": "外航道北側邊坡(示意,航道西端至北防波堤堤頭)",
+      "type": "sloped",
+      "slope": 5,
+      "topDepth_m": 10,
+      "channelDepth_m": 14,
+      "waterSide": "right",
+      "line": [
+        {
+          "lat": 24.31356,
+          "lon": 120.45909
+        },
+        {
+          "lat": 24.29629,
+          "lon": 120.48599
+        }
+      ]
+    },
+    {
+      "id": "TCH-CH-S",
+      "name": "外航道南側邊坡(示意,航道西端至南防波堤堤頭)",
+      "type": "sloped",
+      "slope": 5,
+      "topDepth_m": 10,
+      "channelDepth_m": 14,
+      "waterSide": "left",
+      "line": [
+        {
+          "lat": 24.31097,
+          "lon": 120.45711
+        },
+        {
+          "lat": 24.29371,
+          "lon": 120.48401
+        }
+      ]
+    },
+    {
+      "id": "TCH-BW-N-IN",
+      "name": "北防波堤港內側岸壁(示意)",
+      "type": "vertical",
+      "waterSide": "right",
+      "line": [
+        {
+          "lat": 24.2961,
+          "lon": 120.48611
+        },
+        {
+          "lat": 24.31477,
+          "lon": 120.5214
+        }
+      ]
+    },
+    {
+      "id": "TCH-BW-S-IN",
+      "name": "南防波堤港內側岸壁(示意)",
+      "type": "vertical",
+      "waterSide": "left",
+      "line": [
+        {
+          "lat": 24.29374,
+          "lon": 120.48425
+        },
+        {
+          "lat": 24.24485,
+          "lon": 120.49366
+        }
       ]
     }
   ]

@@ -136,7 +136,7 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 |---|---|---|
 | 港外流 → 外航道 | 085° 1.5 → 2.5 kn(左舷橫流約 1.6 kn,壓向北防波堤) | 265° 1.8 → 3.0 kn(右舷橫流約 1.9 kn 並逆流約 2.3 kn,壓向南防波堤) |
 | 初始車令 / 自動舵修正 | HAH 7.5 kn / 132° | FAH 10.5 kn / 116° |
-| 無人操作 | degraded 368 s、emergency 668 s,約 988 s 擱淺於北防波堤 | degraded 353 s、emergency 653 s,1800 s 時間到 |
+| 無人操作 | degraded 368 s、emergency 668 s,983.7 s 擱淺於北防波堤(無岸壁效應時 987.2 s) | degraded 353 s、emergency 653 s,1800 s 時間到 |
 
 東北風 25 kn(蒲氏 6 級)。
 
@@ -150,7 +150,13 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 - 硬性失敗:擱淺、碰撞、進入北/南防波堤。
 - 容許帶:`track.maxXtd_m`(warn `navigation.xtd.channel_m`、fail 2×)、`track.timeOutsideCorridor_s`、`manoeuvring.timeRotOverLimit_s`(`manoeuvring.rotLimit_degPerMin`)、`manoeuvring.rudderOrders`(warn `manoeuvring.channel.rudderOrdersMax`)、`manoeuvring.hardOverCount`、`manoeuvring.maxOverSpeed_kn`(warn 1.0、fail 2.5 kn)、`collisionAvoidance.minCpa_nm`(航道門檻)。
 - 必要事件:`handoverChecklist`、`leadingLightReport`(report/verbal)、`outboundResponse`(舵令/車令/轉速令或 verbal)。
-- 岸壁效應(規劃書第 6.2 節 B 項、第 458 行)另行實作中(情境 `banks` 區段);合併後可為 E06 防波堤與航道邊坡加 `banks`,並重錄夾具(待辦)。
+- **岸壁效應**(規劃書第 6.2 節 B 項、第 458 行;`docs/design/physics-bank-effect.md`):兩版皆 `banks: { file: data/areas/taichung-harbour-entrance.json }`,
+  區域檔 `banks[]` 4 段(示意):外航道南北邊坡 `TCH-CH-N`/`TCH-CH-S`(坡腳 = `channel.polygon` 南北兩邊,自航道西端至堤頭;1:5、航道 14 m、坡頂外 10 m →
+  等效岸壁在坡腳外 10 m、強度 0.29)、南北防波堤港內側垂直岸壁 `TCH-BW-N-IN`/`TCH-BW-S-IN`(= 防波堤多邊形港內側邊)。防波堤外側面與迴船池周邊不定義
+  (斜向/正面接近不在岸壁模型範圍)。等效岸壁距中心線 185 m、影響寬度約 90 m:**依簡報計畫沿中心線(XTD < 100 m)岸壁力恰為 0**,評估與參考腳本得分不變;
+  刻意靠流壓側 110 m 時受該側邊坡吸力(漲潮約 25 kN、退潮約 7 kN)。xunit 固定時刻(航段 1 368/353 s、emergency 668/653 s、導燈、漸變完成)皆在船接近岸壁之前,
+  **不變**;無人操作漲潮版被壓向北側邊坡時多了向岸吸力,擱淺由 987.2 s 提前至 983.7 s(`E06_BanksFromAreaFileActOnlyOffTheCentreline` 固定)。夾具已重錄(前 60 s 無岸壁力,
+  雜湊因岸壁區塊追加而改變)。
 
 ## 6. 契約與 JSON 範例
 
@@ -253,3 +259,218 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 3. 「改變幅度」「TCPA」容許帶指標(目前只在講評)。
 4. E06 加岸壁效應 `banks`(岸壁效應功能合併後);E06 夜間版(導燈實際熄滅)、E02 夜間版。
 5. 參數集假設值依公司 SMS(DWO-007 等)核定後 bump version 並重新驗證引用情境。
+
+---
+
+# 情境庫課程後段 — E15、E16、E17、E18、E21(第二批)
+
+> 版本 v0.1(2026-10-18)。依據同第一批(規劃書第 3.4、8.1 節與設計規則);拖船/泊位/繫纜見 `docs/design/physics-tugs-anchors-mooring.md`。
+> 本批**未變更** schema 與核心(`src/**`),只新增情境、示意區域檔與參數鍵。港口、航道、泊位座標**全部為示意值,待 ENC 校正**。
+
+| 編號 | 情境檔 | 船/裝載 | 水域(示意區域檔) | 長度 |
+|---|---|---|---|---|
+| E15 | `data/scenarios/E15_distraction_workload_kaohsiung.yaml` | FSB2 滿載 | 高雄第二港口引航進港(`data/areas/kaohsiung-second-port-inbound.json`、`kaohsiung-anchorage.json`) | ≤ 30 min |
+| E16 | `data/scenarios/E16_night_approach_keelung.yaml` | FSB1 滿載 | 基隆港北口(`data/areas/keelung-approach.json`) | ≤ 35 min |
+| E17 | `data/scenarios/E17_typhoon_departure_kaohsiung.yaml` | FSB1 壓載 | 高雄港南端油品碼頭(`data/areas/kaohsiung-south-oil-berth.json`) | ≤ 45 min |
+| E18 | `data/scenarios/E18_ukc_squat_anping.yaml` | FSB2 滿載 | 安平港油品碼頭進港航道(`data/areas/anping-approach.json`) | ≤ 55 min |
+| E21 | `data/scenarios/E21_cargo_heating_pressure_anping.yaml` | FSB1 滿載 | 同 E18(同一幾何、不同船與潮況) | ≤ 65 min |
+
+## 9. E15 干擾與工作負荷過載(高雄引航進港)
+
+**學習目標**:工作負荷管理、授權(delegation)、無干擾駕駛台(sterile bridge)、在噪音中偵測關鍵事件;1.39 工作負荷。
+
+**場景**:09:30 交班,引水人已在 Charlie 登船(帶領者扮演),FSB2 滿載 HAH 約 9 kn,沿出港航道延長線南半側(軸線南 0.12 nm,航向 070°)進第二港口;漲潮向西北 0.8 kn(自動舵 074° 已修正)、東北風 18 kn。
+
+**干擾(每 2 分鐘,T+2 至 T+22)**:貨控室卸貨計畫電話、PSC 檢查郵件、代理行 VHF、ECDIS 警報氾濫(T+8,並以每 20 s 一則、共 8 則的重複訊息表示)、公司海務電話、機控室電話、艏樓報告、VTS 廣播、代理行泊位變更、ECDIS 警報再次氾濫、PSC 追問。以 `voiceScript`(phone/vhfPort/bridge)與 `message` 表示;`ecdisAlarmFlood` 在故障目錄為只記錄故障,注入會使 `--validate` 出現警告「只記錄與廣播」,故**不注入**(第 14.4 節)。
+
+**關鍵事件**:貨船 X1 在自船航線右側約 1.5 nm 漂航(會遇關注門檻外),T+13 起步以 10 kn 向 340° 橫越(自船為讓路船,X1 不避讓);會遇開始時刻落在干擾 5 與 6 之間。
+
+**升級**:normal → **T+8 degraded**(`ecdisAlarmFlood`:警報氾濫 + 漲潮 0.8 → 1.4 kn,300 s 漸變;未再修正時航跡偏出走廊)→ **X1 進入 1.0 nm(或 T+21)emergency**(`crossingCloseQuarters`,引水人提醒)→ 到達 OUTER 或 T+30 結束。無人操作時刻:degraded 480 s、X1 會遇 798 s、emergency 1043 s、cpaHard 1300 s(xunit 固定)。
+
+**評估**:
+- 硬性失敗:碰撞、CPA < `navigation.cpa.hardFail_nm`。
+- 容許帶:`track.maxXtd_m`(warn `navigation.xtd.pilotage_m` 450 m、fail 2×)、`track.timeOutsideCorridor_s`(fail 180 s)、`collisionAvoidance.minCpa_nm`(warn `navigation.cpa.pilotage_nm` 0.25 nm、fail 0.2 nm;0.5 nm 會大於走廊寬度而使驗證警告)。
+- 必要事件:`handoverChecklist`;無干擾駕駛台 `sterileCargoCall`、`sterilePscEmail`、`sterileCompanyCall`(acknowledge verbal,note 記錄授權/延後)、`alarmFloodManaged`(verbal/report,指派專人處理警報);關鍵事件 `crossingDetected`(X1 會遇開始 → lookoutReport/report 或 X1 首次行動 ≤ `bridge.distraction.criticalDetection_s`,逾時每秒 0.05 分)、`crossingAction`(X1 首次行動 ≤ `navigation.encounter.earlyAction_s`)。
+- 合理操作(xunit):每次干擾 20 s 內授權/延後、循跡修正流壓(每次 ≤ 4°,不被會遇追蹤誤判為避讓)、X1 起步即 DSAH + 向右 20°、X1 通過最近點後回航跡:必要事件 met、容許帶皆 ok、100 分;X1 最近約 0.31 nm、最大 XTD 約 410 m。
+
+## 10. E16 夜間進港燈光混淆(基隆)
+
+**學習目標**:夜間視覺狀況覺知、瞭望報告、雷達/ECDIS 與目視交叉核對、航程危險複審(航船布告);1.22。
+
+**場景**:20:30 交班(夜間),FSB1 滿載自口門外 4.5 nm 依導航線(195°)進港至引水人登船點(口門外 0.8 nm);東北季風 25 kn(陣風 0.25)、沿岸流向 250° 0.6 kn(壓向右舷 = 西側淺礁)、HAH 約 8–9 kn、自動舵 193°。東北湧浪與背景岸燈無核心模型,以簡報與訊息表示(3D 視景另行實作)。
+
+**目標**:F1 無燈無 AIS 漁船(導航線上偏東 0.06 nm、口門外 2.0 nm),自船距 1.2 nm 時才出現(`trigger: ownDistance`,代表湧浪雜波中的微弱回波);F2、F3 開集魚燈有 AIS 的漁船(背景燈光);OUT1 出港貨櫃船(緊急階段啟動,導航線東 0.35 nm,左舷對左舷)。**schema `lights` 列舉沒有「無燈」**,F1 以 `aisOn: false` 與訊息表示,未指定 `lights`(核心推定為 fishing),待辦第 14.5 節。
+
+**升級**:normal(F1 雷達回波)→ **通過 K1 degraded**(`leadingLightsOut`:瞭望報告看不到後導燈 — 本週航船布告(簡報附件,交班時未讀)已公告熄滅;風 25 → 30 kn、流 0.6 → 0.9 kn)→ **距 PILOT 1.0 nm(或 T+25)emergency**(`outboundAndSet`:OUT1 出港 + 流 → 1.2 kn)→ 到達登船點、擱淺或 T+35。無人操作:F1 534 s、degraded 771 s、emergency 1090 s、F1 cpaHard 954 s、到達 1419 s。
+
+**評估**:硬性失敗擱淺(淺礁以 `ukcPolicy` 區域水深 4 m 表示)、碰撞、cpaHard;容許帶 XTD(warn `navigation.xtd.harbourApproach_m` 500 m、fail 1.3× ≈ 西側淺礁距離)、走廊外時間、minCpa(warn 0.25、fail 0.2 nm);必要事件 `handoverChecklist`、`lookoutReportF1`(lookoutReport/report ≤ `navigation.night.lookoutReport_s`)、`vtsReport`(K1)、`leadingLightReport`(callMaster/verbal ≤ `navigation.night.leadingLightReport_s`)、`outboundResponse`(舵令/車令/轉速令/verbal ≤ `navigation.channel.outboundResponse_s`)。合理操作:F1 出現 40 s 內報告、以導航線西側 400 m 通過(F1 最近約 0.27 nm)、F1 通過後回線、OUT1 時口頭確認並減至 SAH:100 分。
+
+## 11. E17 颱風準備與離港決策(高雄港南端油品碼頭)
+
+**學習目標**:不確定下的決策、風險評估、公司溝通(1.39 決策)、一艘拖船離泊。
+
+**場景**:10:00 交班,FSB1 壓載(卸貨完畢)右舷靠 KHH-SOB-1(碼頭線 000°、水域在西、碰墊/繫船柱比照 E14 示意型式),4 纜已繫;中央氣象署颱風海上警報,西風 15 kn 吹攏。原訂兩艘拖船:TG1 高港11號(`tugs[]`,左舷艉,`initial.mode: free`,帶纜 90 s)、TUG2 高港12號(港內待命的**目標船**)。
+
+**拖船可用數 2 → 1**:核心時間表動作不含 `tugControl`、也沒有「拖船不可用」狀態,因此只把 TG1 放在 `tugs[]`,TUG2 以 `shipType: tug` 的目標船表示,於 degraded 以 `targetControl {behaviour: waypoints}` 駛離(教官對 TUG2 下拖船令會被 `unknownTug` 拒絕,與「已改派」一致)。
+
+**升級**(壓縮時間):T+1 min 港方要求油輪兩小時內離港(決策點)→ T+4 公司詢問可否留港(壓力)→ **T+7 degraded**(`tugReduced`:拖船 2 → 1 + 風 15 → 25 kn,600 s 漸變)→ **T+25 emergency**(`outerBands`:25 → 40 kn、陣風 0.35,600 s 漸變)→ 離開泊位區(船舯離碼頭 > 110 m)60 s 後結束;或擱淺、T+45。無人操作:船在吹攏風下壓在碰墊上(纜未斷),全部決策逾時。
+
+**評估**:硬性失敗擱淺、碼頭硬接觸、繫纜斷裂;容許帶 `berthing.maxEnergyRatio`(warn 0.8、fail 1.0)、港內速限超速時間;必要事件 `handoverChecklist`、`departureDecision`(notifyCompany/report ≤ `typhoon.departureDecision_s`)、`engineStandby`(notifyEcr)、`tugPlan`(verbal/report)、`tugUsed`(拖船縮減後 `tugCommand`)、**`departBeforeStorm`**(港方要求 → `clearOfBerth` ≤ `typhoon.e17.departBy_s` = 強風時刻 − 要求時刻,penalty 20;決策時機)。拖船工作時間與最大出力見 `summary.berthing.tugs`。
+合理操作(xunit):早決策、TG1 帶纜待命,留艏倒纜右滿舵 DSAH 開艉 100 s,解倒纜後 SAS 退出,TG1 依開出角(< 15°)拉艉抵抗吹攏風(相對方位 270° 的拉力隨船轉動,持續全力會使船迴轉,故以開出角調節);約 T+17 離開泊位區(強風前),無碼頭硬接觸、無斷纜,及格。
+
+## 12. E18 油碼頭進港 UKC/squat 限制(安平)
+
+**學習目標**:潮窗規劃、UKC 監控、速度相關 squat、ECDIS 安全等深線、對「速度誘惑」的質疑;SIRE 4.2.2。
+
+**幾何與潮汐(示意)**:浚深航道軸 080°、底寬 200 m、維護水深 CD 7.0 m;兩側淺灘 CD 5.0 m 以 `ukcPolicy` 區域水深表示(安全等深線以外,越出即擱淺);航道速限區(`port.anping.channelSpeedLimit_kn` 6 kn)。核心水深 = 基底常數 + 區域覆寫取淺,**潮汐以基底水深(維護水深 + 潮高)的 `setEnvironment waterDepth` 漸變表示**,淺灘的固定區域水深不隨潮(淺灘恆淺於基底,不影響結果);開場到航道外端的 1 nm 沿岸段同為基底水深。
+
+**場景**:13:00 交班,FSB2 滿載 7.2 m 自口門外 4.0 nm,HAH 約 7.5 kn(計畫在 OUTER 前減至 SAH)、自動舵 077°;預報潮高 +1.9 m → 水深 8.9 m、靜態 UKC 1.7 m。MMG(ICORELS)squat 在 8.4–8.9 m 水深:DSAH 約 0.35 m、SAH 約 0.4–0.45 m、HAH 約 0.75–0.8 m、FAH 約 1.0 m。
+
+**升級**:normal → **T+5 degraded**(`tideLower`:潮位比預報低 0.3 m 且提早退潮,8.9 → 8.6 m、600 s)→ T+12 碼頭要求加速到 8 kn 以上(速度誘惑)→ **通過 BAR(或 T+35)emergency**(`barShoaling`:前船回報沙洲段淺於海圖、潮位 → 8.4 m)→ 到達迴船池、擱淺或 T+55。測深儀淺水警報 `alerts.shallowWater_m` = `navigation.ukc.shallowAlarm_m`(龍骨下 0.8 m,含 squat)。無人操作(HAH 不減速):degraded 300 s、淺水警報約 585 s、emergency 1333 s、到達 2167 s;UKC 低於政策 1400 s 以上(fail)、最小 0.48 m(warn)、超速 1.3 kn(warn),不及格。
+
+**評估**:`assessment.ukc.min` 與 `zones[channel].ukcMin` 皆為 `navigation.ukc.channel_fraction`(10 % 吃水,0.72 m;淺水沿岸進港段全程適用,開闊海 20 % 會使沿岸段誤扣);硬性失敗擱淺、`ukcHard`(< 5 % 吃水);容許帶 `ukc.min_m`(warn `navigation.ukc.minWarn_m` 0.6、fail `minFail_m` 0.45 m)、`ukc.timeBelowLimit_s`(fail 120 s)、`manoeuvring.maxOverSpeed_kn`(warn 0.5、fail 2.0 kn)、XTD(warn `navigation.xtd.dredgedChannel_m` 70 m、fail 1.4×)、走廊外時間;必要事件 `handoverChecklist`、`tideReport`(report/verbal ≤ `navigation.ukc.tideReport_s`)、`speedChallenge`(verbal/report)、`ukcAlarmResponse`(`alertRaised shallowWater` → 車令/轉速令 ≤ `navigation.ukc.alarmResponse_s`;警報未響時 notApplicable)。合理操作:開場減至 SAH、通過 BAR 減至 DSAH:UKC 最小約 0.91 m、警報未響、100 分。
+
+## 13. E21 貨物加熱系統故障下的到港壓力(安平)
+
+**學習目標**:壓力下的短期策略、對上級(公司)的質疑與安全優先(1.39、MRM)、淺水航道的速限與 UKC 遵守;與 E18 同一幾何(重複性)。
+
+**場景**:14:00 交班,FSB1 滿載 5.7 m、瀝青貨溫約 150 °C,自口門外 5.5 nm FAH 約 10 kn、自動舵 077°;潮高 +0.6 m 且退潮中(水深 7.6 → 7.2 → 6.6 m)。FSB1 的 squat 小(DSAH–FAH 約 0.07–0.3 m),UKC 主要受潮位影響:依計畫航速可在潮窗內進港(UKC 約 0.8 m),延誤或放棄則應錨泊等候。
+
+**故障與壓力**:T+2 熱油鍋爐跳脫(`cargoHeatingFailure` 為只記錄故障,同 E15 理由**不注入**,以輪機長語音 + 警報訊息表示)→ T+5 修復時間不定(2–6 小時)→ 貨溫下降以每 5 分鐘一則訊息表示(核心無貨物熱力模型)→ **T+10 degraded**(`companyPressure`:公司要求全速、「航道速限不用管」,潮位 7.6 → 7.2 m)→ **通過 OUTER(或 T+25)emergency**(`tideWindowClosing`:港控通報潮窗約 30 分鐘、公司再催、潮位 → 6.6 m,1500 s)→ 到達迴船池、擱淺或 T+65。無人操作(FAH):degraded 600 s、emergency 899 s、到達 2264 s;航道超速約 3.5 kn(fail)、偏出走廊(fail)。
+
+**評估**:硬性失敗擱淺、`ukcHard`;容許帶超速幅度(warn 0.5、fail 2.0 kn)、`ukc.min_m`、UKC 超限時間、XTD;必要事件 `handoverChecklist`、`heatingFailureReport`(callMaster/notifyCompany ≤ `cargo.heatingFailureReport_s`)、`companyChallenge`(verbal/notifyCompany ≤ `management.challenge_s`,penalty 15)、`windowDecision`(verbal/anchorDecision/notifyCompany ≤ `management.windowDecision_s`)。「放棄進港、錨泊等候」為同樣正確的決定(以 acknowledge anchorDecision 表示,之後不進航道即不會有速限/UKC 扣分)。合理操作:質疑公司、OUTER 前減至 SAH(約 6 kn)、決定依計畫進港:UKC 最小約 0.81 m、100 分、約 3520 s 到達。
+
+## 14. 第二批共同:參數、契約、測試、待辦
+
+### 14.1 設計規則的落實
+
+| 規則 | 落實 |
+|---|---|
+| 交接班與書面計畫開場 | 第一個時間表項目 `handover`(t = 1 s,narrator 語音);`briefing.text` 以「交班(地方時)」開頭;附件含「…計畫」;必要事件 `handoverChecklist`。 |
+| 三步升級 | 每個情境恰好一個 `degraded` 與一個 `emergency`;位置/會遇觸發者另有時間後備(E15 `bridge.e15.emergencyAt_s`、E16 `navigation.e16.emergencyAt_s`、E18 `navigation.e18.emergencyAt_s`、E21 `cargo.e21.emergencyAt_s`);無人操作時刻由 xunit 固定。 |
+| 課程後段 | 本批不注入技術故障(只記錄故障以訊息表示);升級來自工作負荷、能見度/燈光、天候、潮汐與人員壓力。 |
+| 「引水人/教官是錯的」 | E18 碼頭要求加速、E21 公司要求全速且不管速限、E17 公司詢問留港:皆以必要事件或講評引導問題要求質疑。 |
+| 同一幾何的重複版本 | E18 與 E21 共用安平幾何(不同船、潮況與壓力來源)。 |
+
+### 14.2 參數集新增鍵(`ASSUMED-E15`/`E16`/`E17`/`E18`/`E21`,標題皆以「假設值,待公司程序」開頭)
+
+| 鍵 | 值 | 用途 |
+|---|---|---|
+| `bridge.distraction.response_s` / `alarmFloodResponse_s` / `criticalDetection_s` | 60 / 120 / 240 s | E15 干擾授權、警報氾濫處理、關鍵事件偵測 |
+| `bridge.e15.alarmFloodAt_s` / `closeQuarters_nm` / `emergencyAt_s` | 480 s / 1.0 nm / 1260 s | E15 時間表 |
+| `navigation.cpa.pilotage_nm` / `navigation.xtd.pilotage_m` | 0.25 nm / 450 m | 引航進港 CPA 與走廊(E15、E16 的 minCpa) |
+| `navigation.night.lookoutReport_s` / `leadingLightReport_s` | 180 / 120 s | E16 |
+| `navigation.xtd.harbourApproach_m` | 500 m | E16 導航線接近段走廊 |
+| `navigation.e16.emergencyRange_nm` / `emergencyAt_s` | 1.0 nm / 1500 s | E16 緊急階段 |
+| `typhoon.departureDecision_s` / `engineStandby_s` / `tugPlanReport_s` | 300 / 300 / 300 s | E17 決策 |
+| `typhoon.e17.portOrderAt_s` / `tugReductionAt_s` / `stormAt_s` / `departBy_s` | 60 / 420 / 1500 / 1440 s | E17 時間表與決策時機 |
+| `port.anping.channelSpeedLimit_kn` | 6 kn | 安平航道速限(示意) |
+| `navigation.ukc.tideReport_s` / `speedChallenge_s` / `alarmResponse_s` | 180 / 180 / 60 s | E18 |
+| `navigation.ukc.shallowAlarm_m` / `minWarn_m` / `minFail_m` | 0.8 / 0.6 / 0.45 m | 測深儀警報與 UKC 容許帶(E18、E21) |
+| `navigation.xtd.dredgedChannel_m` | 70 m | 浚深航道走廊 |
+| `navigation.e18.tideLowerAt_s` / `speedPressureAt_s` / `emergencyAt_s` | 300 / 720 / 2100 s | E18 時間表 |
+| `cargo.heatingFailureReport_s`、`management.challenge_s` / `windowDecision_s` | 180 / 300 / 300 s | E21 |
+| `cargo.e21.heatingFailureAt_s` / `companyPressureAt_s` / `emergencyAt_s` | 120 / 600 / 1500 s | E21 時間表 |
+
+既有鍵沿用:`navigation.ukc.channel_fraction`/`hardFail_fraction`、`navigation.cpa.coastal_nm`/`hardFail_nm`、`navigation.encounter.*`、`navigation.vts.report_s`、`navigation.channel.outboundResponse_s`、`port.kaohsiung.berthSpeedLimit_kn`、`manoeuvring.rotLimit_degPerMin`、`bridge.handover.checklist_s`、`assessment.passMark`。
+
+### 14.3 契約與 JSON 範例(皆為既有 schema/核心功能)
+
+```json
+{"id": "crossingDetected", "after": {"event": "encounterStarted", "targetId": "X1"},
+ "expect": {"any": [{"acknowledge": {"kind": "lookoutReport"}}, {"acknowledge": {"kind": "report"}},
+                    {"event": {"kind": "encounterFirstAction", "targetId": "X1"}}]},
+ "within_s": 240, "penalty": 10, "latePenaltyPer_s": 0.05}
+{"id": "alarmFloodRepeat", "repeat": {"every_s": 20, "max": 8},
+ "when": {"type": "event", "kind": "timelineTriggered", "itemId": "ecdisAlarmFlood"},
+ "actions": [{"message": {"to": "all", "text": "ECDIS 警報:多項警報未確認(重複)", "severity": "warning"}}]}
+{"id": "F1", "shipType": "fishing", "aisOn": false,
+ "trigger": {"type": "ownDistance", "point": {"lat": 25.18587, "lon": 121.75561}, "lessThan": 1.2}}
+{"id": "westShoal", "type": "ukcPolicy", "waterDepth_m": 4, "polygon": [{"lat": 25.16515, "lon": 121.74164}]}
+{"id": "tugReduced", "phase": "degraded", "actions": [
+  {"setEnvironment": {"wind": {"trueSpeed": 25, "trueDir": 260, "gustiness": 0.25}, "ramp_s": 600}},
+  {"targetControl": {"id": "TUG2", "behaviour": {"mode": "waypoints", "stopAtEnd": false,
+    "waypoints": [{"x": -600, "y": -400, "speed": 8}, {"x": -1500, "y": -1500, "speed": 10}]}}}]}
+{"id": "TG1", "attach": "aftPort", "connect_s": 90, "initial": {"mode": "free", "direction_deg": 270, "power_pct": 0}}
+{"id": "departBeforeStorm", "after": {"event": "timelineTriggered", "itemId": "portOrder"},
+ "expect": {"event": {"kind": "timelineTriggered", "itemId": "clearOfBerth"}}, "within_s": 1440, "penalty": 20}
+{"id": "tideLower", "phase": "degraded", "actions": [{"setEnvironment": {"waterDepth": 8.6, "ramp_s": 600}}]}
+{"alerts": {"shallowWater_m": 0.8},
+ "assessment": {"ukc": {"min": {"fractionOfDraft": 0.10}},
+   "hardFail": [{"id": "ukcHard", "rule": "ukc", "lessThan": {"fractionOfDraft": 0.05}}],
+   "bands": [{"id": "ukcMin", "metric": "ukc.min_m", "direction": "below", "warn": 0.6, "fail": 0.45, "penalty": 10, "failPenalty": 25},
+             {"id": "ukcTime", "metric": "ukc.timeBelowLimit_s", "warn": 0, "fail": 120, "penalty": 5, "failPenalty": 15}]}}
+{"id": "ukcAlarmResponse", "after": {"event": "alertRaised", "itemId": "shallowWater"},
+ "expect": {"any": ["telegraphChange", "rpmOrder"]}, "within_s": 60, "penalty": 10}
+```
+- 教官/學員指令不變:`{"type": "acknowledge", "args": {"kind": "verbal", "note": "授權大副處理卸貨計畫,引航中不簽字"}}`、`{"kind": "anchorDecision", "note": "潮窗已過,放棄進港錨泊等候"}`、`{"type": "tugControl", "args": {"id": "TG1", "mode": "pull", "direction_deg": 270, "power_pct": 60}}`。
+- 區域檔(新增,不含 `land`):`kaohsiung-second-port-inbound.json`(`route`)、`keelung-approach.json`(`route`、`shoals[]`、`leadingLights`、`fishingGround`)、`kaohsiung-south-oil-berth.json`(`berths[]`,網頁建置時匯入解析)、`anping-approach.json`(`route`、`channel`、`shoals[]`、`chartDatum`)。
+- 確定性:只使用既有狀態與事件(漸變、時間表、目標控制、拖船/泊位/繫纜、警報、評估皆已進快照/雜湊);未使用這些情境的既有情境雜湊不變(參數集 sha256 只在紀錄標頭)。
+
+### 14.4 已知限制與取捨
+
+- **只記錄故障不注入**:`ecdisAlarmFlood`(E15)、`cargoHeatingFailure`(E21)在 `src/Contracts/fault-catalogue.json` 為 `modelled: false`,`ScenarioValidator` 對時間表注入只記錄故障一律給警告;本批要求 `--validate` 無警告,故以同名時間表項目 + 訊息/語音表示(`faults[]` 不會出現)。若要讓儀器端(ECDIS 警報清單)收到故障,可加回 `injectFault` 並接受該警告,或由核心/驗證器把這兩項列為「預期只記錄」(待契約負責人決定)。
+- E16 無燈漁船:schema `targets[].lights` 列舉沒有 `none`,只能以 `aisOn: false` 與訊息表示。
+- E17 拖船縮減以「目標船駛離」表示;核心沒有拖船可用性狀態。
+- E18/E21 淺灘水深固定、不隨潮;潮汐只作用於基底水深。
+- 會遇追蹤把 ≥ 5° 的自動舵改向記為首次行動:合理操作腳本循跡時每次改 ≤ 4°,避免把流壓修正誤判為避讓;實際課程中學員的流壓修正可能被記為對 X1/F1 的首次行動(講評時以 `summary.collisionAvoidance.targets[]` 判讀)。
+
+### 14.5 測試與夾具
+
+- `tests/SimCore.Tests/ScenarioLibraryLateCourseTests.cs`(18 項):載入/驗證(無錯誤、無警告)與設計規則、區域檔一致、五個情境無人操作的升級時刻與關鍵事件、合理操作腳本(必要事件 met、容許帶不誤扣、及格)、E17 單拖船與風力剖面、E18/E21 同一幾何;紀錄 → 重播雜湊/事件/summary 一致後刪除紀錄。
+- 主控程序:五個情境 `--validate` 無錯誤無警告;`--duration 900 --timescale 10` 錄製後 `--replay` 一致(驗證後刪除)。
+- 核心紀錄夾具 `src/Instruments.Web/tests/fixtures/record-E15…E21-core.jsonl`(60 s,每 500 tick 一筆狀態);`src/Tools.Calibration/tests/test_scenario_params.py` 的 `REQUIRED_FIXTURES` 已加入五個 id。
+
+### 14.6 待辦
+
+1. 以 ENC/港方資料校正四個新區域檔(基隆導航線與導燈、高雄南端油品碼頭泊位、安平航道水深與淺灘)並重錄夾具。
+2. schema `targets[].lights` 加入 `none`(E16 F1);核心/驗證器處理「預期只記錄」故障(E15 `ecdisAlarmFlood`、E21 `cargoHeatingFailure`)後改為注入。
+3. 拖船可用性(拖船改派、到達延遲)與颱風風場/湧浪模型;貨物熱力(貨溫)模型。
+4. 區域水深隨潮(潮高網格或區域相對水深),E18/E21 淺灘與沙洲段可隨潮變化。
+5. 參數集假設值依公司 SMS 核定後 bump version 並重新驗證引用情境。
+
+## 15. 第二批審查修正(2026-10-18,E15/E16/E17/E21)
+
+已重現的審查發現與處置(回歸測試 `tests/SimCore.Tests/ScenarioLibraryLateCourseReviewFixTests.cs`,修正前失敗、修正後通過;既有 `ScenarioLibraryLateCourseTests` 全部不變通過):
+
+| 發現 | 處置 |
+| --- | --- |
+| E16 「無燈」漁船 F1 在狀態中為 `lights: fishing`(未指定時依 shipType 推定) | `f1OnRadar`(由 `targetActivated F1` 觸發)加 `targetControl: { id: F1, lights: none }`;F1 啟動時刻 534 s 不變,其後 `state.targets[F1] = { aisOn: false, lights: "none" }`。`targetControl` 動作為自由物件(command.schema.json `targetControl.args`),驗證器無警告。schema `targets[].lights` 加 `none` 仍為契約負責人待辦,之後可改在 `targets[]` 直接宣告。 |
+| E17 留在泊位時 40 kn 吹攏風對纜繩沒有影響 | 保留外圍環流(T+25–T+35)吹攏風(強風中才離泊的碼頭硬接觸風險不變),新增 `windVeer`:外圍環流漸強完成後(`since outerBands ≥ 601 s` = 2101 s)風向 250° → 100°(離岸)、40 kn、陣風 0.35、漸變 600 s(持續到 T+45 結束之後,故既有 `environmentRampDone` 序列不變)。無人操作留港:4 纜最大張力 / MBL 由 0.08 升到 0.71(STERN 約 28 t),未斷纜;新增容許帶 `lineTension`(`berthing.maxLineTensionRatio`,warn 0.5 = OCIMF MEG4 合成纖維纜工作負荷限值、fail 0.8;假設值,待公司繫泊程序)。合理操作(T+11 前離泊)最大 0.18,不受影響。檔頭、簡報(預報風向轉離岸)與教官訊息改寫為一致的說法。 |
+| E21 潮窗永遠不會關閉,UKC 評估在任何延誤下都不作用 | 新增 `windowClosed`:`all[ since tideWindowClosing ≥ 1800 s(港控「約三十分鐘」), zone channel inside, not passedWaypoint BAR ]` → `setEnvironment waterDepth 6.2 m`(300 s)+ 港控語音。沙洲為控制水深,已通過沙洲的船不受影響;在航道外錨泊等候(放棄進港)不觸發、不受 UKC 扣分;等候後再進入航道即觸發。延誤(潮窗將過 60 s 後停俥、3000 s 才以 SAH 進港):2900 s windowClosed,`ukc.min_m` 0.43(ukcMin fail)、`ukc.timeBelowLimit_s` 766(ukcTime fail);FAH 時 UKC 約 0.24 m < 5 % 吃水(硬性失敗)。依計畫 SAH 進港(BAR 約 2332 s,潮窗將過後 20 分鐘)與無人操作 FAH(2264 s 到達)結果不變。 |
+| E15 外錨地區域離航線 2.4 nm 以上,`anchorageEntered` 永遠不觸發;簡報位置不對 | 新增區域檔 `data/areas/kaohsiung-anchorage-b-e15.json`(外錨地 B 區,E15 專用,示意,待 ENC 校正):航線北側、南界距航線 820 m(走廊 450 m 外約 0.2 nm)、北界 2600 m,沿航線 START 西方 300 m 至 FW2 附近。E15 `zones[anchorageB]` 與此檔相同;`zones[anchorage]`(A 區,同 kaohsiung-anchorage.json)保留。`anchorageEntered` 改為 `any[ zone anchorageB, zone anchorage ]`。開場停俥、隨漲潮漂流時 1654 s 進入 B 區(VTS 提醒);無人操作(未修正流壓,最大 XTD 476 m)與合理操作不進入。簡報改為「航線北側(走廊外約 0.2 nm 起)為外錨地 B 區,西北方約 2.5 nm 為外錨地 A 區」,檔頭同步。 |
+| E15 檔頭 emergency 時間後備寫 T+18 | 改為 T+21(`bridge.e15.emergencyAt_s` = 1260 s)。 |
+| E15 關鍵事件計時起點是 X1 會遇開始(循跡時早於 X1 起步) | **未修正**(見下)。 |
+
+**E15 關鍵事件計時(未修正)**:建議的兩種修法都會使既有測試失敗,而本批不可修改 `ScenarioLibraryLateCourseTests.cs`:(a) 把 `crossingDetected`/`crossingAction` 的 `after` 改為 `{ event: timelineTriggered, itemId: crossingTurn }` 時,AssessmentEngine 只計入 after 之後的 expect,既有合理操作腳本在 X1 會遇開始(循跡時約 718 s)+ 60 s 回報(早於 780 s 起步),`crossingDetected` 改由 `encounterFirstAction` 達成,`Assert.Equal("acknowledge:lookoutReport", …By)` 失敗——這正是審查指出的錯誤行為被寫進了測試;(b) 把 X1 初始位置外移會改變無人操作的固定時刻(會遇 798 s、emergency 1043 s、cpaHard 1300 s)。建議由測試負責人同時:情境改用 (a),並把 `E15_ScriptedSterileBridgeMeetsRequirements` 的瞭望報告改在 `crossingTurn` 之後(例如 X1 對地 > 2 kn 時先 `acknowledge lookoutReport` 再避讓);無人操作測試不受 (a) 影響(必要事件仍全部 missed)。
+
+契約(皆為既有 schema/核心功能,schema 未改):
+
+```yaml
+# E16 f1OnRadar
+- targetControl: { id: F1, lights: none }
+# E17 windVeer 與容許帶
+- id: windVeer
+  when: { type: time, atLeast: 601, since: { event: timelineTriggered, itemId: outerBands } }
+  actions:
+    - setEnvironment: { wind: { trueSpeed: 40, trueDir: 100, gustiness: 0.35 }, ramp_s: 600 }
+bands:
+  - { id: lineTension, metric: berthing.maxLineTensionRatio, warn: 0.5, fail: 0.8, penalty: 10, failPenalty: 20 }
+# E21 windowClosed
+- id: windowClosed
+  when:
+    all:
+      - { type: time, atLeast: 1800, since: { event: timelineTriggered, itemId: tideWindowClosing } }
+      - { type: zone, id: channel, inside: true }
+      - { not: { type: routeLeg, passedWaypoint: BAR } }
+  actions:
+    - setEnvironment: { waterDepth: 6.2, ramp_s: 300 }
+```
+
+```json
+{"t": 600.0, "targets": [{"id": "F1", "aisOn": false, "lights": "none"}]}
+{"kind": "timelineTriggered", "itemId": "windowClosed", "t": 2900.0}
+{"bands": [{"id": "lineTension", "metric": "berthing.maxLineTensionRatio", "state": "warn", "value": 0.714}]}
+```
+
+確定性:新狀態只用既有機制(時間表、漸變、目標控制、區域追蹤),皆已進快照與雜湊;只改這四個情境,其他情境雜湊不變。四個情境的核心紀錄夾具 `record-E15/E16/E17/E21…-core.jsonl` 已依第 14.5 節程序重錄(Host `--duration 60 --timescale 10`,`--replay` 一致,縮短為每 500 tick 一筆狀態)。參數集未改(新增時刻以情境內常數表示並於本節記錄)。

@@ -479,6 +479,73 @@ public class ScenarioLibraryTests
         Assert.InRange(f.Environment.Wind.TrueSpeed, 22, 27);   // 蒲氏 6 級
     }
 
+    /// <summary>
+    /// E06 岸壁效應(banks.file = taichung-harbour-entrance.json):載入時內嵌 4 段示意岸壁(外航道南北邊坡坡腳 = 航道多邊形南北邊至堤頭、
+    /// 南北防波堤港內側面),與區域檔一致;無人操作時船被橫流壓向防波堤一側而受岸壁力(漲潮:北側邊坡;退潮:南側),
+    /// 依簡報計畫沿中心線操船時船舯距等效岸壁超過影響寬度,岸壁力為 0(合理操作不受岸壁效應影響);刻意靠流壓側 110 m 時受該側邊坡吸力。
+    /// </summary>
+    [Theory]
+    [InlineData(E06Flood, "TCH-CH-N", -110.0)]
+    [InlineData(E06Ebb, "TCH-CH-S", 110.0)]
+    public void E06_BanksFromAreaFileActOnlyOffTheCentreline(string id, string driftBank, double driftSideOffsetM)
+    {
+        static (double, double) LL(JsonElement p) => (p.GetProperty("lat").GetDouble(), p.GetProperty("lon").GetDouble());
+        var sc = Load(id);
+        var area = Area("taichung-harbour-entrance.json").GetProperty("banks").EnumerateArray().ToList();
+        var defs = sc.Banks!.Definitions!;
+        Assert.Equal(area.Select(b => b.GetProperty("id").GetString()), defs.Select(d => d.Id));
+        for (var i = 0; i < defs.Count; i++)
+            Assert.Equal(area[i].GetProperty("line").EnumerateArray().Select(LL), defs[i].Line.Select(p => (p.Lat!.Value, p.Lon!.Value)));
+        var ch = Area("taichung-harbour-entrance.json").GetProperty("channel").GetProperty("polygon").EnumerateArray().Select(LL).ToList();
+        Assert.Equal(ch[0], (defs[0].Line[0].Lat!.Value, defs[0].Line[0].Lon!.Value));   // 北側邊坡起點 = 航道多邊形西北角
+        Assert.Equal(ch[3], (defs[1].Line[0].Lat!.Value, defs[1].Line[0].Lon!.Value));   // 南側邊坡起點 = 航道多邊形西南角
+        Assert.Equal(1.0, sc.Banks.Scale);
+
+        // 依簡報計畫沿中心線(XTD 0)與刻意靠流壓側 110 m(漲潮 = 北側、退潮 = 南側)兩種操船;無人操作時漲潮版壓向北側邊坡至北防波堤
+        (double MaxY, HashSet<string> Banks) Sample(Action<SimulationEngine, List<SimEvent>, int>? script)
+        {
+            double max = 0;
+            var seen = new HashSet<string>();
+            var (e, _, _) = Run(id, 1800, (eng, events, t) =>
+            {
+                script?.Invoke(eng, events, t);
+                if (eng.Bank?.State() is not { } b) return;
+                max = Math.Max(max, Math.Abs(b.YKN));
+                if (Math.Abs(b.YKN) > 0 && b.BankId is { } bid) seen.Add(bid);
+            }, record: false);
+            Assert.True(e.Bank!.Active);
+            return (max, seen);
+        }
+        var none = Sample(null);
+        var centre = Sample(Crabbing());
+        var offset = Sample(Crabbing(driftSideOffsetM));
+        _out.WriteLine($"no operator: max |Y| {none.MaxY:F1} kN [{string.Join(",", none.Banks)}]; centreline {centre.MaxY:F2} kN; offset {driftSideOffsetM} m: {offset.MaxY:F1} kN [{string.Join(",", offset.Banks)}]");
+        Assert.Equal(0.0, centre.MaxY);
+        Assert.True(offset.MaxY > 1, $"offset max |Y| {offset.MaxY:F2} kN");
+        Assert.Contains(driftBank, offset.Banks);
+        if (id == E06Flood) Assert.Contains("TCH-CH-N", none.Banks);
+
+        // 無人操作的擱淺時刻:岸壁吸力把漲潮版更早拉上北防波堤(無 banks 時的時刻作對照;退潮版不擱淺)
+        double? Grounding(bool banks)
+        {
+            var sc = Load(id);
+            if (!banks) sc.Banks = null;
+            var e = new SimulationEngine(TestData.Ship(sc.Ship.Id), sc, Mmg);
+            var ev = TestData.Capture(e);
+            var end = (long)Math.Round(1800 / e.Dt);
+            while (e.Tick < end && !e.Ended) e.Step();
+            return ev.FirstOrDefault(x => x.Kind == SimEventKinds.Grounding)?.T;
+        }
+        var (gWith, gWithout) = (Grounding(true), Grounding(false));
+        _out.WriteLine($"grounding with banks {gWith}, without {gWithout}");
+        if (id == E06Flood)
+        {
+            Assert.Equal(983.7, gWith!.Value, 1);
+            Assert.True(gWith < gWithout, $"{gWith} vs {gWithout}");
+        }
+        else Assert.Equal((double?)null, gWith);
+    }
+
     /// <summary>無人操作:航段 1 流速增加(degraded)→ 90 s 導燈遮蔽 → 距口門 0.8 nm(或 300 s 後)出港船在航道內(emergency)。漲潮版自動舵不修正時壓上北防波堤擱淺。</summary>
     [Theory]
     [InlineData(E06Flood, 368.0, 668.0, true)]
@@ -514,10 +581,24 @@ public class ScenarioLibraryTests
     [InlineData(E06Ebb)]
     public void E06_ScriptedCrabbingThroughEntrance(string id)
     {
+        var (e, ev, path) = Run(id, 1800, Crabbing());
+        var s = e.Assessment!.BuildSummary(e.Tick, final: true);
+        Dump(ev, s);
+        Assert.Equal("arrived", ev.Single(x => x.Kind == SimEventKinds.ExerciseEnded).ItemId);
+        Assert.False(s.Assessment.HardFailed, string.Join(",", s.Assessment.HardFails.Select(h => h.Id)));
+        Assert.All(s.Assessment.Required, r => Assert.Equal("met", r.State));
+        Assert.True(s.Track!.MaxXtdM < 100, $"max XTD {s.Track.MaxXtdM:F0} m");
+        Assert.Equal(0, s.Manoeuvring.RudderOrders);
+        AssertReplays(path!);
+    }
+
+    /// <summary>E06 引水人腳本(偏航角估計 + XTD 修正的自動舵、檢查表/導燈回報/會船確認、過口門後 SAH);<paramref name="offsetM"/> 為期望 XTD(正 = 偏右 = 航道南側)。</summary>
+    private static Action<SimulationEngine, List<SimEvent>, int> Crabbing(double offsetM = 0)
+    {
         double? outbound = null, inside = null;
         double px = double.NaN, py = double.NaN;
         var ux = Math.Sin(Units.DegToRad(125)); var uy = Math.Cos(Units.DegToRad(125));
-        var (e, ev, path) = Run(id, 1800, (eng, events, t) =>
+        return (eng, events, t) =>
         {
             if (t == 20) eng.Enqueue(SimCommand.Acknowledge("checklist"));
             if (events.Any(x => x.Kind == SimEventKinds.TimelineTriggered && x.ItemId == "leadingLightsObscured") && !events.Any(x => x.Kind == SimEventKinds.Acknowledge && x.DataString("kind") == "report"))
@@ -533,18 +614,10 @@ public class ScenarioLibraryTests
                 var cog = Math.Atan2(m.X - px, m.Y - py);
                 var drift = Units.RadToDeg(Units.WrapRadPi(m.Psi - cog));
                 var xtd = m.X * uy - m.Y * ux;                 // 右舷法線 (u.y, −u.x):正 = 偏右
-                var cmd = 125 + drift - Math.Clamp(0.2 * xtd, -20, 20);
+                var cmd = 125 + drift - Math.Clamp(0.2 * (xtd - offsetM), -20, 20);
                 eng.Enqueue(SimCommand.Autopilot(true, Math.Round(Units.NormalizeHeadingDeg(cmd))));
             }
             px = m.X; py = m.Y;
-        });
-        var s = e.Assessment!.BuildSummary(e.Tick, final: true);
-        Dump(ev, s);
-        Assert.Equal("arrived", ev.Single(x => x.Kind == SimEventKinds.ExerciseEnded).ItemId);
-        Assert.False(s.Assessment.HardFailed, string.Join(",", s.Assessment.HardFails.Select(h => h.Id)));
-        Assert.All(s.Assessment.Required, r => Assert.Equal("met", r.State));
-        Assert.True(s.Track!.MaxXtdM < 100, $"max XTD {s.Track.MaxXtdM:F0} m");
-        Assert.Equal(0, s.Manoeuvring.RudderOrders);
-        AssertReplays(path!);
+        };
     }
 }

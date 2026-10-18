@@ -216,7 +216,7 @@ lines:
 - T > MBL → 斷裂 `mooringLineParted {lineId, tension_t, mbl_t, bollardId}`,狀態 parted(不能再 makeFast)。
 - 纜繩 MBL/應變預設為示意值(聚酯/聚丙烯混紡 ε_b ≈ 0.18);FSB1/FSB2 繫泊佈置與纜繩規格取得後應在情境以實際值給定。
 
-## 5. 狀態(`state.schema.json`;C# 產生,Python 不輸出)
+## 5. 狀態(`state.schema.json`;C# 產生,Python 參考實作同樣輸出,見第 10 節)
 
 ```json
 "tugs": [
@@ -295,7 +295,7 @@ lines:
 
 ## 7. 已知限制與偏離
 
-- **Python 參考實作尚未實作**拖船、錨、碰墊與繫纜(`src/Tools.Calibration` 忽略 `tugs`/`anchors`/`berth`/`environment.seabed`;C#↔Python 一致性只涵蓋無外力情境)。
+- Python 參考實作已實作拖船、錨、碰墊與繫纜(第 10 節;2026-10-18 前 `src/Tools.Calibration` 忽略 `tugs`/`anchors`/`berth`/`environment.seabed`)。
 - 3 自由度:錨鏈/纜繩的垂直分量、橫搖/縱傾、錨鏈彈性與動態(鏈的慣性、snatch)不計;鏈不會斷(拉直時張力以鏈斷裂負荷為上限);錨上拔只折減抓地力。
 - 走錨以有限速率的運動學模型表示(不模擬錨的翻轉/重新入土);抓著係數與鏈摩擦為典型估計值。
 - 拖船為作用於固定點的力向量,沒有拖船本身的運動學、俥流(wash)與自船的交互作用、纜角對出力的影響;推與拉不限制力方向(由教官給合理方向)。
@@ -314,7 +314,8 @@ lines:
 | `BerthTests` | 碰墊曲線反力/能量/觸底;質點 + 線性碰墊的 ½ m v² 能量、δ_max、R_max;只推不拉(含阻尼);過載;硬接觸;繫纜靜平衡(張力 = 拖力、應變式)、絞纜、斷裂、拒絕;麥寮示意泊位(檔案解析、header 內嵌、MMG 拖船推靠、繫纜後靜止) |
 | `ExternalForceEngineTests` | 舊情境/未使用區段雜湊與舊版相同(MMG 與暫代)、拋錨後才改變;快照 JSON 往返後續跑位元一致與事件序列;紀錄 → 重播雜湊/事件一致;暫代模型接受、不支援模型拒絕;契約欄位 |
 | `BerthingAssessmentTests` | 靠泊/錨泊指標:質點 + 線性碰墊的艏/舯/艉接近速度 = v0、能量比 = ½mv²/2/額定;推靠中反彈再碰回不是新的靠上、拉離 ≥ 0.5 m 再推回才是;繫妥後的接觸不是接近接觸;繫妥時船位偏差與 `berthing.allFastPositionTolerance_m` 容許帶;容許帶引用 `berthing.approachSpeed_mps`(warn)/`approachSpeedFail_mps`(fail);碼頭硬接觸 hardFail(event 規則);斷纜張力/MBL;拖船工作時間與最大出力;拖纜斷裂次數;開始即靠在碰墊上的 initial 接觸段;快照還原續跑 summary 相同;無泊位/錨的情境 summary 不含新區塊;放錨速度、帶上鏈長/水深與 `anchoring.scopeMultiplier` 容許帶;走錨到首個反應時間;紀錄 → 重播 summary 一致 |
-| `BerthingScenarioTests` | E12/E13/E14 載入、參數與示意泊位/錨地檔一致;固定腳本的關鍵事件序列、必要事件、summary.berthing / anchoring;紀錄 → 重播雜湊/事件/summary 一致;E12 鏈長 7/9 節不因帶上較晚被扣分(錨妥回報);E13 參考腳本(拖船橫向/艏向/縱向控制)allFast 前四纜皆 fast、無 bollardOutOfReach、船舯在泊位中心 ± 15 m;E14 不操船時繫泊中擺盪不是靠上、`maxLateralSpeed` 為 null |
+| `BerthingScenarioTests` | E12/E13/E14 載入、參數與示意泊位/錨地檔一致;固定腳本的關鍵事件序列、必要事件、summary.berthing / anchoring;紀錄 → 重播雜湊/事件/summary 一致;E12 鏈長 7/9 節不因帶上較晚被扣分(錨妥回報);E13 參考腳本(拖船橫向/艏向/縱向控制)allFast 前四纜皆 fast、無 bollardOutOfReach、船舯在泊位中心 ± 15 m;E14 不操船時繫泊中擺盪不是靠上、`maxLateralSpeed` 為 null、從未離開泊位;E14 參考離泊腳本的艉擺接觸不是再碰回(`maxReContactSpeed` null、`reContactSpeed` ok、100 分) |
+| `BerthingAssessmentTests.ReContactAfterDepartureIsSeparateFromApproachSpeed` | 質點靠上 → 離開 > `departedDistance_m` → 推回:再碰回標記、`maxReContactSpeed_mps` = 解析速度、容許帶 warn、紀錄重播一致、舊 summary/快照不寫新欄位 |
 | `EngineStartFailureTests` | engineStartFailure(主機起動失敗/延遲,E14):attempts、delay_s、持續失敗 3 次封鎖、換向點火、暫代模型(含故障未成立時停俥後才注入、清除後再注入)、mainEngine 注入/清除不解除封鎖、快照與重播 |
 
 ## 9. 靠泊與錨泊評估(`src/SimCore/Assessment/BerthingTracker.cs`;規劃書第 8.3 節第 4 類)
@@ -332,6 +333,7 @@ lines:
 | 碰墊接觸 | 每個 `fenderContact` 一筆:接觸點法向接近速度(接觸開始時,m/s 與 kn)、靜態曲線能量 E(δ_max)、額定能量與能量比 E/E_rated、最大反力、壓縮 %、過載;`approach` = **接近接觸**:未繫妥,且該碰墊自上次接觸(或情境開始)以來曾離開 ≥ 0.5 m(先靠上艏端、艉端後才擺靠者,艉端碰墊的第一次接觸仍是接近接觸)。情境開始即接觸的碰墊須先離開 ≥ 0.5 m |
 | 靠泊橫向接近速度 | `maxLateralSpeed` = 所有接近接觸(碰墊接觸 `approach: true` 與未繫妥時的碼頭硬接觸)**接觸點法向速度**的最大值;無接近接觸時 null。每次靠上另記 `contactSpeed`(該次靠上接近接觸的最大值)。`maxContactSpeed` 則為全部碰墊接觸(含繫泊中擺盪) |
 | 繫妥(allFast) | 每秒評估:所有已設定的纜繩皆受力(fast / heaving / slacking),且本次靠泊船舯前、後的碰墊都已有接觸事件(艏艉皆已靠上,不必同時接觸)。記下 `allFastAt_s`、船舯里程 `allFastMidshipChainage_m` 與泊位中心偏差 `allFastPositionError_m`(船舯里程 − 泊位中心,正 = 沿碼頭線方向超前);泊位中心 `berthCentreChainage_m` = 碰墊列首尾中點(無碰墊時為碼頭線中點)。繫妥期間的接觸不是接近接觸;無任何纜繩受力時解除。艏艉靠上旗標在離開所有碰墊 ≥ 0.5 m、未繫妥且纜繩未全部受力時清除(先繫纜再以纜繩/拖船靠攏時,離開再靠回仍屬同一次靠泊) |
+| 已離開泊位與再碰回 | 每秒評估:**曾接觸過泊位**(有 landing)後,所有碰墊壓縮為 0、無碼頭硬接觸、未繫妥,且**船體外形(艏艉含)至碼頭線(有限線段)的最近距離** > `berth.departedDistance_m`(情境選填,預設 20 m ≈ 1 B;`BerthingTracker.DefaultDepartedDistanceM`;給定時須為有限正數,0 或負值為結構錯誤 — 否則離泊中艉擺接觸會被誤判為再碰回而改變評分,`BerthTests.BerthDepartedDistanceMustBeFinitePositive`)→ 「已離開泊位」成立並鎖定(`departedAt_s` 記第一次;再次繫妥時解除)。之後的碰墊/碼頭接觸為**再碰回**(`contacts[].reContact: true`、`reContacts` 次數),接觸點法向速度最大值為 `maxReContactSpeed_mps`(與 `maxLateralSpeed` 分開)。以船體而非船舯判定:沿碼頭向前/向後駛離時船舯越過碼頭端而艉/艏仍在碰墊旁,不應視為已離開。離泊過程中的艉擺接觸、繫泊中擺盪都不是再碰回(E14 參考離泊腳本 T+269–359 s 的艉擺接觸 `maxLateralSpeed` 0.39 m/s,`departedAt_s` 486 s,其後無接觸 → 指標 null)。只用於評估,不影響物理與雜湊;新欄位為預設值時不寫出(舊 summary/快照格式不變) |
 | 碼頭硬接觸 | `quayContact` 次數、最大穿入、接觸時法向速度 |
 | 繫纜 | 每秒取樣的最大張力(t)與 MBL,比值 T/MBL;`mooringLineParted` 計斷纜次數(張力取事件值) |
 | 拖船 | status `working` 的累計秒數(每秒取樣)、最大出力(t)、繫柱拖力;`tugLineParted` 計拖纜斷裂次數與時刻 |
@@ -340,16 +342,17 @@ lines:
 | 走錨 | `anchorDragging` 次數、首次時刻;累計走錨時間(每秒取樣 dragging);錨鏈孔最大張力(每秒取樣與事件值) |
 | 走錨偵測與反應 | 首次走錨後第一次 `acknowledge`(偵測/回報)時刻;第一個學員反應(舵令、車令、轉速、側推、操舵模式,或教官/學員送出的 `anchor` 指令 `anchorCommand`/`anchorLetGo`)的時刻、方式與反應時間 |
 
-### 9.2 指標(`MetricNames`;容許帶可引用,Python `scenario.py` METRIC_NAMES 尚未同步,`data/scenarios` 暫勿引用)
+### 9.2 指標(`MetricNames`;容許帶可引用,與 Python `scenario.py` METRIC_NAMES 一致)
 
 `berthing.maxLateralSpeed_mps`、`berthing.maxLateralSpeed_kn`(接近接觸的接觸點法向速度最大值;見上表,不含艏/舯/艉端點速度與繫泊中擺盪)、`berthing.maxContactSpeed_mps`(全部碰墊接觸)、
 `berthing.maxEnergy_kNm`、`berthing.maxEnergyRatio`、`berthing.fenderContacts`、`berthing.fenderOverloads`、`berthing.quayContacts`、`berthing.lineBreaks`、
 `berthing.maxLineTensionRatio`、`berthing.tugLineBreaks`、`berthing.maxTugForce_t`、`berthing.tugWorkingTime_s`、`berthing.allFastPositionError_m`(繫妥時船舯與泊位中心的距離,絕對值;未繫妥時 null)、
+`berthing.maxReContactSpeed_mps`(已離開泊位後再碰回的接觸點法向速度最大值;未再碰回時 null = 不扣分;E14 `reContactSpeed` 容許帶)、
 `anchoring.letGoCount`、`anchoring.maxLetGoSog_kn`、`anchoring.dragEvents`、`anchoring.dragTime_s`、`anchoring.maxChainTension_t`、`anchoring.minScopeRatio`、
 `anchoring.dragResponseTime_s`(未反應時為自首次走錨起的經過時間,容許帶可在無反應時判定)。
 
 事件類規則以既有 hardFail `event` 規則表示(Python 已支援):`{ id: quayContact, rule: event, kind: quayContact }`、`{ rule: event, kind: mooringLineParted }`。
-容許帶範例(C# 已驗證;待 Python 同步後 E12–E14 啟用,見各情境檔末段註解):
+容許帶範例(C# 已驗證;E13 `approachSpeed`、E14 `contactEnergy`/`reContactSpeed` 已啟用):
 
 ```yaml
 bands:
@@ -358,6 +361,18 @@ bands:
   - { id: scope, metric: anchoring.minScopeRatio, direction: below, warn: "${params:anchoring.scopeMultiplier}", fail: 3, penalty: 10 }
   - { id: letGoSpeed, metric: anchoring.maxLetGoSog_kn, warn: "${params:anchoring.letGoSog_kn}", fail: "2x", penalty: 10 }
   - { id: berthPosition, metric: berthing.allFastPositionError_m, warn: "${params:berthing.allFastPositionTolerance_m}", fail: "2x", penalty: 10, failPenalty: 20 }
+  - { id: reContactSpeed, metric: berthing.maxReContactSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }   # E14 已啟用
+```
+
+再碰回(`BerthingAssessmentTests.ReContactAfterDepartureIsSeparateFromApproachSpeed`:質點靠上 → 流轉向離開 > `departedDistance_m: 15` → 流轉回推回碰墊;節錄):
+
+```json
+"berthing": { "berthId": "TB", "maxLateralSpeed_mps": 0.163, "maxContactSpeed_mps": 0.163, "departedAt_s": 43, "reContacts": 2, "maxReContactSpeed_mps": 0.163,
+  "maxEnergyRatio": 0.185, "fenderContacts": 4, …,
+  "contacts": [ { "fenderId": "F1", "t_s": 6.32, "approach": true, "normalSpeed_mps": 0.150, "energyRatio": 0.156, …, "overload": false },
+                { "fenderId": "F2", "t_s": 6.32, "approach": true, "normalSpeed_mps": 0.150, … },
+                { "fenderId": "F1", "t_s": 474.7, "approach": true, "normalSpeed_mps": 0.163, "energyRatio": 0.185, …, "overload": false, "reContact": true },
+                { "fenderId": "F2", "t_s": 474.7, "approach": true, "normalSpeed_mps": 0.163, …, "reContact": true } ] }
 ```
 
 參數集(`data/parameters/company-procedures.yaml`;來源 `ASSUMED-BERTH` / `ASSUMED-E12`–`E14`,**假設值,待公司程序**):`berthing.approachSpeed_mps` 0.15
@@ -399,5 +414,78 @@ bands:
 |---|---|---|---|
 | `E12_anchoring_kaohsiung` | 高雄外錨地 A12(`data/areas/kaohsiung-anchorage.json`,水深 30 m、軟泥,3 艘錨泊船) | 東北季風 22 kn → T+`anchoring.e12.monsoonSurgeAt_s` 增至 40 kn;鏈長選擇;走錨偵測與反應;教官手動主機失效 = 緊急下錨 | hardFail 擱淺/碰撞;bands 與錨泊船最小距離;required 錨備便、放錨後帶上**或錨妥回報**(`anchorBroughtUp` 或 acknowledge report,900 s、逾時每秒 0.02 分漸進;鏈長較長而帶上較晚者不被扣滿)、走錨反應(`anchoring.dragResponse_s`)、回報 |
 | `E13_tug_berthing_mailiao` | 麥寮油碼頭 MLO-OIL-3(`mailiao-berth.json`) | 2 艘 push-pull 拖船、引水人(角色)、東北吹開風;碼頭未準備 → 等待(`berthing.e13.berthReadyAfter_s`);就緒後 `tugLineBreak {id: TG2}` | hardFail 碼頭硬接觸/斷纜(event);bands 港內速限;required MPX、等待回報、拖纜斷裂反應;summary.berthing 繫妥時船位(`allFastPositionError_m`,泊位中心 = 碰墊列中點 130 m)。教官 `allFast` 為手動結束,不檢查纜繩狀態:以 summary 的 `allFastAt_s`(null = 未繫妥)與船位偏差講評 |
-| `E14_unberthing_no_tug` | 麥寮小型油品碼頭 MLO-SOB-1(新 `mailiao-small-oil-berth.json`,9 個 H 0.8 m 碰墊) | 壓載右舷靠、吹攏風、4 纜已繫;`engineStartFailure {attempts: 2}`;T+`unberthing.e14.windShiftAt_s` 轉吹開風 | hardFail 碼頭硬接觸/斷纜;required 簡報、起動失敗通知機控室、風向改變反應;summary.berthing(離泊接觸)、manoeuvring.thruster* |
+| `E14_unberthing_no_tug` | 麥寮小型油品碼頭 MLO-SOB-1(新 `mailiao-small-oil-berth.json`,9 個 H 0.8 m 碰墊) | 壓載右舷靠、吹攏風、4 纜已繫;`engineStartFailure {attempts: 2}`;T+`unberthing.e14.windShiftAt_s` 轉吹開風 | hardFail 碼頭硬接觸/斷纜;required 簡報、起動失敗通知機控室、風向改變反應;summary.berthing(離泊接觸、`berth.departedDistance_m: 20` 之後的再碰回 `reContactSpeed` 容許帶)、manoeuvring.thruster* |
+
+## 10. Python 參考實作(`src/Tools.Calibration/simosa_brm/external.py`)
+
+規劃書第 14 章「C# 核心 vs Python 參考實作(相同係數)軌跡差異 <1%」的外力部分。方程式與 C# `src/SimCore/Physics/External/` 逐式對應
+(同一常數、同一二分法迭代次數、同一判斷順序),岸壁效應見 `physics-bank-effect.md` 第 10 節。
+
+### 10.1 對應與接線
+
+| C# | Python | 備註 |
+|---|---|---|
+| `TugUnit`(TugModel.cs) | `TugUnit` | 出力一階上升、方向迴轉、速度效能、換位/帶纜計時(`round` 與 C# `Math.Round` 皆為銀行家捨入)、斷纜 |
+| `Catenary.Solve` | `catenary_solve` | 對數二分 80 次;全懸空區找上界最多 200 次倍增 |
+| `AnchorParticulars` / `AnchorUnit` | 同名 | particulars `anchors` 缺欄估計式相同(`estimated` 列出);指令狀態機、走錨、剎車滑出 40 次二分、帶上、事件 |
+| `FenderType` / `BerthModel` / `MooringLine` | 同名 | 11 點船體外形、碰墊軸線接觸點、碼頭懲罰彈簧(臨界阻尼比 0.5)、Kelvin–Voigt 纜繩阻尼 |
+| `ExternalForceModel` | 同名 | `active`、指令與拒絕原因、雜湊欄位與順序(`hash_bytes`)、`tug_states`/`anchor_states`/`berth_state` |
+| `Rk4Integrator.Step(..., field)` | `MMGShip.step` | 外力場在 RK4 四個階段各以該階段狀態重算後加到 X/Y/N(`_derivs(..., ext)`);環境為步首取樣 |
+| `SimulationEngine.Advance` | `MMGShip.step` | 步首 `ExternalForceModel.pre_step`(拖船,以步首對水速度)→ RK4 → tick+1 → `post_step`(錨、泊位;步首環境)→ 擱淺檢查 |
+| `CreateExternal`(Initialize) | `MMGShip.configure_external` / `reset` | `scenario.apply_scenario` 在設定環境後以情境初始狀態與水深建立(初始已錨泊、繫纜 initial fast) |
+
+- 情境:`scenario.validate_scenario` 以 `external.normalise_sections` 補 C# 預設值(`ScenarioTug`、`FenderTypeDefinition`、`ScenarioMooringLine` 的預設),
+  `berth.file + id` 與 `banks.file + ids` 依「專案根目錄 → 情境檔目錄 → 工作目錄」解析並內嵌,再做與 C# `CheckStructure` 相同的結構檢查;
+  結果放在正規化情境的 `external` 鍵。
+- 確定性:只在 `active`(有拖船/泊位、錨曾被使用)時才走含外力的積分並把外力區塊追加到 `state_hash`;未使用外力的情境逐位元與舊版相同
+  (`test_unused_external_keeps_legacy_hash_and_state`)。快照(`MMGShip.snapshot`)含整個外力模組的深拷貝;舊快照還原時外力回到初始。
+- state:`tugs[]`(有拖船時)、`anchors[]`(particulars 有錨資料時,與 C# 相同即使未使用也輸出)、`berth`(有泊位時)。
+- 事件:接受的指令與物理事件(`anchorDragging`、`fenderContact` …)記入 `MMGShip.external_events`(kind、itemId、message、data、tick;最多 1000 筆),
+  伺服器指令的 ack 附 `event`。
+
+### 10.2 伺服器指令(`server.py`)
+
+| 指令 | args | 接受(ack.event.kind) | 拒絕原因(與 C# `commandRejected.reason` 同名) |
+|---|---|---|---|
+| `tugControl` | `id`(或 value)、`mode`、`direction_deg`(或 `direction`)、`power_pct`(或 `power`) | `tugCommand` | `unknownTug`、`unknownTugMode`、`invalidPower`、`tugModeUnavailable`、`tugLineParted` |
+| `anchor` | `side`(或 value)、`action`、`targetLength_shackles` / `length_m` | `anchorLetGo` / `anchorCommand` | `noAnchorData`、`unknownAnchor`、`unknownAction`、`invalidTarget`、`anchorAlreadyOut`、`anchorStowed`、`chainFullyOut` |
+| `mooring` | `lineId`(或 `id`)、`action`、`bollard`、`tension_t`、`length_m` | `mooringCommand` | `noBerth`、`unknownMooringLine`、`unknownAction`、`unknownBollard`、`bollardOutOfReach`、`mooringLineNotFast`、`mooringLineParted` |
+| `injectFault tugLineBreak` | `args.args.id`(只讀 `args.args` 物件,與 C# `FaultArgString` 相同;`args.id` 視同省略 → 斷第一艘拉中/待命中的拖船) | `tugLineParted` | `unknownTug`(故障不加入 faults) |
+| `clearFault` | `value` 或 `args.name`(C# `SimCommand.FaultName`);皆缺或為 `all` = 全部 | —(只清指定故障;清除 `tugLineBreak` 才恢復拖纜) | — |
+
+數值參數接受數值或數值字串(C# `ArgAsDouble`);拒絕時 ack `ok: false`、`detail` 為「拒絕(原因):…;狀態不變」。範例:
+
+```json
+{"type": "tugControl", "args": {"id": "TG1", "mode": "push", "direction_deg": 270, "power_pct": 80}}
+{"type": "ack", "command": "tugControl", "ok": true, "detail": "TG1 push 270° 80%", "tick": 0,
+ "event": {"kind": "tugCommand", "itemId": "TG1", "message": "TG1 push 270° 80%", "tick": 0,
+           "data": {"id": "TG1", "mode": "push", "from": "standby", "status": "working", "direction_deg": 270.0, "power_pct": 80.0}}}
+{"type": "ack", "command": "anchor", "ok": false, "detail": "拒絕(anchorStowed):anchor 被拒:anchorStowed;狀態不變", "tick": 120}
+```
+
+### 10.3 C# 一致性黃金檔(`tests/SimCore.Tests/Golden/ext_*`)
+
+`export_external_reference.py`(仿 `export_reference.py`)產生情境 `ext_*.yaml` 與時間序列 `ext_*.csv`(標頭含 `# cmd: tick=<n> <JSON>` 指令序列與外力事件);
+C# `ExternalForceGoldenTests` 以同一份 YAML 建立 MMG 引擎、在相同 tick 下指令,每秒比較位置/航向/速度/轉速、外力合計 X/Y/N 與各力項,並要求外力事件
+(tick、kind、itemId)序列相同。Python 端 `test_golden_external_reference_is_reproducible` 重跑並比對檔案(相對 1e-9);
+`test_external_golden_coverage.py` 另比對標頭 `# event` 序列(逐筆相同)與 `state_hash_end`(數值列逐位元相同時必須相同),
+並要求每個項目欄至少有一個非零值、全部黃金檔合起來涵蓋 C# 比對的 16 種外力事件。C# 端擴充案例與涵蓋檢查在
+`ExternalForceGoldenCoverageTests`(直接呼叫 `ExternalForceGoldenTests` 的比對方法;並檢查 `Golden/ext_*.csv` 每一份都在比對清單中)。
+
+| 案例 | 內容 | 最大位置差 / 航程 | 力項最大相對差 |
+|---|---|---|---|
+| `ext_tug_push_turn` | 兩拖船推頂原地迴轉、推 → 拉換位、轉向、解纜、`tugLineBreak`(600 s、航程 1304 m) | 5.6e-14 % | ≤ 3e-14 % |
+| `ext_anchor_wind_drag` | 右錨 4 節已錨泊、35 kn 風、流 0.8 kn、泥 × 0.5:走錨/抓住/剎車滑出、鬆鏈 7 節、左錨 letGo 帶上(600 s) | 0(逐位元相同) | 0 |
+| `ext_berth_fender_lines` | 拖船橫推靠碼頭、非線性碰墊(阻尼、摩擦)接觸 10 次、艏艉纜 makeFast/heave/slack、吹開風(600 s;F1、F4 未接觸,不列比對欄) | 0(逐位元相同) | 0 |
+| `ext_bank_suction` | 見 `physics-bank-effect.md` 第 10 節 | 1.7e-15 % | ≤ 6e-13 % |
+| `ext_quay_line_part` | 無碰墊碼頭(折線、`quayStiffness_kNpm` 5000)硬接觸 `quayContact` 6 次、MBL 6 t 艏纜被拖船拉斷 `mooringLineParted`、艉纜 slack 到 `maxLength` 後回 fast、TG2 由 free 帶纜(`connect_s` 30)拉 → standby → push 換位(500 s、航程 281 m) | 0(逐位元相同) | 0 |
+| `ext_anchor_heave_house` | 右錨 letGo 12 節(夾到 9 節鏈端 `anchorChainFullyOut`)、左錨 3 節後 heave:懸鏈線 hanging/slack/touchdown/suspended/taut 各區、`anchorDragging`、`anchorWindlassStalled` × 194、`anchorBrakeSlipping` × 139、`anchorAweigh`、`anchorHoused`(400 s) | 0(逐位元相同) | 0 |
+| `ext_bank_astern` | 見 `physics-bank-effect.md` 第 10 節 | 1.4e-12 % | 捨入等級 |
+
+`ext_anchor_heave_house` 的絞盤超載事件反覆切換(停轉 → 剎車滑出 → 張力降到門檻下 → 恢復絞收)是 C# `AnchorModel` 與 Python 共有的現行行為
+(超載判定無遲滯),黃金檔照實記錄;兩邊同步加入遲滯後須重新產生此黃金檔。
+
+兩實作在同一平台上達到捨入誤差等級(目標 <1%)。比對過程發現並修正一項**初始化差異**(非外力方程式):Python `apply_scenario` 先 `reset` 後設水深,
+淺水情境的直航平衡轉速取到深水值(h/T 1.4、6 kn 時 70.8 vs 79.7 rpm,300 s 後位置差 5.2 % 航程);改為以情境水深、無風求平衡轉速
+(C# `SteadyRpmForSpeed(u, scenario waterDepth)`)後一致。重新產生:`cd src/Tools.Calibration && uv run python ../../tests/SimCore.Tests/Golden/export_external_reference.py`。
 

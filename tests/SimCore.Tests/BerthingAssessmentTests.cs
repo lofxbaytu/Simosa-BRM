@@ -64,6 +64,69 @@ public class BerthingAssessmentTests
         Assert.Null(s.Anchoring); // 情境無 anchors 區段且錨未使用
     }
 
+    /// <summary>
+    /// 離泊後再碰回(berthing.maxReContactSpeed_mps):質點以北向流 0.15 m/s 靠上碰墊(接近接觸,不是再碰回;線性無阻尼碰墊彈性反彈,
+    /// 對水速度 −0.30 m/s)→ t = 20 s 流轉南 0.5 kn → 船體距碼頭線 &gt; berth.departedDistance_m(15 m)時「已離開泊位」(departedAt_s)
+    /// → t = 120 s 流轉北 0.9 kn,對地以 0.463 − 0.30 ≈ 0.163 m/s 推回 → 再碰回的碰墊接觸標 reContact、指標 = 其接觸點法向速度
+    /// (介於 approachSpeed 0.15 與 approachSpeedFail 0.20 → warn)。
+    /// 已離開前的離開/反彈(船體距碼頭線 ≤ 門檻)不會成立 departed。紀錄 → 重播 summary 一致;快照 JSON 往返後續跑相同。
+    /// </summary>
+    [Fact]
+    public void ReContactAfterDepartureIsSeparateFromApproachSpeed()
+    {
+        var e = Alongside(0.15, """
+              bands:
+                - { id: reContactSpeed, metric: berthing.maxReContactSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }
+            """, extra: "  departedDistance_m: 15");
+        Assert.Equal(15.0, e.Assessment!.Berthing.DepartedDistanceM);
+        Assert.Equal(BerthingTracker.DefaultDepartedDistanceM, Alongside(0.15).Assessment!.Berthing.DepartedDistanceM);
+        var path = Path.Combine(TestData.TestRecordsDirectory, $"recontact-{Guid.NewGuid():N}.jsonl");
+        using (var w = new RecordWriter(path, e))
+        {
+            RunTo(e, 20);
+            var s0 = e.Assessment.BuildSummary(e.Tick, final: false).Berthing!;
+            Assert.True(s0.FenderContacts >= 2);
+            Assert.All(s0.Contacts, c => Assert.False(c.ReContact));
+            Assert.Null(s0.DepartedAtS);
+            Apply(e, SimCommand.SetEnvironment(currentSetDeg: 180, currentDriftKn: 0.5));
+            RunTo(e, 120);
+            var s1 = e.Assessment.BuildSummary(e.Tick, final: false).Berthing!;
+            Assert.NotNull(s1.DepartedAtS);
+            Assert.Null(s1.MaxReContactSpeedMps);
+            Assert.Null(e.Assessment.MetricValue("berthing.maxReContactSpeed_mps", null!));
+            Assert.True(e.Assessment.Berthing.State.Departed);
+            Apply(e, SimCommand.SetEnvironment(currentSetDeg: 0, currentDriftKn: 0.9));
+            RunTo(e, 500);
+            w.Close();
+        }
+        var s = e.Assessment.BuildSummary(e.Tick, final: true);
+        var b = s.Berthing!;
+        var re = b.Contacts.Where(c => c.ReContact).ToList();
+        Assert.Equal(2, re.Count);                       // 兩個碰墊各一次再碰回
+        Assert.All(re, c => Assert.True(c.TS > b.DepartedAtS));
+        var v = Units.KnToMps(0.9) - 2 * 0.15;
+        Assert.Equal(v, b.MaxReContactSpeedMps!.Value, 2);
+        Assert.Equal(re.Max(c => c.NormalSpeedMps), b.MaxReContactSpeedMps.Value, 12);
+        Assert.Equal(2, b.ReContacts);
+        Assert.Equal(b.MaxReContactSpeedMps, e.Assessment.MetricValue("berthing.maxReContactSpeed_mps", null!));
+        Assert.Equal(v, b.MaxLateralSpeedMps!.Value, 2); // 再碰回也是接近接觸(maxLateralSpeed 為全部接近接觸;離泊情境以 maxReContactSpeed 評估)
+        Assert.Equal("warn", s.Assessment.Bands.Single(x => x.Id == "reContactSpeed").State);
+        var json = JsonSerializer.Serialize(b, ContractJson.Options);
+        Assert.Contains("\"reContact\":true", json);
+        Assert.Contains("\"maxReContactSpeed_mps\"", json);
+        var r = Replayer.Replay(path, TestData.Ship, (_, _) => new PointMassDynamics(PointMassKg, PointMassKg * 625.0));
+        Assert.True(r.HashMatches);
+        Assert.True(r.SummaryMatches);
+        Assert.Equal(b.MaxReContactSpeedMps, r.Summary!.Berthing!.MaxReContactSpeedMps);
+        // 舊格式:未使用者 summary/快照不寫出新欄位
+        var plain = Alongside(0.15);
+        RunTo(plain, 30);
+        var pj = JsonSerializer.Serialize(plain.Assessment!.BuildSummary(plain.Tick, true).Berthing!, ContractJson.Options);
+        Assert.DoesNotContain("reContact", pj);
+        Assert.DoesNotContain("departedAt_s", pj);
+        Assert.DoesNotContain("\"departed", JsonSerializer.Serialize(plain.Assessment.Berthing.State, ContractJson.Options).ToLowerInvariant());
+    }
+
     [Fact]
     public void ApproachSpeedBandReferencesParameterSet()
     {

@@ -132,6 +132,20 @@
       "exercise": "E03"
     },
     {
+      "name": "radarFailureS",
+      "label": "S 頻雷達失效",
+      "modelled": false,
+      "exercise": "E03",
+      "effect": "只記錄於核心;雷達服務(Sensors.Radar)S 頻停止發射,X 頻不受影響(radarFailure 只影響 X 頻;docs/design/radar-arpa.md)"
+    },
+    {
+      "name": "radarDegradedS",
+      "label": "S 頻雷達效能下降",
+      "modelled": false,
+      "exercise": "E03",
+      "effect": "只記錄於核心;雷達服務 S 頻靈敏度下降(DegradedLossDb),X 頻不受影響"
+    },
+    {
       "name": "aisFailure",
       "label": "自船 AIS 失效",
       "modelled": false,

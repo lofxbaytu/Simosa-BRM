@@ -1,0 +1,7 @@
+# 由 export_external_reference.py 產生(請勿手改):t
+id: ext_anchor_heave_house
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 0, telegraph: STOP }
+environment: { wind: { trueSpeed: 10, trueDir: 180, gustiness: 0 }, current: { set: 0, drift: 0.4 }, waterDepth: 18, seabed: sand }

@@ -1,0 +1,25 @@
+# 由 export_external_reference.py 產生(請勿手改):拖船橫推靠碼頭、碰墊接觸、艏艉纜繫妥與絞纜、吹開風(600 s)
+id: ext_berth_fender_lines
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 12 }, heading: 90, speed: 0, telegraph: STOP }
+environment: { wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }, current: { set: 0, drift: 0 }, waterDepth: 15 }
+tugs:
+  - id: TG1
+    bollardPull_t: 30
+    attach: midStbd
+    riseTime_s: 20
+    initial: { mode: push, direction_deg: 270, power_pct: 25 }
+berth:
+  definition:
+    id: GB
+    quay: [ { x: -200, y: 30 }, { x: 200, y: 30 } ]
+    waterSide: right
+    fenderTypes:
+      cone: { height_m: 1.0, width_m: 2.5, ratedReaction_kN: 800, ratedDeflection_pct: 72, curve: [[0, 0], [10, 35], [30, 85], [50, 100], [72, 100]], friction: 0.15, damping_kNs_per_m: 50 }
+    fenders: [ { id: F1, type: cone, chainage_m: 140 }, { id: F2, type: cone, chainage_m: 170 }, { id: F3, type: cone, chainage_m: 230 }, { id: F4, type: cone, chainage_m: 260 } ]
+    bollards: [ { id: B1, chainage_m: 110, setback_m: 3 }, { id: B2, chainage_m: 290, setback_m: 3 } ]
+  lines:
+    - { id: HEAD, fairlead: fwdPort, bollard: B2, mbl_t: 40, length_m: 120, winchPull_t: 8, heaveRate_mPerMin: 12 }
+    - { id: STERN, fairlead: aftPort, bollard: B1, mbl_t: 40, length_m: 120, winchPull_t: 8, heaveRate_mPerMin: 12 }
