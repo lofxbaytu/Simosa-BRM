@@ -2,7 +2,8 @@
 #   schema src/Contracts/scenario.schema.json)
 # 與 E18 同一進港幾何(data/areas/anping-approach.json;示意,待 ENC 校正):口門外 5.5 nm 起,沿岸淺水(基底水深 = 維護水深 CD 7.0 m + 潮高)。
 # FSB1 滿載(5.7 m)瀝青貨溫約 150 °C,FAH 約 10 kn、自動舵 077°;進港潮窗:潮高 +0.6 m 且正在退潮(setEnvironment waterDepth 漸變 7.6 → 7.2 → 6.6 m;潮窗已過時 → 6.2 m)。
-# 時間表:T+2 熱油鍋爐跳脫(cargoHeatingFailure:fault-catalogue 為只記錄故障,為使 --validate 無警告以訊息/語音表示,不注入故障)→ T+5 機艙回報修復時間不定(2–6 小時)
+# 時間表:T+2 熱油鍋爐跳脫(注入只記錄故障 cargoHeatingFailure:injectFault recordOnly: true,核心不改變行為、加入 state.faults[],
+#   由語音/訊息與儀器反應;--validate 不警告)→ T+5 機艙回報修復時間不定(2–6 小時)
 #   → T+10 degraded(companyPressure:公司催促全速進港趕潮窗、「航道速限不用管」、潮位續降)→ 通過航道外端 OUTER(或 T+25)emergency(tideWindowClosing:潮窗將過、
 #   貨溫警報、公司再催)→ 潮窗將過 30 分鐘後仍在沙洲(BAR)外側的航道內時 windowClosed(潮窗已過:→ 6.2 m,5 分鐘;SAH 時 UKC 低於政策、FAH 時低於 5 % 吃水)
 #   → 到達迴船池、擱淺或 T+65 結束;貨溫下降以每 5 分鐘一次的訊息表示(核心無貨物熱力模型)。
@@ -118,8 +119,9 @@ timeline:
     name: 熱油鍋爐跳脫(貨物加熱系統故障)
     when: { type: time, atLeast: "${params:cargo.e21.heatingFailureAt_s}" }
     actions:
+      - injectFault: { name: cargoHeatingFailure, recordOnly: true }   # 只記錄故障(核心無貨物熱力模型):state.faults[] 出現 cargoHeatingFailure
       - voiceScript: { role: chiefEngineer, channel: phone, text: "駕駛台,輪機長:熱油鍋爐跳脫,燃燒器點不著,貨艙加熱停了。我們在查原因。", lang: zh-TW }
-      - message: { to: all, text: "警報:熱油鍋爐跳脫(cargoHeatingFailure;只記錄故障,以訊息表示)", severity: alarm }
+      - message: { to: all, text: "警報:熱油鍋爐跳脫(貨物加熱系統故障)", severity: alarm }
       - message: { to: instructor, text: "熱油鍋爐故障:觀察是否通知船長並通報公司(acknowledge callMaster 或 notifyCompany),而不忽略航行", severity: warning }
   - id: repairUncertain
     name: 機艙回報修復時間不定

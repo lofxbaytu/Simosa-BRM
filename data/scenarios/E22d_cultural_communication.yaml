@@ -1,0 +1,110 @@
+# E22d 1.39 教室模式迷你情境:文化差異的溝通(規劃書第 8.0 節 1.39 人因單元(文化差異、溝通)、第 8.1 節 E22;設計 docs/design/scenario-library.md 第 20 節;schema src/Contracts/scenario.schema.json)
+# 台灣西南外海開闊水域(示意座標,無航道/港口幾何,待 ENC 校正;水深一律 60 m),白天,FSB1 滿載 HAH 約 7.5 kn、手操舵 090°;約 12 分鐘。
+# 腳本(1.39 教室模式:不套用三步升級,無硬性失敗):T+1 s 交班開場(新上船的外籍舵工,工作語言英語)→ T+150 s 值班駕駛員以中文下「左舵十」→
+#   舵工回答「Yes sir」卻操右舵 10(timeline ownShip;權力距離:不敢說聽不懂)→ 學員須在 bridge.e22.closedLoop_s 內發現舵角指示不符並改正(舵令),
+#   並以標準航海用語(SMCP)閉環確認(acknowledge verbal)→ T+420 s 外籍二管輪以英語電話要求「降轉速五分鐘」,口音重且未說明原因 →
+#   期望複誦確認(read-back,acknowledge verbal)→ T+540 s 討論點 → T+12 min 結束。
+# 評估(講評為主):舵令改正(rudderOrder)、SMCP 閉環確認(verbal)、電話複誦確認(verbal)、接班檢查表。
+id: E22d_cultural_communication
+name: 1.39 教室迷你情境 — 文化差異的溝通
+description: >-
+  多國籍船員:外籍舵工對中文舵令回答「Yes sir」卻操反舵,外籍輪機員以英語電話提出要求而未說明原因。練習工作語言、
+  標準航海用語(SMCP)與閉環溝通、權力距離與文化差異對「說聽不懂」的影響;1.39 文化差異與溝通單元的教室討論素材(約 12 分鐘)。
+seed: 20261225
+startTimeUtc: "2026-12-25T02:00:00Z"            # 當地 10:00
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.4000, lon: 120.0000 }          # 台灣西南外海(示意)
+initial:
+  position: { lat: 22.4000, lon: 120.0000 }
+  heading: 90
+  speed: 7.5
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 8, trueDir: 90, gustiness: 0.05 }
+  current: { set: 90, drift: 0.2 }
+  waterDepth: 60
+  visibility_nm: 10
+briefing:
+  text: |
+    交班(10:00 地方時):No.1 滿載東行,手操舵 090°(舵工練習)、HAH 約 7.5 kn,開闊水域、無交通。
+    書面航程計畫:航向 090° 直航(示意)。舵工為本週新上船的外籍船員(工作語言英語),二管輪亦為外籍;帶領者或語音腳本扮演。
+    公司政策:駕駛台工作語言為英語,舵令與車令一律使用 IMO 標準航海用語(SMCP)並複誦。
+    教室模式(1.39 文化差異):討論點時請學員說出「為什麼舵工說 Yes sir 卻做錯、怎樣讓對方敢說聽不懂、閉環溝通的三個步驟」。
+  attachments:
+    - { title: "航程計畫(高雄外海東行,示意)", file: docs/passage-plan-E22.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+    - { title: "IMO 標準航海用語(SMCP)舵令與車令", file: docs/IMO-SMCP-wheel-orders.pdf }
+    - { title: "1.39 單元講義:文化差異與溝通", file: docs/IMO-1.39-culture.pdf }
+  roles:
+    - { role: officer, required: true }
+    - { role: helmsman, playedBy: voiceScript }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: master, playedBy: leader }
+  minParticipants: 2
+  duration_s: 720
+timeline:
+  - id: handover
+    name: 交班開場(新上船的外籍舵工)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:手操舵零九零,半速,沒有交通。舵工是這禮拜剛上船的,英文溝通,他比較安靜。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否確認工作語言、以 SMCP 與舵工建立閉環;完成後按「檢查表」", severity: info }
+  - id: wheelOrder
+    name: 中文舵令(左舵十)
+    when: { type: time, atLeast: 150 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "(值班駕駛員以中文)左舵十。", lang: zh-TW }
+  - id: helmsmanMisunderstands
+    name: 舵工誤解(操右舵 10)
+    when: { type: time, atLeast: 3, since: { event: timelineTriggered, itemId: wheelOrder } }
+    actions:
+      - ownShip: { rudder: 10 }
+      - voiceScript: { role: helmsman, channel: bridge, text: "Yes sir.", lang: en }
+      - message: { to: instructor, text: "舵工操右舵 10(與舵令相反):期望 60 s 內發現舵角指示不符並改正(舵令),並以 SMCP 閉環確認(acknowledge verbal)", severity: warning }
+  - id: ecrCall
+    name: 外籍二管輪英語電話
+    when: { type: time, atLeast: 420 }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "Bridge, engine. We need reduce RPM, five minute, okay? Okay.", lang: en }
+      - message: { to: instructor, text: "期望複誦並確認原因與時間(read-back;acknowledge verbal,note 記錄)", severity: info }
+  - id: discussionPoint
+    name: 討論點(教室模式暫停)
+    phase: discussion
+    when: { type: time, atLeast: 540 }
+    actions:
+      - message: { to: instructor, text: "討論點:可暫停(freeze)帶領討論 — 權力距離與「Yes sir」、工作語言、SMCP 複誦、多國籍團隊的心理安全", severity: info }
+  - id: timeUp
+    name: 迷你情境結束
+    when: { type: time, atLeast: 720 }
+    actions:
+      - endExercise: { reason: 迷你情境結束(進入講評) }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  hardFail: []                                    # 1.39 教室模式:無硬性失敗(講評為主)
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 10
+    - id: rudderCorrection
+      after: { event: timelineTriggered, itemId: helmsmanMisunderstands }
+      expect: rudderOrder
+      within_s: "${params:bridge.e22.closedLoop_s}"
+      penalty: 10
+    - id: smcpConfirm
+      after: { event: timelineTriggered, itemId: helmsmanMisunderstands }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.e22.languageConfirm_s}"
+      penalty: 10
+    - id: readBack
+      after: { event: timelineTriggered, itemId: ecrCall }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.e22.languageConfirm_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }

@@ -10,9 +10,9 @@ public sealed record TugStatusState
 {
     [JsonPropertyName("id")] public required string Id { get; init; }
     [JsonPropertyName("name")] public string? Name { get; init; }
-    /// <summary>命令模式 push | pull | standby | free</summary>
+    /// <summary>命令模式 push | pull | standby | free | unavailable</summary>
     [JsonPropertyName("mode")] public required string Mode { get; init; }
-    /// <summary>standby | connecting | repositioning | working | free | parted</summary>
+    /// <summary>standby | connecting | repositioning | working | free | parted | unavailable(已離開,之後指令以 tugUnavailable 拒絕)</summary>
     [JsonPropertyName("status")] public required string Status { get; init; }
     /// <summary>實際出力(t)</summary>
     [JsonPropertyName("force_t")] public required double ForceT { get; init; }

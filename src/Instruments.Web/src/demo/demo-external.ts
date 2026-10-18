@@ -182,8 +182,20 @@ export class DemoExternal {
   private tugControl(args: Record<string, unknown>): true {
     const tug = this.tugs.find((t) => t.def.id === args['id']);
     if (!tug) return this.reject('tugControl', 'unknownTug', args);
+    // 已離開的拖船不可再下令(核心 tugUnavailable);mode unavailable 讓拖船離開(不可恢復)
+    if (tug.mode === 'unavailable') return this.reject('tugControl', 'tugUnavailable', args);
     const modeRaw = args['mode'];
-    const mode: TugMode | null = modeRaw === undefined ? tug.mode : modeRaw === 'push' || modeRaw === 'pull' || modeRaw === 'standby' || modeRaw === 'free' ? modeRaw : null;
+    if (modeRaw === 'unavailable') {
+      const was = tug.mode;
+      tug.mode = 'unavailable';
+      tug.status = 'unavailable';
+      tug.side = null;
+      tug.force = 0;
+      tug.timer = 0;
+      this.emit('tugCommand', 'instructor', { itemId: tug.def.id, data: { id: tug.def.id, mode: 'unavailable', from: was, status: 'unavailable', direction_deg: Math.round(tug.dirOrder * 10) / 10, power_pct: 0 } });
+      return true;
+    }
+    const mode: Exclude<TugMode, 'unavailable'> | null = modeRaw === undefined ? (tug.mode as Exclude<TugMode, 'unavailable'>) : modeRaw === 'push' || modeRaw === 'pull' || modeRaw === 'standby' || modeRaw === 'free' ? modeRaw : null;
     if (!mode) return this.reject('tugControl', 'unknownTugMode', args);
     const power = n(args['power_pct']);
     if (power !== undefined && (power < 0 || power > 100)) return this.reject('tugControl', 'invalidPower', args);

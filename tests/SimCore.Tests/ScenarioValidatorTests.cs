@@ -156,4 +156,47 @@ public class ScenarioValidatorTests
         var e07 = ScenarioValidator.Check(TestData.E07(), TestData.Fsb1());
         Assert.DoesNotContain(e07, i => i.Message.Contains("大於走廊寬度") || i.Message.Contains("到達半徑"));
     }
+
+    /// <summary>
+    /// 預期只記錄故障標記:injectFault 物件形式 recordOnly: true → 只記錄故障不警告(仍注入、加入 faults[]);
+    /// 標在核心有模型的故障上 → 警告;recordOnly 非布林 → 結構錯誤;未標記者維持原本的「只記錄與廣播」警告。
+    /// </summary>
+    [Fact]
+    public void RecordOnlyFaultMarker()
+    {
+        static string Tl(string action) => $"timeline:\n  - {{ id: f, when: {{ type: time, atLeast: 5 }}, actions: [ {action} ] }}";
+        Assert.Empty(Check(Tl("{ injectFault: { name: ecdisAlarmFlood, recordOnly: true } }")));
+        Assert.Empty(Check(Tl("{ injectFault: { name: cargoHeatingFailure, recordOnly: true } }")));
+        HasWarning(Tl("{ injectFault: ecdisAlarmFlood }"), "recordOnly: true");
+        HasWarning(Tl("{ injectFault: { name: ecdisAlarmFlood, recordOnly: false } }"), "只記錄與廣播");
+        HasWarning(Tl("{ injectFault: { name: steeringGear, recordOnly: true } }"), "recordOnly: true 不適用");
+        Assert.Empty(Check(Tl("{ injectFault: { name: steeringGear } }")));
+        HasError(Tl("{ injectFault: { name: ecdisAlarmFlood, recordOnly: \"true\" } }"), "recordOnly 須為布林值");
+        HasWarning(Tl("{ injectFault: { name: noSuchFault, recordOnly: true } }"), "不在故障目錄");
+
+        // 執行時與一般注入相同:faults[] 出現、發 faultInjected
+        var sc = ScenarioLoader.FromYaml($$"""
+            id: T
+            ship: { id: FSB1, loading: ballast }
+            origin: { lat: 23.80, lon: 120.05 }
+            initial: { position: { x: 0, y: 0 }, heading: 0, speed: 5, telegraph: HAH }
+            environment: { waterDepth: 30 }
+            {{Tl("{ injectFault: { name: ecdisAlarmFlood, recordOnly: true } }")}}
+            """).Validate();
+        var e = new Engine.SimulationEngine(TestData.Fsb1(), sc);
+        var events = TestData.Capture(e);
+        TestData.RunTo(e, 6);
+        Assert.Equal(new[] { "ecdisAlarmFlood" }, e.BuildState().Faults);
+        Assert.Equal("ecdisAlarmFlood", Assert.Single(events, x => x.Kind == Engine.SimEventKinds.FaultInjected).DataString("fault"));
+    }
+
+    /// <summary>includePrior 只對指定 targetId 的 encounterFirstAction 有效;用在其他事件或未指定目標時警告(不影響載入)。</summary>
+    [Fact]
+    public void IncludePriorOutsideEncounterFirstActionWarns()
+    {
+        HasWarning("assessment:\n  required: [ { id: r, after: { event: phaseChanged }, expect: { event: { kind: alertRaised, includePrior: true } }, within_s: 10 } ]", "includePrior");
+        HasWarning("assessment:\n  required: [ { id: r, after: { event: phaseChanged }, expect: { any: [ rudderOrder, { event: { kind: encounterFirstAction, includePrior: true } } ] }, within_s: 10 } ]", "includePrior");
+        Assert.DoesNotContain(Check("targets:\n  - { id: T1, initial: { position: { x: 0, y: 5000 }, heading: 180, speed: 5 } }\nassessment:\n  required: [ { id: r, after: { event: phaseChanged }, expect: { event: { kind: encounterFirstAction, targetId: T1, includePrior: true } }, within_s: 10 } ]"),
+            i => i.Message.Contains("includePrior"));
+    }
 }

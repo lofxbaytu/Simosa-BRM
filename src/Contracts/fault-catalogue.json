@@ -218,7 +218,7 @@
       "label": "拖纜斷裂",
       "modelled": true,
       "exercise": "E13",
-      "effect": "args.id(拖船 id,字串;省略 = 第一艘拉中/待命中者)的拖纜斷裂:拉中者出力立即歸零、status parted、發 tugLineParted;推頂者續推但不能再拉;args.id 未定義時以 commandRejected {reason: unknownTug} 拒絕、不加入 faults[];清除後可重新帶纜(connect_s);不產生 BAM 警報(docs/design/physics-tugs-anchors-mooring.md)"
+      "effect": "args.id(拖船 id,字串;省略 = 第一艘拉中/待命中者)的拖纜斷裂:拉中者出力立即歸零、status parted、發 tugLineParted;推頂者續推但不能再拉;args.id 未定義時以 commandRejected {reason: unknownTug}、指定已離開(unavailable)的拖船時以 {reason: tugUnavailable} 拒絕,皆不加入 faults[];清除後可重新帶纜(connect_s);不產生 BAM 警報(docs/design/physics-tugs-anchors-mooring.md)"
     }
   ]
 }

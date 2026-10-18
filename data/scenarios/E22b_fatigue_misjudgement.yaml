@@ -1,0 +1,121 @@
+# E22b 1.39 教室模式迷你情境:疲勞下的誤判(規劃書第 8.0 節 1.39 人因單元(疲勞)、第 8.1 節 E22;設計 docs/design/scenario-library.md 第 20 節;schema src/Contracts/scenario.schema.json)
+# 台灣西南外海開闊水域(示意座標,無航道/港口幾何,待 ENC 校正;水深一律 60 m),夜間 03:50,FSB1 滿載 HAH 約 7.5 kn、自動舵 020°;約 12 分鐘。
+# 腳本(1.39 教室模式:不套用三步升級,無硬性失敗):T+1 s 交班開場(接班者已連續工作約 15 小時:卸貨後未補眠)→
+#   T+120 s 疲勞提示(船長夜令:疲勞時叫船長/加派瞭望)→ T+180 s 瞭望報告「右舷前方一盞白燈,應該是錨泊船」(實為由右舷橫越的貨船 X1,
+#   白色桅燈 + 紅色舷燈;無人查證時約 T+13 min 在艏前約 0.5 nm 通過)→ T+300 s 討論點(phase discussion)→ T+12 min 結束。
+# 評估(講評為主):瞭望報告後以雷達/ARPA 查證並回報(acknowledge report 或 lookoutReport)、承認疲勞並叫船長(callMaster;自交班起算,
+#   交班時即叫船長亦算,期限 = 疲勞提示 + 300 s)、接班檢查表。
+id: E22b_fatigue_misjudgement
+name: 1.39 教室迷你情境 — 疲勞下的誤判
+description: >-
+  夜間接班的駕駛員已連續工作約 15 小時;瞭望員把橫越貨船的燈光誤判為錨泊船,疲勞的值班駕駛員容易接受第一個解釋。
+  練習以雷達/ARPA 交叉查證、承認疲勞並依夜令叫船長;1.39 疲勞與決策單元的教室討論素材(約 12 分鐘)。
+seed: 20261223
+startTimeUtc: "2026-12-22T19:50:00Z"            # 當地 03:50(夜間)
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.4000, lon: 120.0000 }          # 台灣西南外海(示意)
+initial:
+  position: { lat: 22.4000, lon: 120.0000 }
+  heading: 20
+  speed: 7.5
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 10, trueDir: 30, gustiness: 0.1 }
+  current: { set: 20, drift: 0.3 }
+  waterDepth: 60
+  visibility_nm: 6
+briefing:
+  text: |
+    交班(03:50 地方時,夜間):No.1 滿載北上,自動舵 020°、HAH 約 7.5 kn,開闊水域、能見度 6 nm。
+    書面航程計畫:航向 020° 直航(示意);交通稀少。接班者(學員)昨日卸貨後未補眠,已連續工作約 15 小時;瞭望員由帶領者或語音腳本扮演。
+    船長夜令:疲勞、不確定或交通接近時立即叫船長;夜間任何燈光以雷達/ARPA 查證。
+    教室模式(1.39 疲勞/決策):討論點時請學員說出「自己的疲勞徵兆、何時該叫船長、如何避免接受第一個解釋(確認偏誤)」。
+  attachments:
+    - { title: "航程計畫(高雄外海北上,示意)", file: docs/passage-plan-E22.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+    - { title: 船長夜令, file: docs/night-orders.pdf }
+    - { title: "1.39 單元講義:疲勞與決策", file: docs/IMO-1.39-fatigue.pdf }
+  roles:
+    - { role: officer, required: true }
+    - { role: lookout, playedBy: voiceScript }
+    - { role: master, playedBy: leader }
+  minParticipants: 2
+  duration_s: 720
+timeline:
+  - id: handover
+    name: 交班開場(夜間,接班者疲勞)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:自動舵零二零,半速,前面沒有船。你昨天卸貨到半夜,還好嗎?船長夜令在桌上。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察接班者是否誠實說明疲勞狀況、核對夜令與交通;完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 020°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 20 }
+  - id: fatigueCue
+    name: 疲勞提示
+    when: { type: time, atLeast: 120 }
+    actions:
+      - message: { to: all, text: "(旁白)你覺得眼皮很重,剛才有幾秒鐘記不得雷達量程設在幾浬。夜令:疲勞時叫船長或加派瞭望。", severity: info }
+      - message: { to: instructor, text: "疲勞提示:期望承認疲勞並叫船長(acknowledge callMaster)", severity: info }
+  - id: lightSighted
+    name: 瞭望誤判燈光
+    when: { type: time, atLeast: 180 }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "二副,右舷前方一盞白燈,不動,應該是錨泊船吧。", lang: zh-TW }
+      - message: { to: instructor, text: "誤判:X1 為由右舷橫越的貨船(白色桅燈 + 紅色舷燈)。期望以雷達/ARPA 查證並回報(acknowledge report 或 lookoutReport)", severity: warning }
+  - id: discussionPoint
+    name: 討論點(教室模式暫停)
+    phase: discussion
+    when: { type: time, atLeast: 300 }
+    actions:
+      - message: { to: instructor, text: "討論點:可暫停(freeze)帶領討論 — 疲勞如何影響判斷?為何容易接受「錨泊船」這個解釋?", severity: info }
+  - id: redLight
+    name: 瞭望看到紅燈
+    when: { type: time, atLeast: 420 }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "咦,那盞白燈下面好像還有一盞紅燈……", lang: zh-TW }
+  - id: timeUp
+    name: 迷你情境結束
+    when: { type: time, atLeast: 720 }
+    actions:
+      - endExercise: { reason: 迷你情境結束(進入講評) }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  hardFail: []                                    # 1.39 教室模式:無硬性失敗(講評為主)
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 10
+    - id: fatigueCallMaster
+      after: { event: timelineTriggered, itemId: handover }         # 自交班起算:交班時即承認疲勞並依夜令叫船長也算;期限 = 疲勞提示 120 s + 300 s
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:bridge.e22.fatigueCallMasterFromHandover_s}"
+      penalty: 15
+    - id: verifyLight
+      after: { event: timelineTriggered, itemId: lightSighted }
+      expect: { any: [ { acknowledge: { kind: report } }, { acknowledge: { kind: lookoutReport } } ] }
+      within_s: "${params:bridge.e22.verifyLight_s}"
+      penalty: 15
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: X1
+    name: HAI CHENG
+    mmsi: 416522101
+    shipType: cargo
+    loa: 120
+    beam: 19
+    draft: 7
+    initial:
+      position: { lat: 22.42835, lon: 120.03623 }  # 右舷前方約 2.6 nm,航向 280° 8 kn;無人操作約 T+13 min 在艏前約 0.5 nm 通過
+      heading: 280
+      speed: 8
+    behaviour: { mode: scripted, script: [ { t: 0, heading: 280, speed: 8 } ] }

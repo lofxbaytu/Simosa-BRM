@@ -15,7 +15,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { dispatchCommand, tileStyles } from '../shared.js';
 import { instructorStyles, numberFromInput } from './instructor-shared.js';
 import { TUG_MODE_LABEL, TUG_STATUS_LABEL, tugControlCommand, tugDirectionText, tugLineBreakCommand, tugName, type ScenarioTugDef } from '../../lib/external-forces.js';
-import { TUG_MODES, type TugMode, type TugState } from '../../types/external.js';
+import { TUG_OPERATING_MODES, type TugMode, type TugState } from '../../types/external.js';
 import { normalizeHeading } from '../../lib/angles.js';
 
 /** 簡化模式的方向快速鍵(相對船艏) */
@@ -421,8 +421,9 @@ export class TugPanel extends LitElement {
 
   private renderModes(t: TugState) {
     return html`<div class="modes" role="group" aria-label="${tugName(t)} 模式">
-      ${TUG_MODES.map((m) => {
-        const allowed = this.modeAllowed(t.id, m);
+      ${TUG_OPERATING_MODES.map((m) => {
+        // 拖船已離開(unavailable)時核心一律以 tugUnavailable 拒絕,模式鈕全部停用
+        const allowed = this.modeAllowed(t.id, m) && t.status !== 'unavailable' && t.mode !== 'unavailable';
         const blocked = m === 'pull' && (t.lineParted === true || t.status === 'parted');
         return html`<button class="mode-${m} ${t.mode === m ? 'active' : ''}" ?disabled=${!allowed} title=${!allowed ? '情境未提供此模式(tugModeUnavailable)' : blocked ? '拖纜已斷:拉會被核心拒絕(tugLineParted)' : ''} @click=${() => this.sendMode(t, m)}>${TUG_MODE_LABEL[m]}</button>`;
       })}

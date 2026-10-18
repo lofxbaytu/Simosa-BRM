@@ -129,6 +129,8 @@ public sealed class AssessmentEngine
                 {
                     after = e.Kind, afterItemId = e.ItemId, afterSeq = e.Seq, start_t = e.T, within_s = rule.WithinS, deadline_t = e.T + rule.WithinS, penalty = rule.Penalty,
                 });
+                // includePrior:該會遇的首次行動已在開始計時前發生(每筆會遇只發一次 encounterFirstAction)→ 當下以 dt = 0 判 met
+                if (PriorFirstAction(rule.Expect) is { } prior) Meet(rule, st, e.Tick, prior.By, prior.T);
                 continue;
             }
             if (st.State is "pending" or "missed" && st.MetTick < 0 && MatchesExpect(rule.Expect, e, null) is { } by)
@@ -152,7 +154,22 @@ public sealed class AssessmentEngine
         }
     }
 
-    private void Meet(RequiredEvent rule, RequiredState st, long tick, string by)
+    /// <summary>
+    /// expect 中標 <c>includePrior: true</c> 的 <c>{event: {kind: encounterFirstAction, targetId}}</c>:該目標最新一筆會遇仍進行中且已有首次行動時,
+    /// 回傳首次行動時刻(s)與達成方式。已結束的會遇(首次行動屬於前一次會遇)不計;未指定 targetId 時不適用(ScenarioValidator 警告)。
+    /// </summary>
+    private (double T, string By)? PriorFirstAction(ExpectSpec spec)
+    {
+        foreach (var leaf in spec.Leaves())
+        {
+            if (leaf.Event is not { IncludePrior: true, TargetId: { } tid } ev || ev.Kind != SimEventKinds.EncounterFirstAction) continue;
+            var rec = Encounters.State.Records.LastOrDefault(r => string.Equals(r.TargetId, tid, StringComparison.OrdinalIgnoreCase));
+            if (rec is { Closed: false, FirstActionAtS: { } t }) return (t, $"event:{ev.Kind}");
+        }
+        return null;
+    }
+
+    private void Meet(RequiredEvent rule, RequiredState st, long tick, string by, double? priorT = null)
     {
         st.MetTick = tick;
         st.By = by;
@@ -171,7 +188,10 @@ public sealed class AssessmentEngine
             st.State = "met";
             st.Penalty = 0;
         }
-        _raise(SimEventKinds.RequiredEventMet, rule.Id, null, null, new { dt_s = dt, within_s = rule.WithinS, by, late = st.State == "late", penalty = st.Penalty });
+        if (priorT is { } pt)
+            _raise(SimEventKinds.RequiredEventMet, rule.Id, null, null, new { dt_s = dt, within_s = rule.WithinS, by, late = st.State == "late", penalty = st.Penalty, prior_t = pt });
+        else
+            _raise(SimEventKinds.RequiredEventMet, rule.Id, null, null, new { dt_s = dt, within_s = rule.WithinS, by, late = st.State == "late", penalty = st.Penalty });
     }
 
     private void MarkMissed(RequiredEvent rule, RequiredState st)

@@ -1,0 +1,409 @@
+{
+  "id": "kaohsiung-e20-passage",
+  "description": "E20 綜合評估航程示意定義(規劃書第 8.1 節 E20:Charlie 引水站 → 油碼頭完整進港)。港外段沿用 kaohsiung-second-port-inbound.json 的 E15 航線(START → FW1 → FW2 → OUTER,逐點相同),口門位置沿用 kaohsiung-south-approach.json harbourEntrances;口門後的港內航道(060°)、南北防波堤、港內淺灘、泊位 500 m 速限區與油碼頭泊位 KHH-E20-OIL(碼頭線 060°、長 260 m、水域在右(東南)、12 個 H 1.0 m 錐型碰墊與 7 個 50 t 繫船柱,型式與配置比照 mailiao-berth.json MLO-OIL-3)皆為依公開地理常識虛構的示意值,與 E09/E17 的港內示意幾何互不相同;非港方公告/ENC/碼頭設計資料,不可用於實際航行、操船或評估,待 ENC 校正。不含 land(雷達陸地回波仍以 kaohsiung-approach.json 為 Land[0])。",
+  "source": "示意(港外航線同 kaohsiung-second-port-inbound.json、口門同 kaohsiung-south-approach.json;港內航道與泊位為虛構示意;待 ENC 校正)",
+  "route": [
+    {
+      "name": "START",
+      "lat": 22.52736,
+      "lon": 120.23803
+    },
+    {
+      "name": "FW1",
+      "lat": 22.53305,
+      "lon": 120.25496
+    },
+    {
+      "name": "FW2",
+      "lat": 22.54158,
+      "lon": 120.28035
+    },
+    {
+      "name": "OUTER",
+      "lat": 22.54784,
+      "lon": 120.29897
+    },
+    {
+      "name": "ENT",
+      "lat": 22.552,
+      "lon": 120.305
+    },
+    {
+      "name": "IN1",
+      "lat": 22.55606,
+      "lon": 120.31258
+    },
+    {
+      "name": "BERTH",
+      "lat": 22.55968,
+      "lon": 120.31931
+    }
+  ],
+  "harbourEntrance": {
+    "name": "高雄第二港口口門(示意,同 kaohsiung-south-approach.json)",
+    "lat": 22.552,
+    "lon": 120.305,
+    "width_m": 350,
+    "axis_deg": 57
+  },
+  "breakwaters": [
+    {
+      "id": "northBreakwater",
+      "name": "北防波堤(示意)",
+      "depth_m": 2,
+      "polygon": [
+        {
+          "lat": 22.55318,
+          "lon": 120.30383
+        },
+        {
+          "lat": 22.55999,
+          "lon": 120.29906
+        },
+        {
+          "lat": 22.56029,
+          "lon": 120.29955
+        },
+        {
+          "lat": 22.55347,
+          "lon": 120.30432
+        }
+      ]
+    },
+    {
+      "id": "southBreakwater",
+      "name": "南防波堤(示意)",
+      "depth_m": 2,
+      "polygon": [
+        {
+          "lat": 22.55053,
+          "lon": 120.30568
+        },
+        {
+          "lat": 22.54371,
+          "lon": 120.31045
+        },
+        {
+          "lat": 22.54401,
+          "lon": 120.31094
+        },
+        {
+          "lat": 22.55082,
+          "lon": 120.30617
+        }
+      ]
+    }
+  ],
+  "channel": {
+    "id": "innerChannel",
+    "name": "港內航道(示意,060°,中心線兩側 250 m)",
+    "depth_m": 12.5,
+    "polygon": [
+      {
+        "lat": 22.54869,
+        "lon": 120.30369
+      },
+      {
+        "lat": 22.55908,
+        "lon": 120.32305
+      },
+      {
+        "lat": 22.56299,
+        "lon": 120.32062
+      },
+      {
+        "lat": 22.5526,
+        "lon": 120.30126
+      }
+    ]
+  },
+  "shoals": [
+    {
+      "id": "innerShoalS",
+      "name": "港內航道東南側淺灘(示意)",
+      "depth_m": 4,
+      "polygon": [
+        {
+          "lat": 22.55032,
+          "lon": 120.30672
+        },
+        {
+          "lat": 22.55908,
+          "lon": 120.32305
+        },
+        {
+          "lat": 22.55634,
+          "lon": 120.32475
+        },
+        {
+          "lat": 22.54758,
+          "lon": 120.30842
+        }
+      ]
+    },
+    {
+      "id": "innerShoalN",
+      "name": "港內航道西北側淺灘(示意,至碼頭前)",
+      "depth_m": 4,
+      "polygon": [
+        {
+          "lat": 22.55423,
+          "lon": 120.30429
+        },
+        {
+          "lat": 22.56077,
+          "lon": 120.3165
+        },
+        {
+          "lat": 22.56351,
+          "lon": 120.3148
+        },
+        {
+          "lat": 22.55696,
+          "lon": 120.30259
+        }
+      ]
+    }
+  ],
+  "berthSpeedZone": {
+    "id": "berthApproach",
+    "name": "泊位 500 m 速限區(示意)",
+    "polygon": [
+      {
+        "lat": 22.55953,
+        "lon": 120.31379
+      },
+      {
+        "lat": 22.56404,
+        "lon": 120.32221
+      },
+      {
+        "lat": 22.55857,
+        "lon": 120.32561
+      },
+      {
+        "lat": 22.55406,
+        "lon": 120.31719
+      }
+    ]
+  },
+  "outboundTrack": {
+    "offsetFromCentreline_m": 150,
+    "points": [
+      {
+        "name": "OUT-START",
+        "lat": 22.55724,
+        "lon": 120.31185
+      },
+      {
+        "name": "OUT-ENT",
+        "lat": 22.55227,
+        "lon": 120.30259
+      },
+      {
+        "name": "OUT-END",
+        "lat": 22.55097,
+        "lon": 120.29703
+      }
+    ]
+  },
+  "fenderTypes": {
+    "cone-1000": {
+      "description": "示意:錐型碰墊 H 1.0 m 一般型式曲線(額定壓縮 72 %、額定反力 1,000 kN);非特定廠牌型錄值",
+      "height_m": 1.0,
+      "width_m": 2.5,
+      "ratedReaction_kN": 1000,
+      "ratedDeflection_pct": 72,
+      "ratedEnergy_kNm": 551.4,
+      "curve": [
+        [
+          0,
+          0
+        ],
+        [
+          5,
+          19
+        ],
+        [
+          10,
+          37
+        ],
+        [
+          15,
+          53
+        ],
+        [
+          20,
+          66
+        ],
+        [
+          25,
+          77
+        ],
+        [
+          30,
+          85
+        ],
+        [
+          35,
+          91
+        ],
+        [
+          40,
+          95
+        ],
+        [
+          45,
+          97
+        ],
+        [
+          50,
+          98
+        ],
+        [
+          55,
+          98
+        ],
+        [
+          60,
+          98
+        ],
+        [
+          65,
+          99
+        ],
+        [
+          72,
+          100
+        ]
+      ],
+      "damping_kNs_per_m": 300,
+      "dampingSource": "示意:以黏性阻尼近似橡膠碰墊遲滯(約 4 個碰墊同時受壓時船橫移阻尼比約 0.1);fenderContact 能量仍以靜態曲線積分",
+      "friction": 0.2
+    }
+  },
+  "berths": [
+    {
+      "id": "KHH-E20-OIL",
+      "name": "高雄第二港口油碼頭 E20 泊位(示意)",
+      "quay": [
+        {
+          "lat": 22.55964,
+          "lon": 120.31788
+        },
+        {
+          "lat": 22.56081,
+          "lon": 120.32007
+        }
+      ],
+      "waterSide": "right",
+      "quayStiffness_kNpm": 20000,
+      "fenders": [
+        {
+          "id": "F01",
+          "type": "cone-1000",
+          "chainage_m": 20.0
+        },
+        {
+          "id": "F02",
+          "type": "cone-1000",
+          "chainage_m": 40.0
+        },
+        {
+          "id": "F03",
+          "type": "cone-1000",
+          "chainage_m": 60.0
+        },
+        {
+          "id": "F04",
+          "type": "cone-1000",
+          "chainage_m": 80.0
+        },
+        {
+          "id": "F05",
+          "type": "cone-1000",
+          "chainage_m": 100.0
+        },
+        {
+          "id": "F06",
+          "type": "cone-1000",
+          "chainage_m": 120.0
+        },
+        {
+          "id": "F07",
+          "type": "cone-1000",
+          "chainage_m": 140.0
+        },
+        {
+          "id": "F08",
+          "type": "cone-1000",
+          "chainage_m": 160.0
+        },
+        {
+          "id": "F09",
+          "type": "cone-1000",
+          "chainage_m": 180.0
+        },
+        {
+          "id": "F10",
+          "type": "cone-1000",
+          "chainage_m": 200.0
+        },
+        {
+          "id": "F11",
+          "type": "cone-1000",
+          "chainage_m": 220.0
+        },
+        {
+          "id": "F12",
+          "type": "cone-1000",
+          "chainage_m": 240.0
+        }
+      ],
+      "bollards": [
+        {
+          "id": "B1",
+          "chainage_m": 10,
+          "setback_m": 3.0,
+          "swl_t": 50
+        },
+        {
+          "id": "B2",
+          "chainage_m": 45,
+          "setback_m": 3.0,
+          "swl_t": 50
+        },
+        {
+          "id": "B3",
+          "chainage_m": 80,
+          "setback_m": 3.0,
+          "swl_t": 50
+        },
+        {
+          "id": "B4",
+          "chainage_m": 130,
+          "setback_m": 3.0,
+          "swl_t": 50
+        },
+        {
+          "id": "B5",
+          "chainage_m": 180,
+          "setback_m": 3.0,
+          "swl_t": 50
+        },
+        {
+          "id": "B6",
+          "chainage_m": 215,
+          "setback_m": 3.0,
+          "swl_t": 50
+        },
+        {
+          "id": "B7",
+          "chainage_m": 250,
+          "setback_m": 3.0,
+          "swl_t": 50
+        }
+      ]
+    }
+  ]
+}

@@ -200,6 +200,94 @@ public class TugTests
             events.Where(x => x.Kind == SimEventKinds.CommandRejected).Select(x => x.DataString("reason")));
     }
 
+    /// <summary>
+    /// 拖船縮減(設計文件第 2.4 節):tugControl mode unavailable → 出力立即 0、status unavailable、發 tugUnavailable(非 tugCommand);
+    /// 之後任何指令(含再下 unavailable)以 tugUnavailable 拒絕,tugLineBreak 不作用於它;狀態進雜湊與快照。
+    /// </summary>
+    [Fact]
+    public void UnavailableTugLeavesAndRejectsCommands()
+    {
+        var e = Mmg(Sc(TwoTugs));
+        var events = TestData.Capture(e);
+        Apply(e, SimCommand.TugControl("TG2", "push", 90, 100));
+        RunTo(e, 60);
+        Assert.True(e.BuildState().Tugs!.Single(t => t.Id == "TG2").ForceT > 30.0);
+        var snap = e.CreateSnapshot();
+        var h0 = e.StateHash;
+        Apply(e, SimCommand.TugControl("TG2", "unavailable"));
+        var gone = Assert.Single(events, x => x.Kind == SimEventKinds.TugUnavailable);
+        Assert.Equal(("TG2", "unavailable", "push", "working", "unavailable"),
+            (gone.ItemId, gone.DataString("mode"), gone.DataString("from"), gone.DataString("fromStatus"), gone.DataString("status")));
+        Assert.True(gone.DataNumber("force_t") > 30.0);
+        Assert.Single(events, x => x.Kind == SimEventKinds.TugCommand);   // 只有先前的 push
+        e.Step();
+        var tg2 = e.BuildState().Tugs!.Single(t => t.Id == "TG2");
+        Assert.Equal(("unavailable", "unavailable", 0.0), (tg2.Mode, tg2.Status, tg2.ForceT));
+        RunTo(e, 90);
+        Assert.Equal(0.0, e.BuildState().Tugs!.Single(t => t.Id == "TG2").ForceT);
+
+        foreach (var cmd in new[] { SimCommand.TugControl("TG2", "push", 90, 100), SimCommand.TugControl("TG2", "free"), SimCommand.TugControl("TG2", null, 180, 50),
+                     SimCommand.TugControl("TG2", "unavailable"), SimCommand.TugControl("TG2", "tow") })
+            Apply(e, cmd);
+        Assert.All(events.Where(x => x.Kind == SimEventKinds.CommandRejected), x => Assert.Equal(CommandRejectReasons.TugUnavailable, x.DataString("reason")));
+        Assert.Equal(5, events.Count(x => x.Kind == SimEventKinds.CommandRejected));
+        // 拖纜斷裂故障不作用於已離開的拖船:指定 id 時以 tugUnavailable 拒絕、不加入 faults[]、不發 faultInjected
+        // (避免故障亮起卻沒有作用,同 unknownTug;FaultResponseTracker 也不會為它建立應變紀錄)
+        Apply(e, SimCommand.InjectFault(FaultNames.TugLineBreak, new { id = "TG2" }));
+        Assert.DoesNotContain(events, x => x.Kind == SimEventKinds.TugLineParted);
+        Assert.DoesNotContain(events, x => x.Kind == SimEventKinds.FaultInjected);
+        var lineRej = events.Last(x => x.Kind == SimEventKinds.CommandRejected);
+        Assert.Equal(("injectFault", CommandRejectReasons.TugUnavailable), (lineRej.DataString("command"), lineRej.DataString("reason")));
+        Assert.Equal(6, events.Count(x => x.Kind == SimEventKinds.CommandRejected));
+        Assert.Empty(e.BuildState().Faults ?? Array.Empty<string>());
+        Assert.False(e.BuildState().Tugs!.Single(t => t.Id == "TG2").LineParted);
+        // TG1 不受影響
+        Apply(e, SimCommand.TugControl("TG1", "push", 90, 50));
+        Assert.Equal("working", e.BuildState().Tugs!.Single(t => t.Id == "TG1").Status);
+
+        // 快照還原 → 回到離開前(TG2 可再下令)
+        e.Restore(snap);
+        Assert.Equal(h0, e.StateHash);
+        Assert.Equal("working", e.BuildState().Tugs!.Single(t => t.Id == "TG2").Status);
+    }
+
+    /// <summary>時間表 tugControl 動作(args 與指令相同):執行時 source timeline;結構檢查 id 須為 tugs[].id、mode/power_pct 合法。</summary>
+    [Fact]
+    public void TimelineTugControlActionAndValidation()
+    {
+        var sc = Sc(TwoTugs + """
+
+            timeline:
+              - { id: tg1Push, when: { type: time, atLeast: 10 }, actions: [ { tugControl: { id: TG1, mode: push, direction_deg: 90, power_pct: 60 } } ] }
+              - { id: reduce, when: { type: time, atLeast: 30 }, actions: [ { tugControl: { id: TG2, mode: unavailable } } ] }
+              - { id: again, when: { type: time, atLeast: 40 }, actions: [ { tugControl: { id: TG2, mode: push } } ] }
+            """);
+        Assert.Empty(ScenarioValidator.Check(sc, TestData.Fsb1()));
+        var e = Mmg(sc);
+        var events = TestData.Capture(e);
+        RunTo(e, 45);
+        var push = Assert.Single(events, x => x.Kind == SimEventKinds.TugCommand);
+        Assert.Equal((SimEventSources.Timeline, "TG1", 10.0), (push.Source, push.ItemId, push.T));
+        var gone = Assert.Single(events, x => x.Kind == SimEventKinds.TugUnavailable);
+        Assert.Equal((SimEventSources.Timeline, "TG2", 30.0), (gone.Source, gone.ItemId, gone.T));
+        var rej = Assert.Single(events, x => x.Kind == SimEventKinds.CommandRejected);
+        Assert.Equal((SimEventSources.Timeline, "again", CommandRejectReasons.TugUnavailable), (rej.Source, rej.ItemId, rej.DataString("reason")));
+        Assert.Equal("working", e.BuildState().Tugs!.Single(t => t.Id == "TG1").Status);
+
+        foreach (var (action, fragment) in new[]
+                 {
+                     ("{ tugControl: { id: TGX, mode: push } }", "不存在的拖船"),
+                     ("{ tugControl: { mode: push } }", "缺少 id"),
+                     ("{ tugControl: { id: TG1, mode: tow } }", "tugControl.mode"),
+                     ("{ tugControl: { id: TG1, power_pct: 150 } }", "power_pct"),
+                     ("{ tugControl: TG1 }", "須為物件"),
+                 })
+        {
+            var ex = Assert.Throws<InvalidDataException>(() => Sc(TwoTugs + $"\ntimeline:\n  - {{ id: x, when: {{ type: time, atLeast: 1 }}, actions: [ {action} ] }}"));
+            Assert.Contains(fragment, ex.Message);
+        }
+    }
+
     [Fact]
     public void ScenarioTugValidation()
     {

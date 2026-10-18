@@ -123,15 +123,23 @@ public sealed class ExternalForceModel : IExternalForceField
         if (!Supported) return ExternalCommandOutcome.Rejected("externalForcesUnsupported");
         var tug = Tug(id);
         if (tug is null) return ExternalCommandOutcome.Rejected("unknownTug");
+        // 已離開的拖船:任何指令皆拒絕(先於模式檢查,教官站可直接顯示原因)
+        if (tug.Status == TugStatus.Unavailable) return ExternalCommandOutcome.Rejected(Engine.CommandRejectReasons.TugUnavailable);
         var m = mode is null ? tug.Mode : mode.ToLowerInvariant() switch
         {
-            "push" => TugMode.Push, "pull" => TugMode.Pull, "standby" => TugMode.Standby, "free" => TugMode.Free, _ => (TugMode)(-1),
+            "push" => TugMode.Push, "pull" => TugMode.Pull, "standby" => TugMode.Standby, "free" => TugMode.Free, "unavailable" => TugMode.Unavailable, _ => (TugMode)(-1),
         };
         if ((int)m < 0) return ExternalCommandOutcome.Rejected("unknownTugMode");
         if (powerPct is < 0 or > 100) return ExternalCommandOutcome.Rejected("invalidPower");
         var from = tug.Mode;
+        var fromStatus = tug.Status;
+        var forceBefore = tug.ForceN;
         var reject = tug.Command(m, directionDeg, powerPct);
         if (reject is not null) return ExternalCommandOutcome.Rejected(reject);
+        // 拖船離開(拖船縮減):發 tugUnavailable 而非 tugCommand(不是駕駛台的拖船令,不觸發「拖船令」類條件與必要事件)
+        if (m == TugMode.Unavailable)
+            return new ExternalCommandOutcome(null, Engine.SimEventKinds.TugUnavailable, tug.Id, $"拖船 {tug.Id} 離開(不再可用)",
+                new { id = tug.Id, mode = TugUnit.ModeName(m), from = TugUnit.ModeName(from), fromStatus = TugUnit.StatusName(fromStatus), status = TugUnit.StatusName(tug.Status), force_t = forceBefore / TugUnit.TonneForce });
         return new ExternalCommandOutcome(null, "tugCommand", tug.Id, $"{tug.Id} {TugUnit.ModeName(m)} {Units.NormalizeHeadingDeg(Units.RadToDeg(tug.DirectionOrderRad)):F0}° {tug.PowerOrder * 100:F0}%",
             new
             {
@@ -146,8 +154,8 @@ public sealed class ExternalForceModel : IExternalForceField
         if (!Supported) return null;
         var tug = id is not null ? Tug(id)
             : _tugs.FirstOrDefault(t => !t.LineParted && t.Mode == TugMode.Pull && t.Status != TugStatus.Free)
-              ?? _tugs.FirstOrDefault(t => !t.LineParted && t.Status is not (TugStatus.Free or TugStatus.Parted));
-        if (tug is null || tug.LineParted) return null;
+              ?? _tugs.FirstOrDefault(t => !t.LineParted && t.Status is not (TugStatus.Free or TugStatus.Parted or TugStatus.Unavailable));
+        if (tug is null || tug.LineParted || tug.Status == TugStatus.Unavailable) return null;
         var mode = tug.Mode;
         var before = tug.PartLine();
         return new ExternalEvent("tugLineParted", tug.Id, $"拖船 {tug.Id} 拖纜斷裂",
@@ -203,7 +211,7 @@ public sealed class ExternalForceModel : IExternalForceField
 
     // ------------------------------------------------------------------ 雜湊
 
-    public int HashLongs => 2 + _tugs.Count * 9 + _anchors.Count * 6
+    public int HashLongs => 2 + _tugs.Count * 9 + _anchors.Count * 8
                             + (Berth is null ? 0 : 2 + Berth.Fenders.Count * 3 + Berth.Lines.Count * 5);
 
     public int WriteHash(Span<byte> buf)
@@ -223,6 +231,8 @@ public sealed class ExternalForceModel : IExternalForceField
             L(buf, (long)a.Mode); D(buf, a.Length); D(buf, a.TargetLength ?? -1.0);
             L(buf, (a.OnBottom ? 1 : 0) | (a.Dragging ? 2 : 0) | (a.BroughtUpPending ? 4 : 0) | (a.FullyOut ? 8 : 0) | (a.Slipping ? 16 : 0) | (a.Stalled ? 32 : 0));
             D(buf, a.AnchorX); D(buf, a.AnchorY);
+            // 停轉/滑出遲滯計時只在期間內追加(未曾超載的錨雜湊與舊版相同)
+            if (a.Stalled || a.Slipping) { D(buf, a.StallQuietS); D(buf, a.SlipQuietS); }
         }
         if (Berth is { } b)
         {
@@ -238,7 +248,7 @@ public sealed class ExternalForceModel : IExternalForceField
     public ExternalForceSnapshot CreateSnapshot() => new(
         AnchorsUsed,
         _tugs.Select(t => new TugSnapshot(t.Id, t.Mode, t.Status, t.ForceN, t.DirectionRad, t.DirectionOrderRad, t.PowerOrder, t.TimerTicks, t.LineParted, t.LastWorkingMode)).ToList(),
-        _anchors.Select(a => new AnchorSnapshot(a.Side, a.Mode, a.Length, a.TargetLength, a.OnBottom, a.AnchorX, a.AnchorY, a.Dragging, a.BroughtUpPending, a.FullyOut, a.Slipping, a.Stalled)).ToList(),
+        _anchors.Select(a => new AnchorSnapshot(a.Side, a.Mode, a.Length, a.TargetLength, a.OnBottom, a.AnchorX, a.AnchorY, a.Dragging, a.BroughtUpPending, a.FullyOut, a.Slipping, a.Stalled, a.StallQuietS, a.SlipQuietS)).ToList(),
         Berth?.Fenders.Select(f => new FenderSnapshot(f.Id, f.InContact, f.PeakReported, f.MaxDeflection, f.ApproachSpeed)).ToList(),
         Berth is { } b ? new QuaySnapshot(b.QuayInContact, b.QuayMaxPenetration) : null,
         Berth?.Lines.Select(l => new MooringLineSnapshot(l.Id, l.Status, l.BollardIndex, l.RestLength, l.TargetTensionN, l.SlackRemaining)).ToList());
@@ -257,6 +267,7 @@ public sealed class ExternalForceModel : IExternalForceField
             {
                 a.Mode = asn.Mode; a.Length = asn.Length; a.TargetLength = asn.TargetLength; a.OnBottom = asn.OnBottom; a.AnchorX = asn.AnchorX; a.AnchorY = asn.AnchorY;
                 a.Dragging = asn.Dragging; a.BroughtUpPending = asn.BroughtUpPending; a.FullyOut = asn.FullyOut; a.Slipping = asn.Slipping; a.Stalled = asn.Stalled;
+                a.StallQuietS = asn.StallQuietS; a.SlipQuietS = asn.SlipQuietS;
             }
         if (Berth is { } b)
         {
@@ -356,7 +367,7 @@ public sealed record TugSnapshot(string Id, TugMode Mode, TugStatus Status, doub
     TugMode LastWorkingMode = TugMode.Standby);
 
 public sealed record AnchorSnapshot(string Side, AnchorMode Mode, double Length, double? TargetLength, bool OnBottom, double AnchorX, double AnchorY,
-    bool Dragging, bool BroughtUpPending, bool FullyOut, bool Slipping, bool Stalled);
+    bool Dragging, bool BroughtUpPending, bool FullyOut, bool Slipping, bool Stalled, double StallQuietS = 0.0, double SlipQuietS = 0.0);
 
 public sealed record FenderSnapshot(string Id, bool InContact, bool PeakReported, double MaxDeflection, double ApproachSpeed);
 

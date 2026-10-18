@@ -172,6 +172,13 @@ public sealed class AnchorUnit
     public const double RunRateMps = 2.0, VeerRateMps = 0.5, SlipRateMps = 1.0, UpliftZeroRad = 15.0 * Math.PI / 180.0;
     /// <summary>止住走錨的遲滯(水平張力 ≤ 0.95 × 抓地力)與帶上(brought up)的對地速度門檻</summary>
     public const double DragHysteresis = 0.95, BroughtUpSogMps = 0.15;
+    /// <summary>
+    /// 絞盤停轉與剎車滑出的遲滯(設計文件第 3.3、3.4 節):<see cref="Stalled"/>/<see cref="Slipping"/> 為「超載期間」旗標,
+    /// 張力超過門檻時設立並發一次事件;張力須連續 <see cref="OverloadClearS"/> 秒低於門檻的 <see cref="OverloadReleaseFraction"/> 倍才解除。
+    /// 停轉期間絞盤在張力 ≥ 0.9 × 過載拉力時不收鏈。錨鏈拉直時剛性極高(收 7 mm 張力即由 5 t 跳到 250 t),
+    /// 只有張力遲滯時旗標仍每數 tick 切換,故加上持續時間條件,避免 anchorWindlassStalled/anchorBrakeSlipping 洗版。
+    /// </summary>
+    public const double OverloadReleaseFraction = 0.9, OverloadClearS = 5.0;
 
     public string Side { get; }
     public AnchorParticulars Spec { get; }
@@ -195,8 +202,11 @@ public sealed class AnchorUnit
     /// <summary>已到鏈端(bitter end):剎車不再滑出</summary>
     public bool FullyOut { get; set; }
     public bool Slipping { get; set; }
-    /// <summary>絞盤超載停轉中</summary>
+    /// <summary>絞盤超載停轉期間(遲滯旗標,見 <see cref="OverloadReleaseFraction"/>)</summary>
     public bool Stalled { get; set; }
+    /// <summary>停轉/滑出期間張力已連續低於 0.9 × 門檻的時間(s;旗標未設立時為 0)</summary>
+    public double StallQuietS { get; set; }
+    public double SlipQuietS { get; set; }
 
     // ---- 最近一次步末的量(狀態廣播;不進雜湊,由狀態重算) ----
     public CatenaryResult Last { get; private set; }
@@ -261,14 +271,14 @@ public sealed class AnchorUnit
                 Mode = AnchorMode.Running;
                 TargetLength = target is { } t0 ? Math.Min(Math.Max(t0, Length), MaxLength) : null;
                 BroughtUpPending = true;
-                Stalled = false;
+                ClearOverload();
                 return null;
             case "veer":
                 if (Mode == AnchorMode.Stowed) return "anchorStowed";
                 if (FullyOut || Length >= MaxLength - 1e-9) return "chainFullyOut";
                 Mode = AnchorMode.Veering;
                 TargetLength = target is { } t1 ? Math.Min(Math.Max(t1, Length), MaxLength) : null;
-                Stalled = false;
+                ClearOverload();
                 return null;
             case "heave":
                 if (Mode == AnchorMode.Stowed) return "anchorStowed";
@@ -276,20 +286,20 @@ public sealed class AnchorUnit
                 Mode = AnchorMode.Heaving;
                 TargetLength = target is { } t3 ? Math.Max(0.0, t3) : null;
                 FullyOut = false;
-                Stalled = false;
+                ClearOverload();
                 return null;
             case "brake":
                 if (Mode == AnchorMode.Stowed) return "anchorStowed";
                 Mode = AnchorMode.Braked;
                 TargetLength = null;
-                Stalled = false;
+                ClearOverload();
                 return null;
             case "release":
                 if (Mode == AnchorMode.Stowed) BroughtUpPending = true;
                 if (FullyOut) return "chainFullyOut";
                 Mode = AnchorMode.Running;
                 TargetLength = null;
-                Stalled = false;
+                ClearOverload();
                 return null;
             default:
                 return "unknownAction";
@@ -326,18 +336,28 @@ public sealed class AnchorUnit
             }
             case AnchorMode.Heaving:
             {
-                var stalled = r.TopTension > Spec.WindlassOverloadPullN;
-                if (stalled != Stalled)
+                // 遲滯:超過過載拉力即進入停轉期間(發一次事件);期間內張力 ≥ 0.9 × 過載拉力時不收鏈,
+                // 連續 OverloadClearS 秒低於 0.9 倍才解除(再超載才再發事件)
+                var limit = Spec.WindlassOverloadPullN;
+                var over = r.TopTension > limit;
+                if (Stalled)
                 {
-                    Stalled = stalled;
-                    if (stalled) events.Add(new ExternalEvent("anchorWindlassStalled", Side, $"{Side} 絞盤超載停轉",
-                        new { side = Side, tension_t = r.TopTension / (AnchorParticulars.Gravity * 1000.0), windlassLimit_t = Spec.WindlassOverloadPullN / (AnchorParticulars.Gravity * 1000.0) }));
+                    var q = StallQuietS;
+                    Stalled = !Relax(r.TopTension, limit, dt, ref q);
+                    StallQuietS = q;
                 }
-                if (!stalled)
+                if (over && !Stalled)
+                {
+                    Stalled = true;
+                    events.Add(new ExternalEvent("anchorWindlassStalled", Side, $"{Side} 絞盤超載停轉",
+                        new { side = Side, tension_t = r.TopTension / (AnchorParticulars.Gravity * 1000.0), windlassLimit_t = limit / (AnchorParticulars.Gravity * 1000.0) }));
+                }
+                var blocked = over || (Stalled && r.TopTension >= OverloadReleaseFraction * limit);
+                if (!blocked)
                 {
                     Length = Math.Max(TargetLength ?? 0.0, Length - Spec.HeavingRateMps * dt);
                     if (TargetLength is { } tl && Length <= tl + 1e-9) { Mode = AnchorMode.Braked; TargetLength = null; }
-                    Slipping = false;
+                    RelaxSlip(r.TopTension, dt);
                 }
                 // 停轉中的絞盤(馬達剎車 + 鏈輪)握持上限與剎車相同:超過剎車握持力時鏈同樣被拉出(不比剎車強)
                 else SlipIfOverBrake(s, waterDepth, dt, r, events);
@@ -347,7 +367,8 @@ public sealed class AnchorUnit
                 SlipIfOverBrake(s, waterDepth, dt, r, events);
                 break;
         }
-        if (Mode is not (AnchorMode.Braked or AnchorMode.Heaving)) Slipping = false;
+        if (Mode is not (AnchorMode.Braked or AnchorMode.Heaving)) { Slipping = false; SlipQuietS = 0.0; }
+        if (Mode != AnchorMode.Heaving) ClearStall();
 
         // ---- 著底 / 離底 ----
         if (!OnBottom && Length > h)
@@ -372,7 +393,7 @@ public sealed class AnchorUnit
                 Length = 0.0;
                 Mode = AnchorMode.Stowed;
                 TargetLength = null;
-                Stalled = false;
+                ClearStall();
                 events.Add(new ExternalEvent("anchorHoused", Side, $"{Side} 錨收妥", new { side = Side }));
             }
             Last = Solve(s, waterDepth, out _, out _);
@@ -415,15 +436,23 @@ public sealed class AnchorUnit
 
     /// <summary>
     /// 剎車(或停轉絞盤)滑出:錨著底、未到鏈端且錨鏈孔張力 &gt; 剎車握持力時,找 ΔL ∈ (0, SlipRate·dt] 使張力回到剎車握持力;
-    /// 每次滑出發一次 anchorBrakeSlipping。否則清除滑出旗標。
+    /// 進入滑出期間時發一次 anchorBrakeSlipping。滑出旗標有遲滯(<see cref="OverloadReleaseFraction"/>):張力須連續
+    /// <see cref="OverloadClearS"/> 秒低於 0.9 × 剎車握持力才清除(錨離底、到鏈端時立即清除),期間再滑出不重發事件。
     /// </summary>
     private void SlipIfOverBrake(in StateVector s, double waterDepth, double dt, in CatenaryResult r, List<ExternalEvent> events)
     {
-        if (FullyOut || !OnBottom || !(r.TopTension > Spec.BrakeHoldingN))
+        if (FullyOut || !OnBottom)
         {
             Slipping = false;
+            SlipQuietS = 0.0;
             return;
         }
+        if (!(r.TopTension > Spec.BrakeHoldingN))
+        {
+            RelaxSlip(r.TopTension, dt);
+            return;
+        }
+        SlipQuietS = 0.0;
         var l0 = Length;
         var l1 = Math.Min(MaxLength, Length + SlipRateMps * dt);
         for (var i = 0; i < 40; i++)
@@ -439,6 +468,43 @@ public sealed class AnchorUnit
                 new { side = Side, tension_t = r.TopTension / (AnchorParticulars.Gravity * 1000.0), brakeHolding_t = Spec.BrakeHoldingN / (AnchorParticulars.Gravity * 1000.0), length_m = Length }));
         }
         if (Length >= MaxLength - 1e-9) { Length = MaxLength; ReachBitterEnd(events); }
+    }
+
+    /// <summary>停轉/滑出期間的解除計時:張力 &lt; 0.9 × 門檻時累計,否則歸零;累計達 <see cref="OverloadClearS"/> 回傳 true(解除)。</summary>
+    private static bool Relax(double tension, double threshold, double dt, ref double quietS)
+    {
+        if (tension < OverloadReleaseFraction * threshold)
+        {
+            quietS += dt;
+            if (quietS >= OverloadClearS - 1e-9) { quietS = 0.0; return true; }
+        }
+        else quietS = 0.0;
+        return false;
+    }
+
+    private void RelaxSlip(double tension, double dt)
+    {
+        if (!Slipping) return;
+        var q = SlipQuietS;
+        if (Relax(tension, Spec.BrakeHoldingN, dt, ref q)) Slipping = false;
+        SlipQuietS = q;
+    }
+
+    private void ClearStall()
+    {
+        Stalled = false;
+        StallQuietS = 0.0;
+    }
+
+    /// <summary>
+    /// 改下指令時立即解除停轉與滑出兩個超載旗標(設計文件第 3.3 節):brake/heave 之後模式仍為 braked/heaving,
+    /// 若不清除 <see cref="Slipping"/>,5 s 解除計時內再次滑出不會再發 anchorBrakeSlipping,教官站與講評看不到這次滑出。
+    /// </summary>
+    private void ClearOverload()
+    {
+        ClearStall();
+        Slipping = false;
+        SlipQuietS = 0.0;
     }
 
     private void ReachBitterEnd(List<ExternalEvent> events)

@@ -91,14 +91,27 @@ midPort/midStbd = (0, ∓0.5 B)、aftPort/aftStbd = (−0.40 L, ∓0.45 B)。
 | working | 出力中 | push/pull(已連接) |
 | free | 已解纜,出力立即 0 | `mode: free`、斷纜故障清除後 |
 | parted | 拖纜斷裂(拉中或待命中) | `tugLineBreak` |
+| unavailable | 已離開、本練習不再可用(拖船縮減),出力立即 0 | `mode: unavailable`(教官指令或時間表 `tugControl` 動作) |
 
 **拖纜斷裂** `injectFault {name: tugLineBreak, args: {id}}`(id 省略 = 第一艘拉中者,否則第一艘已連接者):拉中/待命者出力立即 0、`status parted`、`mode free`;
 推頂者續推(推頂不需拖纜)但 `lineParted = true`。故障中 `pull` 被拒(`tugLineParted`);`clearFault` 後 parted → free,可重新帶纜。發事件 `tugLineParted`(source engine、visible)。
-parted 的拖船收到只含方向/出力(mode 省略)或 `mode: free` 的指令時保持 `parted`(只更新命令值)。`args.id` 指定未定義的拖船時以 `commandRejected {command: injectFault, reason: unknownTug}` 拒絕(動力學不支援外力時 `externalForcesUnsupported`),不加入 `faults[]`、不發 `faultInjected`;id 省略時行為不變。
+parted 的拖船收到只含方向/出力(mode 省略)或 `mode: free` 的指令時保持 `parted`(只更新命令值)。`args.id` 指定未定義的拖船時以 `commandRejected {command: injectFault, reason: unknownTug}` 拒絕、指定已離開(`unavailable`)的拖船時以 `reason: tugUnavailable` 拒絕(沒有拖纜可斷;動力學不支援外力時 `externalForcesUnsupported`),皆不加入 `faults[]`、不發 `faultInjected`(故障應變紀錄也不建立);id 省略時行為不變(跳過已離開的拖船)。**Python 參考伺服器**(`mmg.py` `inject_fault`)尚未加入 tugUnavailable 拒絕:對已離開的拖船仍加入 faults[](不斷纜),待同步。
 
 **就位工作側**(`TugUnit.LastWorkingMode`,進快照與雜湊):push/pull 被接受時設為該模式,`free` 與斷纜(拉中/待命者)清除為 standby(未就位)。push ↔ pull 換位以它判定,因此「推 → standby → 拉」仍需 modeChange_s;換位或帶纜中下 standby,計時照走(結束時成為 standby)。
 情境 `initial.mode` 為 push/pull 時須包含在 `modes` 內(modes 省略 = 兩者皆可),否則情境驗證錯誤(與 `tugModeUnavailable` 一致)。
 不產生 BAM 警報(拖船以 VHF 報告;fault-catalogue 無 `alert`)。
+
+### 2.4 拖船縮減(`mode: unavailable`)與時間表 `tugControl`
+
+- `tugControl {id, mode: unavailable}`(教官指令,或情境時間表動作 `tugControl`,args 與指令相同):拖船立即失去出力、`mode`/`status` = `unavailable`、
+  計時歸零、就位工作側清除;發 **`tugUnavailable`**(itemId = 拖船 id,data `{id, mode, from, fromStatus, status, force_t}`)——不是 `tugCommand`,
+  因此不觸發情境中以 `tugCommand` 為條件的「拖船令」項目或必要事件。
+- 之後對該拖船的任何 `tugControl`(含再下 unavailable)以 `commandRejected {reason: tugUnavailable}` 拒絕(先於模式檢查);
+  `tugLineBreak` 不作用於它(id 省略時跳過,指定時只加入 faults[]、不發 `tugLineParted`)。本練習內不可恢復(重新載入情境才恢復)。
+- `TugMode.Unavailable`、`TugStatus.Unavailable` 列在列舉最後(Python `TUG_MODES`/`TUG_STATUSES` 同序),既有值的雜湊不變;未使用者雜湊與舊版相同。
+- 時間表 `tugControl` 的結構檢查(C# `Scenario.CheckTugControlAction`、Python `scenario.structural_issues`):`id` 須為情境 `tugs[].id`、
+  `mode` ∈ push|pull|standby|free|unavailable、`power_pct` 0–100、`direction_deg` 為數值;執行時被拒則發 `commandRejected`(source timeline)。
+- 用例:E17 颱風離港兩艘拖船都在 `tugs[]`,degraded(T+7)以 `tugControl { id: TG2, mode: unavailable }` 讓 TG2 離開(取代先前以目標船駛離的替代做法)。
 
 ## 3. 錨與錨鏈(A 項)
 
@@ -145,8 +158,15 @@ parted 的拖船收到只含方向/出力(mode 省略)或 `mode: free` 的指令
 
 - H > P → 走錨(`anchorDragging`):錨沿水平方向朝錨鏈孔以 v = v_max · min(1, (H − P)/(0.25 P)) 移動(v_max = `anchors.dragSpeed_mps`,預設 0.5 m/s);
   H ≤ 0.95 P → 停止(`anchorHolding`)。
-- 錨鏈孔張力 > 剎車握持力 → 鏈被拉出:ΔL ∈ (0, 1 m/s·Δt],二分使張力回到握持力(`anchorBrakeSlipping`,每次滑出一次事件)。到鏈端後不再滑出。
-- 起錨中絞盤停轉(張力 > 過載拉力)時,絞盤握持上限與剎車相同:張力 > 剎車握持力時以同樣方式滑出(仍為 heaving/停轉;張力降到過載拉力以下後續收)。**假設**:停轉時馬達剎車/鏈輪剎車握持,絞盤不比剎車強(力的一致性)。
+- 錨鏈孔張力 > 剎車握持力 → 鏈被拉出:ΔL ∈ (0, 1 m/s·Δt],二分使張力回到握持力。到鏈端後不再滑出。
+- 起錨中絞盤停轉(張力 > 過載拉力)時,絞盤握持上限與剎車相同:張力 > 剎車握持力時以同樣方式滑出(仍為 heaving/停轉)。**假設**:停轉時馬達剎車/鏈輪剎車握持,絞盤不比剎車強(力的一致性)。
+- **停轉/滑出遲滯**(`AnchorUnit.OverloadReleaseFraction` 0.9、`OverloadClearS` 5 s;Python `OVERLOAD_RELEASE`/`OVERLOAD_CLEAR_S`):
+  `stalled`/`slipping` 是「超載期間」旗標,張力超過門檻時設立並發**一次** `anchorWindlassStalled`/`anchorBrakeSlipping`;
+  張力須**連續 5 s 低於門檻的 0.9 倍**才解除(錨離底、到鏈端、改下指令、收妥時立即解除;改下指令 —— 包括模式不變的 brake / heave —— 同時清除兩個旗標與解除計時,`AnchorUnit.ClearOverload` / Python `_clear_overload`,之後再超載會再發事件),期間再超載不重發事件。
+  停轉期間張力 ≥ 0.9 × 過載拉力時絞盤不收鏈,低於 0.9 倍的 tick 照常收鏈(絞盤自動重啟)。
+  只用張力遲滯不夠:錨鏈拉直時剛性極高(FSB1 收 7 mm 張力由 5 t 跳到 250 t,船隨即被拉近、張力回到 5 t),
+  無持續時間條件時旗標仍每 5 tick 切換(第十一輪 `ext_anchor_heave_house` 19 s 內 194 次停轉、139 次滑出事件)。
+  兩個計時(s)進快照;只在旗標設立期間追加進雜湊(未曾超載的錨與舊版雜湊相同)。
 
 ### 3.4 指令與狀態機
 
@@ -265,6 +285,7 @@ lines:
 |---|---|---|
 | `tugCommand` | 指令來源 | `{id, mode, from, status, direction_deg, power_pct}` |
 | `tugLineParted` | engine | `{id, force_t, mode, reason: "fault", stillPushing}` |
+| `tugUnavailable` | 指令來源(instructor / timeline) | `{id, mode: "unavailable", from, fromStatus, status: "unavailable", force_t}`(第 2.4 節) |
 | `anchorLetGo` / `anchorCommand` | 指令來源 | `{side, action, targetLength_m, targetLength_shackles, length_m, status}` |
 | `anchorBroughtUp` | engine | `{side, length_m, tension_t}` |
 | `anchorDragging` / `anchorHolding` | engine | `{side, tension_t, holding_t, length_m}` |
@@ -289,7 +310,7 @@ lines:
  "data":{"command":"tugControl","reason":"tugLineParted","args":{"id":"TG2","mode":"pull","direction_deg":180,"power_pct":100}}}
 ```
 
-拒絕原因(`CommandRejectReasons`):`externalForcesUnsupported`、`unknownTug`、`unknownTugMode`、`tugModeUnavailable`、`tugLineParted`、`invalidPower`、
+拒絕原因(`CommandRejectReasons`):`externalForcesUnsupported`、`unknownTug`、`tugUnavailable`、`unknownTugMode`、`tugModeUnavailable`、`tugLineParted`、`invalidPower`、
 `noAnchorData`、`unknownAnchor`、`anchorAlreadyOut`、`anchorStowed`、`chainFullyOut`、`invalidTarget`、`unknownAction`、
 `noBerth`、`unknownMooringLine`、`unknownBollard`、`bollardOutOfReach`、`mooringLineNotFast`、`mooringLineParted`。
 
@@ -447,10 +468,10 @@ bands:
 
 | 指令 | args | 接受(ack.event.kind) | 拒絕原因(與 C# `commandRejected.reason` 同名) |
 |---|---|---|---|
-| `tugControl` | `id`(或 value)、`mode`、`direction_deg`(或 `direction`)、`power_pct`(或 `power`) | `tugCommand` | `unknownTug`、`unknownTugMode`、`invalidPower`、`tugModeUnavailable`、`tugLineParted` |
+| `tugControl` | `id`(或 value)、`mode`(含 `unavailable`)、`direction_deg`(或 `direction`)、`power_pct`(或 `power`) | `tugCommand`(mode unavailable 時 `tugUnavailable`) | `unknownTug`、`tugUnavailable`、`unknownTugMode`、`invalidPower`、`tugModeUnavailable`、`tugLineParted` |
 | `anchor` | `side`(或 value)、`action`、`targetLength_shackles` / `length_m` | `anchorLetGo` / `anchorCommand` | `noAnchorData`、`unknownAnchor`、`unknownAction`、`invalidTarget`、`anchorAlreadyOut`、`anchorStowed`、`chainFullyOut` |
 | `mooring` | `lineId`(或 `id`)、`action`、`bollard`、`tension_t`、`length_m` | `mooringCommand` | `noBerth`、`unknownMooringLine`、`unknownAction`、`unknownBollard`、`bollardOutOfReach`、`mooringLineNotFast`、`mooringLineParted` |
-| `injectFault tugLineBreak` | `args.args.id`(只讀 `args.args` 物件,與 C# `FaultArgString` 相同;`args.id` 視同省略 → 斷第一艘拉中/待命中的拖船) | `tugLineParted` | `unknownTug`(故障不加入 faults) |
+| `injectFault tugLineBreak` | `args.args.id`(只讀 `args.args` 物件,與 C# `FaultArgString` 相同;`args.id` 視同省略 → 斷第一艘拉中/待命中的拖船) | `tugLineParted` | `unknownTug`、`tugUnavailable`(C#;故障不加入 faults) |
 | `clearFault` | `value` 或 `args.name`(C# `SimCommand.FaultName`);皆缺或為 `all` = 全部 | —(只清指定故障;清除 `tugLineBreak` 才恢復拖纜) | — |
 
 數值參數接受數值或數值字串(C# `ArgAsDouble`);拒絕時 ack `ok: false`、`detail` 為「拒絕(原因):…;狀態不變」。範例:
@@ -479,11 +500,11 @@ C# `ExternalForceGoldenTests` 以同一份 YAML 建立 MMG 引擎、在相同 ti
 | `ext_berth_fender_lines` | 拖船橫推靠碼頭、非線性碰墊(阻尼、摩擦)接觸 10 次、艏艉纜 makeFast/heave/slack、吹開風(600 s;F1、F4 未接觸,不列比對欄) | 0(逐位元相同) | 0 |
 | `ext_bank_suction` | 見 `physics-bank-effect.md` 第 10 節 | 1.7e-15 % | ≤ 6e-13 % |
 | `ext_quay_line_part` | 無碰墊碼頭(折線、`quayStiffness_kNpm` 5000)硬接觸 `quayContact` 6 次、MBL 6 t 艏纜被拖船拉斷 `mooringLineParted`、艉纜 slack 到 `maxLength` 後回 fast、TG2 由 free 帶纜(`connect_s` 30)拉 → standby → push 換位(500 s、航程 281 m) | 0(逐位元相同) | 0 |
-| `ext_anchor_heave_house` | 右錨 letGo 12 節(夾到 9 節鏈端 `anchorChainFullyOut`)、左錨 3 節後 heave:懸鏈線 hanging/slack/touchdown/suspended/taut 各區、`anchorDragging`、`anchorWindlassStalled` × 194、`anchorBrakeSlipping` × 139、`anchorAweigh`、`anchorHoused`(400 s) | 0(逐位元相同) | 0 |
+| `ext_anchor_heave_house` | 右錨 letGo 12 節(夾到 9 節鏈端 `anchorChainFullyOut`)、左錨 3 節後 heave:懸鏈線 hanging/slack/touchdown/suspended/taut 各區、`anchorDragging`、`anchorWindlassStalled` × 1、`anchorBrakeSlipping` × 1(遲滯;無遲滯時 194 / 139 次)、`anchorAweigh`、`anchorHoused`(400 s) | 0(逐位元相同) | 0 |
 | `ext_bank_astern` | 見 `physics-bank-effect.md` 第 10 節 | 1.4e-12 % | 捨入等級 |
 
-`ext_anchor_heave_house` 的絞盤超載事件反覆切換(停轉 → 剎車滑出 → 張力降到門檻下 → 恢復絞收)是 C# `AnchorModel` 與 Python 共有的現行行為
-(超載判定無遲滯),黃金檔照實記錄;兩邊同步加入遲滯後須重新產生此黃金檔。
+`ext_anchor_heave_house` 原本記錄的絞盤超載事件反覆切換(停轉 → 剎車滑出 → 張力降到門檻下 → 恢復絞收,每 5 tick 一次)已由
+C# 與 Python 同步加入的停轉/滑出遲滯(第 3.3 節)消除,黃金檔已重新產生(停轉與滑出各一次事件)。
 
 兩實作在同一平台上達到捨入誤差等級(目標 <1%)。比對過程發現並修正一項**初始化差異**(非外力方程式):Python `apply_scenario` 先 `reset` 後設水深,
 淺水情境的直航平衡轉速取到深水值(h/T 1.4、6 kn 時 70.8 vs 79.7 rpm,300 s 後位置差 5.2 % 航程);改為以情境水深、無風求平衡轉速

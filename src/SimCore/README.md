@@ -246,7 +246,7 @@ targets:
 - `assessment`:`parameterSet`、`minCpa_nm`、`encounter{detectionRange_nm, substantialCourseChange_deg, substantialSpeedChange_kn, cpaInterest_nm}`、`ukc{min}`、`manoeuvring{rotLimit_degPerMin, hardOver_deg}`、`hardFail[]`(grounding|collision|cpa|ukc|zoneEntered|event)、`bands[]`(指標名稱見 `Assessment/MetricNames.cs`;`fail: 2x`、`direction: below`)、`required[]`(`after` 事件起算、`expect` 可偵測動作、`within_s`、`penalty`、`latePenaltyPer_s`)、`scoring{start, passMark}`。
 - `briefing`:字串或 `{text, attachments[], roles[], minParticipants, duration_s}`;`environment.visibility_nm`。
 - 參數引用:任何數值欄位整個字串寫 `"${params:<鍵>}"`(**YAML 流式 `{ }` 內須加引號**,因 `}` 會結束純量);載入時以參數集代入(`ScenarioLoader.Load(path, parameterSet)`;未給參數集時依 `assessment.parameterSet`/預設路徑自動載入),未知鍵、單位後綴不符、引用於 id/name/seed 等位置、來源文件未定義皆為 `InvalidDataException`。解析清單進紀錄 `header.parameterSet.resolved[]`,`summary.assessment.bands/required[]` 附 `paramKey/source/revision/clause`。
-- 載入靜態檢查 `ScenarioValidator.Check(scenario, ship)`(主控程序啟動/`loadScenario` 印出;`--validate` 只檢查):error = 結構錯誤(id 重複、參照不存在、動作不允許、航點不足/重合、多邊形點數/自交、指標名稱、required.after)與初始狀態已成立的硬性失敗;warning = 初始即成立的條件、過晚的 time 觸發、`always` 無 cooldown、缺音檔、只記錄的故障。
+- 載入靜態檢查 `ScenarioValidator.Check(scenario, ship)`(主控程序啟動/`loadScenario` 印出;`--validate` 只檢查):error = 結構錯誤(id 重複、參照不存在、動作不允許、航點不足/重合、多邊形點數/自交、指標名稱、required.after)與初始狀態已成立的硬性失敗;warning = 初始即成立的條件、過晚的 time 觸發、`always` 無 cooldown、缺音檔、只記錄的故障(`injectFault {name, recordOnly: true}` 明示預期者不警告;標在 modelled 故障上則警告)。
 
 ### 8.2 公司程序參數集(`data/parameters/company-procedures.yaml`;`src/Contracts/parameter-set.schema.json`)
 
@@ -316,7 +316,7 @@ targets:
   `Rk4Integrator.Step(..., IExternalForceField)` 每個 RK4 階段以該階段狀態重算錨鏈/碰墊/纜繩力。
 - **拖船**:情境 `tugs[]{id, name, bollardPull_t, attach fwd|aft|…|{x,y}, lineLength_m, modes, riseTime_s, turnRate_degPerSec, push/pull 效能速度, modeChange_s, connect_s, initial}`;
   指令 `tugControl {id, mode push|pull|standby|free, direction_deg(力方向相對船艏), power_pct}`;出力一階上升、方向限速迴轉、自船速度高於門檻效能遞減(推頂 5 kn 約 50 %);
-  故障 `tugLineBreak {id}`(id 未定義 → `commandRejected unknownTug`,不加入 faults[]);`state.tugs[]`;事件 `tugCommand`、`tugLineParted`。
+  故障 `tugLineBreak {id}`(id 未定義 → `commandRejected unknownTug`、已離開的拖船 → `tugUnavailable`,皆不加入 faults[]);`state.tugs[]`;事件 `tugCommand`、`tugUnavailable`(`mode: unavailable` 拖船離開,之後指令以 `tugUnavailable` 拒絕;時間表動作 `tugControl` 同指令 args)、`tugLineParted`。
   push ↔ pull 換位依就位工作側(`LastWorkingMode`,快照/雜湊)判定,插入 standby 不能略過 modeChange_s;parted 的拖船只調出力/方向時保持 parted;情境 initial.mode 須在 modes 內。
 - **錨**:particulars `anchors`(FSB1 實測 + 估計欄位;FSB2 錨重、起錨速率為估計)、情境 `environment.seabed mud|sand|clay|rock`(預設 sand)、`anchors{port|starboard{length_m|length_shackles, bearing_deg}, holdingFactor, dragSpeed_mps}`;
   指令 `anchor {side, action letGo|veer|heave|brake|release, targetLength_shackles | length_m}`;準靜態懸鏈線(躺底/全懸空/拉直)、抓地力 = 錨重 × 抓著係數 × 上拔折減 + 躺底鏈摩擦、走錨、剎車滑出、絞盤速率與停轉(停轉握持上限 = 剎車握持力,超過時同樣滑出)、鏈端;letGo 只在收存或懸吊且未送出時接受(鏈長只增不減);

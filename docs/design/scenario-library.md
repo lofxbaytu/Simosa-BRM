@@ -281,7 +281,7 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 
 **場景**:09:30 交班,引水人已在 Charlie 登船(帶領者扮演),FSB2 滿載 HAH 約 9 kn,沿出港航道延長線南半側(軸線南 0.12 nm,航向 070°)進第二港口;漲潮向西北 0.8 kn(自動舵 074° 已修正)、東北風 18 kn。
 
-**干擾(每 2 分鐘,T+2 至 T+22)**:貨控室卸貨計畫電話、PSC 檢查郵件、代理行 VHF、ECDIS 警報氾濫(T+8,並以每 20 s 一則、共 8 則的重複訊息表示)、公司海務電話、機控室電話、艏樓報告、VTS 廣播、代理行泊位變更、ECDIS 警報再次氾濫、PSC 追問。以 `voiceScript`(phone/vhfPort/bridge)與 `message` 表示;`ecdisAlarmFlood` 在故障目錄為只記錄故障,注入會使 `--validate` 出現警告「只記錄與廣播」,故**不注入**(第 14.4 節)。
+**干擾(每 2 分鐘,T+2 至 T+22)**:貨控室卸貨計畫電話、PSC 檢查郵件、代理行 VHF、ECDIS 警報氾濫(T+8,並以每 20 s 一則、共 8 則的重複訊息表示)、公司海務電話、機控室電話、艏樓報告、VTS 廣播、代理行泊位變更、ECDIS 警報再次氾濫、PSC 追問。以 `voiceScript`(phone/vhfPort/bridge)與 `message` 表示;T+8 以 `injectFault { name: ecdisAlarmFlood, recordOnly: true }` 注入只記錄故障(`state.faults[]` 出現 `ecdisAlarmFlood`,核心行為不變,ECDIS/教官站據以反應;`recordOnly` 明示預期,`--validate` 不警告,第 16 節)。
 
 **關鍵事件**:貨船 X1 在自船航線右側約 1.5 nm 漂航(會遇關注門檻外),T+13 起步以 10 kn 向 340° 橫越(自船為讓路船,X1 不避讓);會遇開始時刻落在干擾 5 與 6 之間。
 
@@ -290,8 +290,8 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 **評估**:
 - 硬性失敗:碰撞、CPA < `navigation.cpa.hardFail_nm`。
 - 容許帶:`track.maxXtd_m`(warn `navigation.xtd.pilotage_m` 450 m、fail 2×)、`track.timeOutsideCorridor_s`(fail 180 s)、`collisionAvoidance.minCpa_nm`(warn `navigation.cpa.pilotage_nm` 0.25 nm、fail 0.2 nm;0.5 nm 會大於走廊寬度而使驗證警告)。
-- 必要事件:`handoverChecklist`;無干擾駕駛台 `sterileCargoCall`、`sterilePscEmail`、`sterileCompanyCall`(acknowledge verbal,note 記錄授權/延後)、`alarmFloodManaged`(verbal/report,指派專人處理警報);關鍵事件 `crossingDetected`(X1 會遇開始 → lookoutReport/report 或 X1 首次行動 ≤ `bridge.distraction.criticalDetection_s`,逾時每秒 0.05 分)、`crossingAction`(X1 首次行動 ≤ `navigation.encounter.earlyAction_s`)。
-- 合理操作(xunit):每次干擾 20 s 內授權/延後、循跡修正流壓(每次 ≤ 4°,不被會遇追蹤誤判為避讓)、X1 起步即 DSAH + 向右 20°、X1 通過最近點後回航跡:必要事件 met、容許帶皆 ok、100 分;X1 最近約 0.31 nm、最大 XTD 約 410 m。
+- 必要事件:`handoverChecklist`;無干擾駕駛台 `sterileCargoCall`、`sterilePscEmail`、`sterileCompanyCall`(acknowledge verbal,note 記錄授權/延後)、`alarmFloodManaged`(verbal/report,指派專人處理警報);關鍵事件 `crossingDetected`(**X1 起步橫越 `timelineTriggered crossingTurn`(780 s)** → lookoutReport/report 或 X1 首次行動 ≤ `bridge.distraction.criticalDetection_s`,逾時每秒 0.05 分)、`crossingAction`(同起點 → X1 首次行動 ≤ `navigation.encounter.earlyAction_s`)。計時起點原為 X1 會遇開始:學員循跡修正流壓時會遇約 718 s 就開始(早於 X1 起步),偵測/反應期限被漂航中的 X1 提前消耗,且「看到漂航船就報告」被當成偵測到橫越(第 16 節)。
+- 合理操作(xunit):每次干擾 20 s 內授權/延後、循跡修正流壓(每次 ≤ 4°,不被會遇追蹤誤判為避讓)、X1 起步(對地 > 2 kn)即瞭望報告 + DSAH + 向右 20°、X1 通過最近點後回航跡:必要事件 met、容許帶皆 ok、100 分;X1 最近約 0.31 nm、最大 XTD 約 410 m。
 
 ## 10. E16 夜間進港燈光混淆(基隆)
 
@@ -309,9 +309,9 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 
 **學習目標**:不確定下的決策、風險評估、公司溝通(1.39 決策)、一艘拖船離泊。
 
-**場景**:10:00 交班,FSB1 壓載(卸貨完畢)右舷靠 KHH-SOB-1(碼頭線 000°、水域在西、碰墊/繫船柱比照 E14 示意型式),4 纜已繫;中央氣象署颱風海上警報,西風 15 kn 吹攏。原訂兩艘拖船:TG1 高港11號(`tugs[]`,左舷艉,`initial.mode: free`,帶纜 90 s)、TUG2 高港12號(港內待命的**目標船**)。
+**場景**:10:00 交班,FSB1 壓載(卸貨完畢)右舷靠 KHH-SOB-1(碼頭線 000°、水域在西、碰墊/繫船柱比照 E14 示意型式),4 纜已繫;中央氣象署颱風海上警報,西風 15 kn 吹攏。原訂兩艘拖船都在 `tugs[]`(`initial.mode: free`,帶纜 90 s):TG1 高港11號(左舷艉)、TG2 高港12號(左舷艏)。
 
-**拖船可用數 2 → 1**:核心時間表動作不含 `tugControl`、也沒有「拖船不可用」狀態,因此只把 TG1 放在 `tugs[]`,TUG2 以 `shipType: tug` 的目標船表示,於 degraded 以 `targetControl {behaviour: waypoints}` 駛離(教官對 TUG2 下拖船令會被 `unknownTug` 拒絕,與「已改派」一致)。
+**拖船可用數 2 → 1**:degraded 以時間表動作 `tugControl { id: TG2, mode: unavailable }` 讓 TG2 離開(`physics-tugs-anchors-mooring.md` 第 2.4 節):TG2 失去出力、`state.tugs[]` status `unavailable`、發 `tugUnavailable`(不是 `tugCommand`,不會觸發 `firstTugOrder` 或使 `tugUsed` 達成);之後對 TG2 的指令以 `commandRejected {reason: tugUnavailable}` 拒絕。取代第十一輪以目標船 TUG2 駛離的替代做法(目標船已移除)。T+7 前學員仍可使用 TG2。
 
 **升級**(壓縮時間):T+1 min 港方要求油輪兩小時內離港(決策點)→ T+4 公司詢問可否留港(壓力)→ **T+7 degraded**(`tugReduced`:拖船 2 → 1 + 風 15 → 25 kn,600 s 漸變)→ **T+25 emergency**(`outerBands`:25 → 40 kn、陣風 0.35,600 s 漸變)→ 離開泊位區(船舯離碼頭 > 110 m)60 s 後結束;或擱淺、T+45。無人操作:船在吹攏風下壓在碰墊上(纜未斷),全部決策逾時。
 
@@ -336,7 +336,7 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 
 **場景**:14:00 交班,FSB1 滿載 5.7 m、瀝青貨溫約 150 °C,自口門外 5.5 nm FAH 約 10 kn、自動舵 077°;潮高 +0.6 m 且退潮中(水深 7.6 → 7.2 → 6.6 m)。FSB1 的 squat 小(DSAH–FAH 約 0.07–0.3 m),UKC 主要受潮位影響:依計畫航速可在潮窗內進港(UKC 約 0.8 m),延誤或放棄則應錨泊等候。
 
-**故障與壓力**:T+2 熱油鍋爐跳脫(`cargoHeatingFailure` 為只記錄故障,同 E15 理由**不注入**,以輪機長語音 + 警報訊息表示)→ T+5 修復時間不定(2–6 小時)→ 貨溫下降以每 5 分鐘一則訊息表示(核心無貨物熱力模型)→ **T+10 degraded**(`companyPressure`:公司要求全速、「航道速限不用管」,潮位 7.6 → 7.2 m)→ **通過 OUTER(或 T+25)emergency**(`tideWindowClosing`:港控通報潮窗約 30 分鐘、公司再催、潮位 → 6.6 m,1500 s)→ 到達迴船池、擱淺或 T+65。無人操作(FAH):degraded 600 s、emergency 899 s、到達 2264 s;航道超速約 3.5 kn(fail)、偏出走廊(fail)。
+**故障與壓力**:T+2 熱油鍋爐跳脫(`injectFault { name: cargoHeatingFailure, recordOnly: true }`:只記錄故障,`state.faults[]` 出現 `cargoHeatingFailure`;輪機長語音 + 警報訊息保留)→ T+5 修復時間不定(2–6 小時)→ 貨溫下降以每 5 分鐘一則訊息表示(核心無貨物熱力模型)→ **T+10 degraded**(`companyPressure`:公司要求全速、「航道速限不用管」,潮位 7.6 → 7.2 m)→ **通過 OUTER(或 T+25)emergency**(`tideWindowClosing`:港控通報潮窗約 30 分鐘、公司再催、潮位 → 6.6 m,1500 s)→ 到達迴船池、擱淺或 T+65。無人操作(FAH):degraded 600 s、emergency 899 s、到達 2264 s;航道超速約 3.5 kn(fail)、偏出走廊(fail)。
 
 **評估**:硬性失敗擱淺、`ukcHard`;容許帶超速幅度(warn 0.5、fail 2.0 kn)、`ukc.min_m`、UKC 超限時間、XTD;必要事件 `handoverChecklist`、`heatingFailureReport`(callMaster/notifyCompany ≤ `cargo.heatingFailureReport_s`)、`companyChallenge`(verbal/notifyCompany ≤ `management.challenge_s`,penalty 15)、`windowDecision`(verbal/anchorDecision/notifyCompany ≤ `management.windowDecision_s`)。「放棄進港、錨泊等候」為同樣正確的決定(以 acknowledge anchorDecision 表示,之後不進航道即不會有速限/UKC 扣分)。合理操作:質疑公司、OUTER 前減至 SAH(約 6 kn)、決定依計畫進港:UKC 最小約 0.81 m、100 分、約 3520 s 到達。
 
@@ -409,9 +409,9 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 
 ### 14.4 已知限制與取捨
 
-- **只記錄故障不注入**:`ecdisAlarmFlood`(E15)、`cargoHeatingFailure`(E21)在 `src/Contracts/fault-catalogue.json` 為 `modelled: false`,`ScenarioValidator` 對時間表注入只記錄故障一律給警告;本批要求 `--validate` 無警告,故以同名時間表項目 + 訊息/語音表示(`faults[]` 不會出現)。若要讓儀器端(ECDIS 警報清單)收到故障,可加回 `injectFault` 並接受該警告,或由核心/驗證器把這兩項列為「預期只記錄」(待契約負責人決定)。
+- ~~只記錄故障不注入~~(第 16 節已解決):`ecdisAlarmFlood`(E15)、`cargoHeatingFailure`(E21)改以 `injectFault {name, recordOnly: true}` 注入,`faults[]` 會出現,`--validate` 不警告。
 - E16 無燈漁船:schema `targets[].lights` 列舉沒有 `none`,只能以 `aisOn: false` 與訊息表示。
-- E17 拖船縮減以「目標船駛離」表示;核心沒有拖船可用性狀態。
+- ~~E17 拖船縮減以「目標船駛離」表示~~(第 16 節已解決):時間表 `tugControl` 動作與拖船狀態 `unavailable`。
 - E18/E21 淺灘水深固定、不隨潮;潮汐只作用於基底水深。
 - 會遇追蹤把 ≥ 5° 的自動舵改向記為首次行動:合理操作腳本循跡時每次改 ≤ 4°,避免把流壓修正誤判為避讓;實際課程中學員的流壓修正可能被記為對 X1/F1 的首次行動(講評時以 `summary.collisionAvoidance.targets[]` 判讀)。
 
@@ -424,8 +424,8 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 ### 14.6 待辦
 
 1. 以 ENC/港方資料校正四個新區域檔(基隆導航線與導燈、高雄南端油品碼頭泊位、安平航道水深與淺灘)並重錄夾具。
-2. schema `targets[].lights` 加入 `none`(E16 F1);核心/驗證器處理「預期只記錄」故障(E15 `ecdisAlarmFlood`、E21 `cargoHeatingFailure`)後改為注入。
-3. 拖船可用性(拖船改派、到達延遲)與颱風風場/湧浪模型;貨物熱力(貨溫)模型。
+2. schema `targets[].lights` 加入 `none`(E16 F1);(「預期只記錄」故障已於第 16 節完成。)
+3. 拖船到達延遲(`unavailable` 已有,恢復/延遲到達尚無)與颱風風場/湧浪模型;貨物熱力(貨溫)模型。
 4. 區域水深隨潮(潮高網格或區域相對水深),E18/E21 淺灘與沙洲段可隨潮變化。
 5. 參數集假設值依公司 SMS 核定後 bump version 並重新驗證引用情境。
 
@@ -442,7 +442,7 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 | E15 檔頭 emergency 時間後備寫 T+18 | 改為 T+21(`bridge.e15.emergencyAt_s` = 1260 s)。 |
 | E15 關鍵事件計時起點是 X1 會遇開始(循跡時早於 X1 起步) | **未修正**(見下)。 |
 
-**E15 關鍵事件計時(未修正)**:建議的兩種修法都會使既有測試失敗,而本批不可修改 `ScenarioLibraryLateCourseTests.cs`:(a) 把 `crossingDetected`/`crossingAction` 的 `after` 改為 `{ event: timelineTriggered, itemId: crossingTurn }` 時,AssessmentEngine 只計入 after 之後的 expect,既有合理操作腳本在 X1 會遇開始(循跡時約 718 s)+ 60 s 回報(早於 780 s 起步),`crossingDetected` 改由 `encounterFirstAction` 達成,`Assert.Equal("acknowledge:lookoutReport", …By)` 失敗——這正是審查指出的錯誤行為被寫進了測試;(b) 把 X1 初始位置外移會改變無人操作的固定時刻(會遇 798 s、emergency 1043 s、cpaHard 1300 s)。建議由測試負責人同時:情境改用 (a),並把 `E15_ScriptedSterileBridgeMeetsRequirements` 的瞭望報告改在 `crossingTurn` 之後(例如 X1 對地 > 2 kn 時先 `acknowledge lookoutReport` 再避讓);無人操作測試不受 (a) 影響(必要事件仍全部 missed)。
+**E15 關鍵事件計時(第十一輪未修正;第 16 節已依 (a) 修正並同步調整測試)**:建議的兩種修法都會使既有測試失敗,而本批不可修改 `ScenarioLibraryLateCourseTests.cs`:(a) 把 `crossingDetected`/`crossingAction` 的 `after` 改為 `{ event: timelineTriggered, itemId: crossingTurn }` 時,AssessmentEngine 只計入 after 之後的 expect,既有合理操作腳本在 X1 會遇開始(循跡時約 718 s)+ 60 s 回報(早於 780 s 起步),`crossingDetected` 改由 `encounterFirstAction` 達成,`Assert.Equal("acknowledge:lookoutReport", …By)` 失敗——這正是審查指出的錯誤行為被寫進了測試;(b) 把 X1 初始位置外移會改變無人操作的固定時刻(會遇 798 s、emergency 1043 s、cpaHard 1300 s)。建議由測試負責人同時:情境改用 (a),並把 `E15_ScriptedSterileBridgeMeetsRequirements` 的瞭望報告改在 `crossingTurn` 之後(例如 X1 對地 > 2 kn 時先 `acknowledge lookoutReport` 再避讓);無人操作測試不受 (a) 影響(必要事件仍全部 missed)。
 
 契約(皆為既有 schema/核心功能,schema 未改):
 
@@ -474,3 +474,312 @@ bands:
 ```
 
 確定性:新狀態只用既有機制(時間表、漸變、目標控制、區域追蹤),皆已進快照與雜湊;只改這四個情境,其他情境雜湊不變。四個情境的核心紀錄夾具 `record-E15/E16/E17/E21…-core.jsonl` 已依第 14.5 節程序重錄(Host `--duration 60 --timescale 10`,`--replay` 一致,縮短為每 500 tick 一筆狀態)。參數集未改(新增時刻以情境內常數表示並於本節記錄)。
+
+## 16. 第十一輪後 C# 遺留四項(2026-10-18)
+
+| 項目 | 處理 |
+|---|---|
+| E15 關鍵事件計時起點 | `crossingDetected`/`crossingAction` 的 `after` 改為 `{ event: timelineTriggered, itemId: crossingTurn }`(X1 實際起步橫越,780 s;與 X1 script t = 780 同時)。合理操作腳本(`E15_ScriptedSterileBridgeMeetsRequirements`)原本在 X1 會遇開始(循跡時約 718 s)+ 60 s 報告,早於新起點而不計入——這正是原本錯誤的行為(偵測的是漂航船,不是橫越);改為 X1 起步(對地 > 2 kn)即瞭望報告並避讓,`crossingDetected.by` 仍為 `acknowledge:lookoutReport`,並固定「會遇開始早於起步」。無人操作測試的固定時刻不變(必要事件仍全部 missed)。參數 `bridge.distraction.criticalDetection_s` 的說明文字(參數集)仍寫「會遇開始」,待參數集負責人改為「橫越目標起步」。 |
+| 錨絞盤超載遲滯 | `stalled`/`slipping` 改為超載期間旗標:超過門檻時設立並發一次事件,張力連續 5 s 低於門檻 0.9 倍才解除;停轉期間 ≥ 0.9 × 過載拉力時不收鏈(`physics-tugs-anchors-mooring.md` 第 3.3 節)。C# `AnchorUnit` 與 Python `AnchorUnit` 同步;`ext_anchor_heave_house` 黃金檔重產(停轉事件 194 → 1、滑出 139 → 1),其餘黃金檔逐位元不變。E12 事件序列見下方夾具說明。 |
+| 預期只記錄故障標記 | `injectFault` 物件形式加 `recordOnly: true`(`scenario.schema.json` `$defs.timelineAction.properties.injectFault`):`ScenarioValidator` 對標記者不警告、標在 modelled 故障上警告、非布林為結構錯誤(Python `structural_issues` 同步)。執行時與一般注入相同(加入 `faults[]`、發 `faultInjected`)。E15 T+8 注入 `ecdisAlarmFlood`、E21 T+2 注入 `cargoHeatingFailure`(原本的訊息/語音保留)。 |
+| 時間表 `tugControl` 與 E17 拖船縮減 | 時間表動作 `tugControl`(args 同指令);拖船模式/狀態 `unavailable`(發 `tugUnavailable`,之後指令以 `tugUnavailable` 拒絕;`physics-tugs-anchors-mooring.md` 第 2.4 節)。E17 兩艘拖船都在 `tugs[]`,`tugReduced` 以 `tugControl { id: TG2, mode: unavailable }` 讓 TG2 離開,移除目標船 TUG2。`firstTugOrder` 語音改為不指名拖船(T+7 前學員可用 TG2)。 |
+
+```yaml
+# E15
+- injectFault: { name: ecdisAlarmFlood, recordOnly: true }
+- id: crossingDetected
+  after: { event: timelineTriggered, itemId: crossingTurn }
+# E17
+- tugControl: { id: TG2, mode: unavailable }
+# E21
+- injectFault: { name: cargoHeatingFailure, recordOnly: true }
+```
+
+```json
+{"kind": "tugUnavailable", "source": "timeline", "itemId": "TG2", "t": 420.0,
+ "data": {"id": "TG2", "mode": "unavailable", "from": "free", "fromStatus": "free", "status": "unavailable", "force_t": 0.0}}
+{"kind": "commandRejected", "data": {"command": "tugControl", "reason": "tugUnavailable", "args": {"id": "TG2", "mode": "pull"}}}
+{"tugs": [{"id": "TG1", "mode": "free", "status": "free"}, {"id": "TG2", "mode": "unavailable", "status": "unavailable", "force_t": 0.0}], "faults": ["ecdisAlarmFlood"]}
+```
+
+確定性:新狀態(拖船 `Unavailable` 列舉值接在既有值之後;錨的兩個遲滯計時只在旗標設立期間追加進雜湊)皆進快照與雜湊;未使用這些功能的情境雜湊不變(`HashCompatibilityTests`)。E15、E17、E21(以及事件序列有變時的 E12)核心紀錄夾具依第 14.5 節程序重錄。
+
+## 17. 第十二輪核心審查修正(2026-10-18)
+
+| 項目 | 處理 |
+|---|---|
+| E15 起步前的首次行動吃掉 X1 `encounterFirstAction` | 計時起點改為 `crossingTurn`(780 s)後,循跡學員在 X1 會遇開始(約 718 s)到起步之間的正常動作(先減速、修正流壓一次改 5°)已發出 X1 的 `encounterFirstAction`(每筆會遇只發一次),`crossingAction` 等不到第二次而 missed(扣 10 分)。改以 expect 事件新欄位 `includePrior: true`(`scenario.schema.json` `$defs.expectSpec` 的 `event`;`AssessmentEngine.PriorFirstAction`):開始計時當下 X1 會遇仍進行中且已有首次行動 → `dt_s = 0` 判 met(與舊起點 `after encounterStarted X1` 的判定一致),`crossingDetected` 的 encounterFirstAction 分支同樣加上。回歸測試 `E15_ActionBeforeCrossingTurnStillCountsAsFirstAction`(750 s 車鐘 SAH / 自動舵 +5°)與 `EncounterTrackerTests.IncludePrior*`;未加欄位的規則(E02 `standOnAction`、E03)語意與雜湊不變。 |
+| 已離開拖船的 `tugLineBreak {id}` | `InjectFault` 對 `unavailable` 拖船以 `commandRejected {command: injectFault, reason: tugUnavailable}` 拒絕,不加入 `faults[]`、不發 `faultInjected`、不建立故障應變紀錄。Python 參考伺服器(`mmg.py inject_fault`)不在本輪範圍,尚未同步(仍加入 faults[] 但不斷纜)。 |
+| 改下錨指令不解除滑出旗標 | `AnchorUnit.Command` 各接受分支改呼叫 `ClearOverload()`(停轉 + 滑出旗標與兩個解除計時),Python `_clear_overload` 同步;剎車滑出後改下 brake/heave,再滑出時再發 `anchorBrakeSlipping`。七個 `ext_*` 黃金檔不變(案例中沒有在滑出期間改下指令)。 |
+| 網頁 tugControl / unavailable | 網頁程式不在本輪範圍,由網頁負責人處理(`timeline.ts` 的 `TIMELINE_ACTION_KINDS`、`types/external.ts` 的 `TUG_MODES`/`TUG_STATUSES`)。 |
+
+```yaml
+# E15
+- id: crossingAction
+  after: { event: timelineTriggered, itemId: crossingTurn }
+  expect: { event: { kind: encounterFirstAction, targetId: X1, includePrior: true } }
+```
+
+```json
+{"kind": "requiredEventMet", "source": "assessment", "itemId": "crossingAction", "t": 780.0,
+ "data": {"dt_s": 0.0, "within_s": 360, "by": "event:encounterFirstAction", "late": false, "penalty": 0, "prior_t": 749.0}}
+{"kind": "commandRejected", "data": {"command": "injectFault", "reason": "tugUnavailable", "args": {"name": "tugLineBreak", "args": {"id": "TG2"}}}}
+```
+
+確定性:`includePrior` 只讀已在快照與雜湊中的會遇紀錄(`FirstActionAtS`、`Closed`),沒有新狀態;只有 E15 的內容改變(核心紀錄夾具 `record-E15…-core.jsonl` 依第 14.5 節重錄,60 s 狀態雜湊與重錄前相同)。
+
+---
+
+# 情境庫收尾 — E19、E20、E22(第三批)
+
+> 版本 v0.1(2026-10-18)。依據:規劃書第 8.0 節(1.39 教室模式、E20 總結評估於訪船時執行)、第 8.1 節表列與「設計規則」、第 8.2 節(行為標記;自動評分僅輔助)。
+> 本批**未變更** schema 與核心(`src/**`),只新增情境、一個示意區域檔與參數鍵;只記錄故障使用第 16 節的 `injectFault recordOnly: true`。港口、航道、泊位座標**全部為示意值,待 ENC 校正**。
+
+| 編號 | 情境檔 | 船/裝載 | 水域(示意區域檔) | 長度 |
+|---|---|---|---|---|
+| E19 | `data/scenarios/E19_fire_isps_pilotage_kaohsiung.yaml` | FSB1 滿載 | 高雄第二港口引航進港(同 E15:`kaohsiung-second-port-inbound.json`、`kaohsiung-anchorage*.json`) | ≤ 30 min |
+| E20 | `data/scenarios/E20_comprehensive_assessment_kaohsiung.yaml`(教官選 2 項)、`E20_comprehensive_assessment_default.yaml`(預設組合 E15 + E09) | FSB1 滿載 | Charlie → 第二港口油碼頭(`data/areas/kaohsiung-e20-passage.json`,新增) | ≤ 75 min |
+| E22a–d | `data/scenarios/E22a_handover_conflict.yaml`、`E22b_fatigue_misjudgement.yaml`、`E22c_challenge_senior.yaml`、`E22d_cultural_communication.yaml` | FSB1 滿載 | 台灣西南外海開闊水域(無區域檔;水深 60 m) | 各 12 min |
+
+## 18. E19 引航中火災/ISPS 警報(選配)
+
+**學習目標**:優先排序(火災 > 保全事件 > 一般干擾)、領導(集合人力 vs 駕駛台當值團隊、指派現場指揮)、與機艙協調停主機時機、VTS 溝通、火災應變中的航跡與速度控制。TMSA 11(緊急應變)。
+
+**場景**:10:00 交班,FSB1 滿載 HAH 約 7.5 kn、自動舵 074°,沿 E15 同一航線(Charlie → OUTER)進港;引水人在船(帶領者扮演)。漲潮 315° 0.8 kn、東北風 18 kn。出港油輪 OUT1 T+10 起沿航線北側 0.36 nm 左舷對左舷通過;外錨地錨泊船 ANC1。
+
+**升級**:normal(T+4 `ispsAlert`:港口保全等級 2 + 艉部限制區門禁警報,訊息/語音)→ **T+8 degraded**(`fireAlarm`:`injectFault { name: fireAlarmEngineRoom, recordOnly: true }` + 機控室語音)→ **火警後 150 s emergency**(`fireConfirmed`:機艙確認火災、全船警報、機艙要求停主機)→ 確認後 120 s `vtsHold`(VTS 要求口門外等候區減速至 `fire.e19.holdSpeed_kn`)→ 集合決定逾時 `musterPrompt`(舵工/瞭望「也要去集合站嗎?」)→ 停俥回覆逾時 `engineStopped`(機艙依程序停主機 `injectFault mainEngine`)→ 確認後 720 s `fireExtinguished`(清除 mainEngine 與火警)→ OUTER 或 T+30 結束。
+
+**只記錄故障**:`fireAlarmEngineRoom` 在故障目錄為 `modelled: false`。原規劃(第 14.4 節)在驗證器對只記錄故障一律警告時改以訊息/語音表示;第 16 節已加入 `recordOnly: true` 標記,本情境改為明示注入(`faults[]` 與儀器端警報清單可見、核心行為不變、`--validate` 無警告),火災的發展(確認、集合、撲滅)仍由時間表項目與語音表示。
+
+**評估**:硬性失敗碰撞、CPA < `navigation.cpa.hardFail_nm`;容許帶 XTD(warn `navigation.xtd.pilotage_m`)、走廊外時間、minCpa(warn `navigation.cpa.pilotage_nm`)、等候區超速幅度 `manoeuvring.maxOverSpeed_kn`(warn 1.0、fail 2.5 kn);必要事件:
+
+| id | 起點 | 期望 | 期限(參數) |
+|---|---|---|---|
+| `handoverChecklist` | handover | checklist | `bridge.handover.checklist_s` |
+| `ispsReport` | ispsAlert | notifyCompany(依 SSP 通報 CSO;可授權他人) | `security.ispsReport_s` 600 s(較長:火災優先) |
+| `fireCallMaster` | fireAlarm | callMaster | `fire.callMaster_s` 60 s(逾時每秒 0.1 分) |
+| `fireEcrContact` | fireAlarm | notifyEcr | `fire.ecrContact_s` 120 s |
+| `musterDecision` | fireConfirmed | verbal(note:當值團隊留駕駛台、現場指揮) | `fire.musterDecision_s` 120 s(penalty 15) |
+| `engineDecision` | fireConfirmed | notifyEcr(回覆停主機時機) | `fire.engineDecision_s` 180 s;逾時則機艙停主機 |
+| `fireReportVts` | fireConfirmed | report | `fire.vtsReport_s` 300 s |
+| `holdSpeedReduction` | vtsHold | telegraphChange / rpmOrder | `fire.speedReduction_s` 180 s |
+
+**無人操作**(xunit `E19_NoOperatorEscalatesInOrder`):ispsAlert 240 s、degraded 480 s、emergency 630 s、vtsHold 750 s、musterPrompt 752 s、engineStopped 812 s(mainEngine)、OUT1 啟動 600 s、fireExtinguished 1350 s、1800 s 時間到;必要事件全部 missed、不及格。
+**合理操作**(`E19_ScriptedPrioritisationMeetsRequirements`):ISPS 20 s 內授權大副並通報 CSO、火警 20 s 叫船長、50 s 聯繫機艙、確認後 30/60/90 s 決定集合/回覆機艙/報告 VTS、等候指示 20 s 內 DSAH、自動舵循跡:全部 met、主機未停、容許帶皆 ok、100 分。
+
+## 19. E20 綜合評估航程(A-I/12 總結性評估)
+
+**定位**:完整課程與定期複訓的總結性評估(規劃書第 8.0 節),由訪船船長於訪船時執行並依第 8.2 節行為標記評分、建議雙評;**系統自動評分僅為輔助**(簡報、檔頭、評分 passMark 說明皆註明)。`scoring.passMark` 引用 `assessment.e20.passMark`(假設值 70,可與一般練習分開調整)。
+
+**場景**:09:00 交班,FSB1 滿載 HAH 約 7.5 kn,自 Charlie 引水站沿 E15 航線 START → FW1 → FW2(高雄 VTS 報告點)→ OUTER → ENT(口門)→ IN1 → BERTH(港內航道 060°),左舷靠油碼頭 KHH-E20-OIL;拖船 TG1(右舷艏)、TG2(右舷艉)在港內待命(`initial.mode: free`,帶纜 90 s)。漲潮 0.8 kn,過口門後 2 分鐘內減弱為 0.3 kn(`harbourCurrent`)。出港船 OUT1 在自船距口門 1.2 nm 時由港內航道左側 150 m 出港(左舷對左舷)。
+
+**示意區域檔** `data/areas/kaohsiung-e20-passage.json`(新增,不含 `land`):`route`(前 4 點與 `kaohsiung-second-port-inbound.json` 相同、ENT = `kaohsiung-south-approach.json` 口門)、`breakwaters`(南北防波堤,水深 2 m、noGo)、`channel`(港內航道 12.5 m,中心線兩側 250 m)、`shoals`(港內航道兩側 4 m 淺灘)、`berthSpeedZone`(泊位 500 m 速限)、`outboundTrack`、`fenderTypes`/`berths`(KHH-E20-OIL:碼頭線 060°、長 260 m、水域在右;碰墊與繫船柱配置比照 `mailiao-berth.json` MLO-OIL-3)。港內幾何為虛構示意,與 E09/E17 的港內示意幾何互不相同(三者都待 ENC 校正)。xunit `AreaFilesAreMarkedSchematicAndMatchScenarios` 檢查情境航線/區域/泊位/出港船航跡與區域檔逐點相同。
+
+**故障/干擾模組(教官選 2 項)**:四個手動時間表項目即教官站「注入 X」鈕,動作為對應故障/語音;各模組的後續以「自注入起算」的自動項目進行:
+
+| 鈕 | 動作 | 後續(自動) | 必要事件(未注入時 notApplicable) |
+|---|---|---|---|
+| `injectE07` | `injectFault steeringGear` + 舵工語音 | `e07EcrPrompt`(首動作逾時)、`e07EmergencySteering`(教官手動,清除故障) | `e07FirstAction`、`e07NotifyEcr`、`e07EmergencySteering` |
+| `injectE08` | `injectFault gyroDrift {rate_degPerMin}` | `e08LookoutCue`、`e08GyroFail`(420 s 後 gyroFailure)、`e08GyroRestored`(手動) | `e08DriftDetected`、`e08AlarmAck`、`e08ManualSteering`、`e08CallMaster` |
+| `injectE09` | `mainEngine`、`steeringGear`、`gyroFailure`、`blackout`/`radarFailure`(recordOnly) | `e09EmergencyPower`(45 s)、`e09VtsCall`、`e09PilotPrompt`、`e09EngineRestored`(360 s)、`e09InstrumentsRestored`(手動) | `e09FirstAction`、`e09AnchorDecision`、`e09NotifyVts` |
+| `injectE15` | 干擾 1(卸貨計畫電話) | 每 2 分鐘:PSC 郵件、公司電話、ECDIS 警報氾濫(`ecdisAlarmFlood` recordOnly + 重複訊息)、港外時漲潮 0.8 → 1.4 kn(關鍵事件:航跡偏差) | `e15SterileCargoCall`、`e15SterilePscEmail`、`e15SterileCompanyCall`、`e15AlarmFloodManaged` |
+
+建議注入時機:E15、E08 於 OUTER 前;E09 於 OUTER 後(距泊位約 1.3 nm,同 E09「距碼頭 1.5 nm」);E07 於口門後港內航道。教官 T+15 min 仍未注入時提示(`selectionReminder`)。
+
+**三步升級(依注入順序)**:`firstModule`(degraded)= 任一 inject 項目已觸發;`secondModule`(emergency)= 任兩項已觸發(六種組合);與模組順序無關。各模組自身不改階段;泊位就緒 `berthReady` 設 `berthing`。
+
+**預設組合版本** `E20_comprehensive_assessment_default.yaml`:供自動測試、無教官時的預演與基準錄影;`injectE15` 改為 T+`emergency.e20.defaultE15At_s`(300 s)、`injectE09` 改為進入航段 3(通過 OUTER)後 `emergency.e20.defaultE09After_s`(60 s)或時間後備 `defaultE09Fallback_s`;其餘內容與主檔完全相同(xunit `E20DefaultDiffersOnlyInDefaultTriggers` 以序列化後比對)。
+
+**評估(所有指標類別)**:
+- 硬性失敗:擱淺、碰撞、進入南/北防波堤、`ukcHard`、碼頭硬接觸 `quayContact`、斷纜 `mooringLineParted`。
+- 容許帶:航跡 `track.maxXtd_m`(warn `navigation.xtd.pilotage_m`)/`track.timeOutsideCorridor_s`(口門與港內航段走廊 `navigation.xtd.harbourChannel_m` 150 m);UKC `ukc.timeBelowLimit_s`(港內航道 `navigation.ukc.channel_fraction`);會遇 `collisionAvoidance.minCpa_nm`(航道門檻 `navigation.cpa.channel_nm`/`channelHardFail_nm`);速限 `manoeuvring.maxOverSpeed_kn`、ROT;靠泊 `berthing.maxLateralSpeed_mps`(`berthing.approachSpeed_mps`/`approachSpeedFail_mps`)、`berthing.maxEnergyRatio`、`berthing.fenderOverloads`、`berthing.allFastPositionError_m`。
+- 必要事件:共同 `handoverChecklist`、`vtsReport`(FW2)、`berthingBrief`(過口門後與引水人/拖船的靠泊簡報,checklist ≤ `berthing.e20.briefing_s`)+ 上表各模組。
+
+**無人操作**(預設組合,`E20Default_NoOperatorEscalatesInOrder`):injectE15 300 s(degraded)、干擾 420/540/660 s、通過 OUTER 1822 s、injectE09 1882 s(emergency)、應急發電機 1927 s、引水人催促 1944 s;自動舵 074° 不隨航線轉向且未修正流壓 → 2009 s 擱淺於北防波堤(下錨決策/VTS 報告期限未到仍 pending)。教官選擇版本無人操作:T+15 min 提示、不升級、模組必要事件全部 notApplicable(`E20_WithoutSelectionRemindsInstructorAndModulesAreNotApplicable`)。
+
+**合理操作**(同一學員腳本 `RunE20Reasonable`;容許帶不誤扣):交班檢查表 → 干擾 20 s 內授權/延後、警報氾濫指派專人 → 自動舵循跡(每次 ≤ 4°)→ FW2 VTS 報告並減至 SAH → OUTER 後手操舵循跡 → 失電 5 s 車鐘歸零、20 s 雙錨備便、30 s 報告 VTS;主機恢復後 DSAH、教官確認儀器重啟 → 過口門靠泊簡報 → IN1 拖船帶纜 → 依距泊位中心的期望速度以車令控速 → 泊位中心前 30 m 內拖船拉住(離碰墊約 40 m,艉不越過碼頭端),之後推頂以 PI 控制朝碼頭速度(吹開風為煞車)→ 繫 4 纜 → 120 s 後教官 allFast。
+- 預設組合(`E20Default_ScriptedPassageAndBerthing`):約 4190 s 靠泊完成;橫向接近速度約 0.05 m/s、碰墊能量比約 0.02、繫妥位置誤差約 6 m;全部容許帶 ok、100 分。
+- 教官選 E08(T+400 s)+ E07(過口門後舵角 < 3° 時)(`E20_InstructorChoosesE08AndE07`):升級依注入順序、E07/E08 必要事件 met、E09/E15 notApplicable、100 分。
+
+## 20. E22 1.39 教室模式迷你情境(E22a–E22d)
+
+規劃書第 8.0 節:1.39 人因理論不另設講授時段,併入練習的簡報資料與講評引導問題,由簡化教官模式播放、船長帶領討論。E22 以 4 個 12 分鐘的短情境實作,**不套用三步升級**(各有一個 `phase: discussion` 討論點,教官可在此暫停帶領討論),**無硬性失敗、無容許帶**,評估以必要事件(acknowledge/舵令)與講評為主;無人操作時分數低於及格(講評素材)。共同:開闊水域(22.40 N、120.00 E,示意,待 ENC 校正)、交班開場(`handover`,narrator)、`handoverChecklist`、簡報附件含 1.39 單元講義、長度 `briefing.duration_s` 720 s。
+
+| 情境 | 1.39 單元 | 腳本 | 必要事件(期限參數) |
+|---|---|---|---|
+| E22a 交接班資訊衝突 | 溝通、狀況覺知 | 交班者口頭「漁船停著、CPA 2 nm、航向沒改」;T+60 s 航海日誌(07:30 改向)、T+90 s ARPA(X1 CPA 0.5 nm)互相矛盾;T+240 s 討論點;T+270 s 交班者催促 | `conflictQuery` verbal/report ≤ `bridge.e22.conflictQuery_s`(penalty 25) |
+| E22b 疲勞下的誤判 | 疲勞、決策(確認偏誤) | 夜間 03:50,接班者已工作 15 小時;T+120 s 疲勞提示;T+180 s 瞭望「白燈不動,應該是錨泊船」(實為橫越貨船 X1);T+300 s 討論點;T+420 s 瞭望看到紅燈 | `fatigueCallMaster` callMaster ≤ `bridge.e22.fatigueCallMaster_s`;`verifyLight` report/lookoutReport ≤ `bridge.e22.verifyLight_s` |
+| E22c 對資深者提出質疑 | 領導、權力距離、PACE | T+150 s 船長對右舷橫越(自船讓路)下令「左舵十,從他船艏前過」;質疑則船長接受(`masterAccepts`,由 `requiredEventMet` 觸發);未質疑則舵工照令左舵 10、60 s 後回正(`masterOrderExecuted`/`helmsmanSteadies`,timeline `ownShip`);T+300 s 討論點 | `challengeMaster` verbal ≤ `bridge.e22.challenge_s`(penalty 25) |
+| E22d 文化差異的溝通 | 文化差異、閉環溝通、SMCP | 手操舵;T+150 s 中文「左舵十」→ 外籍舵工「Yes sir」卻操右舵 10(timeline `ownShip`,不計為學員舵令);T+420 s 外籍二管輪英語電話「reduce RPM five minute」;T+540 s 討論點 | `rudderCorrection` rudderOrder ≤ `bridge.e22.closedLoop_s`;`smcpConfirm`、`readBack` verbal ≤ `bridge.e22.languageConfirm_s` |
+
+xunit:`E22_NoOperatorRunsScriptAndMissesRequirements`(腳本時刻、討論點為唯一的階段變化、必要事件全部 missed、分數 < passMark、E22c 未質疑分支)、`E22_ScriptedResponsesMeetRequirements`(各期望行為於期限內:必要事件 met、100 分;E22c 質疑後 180 s 船長接受、舵工照令分支不出現),皆紀錄 → 重播一致。
+
+## 21. 第三批共同:參數、契約、測試、限制、待辦
+
+### 21.1 設計規則的落實
+
+| 規則 | 落實 |
+|---|---|
+| 交接班與書面計畫開場 | 七個情境第一個時間表項目皆為 `handover`(t = 1 s);`briefing.text` 以「交班」開頭;附件含「…計畫」與交班檢查表;必要事件 `handoverChecklist`。 |
+| 三步升級 | E19:degraded(火警)/emergency(確認火災);E20:依模組注入順序(firstModule/secondModule);E22 依 1.39 教室模式例外(`phase: discussion`)。 |
+| 「引水人/教官是錯的」 | E22c 船長錯誤舵令(質疑);E19 機艙依程序要停主機(需船長協調時機)。 |
+| 示意座標 | 檔頭與區域檔 `source`/`description` 皆標「示意,待 ENC 校正」(xunit 檢查)。 |
+
+### 21.2 參數集新增鍵(`ASSUMED-E19`/`E20`/`E22`,標題皆以「假設值,待公司程序」開頭)
+
+| 鍵 | 值 | 用途 |
+|---|---|---|
+| `security.ispsReport_s` / `security.e19.ispsAlertAt_s` | 600 / 240 s | E19 ISPS 通報 CSO 期限 / 警報時刻 |
+| `fire.callMaster_s` / `ecrContact_s` / `musterDecision_s` / `engineDecision_s` / `vtsReport_s` / `speedReduction_s` | 60 / 120 / 120 / 180 / 300 / 180 s | E19 必要事件期限 |
+| `fire.e19.alarmAt_s` / `confirmAfter_s` / `vtsHoldAfter_s` / `extinguishAfter_s` | 480 / 150 / 120 / 720 s | E19 時間表 |
+| `fire.e19.holdSpeed_kn` | 6 kn | E19 口門外等候區速限 |
+| `navigation.xtd.harbourChannel_m` | 150 m | E20 口門與港內航段走廊半寬 |
+| `emergency.e20.selectionReminderAt_s` | 900 s | E20 教官未選模組提示 |
+| `emergency.e20.defaultE15At_s` / `defaultE09After_s` / `defaultE09Fallback_s` | 300 / 60 / 2700 s | E20 預設組合觸發 |
+| `berthing.e20.briefing_s` | 600 s | E20 靠泊簡報期限 |
+| `assessment.e20.passMark` | 70 | E20 總結性評估自動評分及格分數(輔助) |
+| `bridge.e22.conflictQuery_s` / `fatigueCallMaster_s` / `verifyLight_s` / `challenge_s` / `closedLoop_s` / `languageConfirm_s` | 180 / 300 / 180 / 90 / 60 / 120 s | E22 必要事件期限 |
+
+既有鍵沿用:`bridge.handover.checklist_s`、`bridge.distraction.*`、`emergency.steeringFailure.*`、`emergency.gyroFailure.*`、`emergency.blackout.*`、`navigation.xtd.pilotage_m`、`navigation.cpa.*`、`navigation.ukc.*`、`navigation.vts.report_s`、`port.kaohsiung.*`、`berthing.approachSpeed_mps`/`approachSpeedFail_mps`/`allFastPositionTolerance_m`、`manoeuvring.rotLimit_degPerMin`、`assessment.passMark`。
+
+### 21.3 契約與 JSON 範例(皆為既有 schema/核心功能;schema 未改)
+
+```yaml
+# E19:只記錄故障明示注入(第 16 節 recordOnly)與「逾時則機艙停主機」
+- id: fireAlarm
+  phase: degraded
+  actions:
+    - injectFault: { name: fireAlarmEngineRoom, recordOnly: true }
+- id: engineStopped
+  when: { type: event, kind: requiredEventMissed, itemId: engineDecision }
+  actions:
+    - injectFault: mainEngine
+# E20:教官「注入 X」手動鈕與依注入順序的升級
+- id: injectE07
+  manual: true
+  actions:
+    - injectFault: steeringGear
+- id: secondModule
+  phase: emergency
+  when:
+    any:
+      - all: [ { type: event, kind: timelineTriggered, itemId: injectE07 }, { type: event, kind: timelineTriggered, itemId: injectE08 } ]
+      # …共六種兩兩組合
+# E20 預設組合版本(其餘內容與主檔相同)
+- id: injectE09
+  when:
+    any:
+      - { type: time, atLeast: "${params:emergency.e20.defaultE09After_s}", since: { event: routeLegChanged, legIndex: 3 } }
+      - { type: time, atLeast: "${params:emergency.e20.defaultE09Fallback_s}" }
+# E22c:質疑與未質疑兩個分支
+- id: masterAccepts
+  when: { type: event, kind: requiredEventMet, itemId: challengeMaster }
+- id: masterOrderExecuted
+  when: { type: event, kind: requiredEventMissed, itemId: challengeMaster }
+  actions:
+    - autopilot: { enabled: false }
+    - ownShip: { rudder: -10 }
+```
+
+```json
+{"type": "triggerTimeline", "args": {"id": "injectE09"}}
+{"type": "acknowledge", "args": {"kind": "verbal", "note": "全船警報;消防隊集合由大副現場指揮,舵工、瞭望、二副留駕駛台"}}
+{"type": "acknowledge", "args": {"kind": "notifyCompany", "note": "授權大副依 SSP 檢查舵機房限制區並通報 CSO"}}
+{"kind": "faultInjected", "source": "timeline", "itemId": "fireAlarm", "t": 480.0, "message": "fireAlarmEngineRoom"}
+{"kind": "phaseChanged", "source": "timeline", "itemId": "secondModule", "t": 1882.0, "data": {"from": "degraded", "to": "emergency"}}
+{"assessment": {"required": [{"id": "e07FirstAction", "state": "notApplicable"}, {"id": "e09FirstAction", "state": "met", "by": "telegraphChange"}]}}
+{"berthing": {"berthId": "KHH-E20-OIL", "maxLateralSpeed_mps": 0.05, "maxEnergyRatio": 0.02, "allFastPositionError_m": -6.2}}
+```
+
+區域檔(節錄):
+```json
+{"id": "kaohsiung-e20-passage", "source": "示意(港外航線同 kaohsiung-second-port-inbound.json、口門同 kaohsiung-south-approach.json;港內航道與泊位為虛構示意;待 ENC 校正)",
+ "route": [{"name": "START", "lat": 22.52736, "lon": 120.23803}, {"name": "ENT", "lat": 22.552, "lon": 120.305}, {"name": "BERTH", "lat": 22.55968, "lon": 120.31931}],
+ "breakwaters": [{"id": "northBreakwater", "depth_m": 2, "polygon": [{"lat": 22.55318, "lon": 120.30383}]}],
+ "channel": {"id": "innerChannel", "depth_m": 12.5}, "shoals": [{"id": "innerShoalS", "depth_m": 4}],
+ "berths": [{"id": "KHH-E20-OIL", "quay": [{"lat": 22.55964, "lon": 120.31788}, {"lat": 22.56081, "lon": 120.32007}], "waterSide": "right"}]}
+```
+
+確定性:只使用既有狀態與事件(時間表、手動觸發、漸變、目標、拖船/泊位/繫纜、故障、評估皆已進快照/雜湊);未改核心,其他情境雜湊不變(參數集 sha256 只在紀錄標頭)。
+
+### 21.4 已知限制與取捨
+
+- E19 火災本身無物理/煙霧模型,發展以時間表表示;集合造成的人力減少(舵工/瞭望離開)以語音提示與必要事件表示,核心沒有人員狀態。
+- E20 的模組時序由教官決定,無人操作的固定時刻只在預設組合版本有意義;教官選擇版本以 `requiredEventPending` 的 `deadline_t` 供教官站倒數。模組不改階段,階段只表示「第幾個模組」。
+- E20 E09 模組的 `gyroFailure` 使自動舵脫開;合理操作腳本以真航向代表舵工依磁羅經/疊標操舵(講評時以 `summary` 與錄影判讀)。
+- E22 的「質疑」「閉環確認」以教官按確認(acknowledge)代表,核心不做語音辨識;E22d 舵工反舵以 timeline `ownShip` 表示(不計為學員舵令,`rudderCorrection` 只看學員/教官舵令)。
+- 主控程序 `--duration` 大於情境 `endExercise` 時刻時(E22 720 s)錄製不會自行結束:錄製驗證以 `--duration 700` 執行。
+
+### 21.5 測試與夾具
+
+- `tests/SimCore.Tests/ScenarioLibraryFinalTests.cs`(23 項):載入/驗證(七檔無錯誤無警告)與設計規則(含 1.39 例外、只記錄故障皆 `recordOnly`)、區域檔一致、E20 兩檔差異只在預設觸發、E20 未選模組時 notApplicable;E19、E20 預設組合、E22a–d 無人操作的固定時刻與關鍵事件;合理操作(E19、E20 預設組合、E20 教官選 E08 + E07、E22a–d)必要事件 met、容許帶皆 ok、100 分;紀錄 → 重播雜湊/事件/summary 一致後刪除紀錄。
+- 主控程序:七檔 `--validate` 無錯誤無警告;E19/E20 兩檔 `--duration 900`、E22 `--duration 700`(`--timescale 10`)錄製後 `--replay` 一致(驗證後刪除)。
+- 核心紀錄夾具 `src/Instruments.Web/tests/fixtures/record-<id>-core.jsonl`(60 s,每 500 tick 一筆狀態)七檔;`src/Tools.Calibration/tests/test_scenario_params.py` 的 `REQUIRED_FIXTURES` 已加入七個 id。
+
+### 21.6 待辦
+
+1. 以 ENC/港方資料校正 `kaohsiung-e20-passage.json`(口門、防波堤、港內航道、淺灘、油碼頭泊位)並與 E09/E17 的港內示意幾何統一後重錄夾具。
+2. E19 人員狀態(集合後駕駛台人力)與火災發展模型;E20 教官站「注入 X」鈕依 `briefing`/項目名稱分組顯示(目前為一般手動項目)。
+3. E22 迷你情境的講評引導問題與 1.39 講義由 BRM 教官定稿;參數集假設值依公司 SMS 核定後 bump version 並重新驗證引用情境。
+
+## 22. 第三批收尾審查修正(2026-10-18,E19/E20/E22a/E22b)
+
+審查以探針(同一份 `SimosaBRM.SimCore.dll`、指令經 `Enqueue` 送入)重現五項;每項先寫成 `tests/SimCore.Tests/ScenarioLibraryFinalReviewFixTests.cs` 的正式測試確認失敗,再只改情境 YAML 與參數集(新增鍵)修正。核心、schema、既有測試皆未改。
+
+| # | 情境 | 問題 | 修正 |
+|---|---|---|---|
+| 1 | E20 兩檔 | E07 與 E09 共用故障名稱 `steeringGear`:`e09EmergencyPower`(E09 + 45 s)把 E07 尚未處理的卡舵一起清除,舵自動恢復,`e07EmergencySteering` 失去意義 | `e09EmergencyPower` 加條件「非(E07 已注入且教官尚未確認應急操舵)」;另增 `e09EmergencyPowerSteeringJammed`(同一時刻、互斥):應急發電機供電但不清除 `steeringGear`,語音/訊息說明操舵未恢復,待教官按 `e07EmergencySteering`。E09 先、45 s 內再注入 E07 亦同 |
+| 2 | E19 | `holdSpeedReduction` 只接受 VTS 等候指示(750 s)後的車令/轉速令;確認火災後即主動減速者被扣 10 分 | 新增 `holdAlreadyReduced`:VTS 指示當下(2 s 窗)車鐘已低於 HAH(`notIn [HAH, FAH, NAVF]`)或對地速度低於 `fire.e19.holdSpeed_kn`,且主機非機艙停俥(`mainEngine` 未作用);`holdSpeedReduction.expect` 加入 `{event: {kind: timelineTriggered, itemId: holdAlreadyReduced}}` |
+| 3 | E22a | `conflictQuery` 自 `arpaCue`(90 s)起算;看到航海日誌(60 s)即提出查證不計,之後須再確認一次 | `after` 改為 `logbookEntry`(第一個衝突來源),`within_s` 改引用新鍵 `bridge.e22.conflictQueryFromLogbook_s`(210 s);期限時刻不變(60 + 210 = 90 + 180 = 270 s) |
+| 4 | E22b | `fatigueCallMaster` 自 `fatigueCue`(120 s)起算;交班時即承認疲勞並依夜令叫船長不計 | `after` 改為 `handover`,`within_s` 改引用新鍵 `bridge.e22.fatigueCallMasterFromHandover_s`(420 s = 疲勞提示 120 s + 原期限 300 s) |
+| 5 | E20 兩檔 | E08 與 E09 共用 `gyroFailure`:E09 的電羅經失效警報已確認後,E08 漂移 420 s 再注入 `gyroFailure`(`alreadyActive`)不產生新警報,`e08AlarmAck` 必然逾時;`e09InstrumentsRestored` 宣告「電羅經恢復正常」但 `gyroDrift` 仍在 | `e08GyroFail` 加條件 `{type: fault, name: gyroFailure, active: false}`;另增 `e08GyroFailMasked`(電羅經已因 E09 失效時通知教官,不注入),E08 失效階段三項必要事件(`e08AlarmAck`、`e08ManualSteering`、`e08CallMaster`)為 notApplicable;`e09InstrumentsRestored` 一併 `clearFault: gyroDrift`(同 `e08GyroRestored`,重新啟動後不再失效) |
+
+### 22.1 契約與 JSON 範例(皆為既有 schema/核心功能;schema 未改)
+
+E20 應急發電機的兩個互斥分支(YAML 流式 `{ }` 內參數引用加引號):
+
+```yaml
+- id: e09EmergencyPower
+  when:
+    all:
+      - { type: time, atLeast: "${params:emergency.blackout.emergencyPower_s}", since: { event: timelineTriggered, itemId: injectE09 } }
+      - not:
+          all:
+            - { type: event, kind: timelineTriggered, itemId: injectE07 }
+            - not: { type: event, kind: timelineTriggered, itemId: e07EmergencySteering }
+      - not: { type: event, kind: timelineTriggered, itemId: e09EmergencyPowerSteeringJammed }
+  actions: [ { clearFault: steeringGear }, … ]
+- id: e09EmergencyPowerSteeringJammed        # 不清除 steeringGear
+```
+
+事件序列(測試腳本於 400 s 注入 E07、430 s 注入 E09、560 s 由教官確認應急操舵,事件時刻為 399/429/559 s;`SimEvent` JSON,`t` 秒):
+
+```json
+{"kind": "timelineTriggered", "source": "timeline", "itemId": "e09EmergencyPowerSteeringJammed", "t": 474.0}
+{"kind": "faultCleared", "source": "timeline", "itemId": "e07EmergencySteering", "message": "steeringGear", "data": {"fault": "steeringGear"}, "t": 559.0}
+{"kind": "requiredEventMet", "source": "assessment", "itemId": "e07EmergencySteering", "data": {"dt_s": 160.0, "within_s": 300, "by": "event:timelineTriggered", "late": false, "penalty": 0}}
+```
+
+E19 VTS 指示時已在減速(690 s 下 DSAH):
+
+```json
+{"kind": "timelineTriggered", "source": "timeline", "itemId": "holdAlreadyReduced", "t": 750.0}
+{"kind": "requiredEventMet", "source": "assessment", "itemId": "holdSpeedReduction", "data": {"dt_s": 0.0, "within_s": 180, "by": "event:timelineTriggered", "late": false, "penalty": 0}}
+```
+
+E20 E08 + E09(電羅經已失效):`e08GyroFailMasked` 於 E08 + `emergency.gyroFailure.failAfter_s` 觸發(只發教官訊息),`summary.assessment.required[]` 中 `{"id": "e08AlarmAck", "state": "notApplicable"}`。
+
+參數集新增鍵(來源 `ASSUMED-E22`,標題「假設值,待公司程序」;未 bump version,只新增鍵):
+
+```yaml
+bridge.e22.conflictQueryFromLogbook_s:      { value: 210, unit: s, source: ASSUMED-E22 }
+bridge.e22.fatigueCallMasterFromHandover_s: { value: 420, unit: s, source: ASSUMED-E22 }
+```
+
+確定性:只使用既有觸發條件(`event`、`fault`、`telegraph`、`ownSpeed`、`time since`、`not/all/any`)與動作;時間表項目狀態本已進快照/雜湊。未使用 E07+E09、E08+E09 組合或早期確認的路徑行為不變(E19/E20/E22 既有 xunit 時刻與分數斷言全數通過);內容有變的五檔已依規則重錄 60 s 核心紀錄夾具(`--replay` 一致)。
+
+### 22.2 模組組合互動(補充第 19 節)
+
+- **E07 + E09**:兩者都以 `steeringGear` 表示失去操舵。E07 卡舵只由教官 `e07EmergencySteering` 解除;E09 的應急發電機供電只在 E07 未注入或已處理時解除。E07 在 E09 供電之後才注入者,照常卡舵。反向情形(E09 失電 45 s 內教官就按 `e07EmergencySteering`)仍會提早恢復操舵:教官應在應急發電機供電後才確認應急操舵(核心沒有「應急操舵需應急電源」的模型)。
+- **E08 + E09**:兩者都以 `gyroFailure` 表示電羅經失效。E08 漂移期間電羅經已因 E09 失效時,E08 的完全失效不另注入(無新警報可確認),失效階段必要事件不適用,改以 E09 必要事件評估;教官按 `e09InstrumentsRestored` 或 `e08GyroRestored` 都會一併清除 `gyroFailure` 與 `gyroDrift`。
+- 測試:`ScenarioLibraryFinalReviewFixTests`(14 項)涵蓋上述組合、單一模組的既有行為(E09 單獨照常恢復操舵、E08 單獨照常注入警報)、E19 未減速仍須車令、E22a 日誌前提問不算,並以紀錄 → 重播確認雜湊/事件/summary 一致。

@@ -1505,7 +1505,7 @@
     },
     "timelineAction": {
       "type": "object",
-      "description": "只有一個鍵的物件(鍵即動作名):injectFault(<name> | {name, args})、clearFault(<name> | all)、setEnvironment{wind{trueSpeed,trueDir,gustiness},current{set,drift},waterDepth,visibility_nm,ramp_s}、targetControl{同 command.schema.json targetControl.args}、voiceScript{role,channel,text?,file?,lang?,durationEstimate_s?}、message{to: instructor|all, text, severity: info|warning|alarm}、phase: <name>、freeze{reason?}、autopilot{enabled,heading?,rotLimit?}、ownShip{rudder?,telegraph?,rpm?,thruster?}、timeScale: <n>、arm: <itemId>、disarm: <itemId>、endExercise{reason?}。不允許 loadScenario/reset/restore/snapshot",
+      "description": "只有一個鍵的物件(鍵即動作名):injectFault(<name> | {name, args?, recordOnly?})、clearFault(<name> | all)、setEnvironment{wind{trueSpeed,trueDir,gustiness},current{set,drift},waterDepth,visibility_nm,ramp_s}、targetControl{同 command.schema.json targetControl.args}、tugControl{同 command.schema.json tugControl.args:id(須為情境 tugs[].id)、mode push|pull|standby|free|unavailable、direction_deg、power_pct;拒絕時發 commandRejected(source timeline)}、voiceScript{role,channel,text?,file?,lang?,durationEstimate_s?}、message{to: instructor|all, text, severity: info|warning|alarm}、phase: <name>、freeze{reason?}、autopilot{enabled,heading?,rotLimit?}、ownShip{rudder?,telegraph?,rpm?,thruster?}、timeScale: <n>、arm: <itemId>、disarm: <itemId>、endExercise{reason?}。不允許 loadScenario/reset/restore/snapshot",
       "minProperties": 1,
       "maxProperties": 1,
       "propertyNames": {
@@ -1523,8 +1523,40 @@
           "timeScale",
           "arm",
           "disarm",
-          "endExercise"
+          "endExercise",
+          "tugControl"
         ]
+      },
+      "properties": {
+        "injectFault": {
+          "oneOf": [
+            { "type": "string", "description": "故障名稱(fault-catalogue.json)" },
+            {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": { "type": "string", "description": "故障名稱(fault-catalogue.json)" },
+                "args": { "type": "object", "description": "故障參數(依故障目錄,例如 tugLineBreak {id}、engineStartFailure {attempts, delay_s})" },
+                "recordOnly": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "true = 情境作者明示此故障為「只記錄」(核心不改變行為,加入 state.faults[] 並發 faultInjected,由儀器/語音/訊息腳本反應),驗證時不再警告「只記錄與廣播」;用於核心有模型的故障時驗證器警告(該故障不是只記錄)"
+                }
+              }
+            }
+          ]
+        },
+        "tugControl": {
+          "type": "object",
+          "required": ["id"],
+          "description": "同 command.schema.json $defs/tugControlArgs(時間表的拖船縮減以 mode unavailable 表示)",
+          "properties": {
+            "id": { "type": "string" },
+            "mode": { "type": "string", "enum": ["push", "pull", "standby", "free", "unavailable"] },
+            "direction_deg": { "type": "number", "minimum": 0, "maximum": 360 },
+            "power_pct": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        }
       }
     },
     "timelineItem": {
@@ -1945,6 +1977,10 @@
                 },
                 "targetId": {
                   "type": "string"
+                },
+                "includePrior": {
+                  "type": "boolean",
+                  "description": "只用於 kind encounterFirstAction(須指定 targetId):規則開始計時(after)時,該目標的會遇仍進行中且首次行動已在 after 之前發生,即以 dt_s = 0 判 met(requiredEventMet data 另含 prior_t = 首次行動時刻)。每筆會遇只發一次 encounterFirstAction;after 晚於會遇開始時(E15 以 X1 起步為計時起點)起步前的正常動作會先用掉它。已結束的會遇不計;用在其他事件或未指定 targetId 時 --validate 警告且不作用"
                 }
               }
             }

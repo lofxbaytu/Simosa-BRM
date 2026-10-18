@@ -1,0 +1,294 @@
+# E19 引航中火災/ISPS 警報(選配)— 高雄第二港口引航進港(規劃書第 8.1 節 E19 與「設計規則」、TMSA 11;設計 docs/design/scenario-library.md 第 18 節;schema src/Contracts/scenario.schema.json)
+# 航線與外錨地沿用 E15 的示意幾何(data/areas/kaohsiung-second-port-inbound.json route、kaohsiung-anchorage.json、kaohsiung-anchorage-b-e15.json;示意,待 ENC 校正);
+#   口門外等候區(zones[entranceHold],OUTER 前 1300 m 至後 300 m、航線兩側 600 m)為本情境的示意區域。
+# FSB1 滿載(5.7 m)引水人已在 Charlie 登船(帶領者扮演),HAH 約 7.5 kn、自動舵 074°;漲潮流向西北 0.8 kn、東北風 18 kn。
+# 時間表:T+1 s 交班 → T+4 min ISPS 保全警報(港口保全等級 2 級 + 艉部限制區門禁警報;訊息/語音)
+#   → T+8 min degraded(fireAlarm:機艙煙感火警;fireAlarmEngineRoom 為只記錄故障,以 injectFault recordOnly: true 注入(faults[] 與儀器警報清單可見、
+#     核心行為不變、--validate 不警告),火災的發展與應變以訊息/語音與時間表項目表示)
+#   → 火警後 150 s emergency(fireConfirmed:機艙確認火災、全船警報集合 vs 駕駛台當值團隊、機艙要求停主機關斷燃油)
+#   → 確認後 120 s VTS 要求在口門外減速等候(口門外等候區速限 fire.e19.holdSpeed_kn)→ 未於期限內回覆機艙(engineDecision 逾時)則機艙依程序停主機(injectFault mainEngine)
+#     (VTS 指示時已在減速 — 車鐘低於 HAH 或對地速度低於 fire.e19.holdSpeed_kn — 由 holdAlreadyReduced 判 holdSpeedReduction 達成,不需再下車令)
+#   → 確認後 fire.e19.extinguishAfter_s 火已撲滅(clearFault mainEngine)→ 到達口門外 OUTER 或 T+30 結束。T+10 起出港船 OUT1 在航線北側 0.36 nm 左舷對左舷通過。
+# 評估:優先排序與領導(火警通知船長 callMaster、與機艙聯繫 notifyEcr、集合 vs 航行優先的決定 verbal、向 VTS/引水人報告 report、
+#   機艙停俥請求的回覆 notifyEcr、ISPS 通報公司保全官 notifyCompany(期限較長:火災優先)、VTS 等候指示後減速)、航跡(XTD 走廊)、CPA、等候區超速幅度。
+id: E19_fire_isps_pilotage_kaohsiung
+name: 高雄引航進港中的機艙火災與 ISPS 保全警報(選配)
+description: >-
+  引水人在船、沿高雄第二港口航道延長線進港時先後發生 ISPS 保全警報與機艙火警:團隊須排定優先順序(火災優先、保全事件授權處理)、
+  決定全船集合與駕駛台當值團隊的人力分配、與機艙協調是否停主機,並在 VTS 要求下於口門外減速等候,同時維持航跡與交通安全。
+seed: 20261220
+startTimeUtc: "2026-12-20T02:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.5300, lon: 120.2400 }          # Charlie 引水站(與 E04/E05/E15 相同,示意)
+initial:
+  position: { lat: 22.52736, lon: 120.23803 }    # 航線 START(同 E15)
+  heading: 74
+  speed: 7.5
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 18, trueDir: 30, gustiness: 0.15 }
+  current: { set: 315, drift: 0.8 }              # 漲潮向西北
+  waterDepth: 25
+  visibility_nm: 8
+briefing:
+  text: |
+    交班(10:00 地方時):No.1 滿載瀝青(吃水 5.7 m),引水人已於 Charlie 引水站登船並完成 MPX,HAH 約 7.5 kn,自動舵 074°(已含流壓修正),沿出港航道延長線南半側進港。
+    書面航程計畫:START(Charlie 南方)→ FW1 → FW2 → OUTER(航向 070°,口門外 0.4 nm);走廊半寬見參數集 navigation.xtd.pilotage_m;航線北側為出港船航路與外錨地 B 區。
+    船長常規命令:引航中駕駛台當值團隊(船副、舵工、瞭望)不得離開駕駛台;火災依 SMS 緊急程序(全船警報、消防隊集合、機艙報告),保全事件依船舶保全計畫(SSP)通報公司保全官(CSO)。
+    今日港口保全等級 1 級。本練習為選配(TMSA 11 緊急應變),接班者完成交班檢查表後由教官確認(acknowledge checklist)。
+  attachments:
+    - { title: "航程計畫(Charlie → 第二港口口門外,示意)", file: docs/passage-plan-E19.pdf }
+    - { title: "緊急程序 — 機艙火災與全船集合(應變部署表)", file: docs/SMS-EMG-fire-muster.pdf }
+    - { title: "船舶保全計畫摘要(SSP;保全等級與通報)", file: docs/SSP-summary.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: helmsman }
+    - { role: lookout }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: vts, playedBy: voiceScript }
+    - { role: crew, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 1800
+route:
+  name: 高雄第二港口引航進港(示意,同 E15)
+  xtdLimit_m: "${params:navigation.xtd.pilotage_m}"
+  waypoints:                                      # 與 data/areas/kaohsiung-second-port-inbound.json route 相同
+    - { name: START, lat: 22.52736, lon: 120.23803 }
+    - { name: FW1, lat: 22.53305, lon: 120.25496 }
+    - { name: FW2, lat: 22.54158, lon: 120.28035, checkpoint: true }
+    - { name: OUTER, lat: 22.54784, lon: 120.29897, arrivalRadius_m: 300 }
+zones:
+  - id: anchorage
+    name: 高雄外錨地 A 區(示意,同 kaohsiung-anchorage.json)
+    type: reporting
+    polygon:
+      - { lat: 22.57, lon: 120.205 }
+      - { lat: 22.6, lon: 120.205 }
+      - { lat: 22.6, lon: 120.24 }
+      - { lat: 22.57, lon: 120.24 }
+  - id: anchorageB
+    name: 高雄外錨地 B 區(示意,同 kaohsiung-anchorage-b-e15.json)
+    type: reporting
+    polygon:
+      - { lat: 22.53341, lon: 120.23258 }
+      - { lat: 22.54847, lon: 120.2774 }
+      - { lat: 22.56361, lon: 120.27151 }
+      - { lat: 22.54855, lon: 120.22669 }
+  - id: entranceHold
+    name: 口門外等候區(示意;火災時 VTS 指示減速等候)
+    type: speedLimit
+    speedLimit_kn: "${params:fire.e19.holdSpeed_kn}"
+    polygon:                                      # OUTER 前 1300 m 至後 300 m、航線兩側 600 m
+      - { lat: 22.53875, lon: 120.28907 }
+      - { lat: 22.54367, lon: 120.3037 }
+      - { lat: 22.55386, lon: 120.29973 }
+      - { lat: 22.54894, lon: 120.2851 }
+timeline:
+  - id: handover
+    name: 交班(引水人在船)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:引水人已在船,自動舵 074 已修正流壓,HAH 七點五節,沿航道延長線南側進港。保全等級一級。引航中當值團隊不得離開駕駛台。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對航程計畫、流壓、交通與應變部署(火災/保全)分工,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 074°(交班狀態,含流壓修正)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 74 }
+  - id: ispsAlert
+    name: ISPS 保全警報(保全等級 2 + 艉部限制區門禁警報)
+    visibility: all
+    when: { type: time, atLeast: "${params:security.e19.ispsAlertAt_s}" }
+    actions:
+      - message: { to: all, text: "保全:高雄港港口設施保全官通知保全等級即時提升為 2 級;同時本船艉部 ISPS 限制區(舵機房)門禁警報響起,原因不明。", severity: warning }
+      - voiceScript: { role: crew, channel: phone, text: "駕駛台,水手長。舵機房門禁警報響了,門是關的,要不要派人去看?", lang: zh-TW }
+      - message: { to: instructor, text: "ISPS 保全事件:觀察是否授權他人(大副/保全員)依 SSP 檢查並通報公司保全官(acknowledge notifyCompany),而非由值班駕駛員離開瞭望與監控", severity: info }
+  - id: fireAlarm
+    name: 機艙火警(煙感警報)
+    phase: degraded
+    visibility: all
+    when: { type: time, atLeast: "${params:fire.e19.alarmAt_s}" }
+    actions:
+      - injectFault: { name: fireAlarmEngineRoom, recordOnly: true }   # 只記錄:儀器端顯示火警,火災發展由時間表表示
+      - message: { to: all, text: "火警偵測系統:機艙 — 主機區第 3 迴路 煙感警報", severity: alarm }
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室!機艙主機區煙感警報,我們馬上派人去確認。", lang: zh-TW }
+      - message: { to: instructor, text: "機艙火警:期望 60 s 內通知船長(callMaster)、120 s 內與機艙聯繫確認(notifyEcr);保全事件此時應退居次要並授權處理", severity: warning }
+  - id: fireConfirmed
+    name: 機艙確認火災(集合 vs 航行優先)
+    phase: emergency
+    visibility: all
+    when: { type: time, atLeast: "${params:fire.e19.confirmAfter_s}", since: { event: timelineTriggered, itemId: fireAlarm } }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機艙確認火災!淨油機旁起火,請發全船警報集合消防隊。我們可能要停主機關斷燃油,請船長指示!", lang: zh-TW }
+      - message: { to: all, text: "全船警報:機艙火災,消防隊至集合站集合(應變部署表)", severity: alarm }
+      - message: { to: instructor, text: "確認火災:觀察船長是否決定集合人力與駕駛台當值團隊(舵工、瞭望留駕駛台;acknowledge verbal)、120 s 內;180 s 內回覆機艙停主機的時機(notifyEcr);300 s 內向 VTS/引水人報告(report)", severity: alarm }
+  - id: vtsHold
+    name: VTS 要求口門外減速等候
+    when: { type: time, atLeast: "${params:fire.e19.vtsHoldAfter_s}", since: { event: timelineTriggered, itemId: fireConfirmed } }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.1,高雄 VTS。你船機艙失火,暫停進港,請在口門外減速至六節以下等候,拖船與消防船已出發。", lang: zh-TW }
+      - message: { to: instructor, text: "VTS 等候指示:期望減速(車令/轉速令)並在等候區保持低速、維持航跡與出港船通過距離", severity: warning }
+  - id: holdAlreadyReduced
+    name: VTS 等候指示時已在減速(確認火災後主動減速)
+    # 只在 VTS 指示的當下(2 s 窗內)判定:車鐘已低於 HAH,或對地速度已低於等候區速限,且主機由駕駛台控制(非機艙停俥)。
+    #   火災確認後即主動減速者不需在 VTS 指示後再下車令(holdSpeedReduction 以本項目達成;收尾審查修正)
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: vtsHold }
+        - not: { type: time, atLeast: 2, since: { event: timelineTriggered, itemId: vtsHold } }
+        - { type: fault, name: mainEngine, active: false }
+        - any:
+            - { type: telegraph, notIn: [ HAH, FAH, NAVF ] }
+            - { type: ownSpeed, metric: sog, lessThan: "${params:fire.e19.holdSpeed_kn}" }
+    actions:
+      - message: { to: instructor, text: "VTS 等候指示時本船已在減速(確認火災後主動減速):holdSpeedReduction 達成;觀察等候區保持低速", severity: info }
+  - id: musterPrompt
+    name: 集合人力提示(未決定時)
+    when: { type: event, kind: requiredEventMissed, itemId: musterDecision }
+    actions:
+      - voiceScript: { role: crew, channel: bridge, text: "二副,全船警報響了,舵工和瞭望也要去集合站嗎?", lang: zh-TW }
+      - message: { to: instructor, text: "集合 vs 航行優先未決定:觀察船長是否明確指示駕駛台當值團隊留守、指派大副為現場指揮", severity: warning }
+  - id: engineStopped
+    name: 機艙依程序停主機(未獲駕駛台回覆)
+    when: { type: event, kind: requiredEventMissed, itemId: engineDecision }
+    actions:
+      - injectFault: mainEngine
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,一直沒有接到指示,我們依程序關斷燃油,主機停了!", lang: zh-TW }
+      - message: { to: instructor, text: "機艙停主機(engineDecision 逾時):船失去推進,觀察下錨/拖船/報告 VTS 的優先順序", severity: alarm }
+  - id: fireExtinguished
+    name: 火已撲滅
+    when: { type: time, atLeast: "${params:fire.e19.extinguishAfter_s}", since: { event: timelineTriggered, itemId: fireConfirmed } }
+    actions:
+      - clearFault: mainEngine
+      - clearFault: fireAlarmEngineRoom
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機艙火已撲滅,現在監控復燃。主機可以用了,請指示。", lang: zh-TW }
+      - message: { to: all, text: "機艙火災已撲滅(監控復燃中)", severity: info }
+  - id: outboundTanker
+    name: 出港船(航線北側,左舷對左舷)
+    when: { type: event, kind: targetActivated, targetId: OUT1 }
+    actions:
+      - message: { to: instructor, text: "出港油輪 OUT1 沿航線北側 0.36 nm 出港(左舷對左舷);火災應變中觀察是否持續瞭望與 CPA 監控", severity: info }
+  - id: anchorageEntered
+    name: 漂入外錨地
+    when:
+      any:
+        - { type: zone, id: anchorageB, inside: true }
+        - { type: zone, id: anchorage, inside: true }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.1,高雄 VTS,你船已偏到錨地邊緣,請確認航向。", lang: zh-TW }
+  - id: speedCoach
+    name: 等候區超速提示
+    repeat: { every_s: 120, max: 3 }
+    when: { type: event, kind: speedLimitExceeded }
+    actions:
+      - message: { to: instructor, text: "等候區超過 VTS 指示速度;觀察引水人與船長是否提出", severity: warning }
+  - id: arrived
+    name: 到達口門外
+    when: { type: ownDistance, waypoint: OUTER, lessThan: 0.15 }
+    actions:
+      - endExercise: { reason: 到達口門外 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 1800 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  encounter:
+    detectionRange_nm: "${params:navigation.encounter.detectionRange_nm}"
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: collision, rule: collision }
+    - { id: cpaHard, rule: cpa, lessThan: "${params:navigation.cpa.hardFail_nm}" }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.pilotage_m}", fail: 2x, penalty: 10, failPenalty: 20 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 180, penalty: 5, failPenalty: 15 }
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.pilotage_nm}", fail: "${params:navigation.cpa.hardFail_nm}", penalty: 10, failPenalty: 30 }
+    - { id: holdSpeed, metric: manoeuvring.maxOverSpeed_kn, warn: 1.0, fail: 2.5, penalty: 5, failPenalty: 15 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: ispsReport
+      after: { event: timelineTriggered, itemId: ispsAlert }
+      expect: { acknowledge: { kind: notifyCompany } }      # 依 SSP 通報公司保全官(CSO);授權他人處理時由教官按「通報公司」並在 note 記錄
+      within_s: "${params:security.ispsReport_s}"
+      penalty: 5
+    - id: fireCallMaster
+      after: { event: timelineTriggered, itemId: fireAlarm }
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:fire.callMaster_s}"
+      penalty: 10
+      latePenaltyPer_s: 0.1
+    - id: fireEcrContact
+      after: { event: timelineTriggered, itemId: fireAlarm }
+      expect: { acknowledge: { kind: notifyEcr } }
+      within_s: "${params:fire.ecrContact_s}"
+      penalty: 5
+    - id: musterDecision
+      after: { event: timelineTriggered, itemId: fireConfirmed }
+      expect: { acknowledge: { kind: verbal } }            # 集合 vs 航行優先:駕駛台當值團隊留守、指派現場指揮(note 記錄決定)
+      within_s: "${params:fire.musterDecision_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.1
+    - id: engineDecision
+      after: { event: timelineTriggered, itemId: fireConfirmed }
+      expect: { acknowledge: { kind: notifyEcr } }         # 回覆機艙停主機的時機(note 記錄:先減速/下錨/待拖船)
+      within_s: "${params:fire.engineDecision_s}"
+      penalty: 10
+    - id: fireReportVts
+      after: { event: timelineTriggered, itemId: fireConfirmed }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:fire.vtsReport_s}"
+      penalty: 10
+    - id: holdSpeedReduction
+      after: { event: timelineTriggered, itemId: vtsHold }
+      expect: { any: [ telegraphChange, rpmOrder, { event: { kind: timelineTriggered, itemId: holdAlreadyReduced } } ] }   # 指示時已在減速亦算達成
+      within_s: "${params:fire.speedReduction_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: OUT1
+    name: CHANG HSING
+    mmsi: 416519001
+    shipType: tanker
+    loa: 120
+    beam: 19
+    draft: 7
+    callSign: BTCH
+    destination: TAICHUNG
+    initial:
+      position: { lat: 22.55414, lon: 120.29858 }  # OUTER 北側(航線左)670 m、前 200 m;出港航路(示意)
+      heading: 250
+      speed: 9
+    behaviour:
+      mode: waypoints
+      waypoints:
+        - { lat: 22.54727, lon: 120.27813, speed: 9 }
+        - { lat: 22.53498, lon: 120.24157, speed: 10 }
+      stopAtEnd: false
+    trigger: { type: time, time: 600 }
+  - id: ANC1
+    name: EVER GLORY
+    mmsi: 416519002
+    shipType: cargo
+    loa: 200
+    beam: 32
+    draft: 11
+    initial:
+      position: { lat: 22.5800, lon: 120.2200 }   # 外錨地錨泊船(同 E15)
+      heading: 30
+      speed: 0
+    behaviour: { mode: anchored }

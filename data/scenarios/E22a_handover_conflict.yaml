@@ -1,0 +1,129 @@
+# E22a 1.39 教室模式迷你情境:交接班資訊衝突(規劃書第 8.0 節 1.39 人因單元、第 8.1 節 E22;設計 docs/design/scenario-library.md 第 20 節;schema src/Contracts/scenario.schema.json)
+# 台灣西南外海開闊水域(示意座標,無航道/港口幾何,待 ENC 校正;水深一律 60 m),FSB1 滿載 HAH 約 7.5 kn、自動舵 200°;約 12 分鐘。
+# 腳本(1.39 教室模式:不套用三步升級,教官於討論點暫停帶領討論,無硬性失敗):
+#   T+1 s 交班開場(交班者口頭:「右舷那艘漁船停著,CPA 兩浬,航向沒改過」)→ T+60 s 航海日誌訊息(07:30 已由 195° 改 200°)→
+#   T+90 s ARPA 訊息(右舷前方 X1 對地 11 kn、CPA 約 0.5 nm、TCPA 約 12 分鐘)— 三個資訊來源互相衝突 →
+#   T+240 s 討論點(phase discussion)→ 交班者催促「我要下去了」→ T+12 min 結束。
+# 評估(講評為主,必要事件以教官確認表示):接班者完成檢查表前提出資訊衝突並查證(acknowledge verbal/report;自航海日誌 60 s 起算,
+#   ARPA 提示前即提出亦算)、接班檢查表(checklist)。
+id: E22a_handover_conflict
+name: 1.39 教室迷你情境 — 交接班資訊衝突
+description: >-
+  開闊水域交班:交班者口頭說明、航海日誌與 ARPA 顯示的交通與航向資訊互相矛盾。練習接班前的查證與提問、
+  不在資訊未釐清前接班、閉環溝通;1.39 溝通與狀況覺知單元的教室討論素材(約 12 分鐘)。
+seed: 20261222
+startTimeUtc: "2026-12-21T23:55:00Z"            # 當地 07:55
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.4000, lon: 120.0000 }          # 台灣西南外海(示意)
+initial:
+  position: { lat: 22.4000, lon: 120.0000 }
+  heading: 200
+  speed: 7.5
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 12, trueDir: 40, gustiness: 0.1 }
+  current: { set: 200, drift: 0.3 }
+  waterDepth: 60
+  visibility_nm: 10
+briefing:
+  text: |
+    交班(07:55 地方時):No.1 滿載自高雄外海南下,自動舵 200°、HAH 約 7.5 kn,開闊水域、能見度良好。
+    書面航程計畫:航向 200° 直航至巴士海峽轉向點(示意);交通稀少。接班者由學員擔任,交班者由帶領者扮演(或語音腳本)。
+    教室模式(1.39 溝通/狀況覺知):練習中途帶領者會在討論點暫停,請學員說出「哪一個資訊來源可信、怎麼查證、何時才接班」。
+    講評引導問題:交班者的說法、航海日誌與 ARPA 何者為真?接班者有沒有權利延後接班?如何以閉環溝通確認?
+  attachments:
+    - { title: "航程計畫(高雄外海南下,示意)", file: docs/passage-plan-E22.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+    - { title: "1.39 單元講義:溝通與狀況覺知", file: docs/IMO-1.39-communication.pdf }
+  roles:
+    - { role: officer, required: true }
+    - { role: officerOff, playedBy: leader }
+    - { role: master, playedBy: leader }
+    - { role: lookout }
+  minParticipants: 2
+  duration_s: 720
+timeline:
+  - id: handover
+    name: 交班開場(交班者口頭說明)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:自動舵兩百,半速。交通沒問題,右舷那艘漁船停著,CPA 兩浬。航向一整班都沒改過。我先下去了。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察接班者是否逐項核對(航向、交通、ARPA、日誌)而非直接接班;完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 200°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 200 }
+  - id: logbookEntry
+    name: 航海日誌(與口頭說明不一致)
+    visibility: all
+    when: { type: time, atLeast: 60 }
+    actions:
+      - message: { to: all, text: "航海日誌:07:30 因漁船群由 195° 改向 200°;07:40 右舷 X1 貨船 CPA 1.0 nm(交班者未提)", severity: info }
+  - id: arpaCue
+    name: ARPA 顯示(與口頭說明不一致)
+    visibility: all
+    when: { type: time, atLeast: 90 }
+    actions:
+      - message: { to: all, text: "ARPA:右舷前方 X1 對地 11 kn、航向 110°、CPA 約 0.5 nm、TCPA 約 12 分鐘;右舷正橫 F1 漁船停航", severity: warning }
+      - message: { to: instructor, text: "三個資訊來源衝突:觀察是否提出疑問並查證(acknowledge verbal 或 report,note 記錄)", severity: info }
+  - id: discussionPoint
+    name: 討論點(教室模式暫停)
+    phase: discussion
+    when: { type: time, atLeast: 240 }
+    actions:
+      - message: { to: instructor, text: "討論點:可暫停(freeze)帶領討論 — 哪一個資訊可信?接班者應如何要求交班者留下釐清?", severity: info }
+  - id: pressure
+    name: 交班者催促
+    when: { type: time, atLeast: 270 }
+    actions:
+      - voiceScript: { role: officerOff, channel: bridge, text: "都對過了啦,沒問題,我真的要下去休息了。", lang: zh-TW }
+  - id: timeUp
+    name: 迷你情境結束
+    when: { type: time, atLeast: 720 }
+    actions:
+      - endExercise: { reason: 迷你情境結束(進入講評) }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  hardFail: []                                    # 1.39 教室模式:無硬性失敗(講評為主)
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 10
+    - id: conflictQuery
+      after: { event: timelineTriggered, itemId: logbookEntry }     # 第一個衝突來源(航海日誌 60 s)起算:看到日誌即提出查證也算;期限仍為 270 s(= ARPA 90 s + 180 s)
+      expect: { any: [ { acknowledge: { kind: verbal } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:bridge.e22.conflictQueryFromLogbook_s}"
+      penalty: 25
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: X1
+    name: KUO HSING
+    mmsi: 416522001
+    shipType: cargo
+    loa: 110
+    beam: 18
+    draft: 6
+    initial:
+      position: { lat: 22.3805, lon: 119.95377 }   # 右舷前方約 2.8 nm,航向 110° 11 kn;無人操作 CPA 約 0.5 nm(T+12.5 min)
+      heading: 110
+      speed: 11
+    behaviour: { mode: scripted, script: [ { t: 0, heading: 110, speed: 11 } ] }
+  - id: F1
+    name: SHIN FA 6
+    mmsi: 416522002
+    shipType: fishing
+    loa: 25
+    beam: 6
+    initial:
+      position: { lat: 22.41144, lon: 119.9662 }   # 開場右舷正橫偏前 2.0 nm 停航
+      heading: 0
+      speed: 0
+    behaviour: { mode: scripted, script: [ { t: 0, heading: 0, speed: 0 } ] }

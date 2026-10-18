@@ -652,8 +652,8 @@
         "properties": {
           "id": { "type": "string" },
           "name": { "type": "string" },
-          "mode": { "type": "string", "enum": ["push", "pull", "standby", "free"] },
-          "status": { "type": "string", "enum": ["standby", "connecting", "repositioning", "working", "free", "parted"] },
+          "mode": { "type": "string", "enum": ["push", "pull", "standby", "free", "unavailable"] },
+          "status": { "type": "string", "enum": ["standby", "connecting", "repositioning", "working", "free", "parted", "unavailable"], "description": "unavailable = 已離開、本練習不再可用(tugControl mode unavailable;之後的指令以 tugUnavailable 拒絕)" },
           "force_t": { "type": "number", "minimum": 0, "description": "實際出力(t)" },
           "direction_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "實際力方向(相對船艏;0 向前、90 向右舷)" },
           "directionOrder_deg": { "type": "number", "minimum": 0, "maximum": 360 },

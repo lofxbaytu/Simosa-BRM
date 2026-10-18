@@ -1,0 +1,616 @@
+# E20 綜合評估航程(預設組合版本:E15 干擾 + E09 全船失電自動觸發)— 高雄 Charlie 引水站 → 第二港口油碼頭(規劃書第 8.1 節 E20、A-I/12;
+#   設計 docs/design/scenario-library.md 第 19 節;schema src/Contracts/scenario.schema.json)
+# 供自動測試、無教官時的預演與基準錄影:內容與 data/scenarios/E20_comprehensive_assessment_kaohsiung.yaml 相同(幾何示意,待 ENC 校正;
+#   data/areas/kaohsiung-e20-passage.json),只有 injectE15 與 injectE09 由手動鈕改為自動觸發(xunit 檢查兩檔其餘部分一致):
+#   injectE15:T+emergency.e20.defaultE15At_s(港外段);injectE09:通過 OUTER(進入口門接近航段 3,距泊位約 1.3 nm,同 E09「距碼頭 1.5 nm」)後 emergency.e20.defaultE09After_s,
+#   或時間後備 emergency.e20.defaultE09Fallback_s。injectE07 / injectE08 仍為手動鈕(教官可另加,但總結性評估以 2 項為準)。
+# 三步升級:injectE15 → degraded(firstModule)→ injectE09 → emergency(secondModule)。評估與主檔相同(自動評分僅為輔助)。
+# 模組組合互動(docs/design/scenario-library.md 第 19 節「收尾審查修正」):E07+E09 共用 steeringGear — E07 卡舵未經應急操舵處理時,E09 應急發電機供電
+#   不解除卡舵(e09EmergencyPowerSteeringJammed);E08+E09 共用 gyroFailure — E08 完全失效時電羅經已因 E09 失效則不重複注入(e08GyroFailMasked,
+#   E08 失效階段必要事件不適用),e09InstrumentsRestored 一併清除 gyroDrift。
+id: E20_comprehensive_assessment_default
+name: 綜合評估航程(預設組合 E15 + E09)— 高雄 Charlie 引水站至油碼頭
+description: >-
+  總結性評估航程:引水人在船,自 Charlie 引水站沿航道延長線進高雄第二港口、過防波堤口、在港內航道減速並以兩艘拖船左舷靠油碼頭;
+  預設組合:港外段 E15 干擾與工作負荷、口門接近段(OUTER 後)E09 全船失電自動觸發(教官選擇版本見 E20_comprehensive_assessment_kaohsiung)。評估涵蓋航跡、UKC、會遇、故障應變與靠泊。
+seed: 20261228
+startTimeUtc: "2026-12-28T01:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.5300, lon: 120.2400 }          # Charlie 引水站(與 E04/E05/E15 相同,示意)
+initial:
+  position: { lat: 22.52736, lon: 120.23803 }    # 航線 START(同 E15)
+  heading: 74
+  speed: 7.5
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 18, trueDir: 30, gustiness: 0.15 }
+  current: { set: 315, drift: 0.8 }              # 漲潮向西北;防波堤內 0.3 kn(harbourCurrent)
+  waterDepth: 25                                 # 港外;港內航道由 zones channel 覆寫 12.5 m
+  visibility_nm: 8
+tugs:
+  - id: TG1
+    name: 高港21號
+    bollardPull_t: 40
+    attach: fwdStbd
+    lineLength_m: 30
+    modes: [push, pull]
+    modeChange_s: 30
+    connect_s: 90
+    initial: { mode: free, direction_deg: 270, power_pct: 0 }   # 港內待命:下 push/pull 後 90 s 帶妥
+  - id: TG2
+    name: 高港22號
+    bollardPull_t: 40
+    attach: aftStbd
+    lineLength_m: 30
+    modes: [push, pull]
+    modeChange_s: 30
+    connect_s: 90
+    initial: { mode: free, direction_deg: 270, power_pct: 0 }
+berth:
+  file: data/areas/kaohsiung-e20-passage.json
+  id: KHH-E20-OIL
+  lines:
+    - { id: HEAD, fairlead: fwdPort, bollard: B7, mbl_t: 50, length_m: 150, initial: stowed }
+    - { id: FWDSPRING, fairlead: fwdPort, bollard: B5, mbl_t: 50, length_m: 150, initial: stowed }
+    - { id: AFTSPRING, fairlead: aftPort, bollard: B3, mbl_t: 50, length_m: 150, initial: stowed }
+    - { id: STERN, fairlead: aftPort, bollard: B1, mbl_t: 50, length_m: 150, initial: stowed }
+briefing:
+  text: |
+    交班(09:00 地方時):No.1 滿載瀝青(吃水 5.7 m),引水人已於 Charlie 引水站登船並完成 MPX,HAH 約 7.5 kn,自動舵 074°(已含流壓修正),沿出港航道延長線南半側進港。
+    書面航程計畫(示意):START → FW1 → FW2(高雄 VTS 報告點)→ OUTER(口門外 0.4 nm)→ ENT(第二港口口門,寬約 350 m)→ IN1 → BERTH(港內航道 060°);
+    港外走廊半寬 navigation.xtd.pilotage_m、口門與港內 navigation.xtd.harbourChannel_m;航道速限 10 kn、港內 8 kn、泊位 500 m 內 5 kn(參數集 port.kaohsiung.*);UKC 政策:港內航道 ≥ 10 % 吃水。
+    靠泊計畫:左舷靠 KHH-E20-OIL(碼頭線 060°,12 個 H 1.0 m 錐型碰墊),TG1 右舷艏、TG2 右舷艉帶纜推頂(港內待命,下令後約 90 s 帶妥);繫纜順序 艏纜 → 艏倒纜 → 艉倒纜 → 艉纜;
+    靠泊橫向接近速度依參數集 berthing.approachSpeed_mps。
+    本練習為 A-I/12 總結性評估:評估員依行為標記與錄影評分,系統自動評分僅為輔助。接班者完成交班檢查表後由教官確認(acknowledge checklist)。
+  attachments:
+    - { title: "航程計畫(Charlie → 第二港口油碼頭,示意)", file: docs/passage-plan-E20.pdf }
+    - { title: "靠泊計畫(KHH-E20-OIL,示意)", file: docs/berthing-plan-E20.pdf }
+    - { title: 緊急程序 — 舵機故障/全船失電, file: docs/SMS-EMG-004-005.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+    - { title: "總結性評估表(行為標記,第 8.2 節)", file: docs/assessment-form-E20.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: helmsman, required: true }
+    - { role: lookout }
+    - { role: ecr, playedBy: voiceScript }
+    - { role: vts, playedBy: voiceScript }
+    - { role: tug, playedBy: voiceScript }
+    - { role: berth, playedBy: voiceScript }
+    - { role: cargoOffice, playedBy: voiceScript }
+    - { role: company, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 4500
+route:
+  name: 高雄 Charlie 引水站 → 第二港口油碼頭(示意)
+  xtdLimit_m: "${params:navigation.xtd.pilotage_m}"
+  waypoints:                                      # 與 data/areas/kaohsiung-e20-passage.json route 相同(前 4 點同 E15)
+    - { name: START, lat: 22.52736, lon: 120.23803 }
+    - { name: FW1, lat: 22.53305, lon: 120.25496 }
+    - { name: FW2, lat: 22.54158, lon: 120.28035, checkpoint: true, report: "高雄 VTS 報告點(VHF 14,口門外 1.5 nm)" }
+    - { name: OUTER, lat: 22.54784, lon: 120.29897 }
+    - { name: ENT, lat: 22.552, lon: 120.305, xtdLimit_m: "${params:navigation.xtd.harbourChannel_m}", speedLimit_kn: "${params:port.kaohsiung.channelSpeedLimit_kn}" }
+    - { name: IN1, lat: 22.55606, lon: 120.31258, xtdLimit_m: "${params:navigation.xtd.harbourChannel_m}", speedLimit_kn: "${params:port.kaohsiung.speedLimit_kn}" }
+    - { name: BERTH, lat: 22.55968, lon: 120.31931, xtdLimit_m: "${params:navigation.xtd.harbourChannel_m}", speedLimit_kn: "${params:port.kaohsiung.berthSpeedLimit_kn}", arrivalRadius_m: 60 }
+zones:
+  - id: channel
+    name: 港內航道(UKC 政策區,示意)
+    type: ukcPolicy
+    waterDepth_m: 12.5
+    ukcMin: { fractionOfDraft: "${params:navigation.ukc.channel_fraction}" }
+    polygon:
+      - { lat: 22.54869, lon: 120.30369 }
+      - { lat: 22.55908, lon: 120.32305 }
+      - { lat: 22.56299, lon: 120.32062 }
+      - { lat: 22.5526, lon: 120.30126 }
+  - id: northBreakwater
+    name: 北防波堤(示意)
+    type: noGo
+    waterDepth_m: 2
+    polygon:
+      - { lat: 22.55318, lon: 120.30383 }
+      - { lat: 22.55999, lon: 120.29906 }
+      - { lat: 22.56029, lon: 120.29955 }
+      - { lat: 22.55347, lon: 120.30432 }
+  - id: southBreakwater
+    name: 南防波堤(示意)
+    type: noGo
+    waterDepth_m: 2
+    polygon:
+      - { lat: 22.55053, lon: 120.30568 }
+      - { lat: 22.54371, lon: 120.31045 }
+      - { lat: 22.54401, lon: 120.31094 }
+      - { lat: 22.55082, lon: 120.30617 }
+  - id: innerShoalS
+    name: 港內航道東南側淺灘(示意)
+    type: ukcPolicy
+    waterDepth_m: 4
+    polygon:
+      - { lat: 22.55032, lon: 120.30672 }
+      - { lat: 22.55908, lon: 120.32305 }
+      - { lat: 22.55634, lon: 120.32475 }
+      - { lat: 22.54758, lon: 120.30842 }
+  - id: innerShoalN
+    name: 港內航道西北側淺灘(示意,至碼頭前)
+    type: ukcPolicy
+    waterDepth_m: 4
+    polygon:
+      - { lat: 22.55423, lon: 120.30429 }
+      - { lat: 22.56077, lon: 120.3165 }
+      - { lat: 22.56351, lon: 120.3148 }
+      - { lat: 22.55696, lon: 120.30259 }
+  - id: berthApproach
+    name: 泊位 500 m 速限區(示意)
+    type: speedLimit
+    speedLimit_kn: "${params:port.kaohsiung.berthSpeedLimit_kn}"
+    polygon:
+      - { lat: 22.55953, lon: 120.31379 }
+      - { lat: 22.56404, lon: 120.32221 }
+      - { lat: 22.55857, lon: 120.32561 }
+      - { lat: 22.55406, lon: 120.31719 }
+  - id: anchorage
+    name: 高雄外錨地 A 區(示意,同 kaohsiung-anchorage.json)
+    type: reporting
+    polygon:
+      - { lat: 22.57, lon: 120.205 }
+      - { lat: 22.6, lon: 120.205 }
+      - { lat: 22.6, lon: 120.24 }
+      - { lat: 22.57, lon: 120.24 }
+  - id: anchorageB
+    name: 高雄外錨地 B 區(示意,同 kaohsiung-anchorage-b-e15.json)
+    type: reporting
+    polygon:
+      - { lat: 22.53341, lon: 120.23258 }
+      - { lat: 22.54847, lon: 120.2774 }
+      - { lat: 22.56361, lon: 120.27151 }
+      - { lat: 22.54855, lon: 120.22669 }
+timeline:
+  - id: handover
+    name: 交班(引水人在船)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:引水人已在船,自動舵 074 已修正流壓,HAH 七點五節,沿航道延長線南側進港,靠第二港口油碼頭,兩艘拖船港內待命。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對航程計畫、靠泊計畫、流壓、交通與應變分工,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 074°(交班狀態,含流壓修正)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 74 }
+  - id: moduleBrief
+    name: 教官提示:選 2 項模組
+    when: { type: time, atLeast: 5 }
+    actions:
+      - message: { to: instructor, text: "總結性評估:請自 injectE07(舵機)、injectE08(電羅經)、injectE09(全船失電)、injectE15(干擾)中選 2 項注入;建議 E15/E08 於 OUTER 前、E09 於 OUTER 後、E07 於口門後", severity: info }
+  - id: selectionReminder
+    name: 教官提示:尚未注入模組
+    when:
+      all:
+        - { type: time, atLeast: "${params:emergency.e20.selectionReminderAt_s}" }
+        - not:
+            any:
+              - { type: event, kind: timelineTriggered, itemId: injectE07 }
+              - { type: event, kind: timelineTriggered, itemId: injectE08 }
+              - { type: event, kind: timelineTriggered, itemId: injectE09 }
+              - { type: event, kind: timelineTriggered, itemId: injectE15 }
+    actions:
+      - message: { to: instructor, text: "尚未注入任何模組:總結性評估需注入 2 項(或改用預設組合版本 E20_comprehensive_assessment_default)", severity: warning }
+  # ---------------------------------------------------------------- 模組注入(教官「注入 X」手動鈕;預設組合版本中 injectE09/injectE15 改為自動)
+  - id: injectE07
+    name: 注入 E07 舵機故障(卡舵)
+    manual: true
+    actions:
+      - injectFault: steeringGear
+      - voiceScript: { role: helmsman, channel: bridge, text: "舵不聽使喚!舵令右十,舵角指示不動。", lang: zh-TW }
+      - message: { to: instructor, text: "E07 舵機故障(舵卡在目前角):期望 60 s 內車令/側推/操舵模式切換,120 s 內通知機控室,300 s 內轉應急操舵(教官按 e07EmergencySteering)", severity: warning }
+  - id: injectE08
+    name: 注入 E08 電羅經漂移(無警報)
+    manual: true
+    actions:
+      - injectFault: { name: gyroDrift, args: { rate_degPerMin: "${params:emergency.gyroFailure.driftRate_degPerMin}" } }
+      - message: { to: instructor, text: "E08 電羅經漂移(每分鐘 1°、無警報):自動舵跟隨錯誤航向;漂移 420 s 後完全失效。期望 300 s 內交叉核對發現", severity: warning }
+  - id: injectE09
+    name: 注入 E09 全船失電(預設組合:自動)
+    when:
+      any:
+        - { type: time, atLeast: "${params:emergency.e20.defaultE09After_s}", since: { event: routeLegChanged, legIndex: 3 } }
+        - { type: time, atLeast: "${params:emergency.e20.defaultE09Fallback_s}" }
+    actions:
+      - injectFault: mainEngine                  # modelled:主機停止
+      - injectFault: steeringGear                # modelled:舵卡在目前角(失去操舵)
+      - injectFault: gyroFailure                 # modelled:電羅經失效警報、自動舵脫開
+      - injectFault: { name: blackout, recordOnly: true }       # 以下只記錄與廣播,由儀器端自行反應(燈光、ECDIS、警報)
+      - injectFault: { name: radarFailure, recordOnly: true }   # 雷達服務停止 X 頻
+      - message: { to: all, text: "全船失電:主機跳脫、失去操舵、電羅經與雷達失效", severity: alarm }
+      - voiceScript: { role: ecr, channel: phone, text: "機艙:全船失電!主機跳脫,應急發電機起動中。", lang: zh-TW }
+      - message: { to: instructor, text: "E09 全船失電:期望 60 s 內車鐘歸零或切換操舵模式、180 s 內下錨決策(anchorReady)與通知 VTS(report)", severity: alarm }
+  - id: injectE15
+    name: 注入 E15 干擾序列(工作負荷;預設組合:自動)
+    when: { type: time, atLeast: "${params:emergency.e20.defaultE15At_s}" }
+    actions:
+      - voiceScript: { role: cargoOffice, channel: phone, text: "駕駛台,貨控室:碼頭改了卸貨順序,要先卸二號艙,請船長現在確認並簽字。", lang: zh-TW }
+      - message: { to: instructor, text: "E15 干擾 1(卸貨計畫電話):之後每 2 分鐘一次(PSC 郵件、公司電話、ECDIS 警報氾濫 + 流壓增強);觀察授權/延後與航跡監控", severity: info }
+  # ---------------------------------------------------------------- 模組後續(自注入起算)
+  - id: e07EcrPrompt
+    name: E07 機控室來電(無反應時)
+    when:
+      all:
+        - { type: fault, name: steeringGear, active: true }
+        - { type: event, kind: requiredEventMissed, itemId: e07FirstAction }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,機控室。舵機液壓油壓低警報,你們舵有問題嗎?", lang: zh-TW }
+  - id: e07EmergencySteering
+    name: E07 應急操舵完成(教官確認後解除故障)
+    manual: true
+    actions:
+      - clearFault: steeringGear
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,舵機房已切換應急操舵,請以電話下舵令。", lang: zh-TW }
+  - id: e08LookoutCue
+    name: E08 瞭望員提示(未偵測時)
+    when: { type: event, kind: requiredEventMissed, itemId: e08DriftDetected }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "二副,口門的燈塔方位一直在變,我們是不是偏了?", lang: zh-TW }
+  - id: e08GyroFail
+    name: E08 電羅經完全失效(警報)
+    when:
+      all:
+        - { type: fault, name: gyroDrift, active: true }
+        - { type: fault, name: gyroFailure, active: false }   # E09 已使電羅經失效(警報已在)時不重複注入:改由 e08GyroFailMasked 通知教官
+        - { type: time, atLeast: "${params:emergency.gyroFailure.failAfter_s}", since: { event: timelineTriggered, itemId: injectE08 } }
+    actions:
+      - injectFault: gyroFailure
+      - message: { to: instructor, text: "E08 電羅經完全失效:期望 30 s 內確認警報、60 s 內手操舵、3 分鐘內通知船長", severity: warning }
+  - id: e08GyroFailMasked
+    name: E08 完全失效時刻電羅經已因 E09 失效(不另注入)
+    when:
+      all:
+        - { type: fault, name: gyroDrift, active: true }
+        - { type: fault, name: gyroFailure, active: true }
+        - not: { type: event, kind: timelineTriggered, itemId: e08GyroFail }
+        - { type: time, atLeast: "${params:emergency.gyroFailure.failAfter_s}", since: { event: timelineTriggered, itemId: injectE08 } }
+    actions:
+      - message: { to: instructor, text: "E08 完全失效時刻:電羅經已因 E09 全船失電失效(警報已發出),不另注入新警報;e08AlarmAck、e08ManualSteering、e08CallMaster 不適用(依 E09 應變評估)", severity: info }
+  - id: e08GyroRestored
+    name: E08 電羅經重新啟動完成(教官確認)
+    manual: true
+    actions:
+      - clearFault: gyroFailure
+      - clearFault: gyroDrift
+      - voiceScript: { role: master, channel: bridge, text: "電羅經重新啟動了,先跟磁羅經對過再接自動舵。", lang: zh-TW }
+  # E07 與 E09 共用故障名稱 steeringGear:E07 卡舵已注入且教官尚未確認應急操舵(e07EmergencySteering)時,應急發電機供電不得解除卡舵
+  #   (走 e09EmergencyPowerSteeringJammed 分支);兩項於同一評估步互斥,後者觸發後前者不再觸發(docs/design/scenario-library.md 收尾審查修正)。
+  - id: e09EmergencyPower
+    name: E09 應急發電機供電(操舵恢復)
+    when:
+      all:
+        - { type: time, atLeast: "${params:emergency.blackout.emergencyPower_s}", since: { event: timelineTriggered, itemId: injectE09 } }
+        - not:
+            all:
+              - { type: event, kind: timelineTriggered, itemId: injectE07 }
+              - not: { type: event, kind: timelineTriggered, itemId: e07EmergencySteering }
+        - not: { type: event, kind: timelineTriggered, itemId: e09EmergencyPowerSteeringJammed }
+    actions:
+      - clearFault: steeringGear
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,應急發電機已供電,舵機一號泵恢復。主機要重新起動,至少五到八分鐘。", lang: zh-TW }
+      - message: { to: all, text: "應急發電機供電,操舵恢復", severity: warning }
+  - id: e09EmergencyPowerSteeringJammed
+    name: E09 應急發電機供電(E07 卡舵仍在,操舵未恢復)
+    when:
+      all:
+        - { type: time, atLeast: "${params:emergency.blackout.emergencyPower_s}", since: { event: timelineTriggered, itemId: injectE09 } }
+        - { type: event, kind: timelineTriggered, itemId: injectE07 }
+        - not: { type: event, kind: timelineTriggered, itemId: e07EmergencySteering }
+    actions:
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,應急發電機已供電,舵機泵有電了,但舵還是卡住不動,請繼續應急操舵程序。主機要重新起動,至少五到八分鐘。", lang: zh-TW }
+      - message: { to: all, text: "應急發電機供電;舵機故障未排除,操舵未恢復", severity: warning }
+      - message: { to: instructor, text: "E07 + E09:應急發電機供電但 E07 卡舵仍在(steeringGear 不解除);學員轉應急操舵後請按 e07EmergencySteering", severity: warning }
+  - id: e09VtsCall
+    name: E09 VTS 詢問狀況
+    when: { type: time, atLeast: "${params:emergency.blackout.vtsCallAfter_s}", since: { event: timelineTriggered, itemId: injectE09 } }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.1, Kaohsiung VTS, 看到你在航道減速,請報狀況與意圖。", lang: zh-TW }
+  - id: e09PilotPrompt
+    name: E09 引水人催促(無反應時)
+    when: { type: event, kind: requiredEventMissed, itemId: e09FirstAction }
+    actions:
+      - voiceScript: { role: pilot, channel: bridge, text: "船長,船沒車沒舵了,還在往前漂。要不要先備便雙錨?我叫拖船過來。", lang: zh-TW }
+  - id: e09EngineRestored
+    name: E09 主機恢復可用
+    when: { type: time, atLeast: "${params:emergency.blackout.mainEngineRestore_s}", since: { event: timelineTriggered, itemId: injectE09 } }
+    actions:
+      - clearFault: mainEngine
+      - voiceScript: { role: ecr, channel: phone, text: "駕駛台,主機已備便,可以用車。電羅經還在穩定中,請用磁羅經核對。", lang: zh-TW }
+      - message: { to: all, text: "主機恢復可用;電羅經與雷達仍待重啟", severity: warning }
+  - id: e09InstrumentsRestored
+    name: E09 儀器重啟完成(教官確認)
+    manual: true
+    actions:
+      - clearFault: gyroFailure
+      - clearFault: gyroDrift                    # 電羅經重新啟動一併排除 E08 漂移(同 e08GyroRestored),「恢復正常」屬實、之後 E08 不再失效
+      - clearFault: blackout
+      - clearFault: radarFailure
+      - message: { to: all, text: "電羅經與雷達恢復正常", severity: info }
+  - id: e15PscEmail
+    name: E15 干擾 2 — PSC 檢查郵件
+    when: { type: time, atLeast: 120, since: { event: timelineTriggered, itemId: injectE15 } }
+    actions:
+      - message: { to: all, text: "電子郵件(代理行轉):港口國管制(PSC)檢查官預定明日 08:00 登輪,請於一小時內回覆證書與紀錄清單。", severity: info }
+  - id: e15CompanyCall
+    name: E15 干擾 3 — 公司海務電話
+    when: { type: time, atLeast: 240, since: { event: timelineTriggered, itemId: injectE15 } }
+    actions:
+      - voiceScript: { role: company, channel: phone, text: "我是公司海務,油公司明天要做 vetting 檢查,請船長現在把上次檢查的缺失改正報告寄給我。", lang: zh-TW }
+  - id: e15AlarmFlood
+    name: E15 干擾 4 — ECDIS 警報氾濫
+    when: { type: time, atLeast: 360, since: { event: timelineTriggered, itemId: injectE15 } }
+    actions:
+      - injectFault: { name: ecdisAlarmFlood, recordOnly: true }   # 只記錄:儀器端警報清單氾濫
+      - message: { to: all, text: "ECDIS 警報:安全等深線、偏航、區域進入、AIS 目標遺失……(警報氾濫)", severity: alarm }
+      - message: { to: instructor, text: "警報氾濫:觀察是否指派專人處理(acknowledge verbal 或 report)而不忽略航跡偏差", severity: warning }
+  - id: e15AlarmRepeat
+    name: E15 ECDIS 警報持續(重複)
+    repeat: { every_s: 20, max: 6 }
+    when: { type: event, kind: timelineTriggered, itemId: e15AlarmFlood }
+    actions:
+      - message: { to: all, text: "ECDIS 警報:多項警報未確認(重複)", severity: warning }
+  - id: e15CurrentIncrease
+    name: E15 關鍵事件 — 漲潮增強(航跡偏差,港外)
+    when:
+      all:
+        - { type: time, atLeast: 360, since: { event: timelineTriggered, itemId: injectE15 } }
+        - not: { type: routeLeg, passedWaypoint: ENT }
+    actions:
+      - setEnvironment: { current: { set: 315, drift: 1.4 }, ramp_s: 300 }
+      - message: { to: instructor, text: "關鍵事件(藏在警報氾濫中):漲潮 0.8 → 1.4 kn(5 分鐘漸變),未再修正時航跡偏向外錨地 B 區", severity: warning }
+  # ---------------------------------------------------------------- 三步升級(依注入順序)
+  - id: firstModule
+    name: 第一個模組注入(劣化)
+    phase: degraded
+    when:
+      any:
+        - { type: event, kind: timelineTriggered, itemId: injectE07 }
+        - { type: event, kind: timelineTriggered, itemId: injectE08 }
+        - { type: event, kind: timelineTriggered, itemId: injectE09 }
+        - { type: event, kind: timelineTriggered, itemId: injectE15 }
+    actions:
+      - message: { to: instructor, text: "第一個模組已注入(劣化階段)", severity: info }
+  - id: secondModule
+    name: 第二個模組注入(緊急)
+    phase: emergency
+    when:
+      any:
+        - all: [ { type: event, kind: timelineTriggered, itemId: injectE07 }, { type: event, kind: timelineTriggered, itemId: injectE08 } ]
+        - all: [ { type: event, kind: timelineTriggered, itemId: injectE07 }, { type: event, kind: timelineTriggered, itemId: injectE09 } ]
+        - all: [ { type: event, kind: timelineTriggered, itemId: injectE07 }, { type: event, kind: timelineTriggered, itemId: injectE15 } ]
+        - all: [ { type: event, kind: timelineTriggered, itemId: injectE08 }, { type: event, kind: timelineTriggered, itemId: injectE09 } ]
+        - all: [ { type: event, kind: timelineTriggered, itemId: injectE08 }, { type: event, kind: timelineTriggered, itemId: injectE15 } ]
+        - all: [ { type: event, kind: timelineTriggered, itemId: injectE09 }, { type: event, kind: timelineTriggered, itemId: injectE15 } ]
+    actions:
+      - message: { to: instructor, text: "第二個模組已注入(緊急階段)", severity: info }
+  # ---------------------------------------------------------------- 航程共同項目
+  - id: harbourCurrent
+    name: 防波堤內流壓減弱
+    when: { type: routeLeg, passedWaypoint: ENT }
+    actions:
+      - setEnvironment: { current: { set: 315, drift: 0.3 }, ramp_s: 120 }
+      - message: { to: instructor, text: "過口門:流壓 2 分鐘內減弱至 0.3 kn,觀察偏航角回正與減速計畫", severity: info }
+  - id: outboundShip
+    name: 出港船(港內航道左側,左舷對左舷)
+    when: { type: event, kind: targetActivated, targetId: OUT1 }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "高雄 VTS 通報:出港船 HAI AN 9 正在港內航道出港,預計在口門附近與你船會船,左舷對左舷。", lang: zh-TW }
+  - id: tugsAvailable
+    name: 拖船待命(靠泊簡報)
+    when: { type: routeLeg, passedWaypoint: ENT }
+    actions:
+      - voiceScript: { role: tug, channel: vhfPort, text: "高港21、22號在港內待命,請指示帶纜位置與時機。", lang: zh-TW }
+      - message: { to: instructor, text: "靠泊階段:觀察與引水人/拖船的靠泊簡報(acknowledge checklist)、減速計畫與橫向接近速度", severity: info }
+  - id: berthReady
+    name: 泊位就緒
+    phase: berthing
+    when: { type: routeLeg, passedWaypoint: IN1 }
+    actions:
+      - voiceScript: { role: berth, channel: vhfPort, text: "E20 油碼頭:繫纜工已就位,可以靠泊,左舷靠。", lang: zh-TW }
+  - id: anchorageEntered
+    name: 漂入外錨地
+    when:
+      any:
+        - { type: zone, id: anchorageB, inside: true }
+        - { type: zone, id: anchorage, inside: true }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.1,高雄 VTS,你船已偏到錨地邊緣,請確認航向。", lang: zh-TW }
+  - id: speedCoach
+    name: 超速提示
+    repeat: { every_s: 120, max: 3 }
+    when: { type: event, kind: speedLimitExceeded }
+    actions:
+      - message: { to: instructor, text: "超過航道/港內/泊位速限;觀察引水人與船長是否提出", severity: warning }
+  - id: firstContact
+    name: 首次碰墊接觸
+    when: { type: event, kind: fenderContact }
+    actions:
+      - message: { to: instructor, text: "首次碰墊接觸:見 summary.berthing.contacts(接近速度、能量比)", severity: info }
+  - id: allFast
+    name: 繫纜完成(教官)
+    manual: true
+    actions:
+      - message: { to: all, text: "全部纜繩已繫妥,靠泊完成。", severity: info }
+      - endExercise: { reason: 靠泊完成 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - message: { to: all, text: "船已擱淺。", severity: alarm }
+      - endExercise: { reason: 擱淺 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 4500 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.channel_nm}"       # 口門與港內航道的通過距離門檻(cpaAlarm 與會遇關注 2×)
+  encounter:
+    detectionRange_nm: 3
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  ukc:
+    min: { metres: "${params:navigation.ukc.minimum_m}" }
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: collision, rule: collision }
+    - { id: northBreakwater, rule: zoneEntered, zoneId: northBreakwater }
+    - { id: southBreakwater, rule: zoneEntered, zoneId: southBreakwater }
+    - { id: ukcHard, rule: ukc, lessThan: { fractionOfDraft: "${params:navigation.ukc.hardFail_fraction}" } }
+    - { id: quayContact, rule: event, kind: quayContact }
+    - { id: mooringLineParted, rule: event, kind: mooringLineParted }
+  bands:
+    # 航跡
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.pilotage_m}", fail: 2x, penalty: 10, failPenalty: 20 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 180, penalty: 5, failPenalty: 15 }
+    # UKC
+    - { id: ukcTime, metric: ukc.timeBelowLimit_s, warn: 0, fail: 30, penalty: 10, failPenalty: 25 }
+    # 會遇
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.channel_nm}", fail: "${params:navigation.cpa.channelHardFail_nm}", penalty: 10, failPenalty: 30 }
+    # 操船與速限
+    - { id: speed, metric: manoeuvring.maxOverSpeed_kn, warn: 1.0, fail: 2.5, penalty: 5, failPenalty: 15 }
+    - { id: rotOver, metric: manoeuvring.timeRotOverLimit_s, warn: 0, fail: 60, penalty: 5, failPenalty: 10 }
+    # 靠泊
+    - { id: approachSpeed, metric: berthing.maxLateralSpeed_mps, warn: "${params:berthing.approachSpeed_mps}", fail: "${params:berthing.approachSpeedFail_mps}", penalty: 10, failPenalty: 25 }
+    - { id: contactEnergy, metric: berthing.maxEnergyRatio, warn: 0.8, fail: 1.0, penalty: 10, failPenalty: 25 }
+    - { id: fenderOverload, metric: berthing.fenderOverloads, warn: 0, fail: 1, penalty: 10, failPenalty: 20 }
+    - { id: berthPosition, metric: berthing.allFastPositionError_m, warn: "${params:berthing.allFastPositionTolerance_m}", fail: "2x", penalty: 10, failPenalty: 20 }
+  required:
+    # 航程共同
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: vtsReport
+      after: { event: reportPointPassed, waypoint: FW2 }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:navigation.vts.report_s}"
+      penalty: 5
+    - id: berthingBrief
+      after: { event: timelineTriggered, itemId: tugsAvailable }
+      expect: { acknowledge: { kind: checklist } }      # 與引水人/拖船的靠泊簡報(拖船位置、繫纜順序、接近速度)
+      within_s: "${params:berthing.e20.briefing_s}"
+      penalty: 5
+    # E07 舵機故障(未注入時 notApplicable)
+    - id: e07FirstAction
+      after: { event: faultInjected, itemId: injectE07 }
+      expect: { any: [ telegraphChange, rpmOrder, thrusterOrder, steeringModeChange, { acknowledge: { kind: steeringMode } } ] }
+      within_s: "${params:emergency.steeringFailure.firstAction_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.5
+    - id: e07NotifyEcr
+      after: { event: faultInjected, itemId: injectE07 }
+      expect: { acknowledge: { kind: notifyEcr } }
+      within_s: "${params:emergency.steeringFailure.notifyEcr_s}"
+      penalty: 10
+    - id: e07EmergencySteering
+      after: { event: faultInjected, itemId: injectE07 }
+      expect: { event: { kind: timelineTriggered, itemId: e07EmergencySteering } }
+      within_s: "${params:emergency.steeringFailure.emergencySteering_s}"
+      penalty: 10
+    # E08 電羅經失效
+    - id: e08DriftDetected
+      after: { event: faultInjected, itemId: injectE08 }
+      expect: { any: [ autopilotOff, steeringModeChange, rudderOrder, { acknowledge: { kind: gyroCheck } } ] }
+      within_s: "${params:emergency.gyroFailure.detectDrift_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.1
+    - id: e08AlarmAck
+      after: { event: faultInjected, itemId: e08GyroFail }
+      expect: { event: { kind: alertAcknowledged, itemId: gyroFailure } }
+      within_s: "${params:emergency.gyroFailure.alarmAck_s}"
+      penalty: 5
+    - id: e08ManualSteering
+      after: { event: faultInjected, itemId: e08GyroFail }
+      expect: { any: [ rudderOrder, steeringModeChange ] }
+      within_s: "${params:emergency.gyroFailure.manualSteering_s}"
+      penalty: 10
+    - id: e08CallMaster
+      after: { event: faultInjected, itemId: e08GyroFail }
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:emergency.gyroFailure.callMaster_s}"
+      penalty: 5
+    # E09 全船失電
+    - id: e09FirstAction
+      after: { event: faultInjected, itemId: injectE09 }
+      expect: { any: [ telegraphChange, steeringModeChange, { acknowledge: { kind: checklist } } ] }
+      within_s: "${params:emergency.blackout.firstAction_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.5
+    - id: e09AnchorDecision
+      after: { event: faultInjected, itemId: injectE09 }
+      expect: { acknowledge: { kind: anchorReady } }
+      within_s: "${params:emergency.blackout.anchorReady_s}"
+      penalty: 10
+    - id: e09NotifyVts
+      after: { event: faultInjected, itemId: injectE09 }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:emergency.blackout.notifyVts_s}"
+      penalty: 10
+    # E15 干擾與工作負荷(無干擾駕駛台)
+    - id: e15SterileCargoCall
+      after: { event: timelineTriggered, itemId: injectE15 }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.distraction.response_s}"
+      penalty: 5
+    - id: e15SterilePscEmail
+      after: { event: timelineTriggered, itemId: e15PscEmail }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.distraction.response_s}"
+      penalty: 5
+    - id: e15SterileCompanyCall
+      after: { event: timelineTriggered, itemId: e15CompanyCall }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.distraction.response_s}"
+      penalty: 5
+    - id: e15AlarmFloodManaged
+      after: { event: timelineTriggered, itemId: e15AlarmFlood }
+      expect: { any: [ { acknowledge: { kind: verbal } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:bridge.distraction.alarmFloodResponse_s}"
+      penalty: 5
+  scoring: { start: 100, passMark: "${params:assessment.e20.passMark}" }
+targets:
+  - id: OUT1
+    name: HAI AN 9
+    mmsi: 416520001
+    shipType: cargo
+    loa: 100
+    beam: 16
+    draft: 6
+    callSign: BHA9
+    destination: HONG KONG
+    initial:
+      position: { lat: 22.55724, lon: 120.31185 }  # 港內航道 IN1 左側 150 m(kaohsiung-e20-passage.json outboundTrack OUT-START)
+      heading: 240
+      speed: 5
+    behaviour:
+      mode: waypoints
+      waypoints:                                   # 中心線左側 150 m 出港,過口門後沿航線北側
+        - { lat: 22.55227, lon: 120.30259, speed: 6 }
+        - { lat: 22.55097, lon: 120.29703, speed: 8 }
+      stopAtEnd: false
+    trigger: { type: ownDistance, point: { lat: 22.552, lon: 120.305 }, lessThan: 1.2 }
+  - id: ANC1
+    name: EVER GLORY
+    mmsi: 416520002
+    shipType: cargo
+    loa: 200
+    beam: 32
+    draft: 11
+    initial:
+      position: { lat: 22.5800, lon: 120.2200 }   # 外錨地錨泊船(同 E15)
+      heading: 30
+      speed: 0
+    behaviour: { mode: anchored }

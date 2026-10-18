@@ -34,6 +34,9 @@ sources:                              # 程序文件索引;parameters[].source �
   ASSUMED-E17: { title: "假設值,待公司程序(E17 颱風準備與離港決策(高雄);規劃書第 3.4、8.1 節 E17,待公司颱風/惡劣天候程序與高雄港颱風封港規定核對)", revision: "0", date: 2026-10-18 }
   ASSUMED-E18: { title: "假設值,待公司程序(E18 油碼頭進港 UKC/squat 限制(安平,示意);規劃書第 8.1 節 E18、SIRE 4.2.2,待 SMS-NAV-012 UKC 政策與港方航道水深公告核對)", revision: "0", date: 2026-10-18 }
   ASSUMED-E21: { title: "假設值,待公司程序(E21 貨物加熱系統故障下的到港壓力;規劃書第 8.1 節 E21,待公司貨物加熱程序、DPA 通報與停止作業權(stop work authority)程序核對)", revision: "0", date: 2026-10-18 }
+  ASSUMED-E19: { title: "假設值,待公司程序(E19 引航中火災/ISPS 保全警報(選配);規劃書第 8.1 節 E19、TMSA 11,待公司緊急程序(應變部署表)與船舶保全計畫 SSP 通報章節核對;航道為示意,待 ENC 校正)", revision: "0", date: 2026-10-18 }
+  ASSUMED-E20: { title: "假設值,待公司程序(E20 綜合評估航程;規劃書第 8.1 節 E20、A-I/12、TMSA 5.4.3,待 BRM-TRN-001 總結性評估章節與高雄港港口規定核對;港內航道與泊位為示意,待 ENC 校正)", revision: "0", date: 2026-10-18 }
+  ASSUMED-E22: { title: "假設值,待公司程序(E22 1.39 教室模式迷你情境;規劃書第 8.0、8.1 節 E22、IMO 示範課程 1.39,待 BRM-TRN-001 人因單元與 DWO-007 交接班/叫船長章節核對)", revision: "0", date: 2026-10-18 }
 parameters:
   navigation.cpa.openSea_nm:      { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.2", description: 開闊海最小 CPA }
   navigation.cpa.coastal_nm:      { value: 0.5,  unit: nm,  source: DWO-007, clause: "4.2", description: 沿岸/港外最小 CPA }
@@ -186,4 +189,33 @@ parameters:
   cargo.e21.heatingFailureAt_s:    { value: 120, unit: s, source: ASSUMED-E21, clause: "", description: E21 熱油鍋爐故障(貨物加熱系統故障)的時刻(自情境開始) }
   cargo.e21.companyPressureAt_s:   { value: 600, unit: s, source: ASSUMED-E21, clause: "", description: E21 公司催促全速進港(劣化階段)的時刻 }
   cargo.e21.emergencyAt_s:         { value: 1500, unit: s, source: ASSUMED-E21, clause: "", description: E21 潮窗將過(緊急階段)的時間後備(另以通過航道外端觸發) }
+  security.ispsReport_s:           { value: 600, unit: s, source: ASSUMED-E19, clause: "", description: ISPS 保全事件(保全等級變更、限制區門禁警報)到依 SSP 通報公司保全官(acknowledge notifyCompany;引航中可授權他人處理) }
+  security.e19.ispsAlertAt_s:      { value: 240, unit: s, source: ASSUMED-E19, clause: "", description: E19 ISPS 保全警報的時刻(自情境開始) }
+  fire.callMaster_s:               { value: 60,  unit: s, source: ASSUMED-E19, clause: "", description: 火警(偵測系統警報)到通知船長 }
+  fire.ecrContact_s:               { value: 120, unit: s, source: ASSUMED-E19, clause: "", description: 機艙火警到駕駛台與機控室聯繫確認(acknowledge notifyEcr) }
+  fire.musterDecision_s:           { value: 120, unit: s, source: ASSUMED-E19, clause: "", description: 確認火災到船長決定集合人力與駕駛台當值團隊(集合 vs 航行優先;acknowledge verbal) }
+  fire.engineDecision_s:           { value: 180, unit: s, source: ASSUMED-E19, clause: "", description: 機艙要求停主機(關斷燃油)到駕駛台回覆時機(acknowledge notifyEcr);逾時則機艙依程序停主機 }
+  fire.vtsReport_s:                { value: 300, unit: s, source: ASSUMED-E19, clause: "", description: 確認火災到向 VTS/引水人報告(acknowledge report) }
+  fire.speedReduction_s:           { value: 180, unit: s, source: ASSUMED-E19, clause: "", description: VTS 等候指示到減速(車令/轉速令) }
+  fire.e19.alarmAt_s:              { value: 480, unit: s, source: ASSUMED-E19, clause: "", description: E19 機艙火警(劣化階段)的時刻(自情境開始) }
+  fire.e19.confirmAfter_s:         { value: 150, unit: s, source: ASSUMED-E19, clause: "", description: E19 火警到機艙確認火災(緊急階段) }
+  fire.e19.vtsHoldAfter_s:         { value: 120, unit: s, source: ASSUMED-E19, clause: "", description: E19 確認火災到 VTS 要求口門外減速等候 }
+  fire.e19.extinguishAfter_s:      { value: 720, unit: s, source: ASSUMED-E19, clause: "", description: E19 確認火災到火已撲滅(主機可再用) }
+  fire.e19.holdSpeed_kn:           { value: 6,   unit: kn, source: ASSUMED-E19, clause: "", description: E19 口門外等候區速限(VTS 指示;以對地速度計) }
+  bridge.e22.conflictQuery_s:      { value: 180, unit: s, source: ASSUMED-E22, clause: "", description: E22a 交班資訊衝突(口頭/日誌/ARPA 不一致)出現到接班者提出疑問並查證(acknowledge verbal 或 report) }
+  bridge.e22.fatigueCallMaster_s:  { value: 300, unit: s, source: ASSUMED-E22, clause: "", description: E22b 疲勞提示到依夜令叫船長(acknowledge callMaster) }
+  bridge.e22.verifyLight_s:        { value: 180, unit: s, source: ASSUMED-E22, clause: "", description: E22b 瞭望報告燈光到以雷達/ARPA 查證並回報(acknowledge report 或 lookoutReport) }
+  bridge.e22.challenge_s:          { value: 90,  unit: s, source: ASSUMED-E22, clause: "", description: E22c 資深者不當指示到提出質疑(acknowledge verbal;PACE) }
+  bridge.e22.closedLoop_s:         { value: 60,  unit: s, source: ASSUMED-E22, clause: "", description: E22d 舵工誤解舵令到發現並改正(舵令) }
+  bridge.e22.languageConfirm_s:    { value: 120, unit: s, source: ASSUMED-E22, clause: "", description: E22d 溝通誤解/外語要求到以 SMCP 閉環確認或複誦(acknowledge verbal) }
+  # 收尾審查修正(假設值,待公司程序;來源 ASSUMED-E22):必要事件改自第一個線索起算,期限時刻與原設定相同
+  bridge.e22.conflictQueryFromLogbook_s: { value: 210, unit: s, source: ASSUMED-E22, clause: "", description: "E22a 航海日誌(第一個衝突來源,60 s)到接班者提出疑問並查證(acknowledge verbal 或 report);= ARPA 提示 30 s 後 + conflictQuery_s,假設值,待公司程序" }
+  bridge.e22.fatigueCallMasterFromHandover_s: { value: 420, unit: s, source: ASSUMED-E22, clause: "", description: "E22b 交班到依夜令叫船長(acknowledge callMaster;交班時即承認疲勞亦算);= 疲勞提示 120 s + fatigueCallMaster_s,假設值,待公司程序" }
+  navigation.xtd.harbourChannel_m: { value: 150, unit: m, source: ASSUMED-E20, clause: "", description: 口門與港內航道(示意航道半寬 250 m)航跡走廊半寬(E20) }
+  emergency.e20.selectionReminderAt_s: { value: 900, unit: s, source: ASSUMED-E20, clause: "", description: E20 教官尚未注入任何模組時提示的時刻(自情境開始) }
+  emergency.e20.defaultE15At_s:    { value: 300, unit: s, source: ASSUMED-E20, clause: "", description: E20 預設組合版本:E15 干擾序列自動注入的時刻(自情境開始,港外段) }
+  emergency.e20.defaultE09After_s: { value: 60,  unit: s, source: ASSUMED-E20, clause: "", description: E20 預設組合版本:通過 OUTER(進入口門接近航段,距泊位約 1.3 nm)到 E09 全船失電自動注入 }
+  emergency.e20.defaultE09Fallback_s: { value: 2700, unit: s, source: ASSUMED-E20, clause: "", description: E20 預設組合版本:E09 全船失電的時間後備(未通過 OUTER 時) }
+  berthing.e20.briefing_s:         { value: 600, unit: s, source: ASSUMED-E20, clause: "", description: E20 通過口門(拖船待命)到完成與引水人/拖船的靠泊簡報(acknowledge checklist) }
+  assessment.e20.passMark:         { value: 70,  unit: score, source: ASSUMED-E20, clause: "", description: E20 總結性評估自動評分的及格分數(輔助;最終評分由評估員依行為標記評定,規劃書第 8.2 節) }
 overrides: {}                         # 保留:依船舶 ID 覆寫(第一版不解析)

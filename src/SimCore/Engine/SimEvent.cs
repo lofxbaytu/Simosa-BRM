@@ -135,6 +135,8 @@ public static class SimEventKinds
     // 外力:拖船、錨、碰墊、繫纜(設計文件 docs/design/physics-tugs-anchors-mooring.md 第 6 節;itemId = 拖船 id / 錨側 / 碰墊 id / 纜 id)
     /// <summary>拖船命令被接受(data {id, mode, from, status, direction_deg, power_pct};source 同指令)</summary>
     public const string TugCommand = "tugCommand";
+    /// <summary>拖船離開、本練習不再可用(tugControl mode unavailable;data {id, mode, from, fromStatus, status, force_t})</summary>
+    public const string TugUnavailable = "tugUnavailable";
     /// <summary>拖纜斷裂(data {id, force_t, mode, reason: fault, stillPushing})</summary>
     public const string TugLineParted = "tugLineParted";
     /// <summary>拋錨(letGo 指令;data {side, action, targetLength_m, targetLength_shackles, length_m, status})</summary>
@@ -193,6 +195,8 @@ public static class CommandRejectReasons
     public const string TugModeUnavailable = "tugModeUnavailable";
     /// <summary>拖纜已斷(tugLineBreak 未清除),不能拉</summary>
     public const string TugLineParted = "tugLineParted";
+    /// <summary>拖船已離開(tugControl mode unavailable,教官或時間表的拖船縮減),之後的指令一律拒絕</summary>
+    public const string TugUnavailable = "tugUnavailable";
     public const string InvalidPower = "invalidPower";
     public const string NoAnchorData = "noAnchorData";
     public const string UnknownAnchor = "unknownAnchor";

@@ -190,7 +190,7 @@ public sealed class TimelineAction
     public static readonly string[] AllowedKinds =
     {
         "injectFault", "clearFault", "setEnvironment", "targetControl", "voiceScript", "message", "phase", "freeze",
-        "autopilot", "ownShip", "timeScale", "arm", "disarm", "endExercise",
+        "autopilot", "ownShip", "timeScale", "arm", "disarm", "endExercise", "tugControl",
     };
     public static readonly string[] ForbiddenKinds = { "loadScenario", "reset", "restore", "snapshot" };
 
@@ -216,6 +216,10 @@ public sealed class TimelineAction
 
     public double? NumberField(string name)
         => Payload.ValueKind == JsonValueKind.Object && Payload.TryGetProperty(name, out var e) ? SimCommand.AsDouble(e) : null;
+
+    /// <summary>injectFault 物件形式的 recordOnly: true(情境作者明示「只記錄,由儀器/腳本反應」;驗證器不警告)。</summary>
+    public bool RecordOnly
+        => Payload.ValueKind == JsonValueKind.Object && Payload.TryGetProperty("recordOnly", out var r) && r.ValueKind == JsonValueKind.True;
 
     /// <summary>injectFault 的 args(物件形式;無則 null)。</summary>
     public JsonElement? FaultArgs()

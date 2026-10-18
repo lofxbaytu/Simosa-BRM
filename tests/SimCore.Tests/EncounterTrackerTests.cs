@@ -145,4 +145,76 @@ public class EncounterTrackerTests
         Assert.InRange(rec.MinRangeNm!.Value, 0.0, 0.05);
         Assert.InRange(e.LatestSummary!.CollisionAvoidance.MinCpaNm!.Value, 0.0, 0.05);
     }
+
+    /// <summary>
+    /// expect 事件 encounterFirstAction 的 <c>includePrior: true</c>(情境引擎設計第 4.4 節;E15 審查發現):規則的 after 晚於會遇開始、
+    /// 首次行動又發生在 after 之前時,該會遇不會再發 encounterFirstAction —— 會遇仍進行中則於開始計時當下以 dt = 0 判 met(data.prior_t = 首次行動時刻);
+    /// 未加 includePrior 的規則語意不變(等不到、逾時 missed)。
+    /// </summary>
+    [Fact]
+    public void IncludePriorCountsFirstActionBeforeRuleStart()
+    {
+        var e = TestData.MinimalEngine("""
+            targets:
+              - id: T1
+                initial: { position: { x: 0, y: 7408 }, heading: 180, speed: 6 }
+            timeline:
+              - { id: go, when: { type: time, atLeast: 300 }, actions: [ { message: { to: all, text: go } } ] }
+            assessment:
+              minCpa_nm: 0.5
+              encounter: { detectionRange_nm: 3 }
+              required:
+                - { id: withPrior, after: { event: timelineTriggered, itemId: go }, expect: { event: { kind: encounterFirstAction, targetId: T1, includePrior: true } }, within_s: 60, penalty: 10 }
+                - { id: anyWithPrior, after: { event: timelineTriggered, itemId: go }, expect: { any: [ { acknowledge: { kind: report } }, { event: { kind: encounterFirstAction, targetId: T1, includePrior: true } } ] }, within_s: 60, penalty: 10 }
+                - { id: plain, after: { event: timelineTriggered, itemId: go }, expect: { event: { kind: encounterFirstAction, targetId: T1 } }, within_s: 60, penalty: 10 }
+            """, speedKn: 8);
+        var events = TestData.Capture(e);
+        TestData.RunTo(e, 270);
+        var started = events.Single(x => x.Kind == SimEventKinds.EncounterStarted && x.TargetId == "T1");
+        Assert.True(started.T < 270);
+        e.Enqueue(SimCommand.Rudder(20));
+        e.ProcessPendingCommands();
+        var actionT = e.Time;
+        TestData.RunTo(e, 400);
+        Assert.Single(events, x => x.Kind == SimEventKinds.EncounterFirstAction);
+        var s = e.Assessment!.BuildSummary(e.Tick, final: true);
+        foreach (var id in new[] { "withPrior", "anyWithPrior" })
+        {
+            var r = s.Assessment.Required.Single(q => q.Id == id);
+            Assert.Equal(("met", 0.0, "event:encounterFirstAction", 0.0), (r.State, r.DtS, r.By, r.Penalty));
+            var met = events.Single(x => x.Kind == SimEventKinds.RequiredEventMet && x.ItemId == id);
+            Assert.Equal((300.0, actionT), (met.T, met.DataNumber("prior_t")));
+        }
+        Assert.Equal("missed", s.Assessment.Required.Single(q => q.Id == "plain").State);
+        // 一般路徑(未在 after 之前行動)不帶 prior_t
+        Assert.DoesNotContain(events, x => x.Kind == SimEventKinds.RequiredEventMet && x.ItemId == "plain");
+    }
+
+    /// <summary>includePrior 不計入已結束的會遇(首次行動屬於前一次會遇)。</summary>
+    [Fact]
+    public void IncludePriorIgnoresClosedEncounter()
+    {
+        var e = TestData.MinimalEngine("""
+            targets:
+              - id: A1
+                initial: { position: { x: 300, y: 1500 }, heading: 40 }
+                behaviour: { mode: anchored }
+            timeline:
+              - { id: go, when: { type: time, atLeast: 500 }, actions: [ { message: { to: all, text: go } } ] }
+            assessment:
+              minCpa_nm: 0.5
+              encounter: { detectionRange_nm: 3 }
+              required:
+                - { id: withPrior, after: { event: timelineTriggered, itemId: go }, expect: { event: { kind: encounterFirstAction, targetId: A1, includePrior: true } }, within_s: 30, penalty: 10 }
+            """, speedKn: 8);
+        var events = TestData.Capture(e);
+        TestData.RunTo(e, 20);
+        Assert.Single(events, x => x.Kind == SimEventKinds.EncounterStarted);
+        e.Enqueue(SimCommand.Telegraph(TelegraphOrder.SAH));
+        e.ProcessPendingCommands();
+        Assert.Single(events, x => x.Kind == SimEventKinds.EncounterFirstAction);
+        TestData.RunTo(e, 560);
+        Assert.True(e.Assessment!.Encounters.State.Records.Single().Closed);
+        Assert.Equal("missed", e.Assessment.BuildSummary(e.Tick, final: true).Assessment.Required.Single().State);
+    }
 }

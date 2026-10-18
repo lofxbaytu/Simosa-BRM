@@ -178,6 +178,12 @@ public sealed class EventRef
     public string Kind { get; set; } = "";
     public string? ItemId { get; set; }
     public string? TargetId { get; set; }
+    /// <summary>
+    /// 只用於 <c>encounterFirstAction</c>(須指定 targetId):規則開始計時(after)時,該目標的會遇仍進行中且首次行動已在 after 之前發生,
+    /// 即以 dt = 0 判 met(requiredEventMet data.prior_t = 首次行動時刻)。每筆會遇只發一次 encounterFirstAction,after 晚於會遇開始時
+    /// (例如 E15 以 X1 起步為計時起點)起步前的正常動作會先用掉它;未給(null)時語意不變。
+    /// </summary>
+    public bool? IncludePrior { get; set; }
 }
 
 public sealed class ExpectSpecConverter : JsonConverter<ExpectSpec>

@@ -366,6 +366,64 @@ def test_server_external_commands_and_state() -> None:
     assert srv.ship.external.tug("TG1").status == "standby" and srv.ship.external.berth.lines[0].status == "stowed"
 
 
+def test_tug_unavailable_leaves_and_rejects_commands() -> None:
+    """拖船縮減(C# TugTests.UnavailableTugLeavesAndRejectsCommands):mode unavailable → 出力 0、status unavailable、事件 tugUnavailable;
+    之後任何指令以 tugUnavailable 拒絕、tugLineBreak 不作用;狀態進雜湊(序數接在既有值之後)。"""
+    tugs = [{"id": "TG1"}, {"id": "TG2", "attach": "aft"}]
+    sc = scenario_from_tree(_tree({"tugs": tugs}))
+    srv = SimServer(ship_from_scenario(sc), scenario=sc)
+    ack = srv.apply_command({"type": "tugControl", "args": {"id": "TG2", "mode": "push", "direction_deg": 90, "power_pct": 100}})
+    assert ack["ok"] and ack["event"]["kind"] == "tugCommand"
+    for _ in range(3000):
+        srv.ship.step()
+    h_before = srv.ship.state_hash()
+    ack = srv.apply_command({"type": "tugControl", "args": {"id": "TG2", "mode": "unavailable"}})
+    assert ack["ok"] and ack["event"]["kind"] == "tugUnavailable"
+    d = ack["event"]["data"]
+    assert (d["mode"], d["from"], d["fromStatus"], d["status"]) == ("unavailable", "push", "working", "unavailable") and d["force_t"] > 30
+    assert srv.ship.state_hash() != h_before
+    srv.ship.step()
+    st = next(t for t in srv.state_json()["tugs"] if t["id"] == "TG2")
+    assert (st["mode"], st["status"], st["force_t"]) == ("unavailable", "unavailable", 0.0)
+    for args in ({"id": "TG2", "mode": "push"}, {"id": "TG2", "mode": "free"}, {"id": "TG2", "power_pct": 50},
+                 {"id": "TG2", "mode": "unavailable"}, {"id": "TG2", "mode": "tow"}):
+        ack = srv.apply_command({"type": "tugControl", "args": args})
+        assert not ack["ok"] and "拒絕(tugUnavailable)" in ack["detail"], (args, ack)
+    assert srv.ship.external.part_tug_line("TG2") is None and not srv.ship.external.tug("TG2").line_parted
+    # 對已離開的拖船注入 tugLineBreak {id}:拒絕、不加入 faults(C# SimulationEngine tugUnavailable)
+    ack = srv.apply_command({"type": "injectFault", "args": {"name": "tugLineBreak", "args": {"id": "TG2"}}})
+    assert not ack["ok"] and "tugUnavailable" in ack["detail"] and "tugLineBreak" not in srv.ship.faults, ack
+    ack = srv.apply_command({"type": "tugControl", "args": {"id": "TG1", "mode": "push", "power_pct": 50}})
+    assert ack["ok"] and srv.ship.external.tug("TG1").status == "working"
+    assert ex.TUG_MODES.index("unavailable") == 4 and ex.TUG_STATUSES.index("unavailable") == 6   # C# TugMode/TugStatus 序數
+
+
+def test_timeline_tug_control_and_record_only_structure() -> None:
+    """時間表 tugControl 動作與 injectFault recordOnly 的結構檢查(C# Scenario.CheckTugControlAction / StructuralIssues)。"""
+    from simosa_brm.scenario import structural_issues
+
+    tugs = [{"id": "TG1"}, {"id": "TG2"}]
+
+    def issues(action: dict) -> list[tuple[str, str]]:
+        return structural_issues({"tugs": tugs, "timeline": [{"id": "x", "when": {"type": "time", "atLeast": 1}, "actions": [action]}]})
+
+    assert issues({"tugControl": {"id": "TG2", "mode": "unavailable"}}) == []
+    assert issues({"tugControl": {"id": "tg1", "mode": "push", "direction_deg": 90, "power_pct": 60}}) == []
+    assert issues({"injectFault": {"name": "ecdisAlarmFlood", "recordOnly": True}}) == []
+    for action, fragment in (({"tugControl": {"id": "TGX", "mode": "push"}}, "不存在的拖船"), ({"tugControl": {"mode": "push"}}, "缺少 id"),
+                             ({"tugControl": {"id": "TG1", "mode": "tow"}}, "tugControl.mode"), ({"tugControl": {"id": "TG1", "power_pct": 150}}, "power_pct"),
+                             ({"tugControl": "TG1"}, "須為物件"), ({"injectFault": {"name": "ecdisAlarmFlood", "recordOnly": "true"}}, "recordOnly 須為布林值")):
+        got = issues(action)
+        assert any(fragment in m for _, m in got), (action, got)
+    # 程式庫情境:E17 以 tugControl 讓 TG2 unavailable、E15/E21 以 recordOnly 注入只記錄故障
+    e17 = load_scenario("E17_typhoon_departure_kaohsiung")
+    acts = [a for t in e17["timeline"] for a in t["actions"] if "tugControl" in a]
+    assert acts == [{"tugControl": {"id": "TG2", "mode": "unavailable"}}]
+    for sid, fault in (("E15_distraction_workload_kaohsiung", "ecdisAlarmFlood"), ("E21_cargo_heating_pressure_anping", "cargoHeatingFailure")):
+        sc = load_scenario(sid)
+        assert [a["injectFault"] for t in sc["timeline"] for a in t["actions"] if "injectFault" in a] == [{"name": fault, "recordOnly": True}]
+
+
 @pytest.mark.parametrize("sid", ["E12_anchoring_kaohsiung", "E13_tug_berthing_mailiao", "E14_unberthing_no_tug", "E06_taichung_channel_flood"])
 def test_library_scenarios_load_external_sections(sid: str) -> None:
     sc = load_scenario(sid)
@@ -437,6 +495,73 @@ def test_golden_external_reference_is_reproducible(name: str) -> None:
         sc = max(1.0, max(abs(r[j]) for r in rows))
         worst = max(abs(g[j] - r[j]) for g, r in zip(got, rows))
         assert worst <= 1e-9 * sc, f"{name} {c}: 最大差 {worst:.3e}"
+
+
+def test_windlass_stall_and_brake_slip_hysteresis() -> None:
+    """絞盤停轉/剎車滑出遲滯(C# AnchorTests.WindlassStallHasHysteresis):錨鏈拉直時張力每數 tick 在門檻上下擺動,
+    ext_anchor_heave_house 的停轉期間只發一次 anchorWindlassStalled、一次 anchorBrakeSlipping(無遲滯時為 194 / 139 次)。"""
+    mod = _load_export_module()
+    case = next(c for c in mod.CASES if c["name"] == "ext_anchor_heave_house")
+    res = mod.run_case(case, write=False)
+    kinds = [e["kind"] for e in res["events"]]
+    assert kinds.count("anchorWindlassStalled") == 1
+    assert kinds.count("anchorBrakeSlipping") == 1
+    assert kinds[-1] == "anchorHoused"
+    port = res["ship"].external.anchor("port")
+    assert not port.stalled and port.stall_quiet_s == 0.0
+
+    # 單元:張力交替超過/低於門檻時旗標保持;連續 5 s 低於 0.9 倍才解除
+    spec = ex.AnchorParticulars.from_raw(_raw_fsb1())
+    u = ex.AnchorUnit("starboard", spec, 5.7)
+    k = Kin(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    u.length, u.mode, u.on_bottom = 137.5, "heaving", True
+    hv = u.vertical_span(20.0)
+    he, hn = ex.body_to_enu(k, u.hawse_xb, u.hawse_yb)
+
+    def place(h: float) -> None:
+        u.anchor_x, u.anchor_y = he, hn + ex.touchdown_distance(h / spec.chain_submerged_weight, u.length, hv)
+
+    events: list = []
+    for i in range(100):
+        place(1.6 * spec.windlass_pull_n if i % 2 == 0 else 5e3)
+        u.post_step(k, 20.0, 0.02, "sand", 100.0, 0.5, 0.0, events)
+        assert u.stalled
+    for i in range(250):
+        place(5e3)
+        u.post_step(k, 20.0, 0.02, "sand", 100.0, 0.5, 0.0, events)
+        assert u.stalled == (i < 248)   # 交替最後一 tick 已是低張力(計時 0.02 s)
+    assert [e["kind"] for e in events].count("anchorWindlassStalled") == 1
+
+
+@pytest.mark.parametrize("action", ["brake", "heave"])
+def test_new_anchor_command_clears_brake_slip_flag(action: str) -> None:
+    """改下指令立即解除滑出旗標(C# AnchorTests.NewCommandClearsBrakeSlipFlag;設計文件第 3.3 節):剎車滑出後改下 brake / heave
+    (模式仍為 braked/heaving)→ slipping 與解除計時歸零,再次滑出時再發一次 anchorBrakeSlipping。"""
+    spec = ex.AnchorParticulars.from_raw(_raw_fsb1())
+    u = ex.AnchorUnit("starboard", spec, 5.7)
+    k = Kin(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    u.length, u.mode, u.on_bottom = 137.5, "braked", True
+    hv = u.vertical_span(20.0)
+    he, hn = ex.body_to_enu(k, u.hawse_xb, u.hawse_yb)
+
+    def taut() -> None:
+        u.anchor_x, u.anchor_y = he, hn + math.sqrt(u.length * u.length - hv * hv) - 0.01
+
+    def place(h: float) -> None:
+        u.anchor_x, u.anchor_y = he, hn + ex.touchdown_distance(h / spec.chain_submerged_weight, u.length, hv)
+
+    events: list = []
+    taut()
+    u.post_step(k, 20.0, 0.02, "sand", 100.0, 0.5, 0.0, events)
+    assert u.slipping and [e["kind"] for e in events].count("anchorBrakeSlipping") == 1
+    place(5e3)
+    u.post_step(k, 20.0, 0.02, "sand", 100.0, 0.5, 0.0, events)
+    assert u.slipping and u.slip_quiet_s > 0.0
+    assert u.command(action, None) is None
+    assert not u.slipping and u.slip_quiet_s == 0.0 and not u.stalled
+    taut()
+    u.post_step(k, 20.0, 0.02, "sand", 100.0, 0.5, 0.0, events)
+    assert u.slipping and [e["kind"] for e in events].count("anchorBrakeSlipping") == 2
 
 
 @pytest.mark.parametrize("value, bad", [(0, True), (-5, True), (float("inf"), True), (20, False)])

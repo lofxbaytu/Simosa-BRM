@@ -1,10 +1,11 @@
 # E17 颱風準備與離港決策 — 高雄港南端油品碼頭(規劃書第 8.1 節 E17 與「設計規則」、第 3.4 節高雄港「颱風 7 至 10 月」;設計 docs/design/scenario-library.md 第 11 節;
 #   docs/design/physics-tugs-anchors-mooring.md 第 2、4、7 節;schema src/Contracts/scenario.schema.json)
 # FSB1 壓載(卸貨完畢)右舷靠高雄港南端油品碼頭 KHH-SOB-1(data/areas/kaohsiung-south-oil-berth.json,示意,待 ENC 校正:碼頭線 000°、長 150 m、水域在西、9 個 H 0.8 m 錐型碰墊),
-# 艏向北、4 纜已繫。中央氣象署發布颱風警報(海上);西風 15 kn 自水側吹向碼頭(吹攏)。原訂兩艘拖船:TG1 高港11號(本船 tugs[],左舷艉帶纜,尚未靠上)、
-# TUG2 高港12號(在港內待命的目標船;改派他船後駛離,以目標船表示「不可用」——教官對 TUG2 下 tugControl 會被 unknownTug 拒絕)。
+# 艏向北、4 纜已繫。中央氣象署發布颱風警報(海上);西風 15 kn 自水側吹向碼頭(吹攏)。原訂兩艘拖船(皆在 tugs[],尚未靠上):TG1 高港11號(左舷艉帶纜)、
+# TG2 高港12號(左舷艏帶纜);T+7 改派他船,以時間表 tugControl { id: TG2, mode: unavailable } 讓 TG2 離開(發 tugUnavailable,
+#   之後對 TG2 的指令以 commandRejected reason tugUnavailable 拒絕;docs/design/physics-tugs-anchors-mooring.md 第 2.4 節)。
 # 時間表(壓縮時間:颱風數小時的演變以分鐘表示):T+1 交班 → T+1 min 港務/VTS 要求油輪離港(決策點)→ T+4 公司詢問可否留港(不確定下的壓力)→
-#   T+7 degraded(tugReduced:拖船可用數 2 → 1 + 風力漸增 15 → 25 kn,10 分鐘)→ T+25 emergency(outerBands:颱風外圍環流 25 → 40 kn、陣風 0.35,10 分鐘)
+#   T+7 degraded(tugReduced:拖船可用數 2 → 1(TG2 unavailable)+ 風力漸增 15 → 25 kn,10 分鐘)→ T+25 emergency(outerBands:颱風外圍環流 25 → 40 kn、陣風 0.35,10 分鐘)
 #   → 離開泊位區(船舯離碼頭 > 110 m)後 60 s 結束;或擱淺、T+45 時間到。
 # 評估:決策時機(港方要求 → 通報公司/代理行;主機備便;拖船縮減後修正計畫;強風前離開泊位區 typhoon.e17.departBy_s)、離泊安全(碼頭硬接觸、斷纜為硬性失敗;
 #   碰墊能量比與纜繩張力 lineTension 容許帶)、拖船使用(拖船縮減後須下拖船令;summary.berthing.tugs 記錄工作時間與最大出力)。
@@ -44,6 +45,15 @@ tugs:
     modeChange_s: 30
     connect_s: 90
     initial: { mode: free, direction_deg: 270, power_pct: 0 }   # 尚未帶纜:下 pull/push 後 90 s 帶妥
+  - id: TG2
+    name: 高港12號
+    bollardPull_t: 40
+    attach: fwdPort                              # 原訂左舷艏帶纜;T+7 改派他船後離開(unavailable)
+    lineLength_m: 30
+    modes: [push, pull]
+    modeChange_s: 30
+    connect_s: 90
+    initial: { mode: free, direction_deg: 270, power_pct: 0 }
 berth:
   file: data/areas/kaohsiung-south-oil-berth.json
   id: KHH-SOB-1
@@ -56,7 +66,7 @@ briefing:
   text: |
     交班(10:00 地方時):No.1 卸貨完畢(壓載,艏 2.03 / 艉 5.41 m)右舷靠高雄港南端油品碼頭 KHH-SOB-1(泊位與碰墊為示意值),艏向北,4 纜已繫。
     中央氣象署已發布颱風海上警報,颱風預計 18 小時後最接近;港方颱風期間三階段封港(24/12/6 小時)。西風 15 kn 自水側吹向碼頭(吹攏),預報持續增強。
-    離泊計畫(書面):拖船兩艘(TG1 高港11號 左舷艉、TUG2 高港12號 左舷艏)、解纜順序(先單綁再解)、側推 325 kW、主機備便時間約 10 分鐘;
+    離泊計畫(書面):拖船兩艘(TG1 高港11號 左舷艉、TG2 高港12號 左舷艏)、解纜順序(先單綁再解)、側推 325 kW、主機備便時間約 10 分鐘;
     預報:颱風接近後風向將由西轉為東南東(離岸),風力 8 級以上。離港後在外海避颱或依公司指示。接班者完成交班檢查表後由教官確認(acknowledge checklist)。
   attachments:
     - { title: "離泊計畫(拖船兩艘,示意)", file: docs/unberthing-plan-E17.pdf }
@@ -117,8 +127,8 @@ timeline:
     actions:
       - setEnvironment: { wind: { trueSpeed: 25, trueDir: 260, gustiness: 0.25 }, ramp_s: 600 }
       - voiceScript: { role: tug, channel: vhfPort, text: "拖船調度:高港十二號被調去協助另一艘出港,你們只剩高港十一號一艘,大約要排十五分鐘。", lang: zh-TW }
-      - targetControl: { id: TUG2, behaviour: { mode: waypoints, stopAtEnd: false, waypoints: [ { x: -600, y: -400, speed: 8 }, { x: -1500, y: -1500, speed: 10 } ] } }
-      - message: { to: instructor, text: "拖船 2 → 1 + 風 15 → 25 kn(10 分鐘):觀察是否修正離泊計畫(拖船位置、側推、俥舵)並回報(acknowledge verbal 或 report);TUG2 已駛離", severity: warning }
+      - tugControl: { id: TG2, mode: unavailable }   # TG2 離開:失去出力,之後對 TG2 的指令以 tugUnavailable 拒絕
+      - message: { to: instructor, text: "拖船 2 → 1 + 風 15 → 25 kn(10 分鐘):觀察是否修正離泊計畫(拖船位置、側推、俥舵)並回報(acknowledge verbal 或 report);TG2 已離開(不再可用)", severity: warning }
   - id: outerBands
     name: 颱風外圍環流強風
     phase: emergency
@@ -138,7 +148,7 @@ timeline:
     name: 拖船令(首次)
     when: { type: event, kind: tugCommand }
     actions:
-      - voiceScript: { role: tug, channel: vhfPort, text: "高港十一號收到,前往左舷艉帶纜。", lang: zh-TW }
+      - voiceScript: { role: tug, channel: vhfPort, text: "拖船收到,前往指定位置帶纜。", lang: zh-TW }
   - id: clearOfBerth
     name: 離開泊位區
     when: { type: zone, id: berthArea, inside: false }
@@ -203,16 +213,3 @@ assessment:
       within_s: "${params:typhoon.e17.departBy_s}"
       penalty: 20
   scoring: { start: 100, passMark: "${params:assessment.passMark}" }
-targets:
-  - id: TUG2
-    name: 高港12號
-    mmsi: 416517002
-    shipType: tug
-    loa: 32
-    beam: 10
-    draft: 4
-    initial:
-      position: { x: -250, y: -150 }               # 港內待命(示意);T+7 改派他船後駛離
-      heading: 0
-      speed: 0
-    behaviour: { mode: hold }

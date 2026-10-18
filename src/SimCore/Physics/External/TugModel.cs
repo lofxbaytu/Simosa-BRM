@@ -11,6 +11,8 @@ public enum TugMode
     Push,
     Pull,
     Free,
+    /// <summary>拖船離開、不再可用(教官或時間表 tugControl mode unavailable;之後的指令以 tugUnavailable 拒絕)。列在最後:既有值與雜湊不變。</summary>
+    Unavailable,
 }
 
 /// <summary>拖船狀態(state.tugs[].status)。</summary>
@@ -28,6 +30,8 @@ public enum TugStatus
     Free,
     /// <summary>拖纜斷裂(tugLineBreak);故障清除前不能拉</summary>
     Parted,
+    /// <summary>已離開、本練習不再可用(拖船縮減;無出力,之後的指令以 tugUnavailable 拒絕)</summary>
+    Unavailable,
 }
 
 /// <summary>
@@ -121,10 +125,21 @@ public sealed class TugUnit
     }
 
     /// <summary>
-    /// 指令;回傳 null = 接受,否則拒絕原因(tugModeUnavailable、tugLineParted)。<paramref name="directionDeg"/>、<paramref name="powerPct"/> 未給時不變。
+    /// 指令;回傳 null = 接受,否則拒絕原因(tugUnavailable、tugModeUnavailable、tugLineParted)。<paramref name="directionDeg"/>、<paramref name="powerPct"/> 未給時不變。
+    /// mode unavailable:拖船立即失去出力並離開(status unavailable),之後任何指令(含再下 unavailable)以 tugUnavailable 拒絕。
     /// </summary>
     public string? Command(TugMode mode, double? directionDeg, double? powerPct)
     {
+        if (Status == TugStatus.Unavailable) return Engine.CommandRejectReasons.TugUnavailable;
+        if (mode == TugMode.Unavailable)
+        {
+            Mode = TugMode.Unavailable;
+            Status = TugStatus.Unavailable;
+            ForceN = 0.0;
+            TimerTicks = 0;
+            LastWorkingMode = TugMode.Standby;
+            return null;
+        }
         if (mode == TugMode.Push && !AllowPush || mode == TugMode.Pull && !AllowPull) return "tugModeUnavailable";
         if (mode == TugMode.Pull && LineParted) return "tugLineParted";
         if (directionDeg is { } d) DirectionOrderRad = Units.WrapRadPi(Units.DegToRad(d));
@@ -164,6 +179,7 @@ public sealed class TugUnit
     /// <summary>拖纜斷裂(故障注入);回傳斷裂前的出力(N)。拉中者失去出力並成為 parted;推頂中者繼續推(推頂不需拖纜)但之後不能拉。</summary>
     public double PartLine()
     {
+        if (Status == TugStatus.Unavailable) return 0.0;
         var before = ForceN;
         LineParted = true;
         if (Mode is TugMode.Pull or TugMode.Standby)
@@ -191,9 +207,9 @@ public sealed class TugUnit
             Status = Mode is TugMode.Push or TugMode.Pull ? TugStatus.Working : TugStatus.Standby;
         Efficiency = Mode is TugMode.Push or TugMode.Pull ? SpeedEfficiency(Mode, speedMps) : 1.0;
         var target = Status == TugStatus.Working ? BollardPullN * PowerOrder * Efficiency : 0.0;
-        if (Status is TugStatus.Free or TugStatus.Parted) ForceN = 0.0;
+        if (Status is TugStatus.Free or TugStatus.Parted or TugStatus.Unavailable) ForceN = 0.0;
         else ForceN += (target - ForceN) * _alpha;
-        if (Status is not (TugStatus.Free or TugStatus.Parted))
+        if (Status is not (TugStatus.Free or TugStatus.Parted or TugStatus.Unavailable))
         {
             var diff = Units.WrapRadPi(DirectionOrderRad - DirectionRad);
             var step = TurnRateRadPerSec * dt;

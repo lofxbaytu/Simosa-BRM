@@ -153,8 +153,9 @@ public class ScenarioLibraryLateCourseTests
         Assert.Contains(sc.Assessment.Required, r => r.Id == "handoverChecklist" && r.After.ItemId == "handover");
         Assert.Single(sc.Timeline, t => t.Phase == "degraded");
         Assert.Single(sc.Timeline, t => t.Phase == "emergency");
-        // 只記錄故障(ecdisAlarmFlood、cargoHeatingFailure)以訊息/語音表示,不注入(--validate 無警告)
-        Assert.DoesNotContain(sc.Timeline.SelectMany(t => t.Actions), a => a.Kind == "injectFault" && !ScenarioValidator.ModelledFaults.Contains(a.AsString()));
+        // 只記錄故障(E15 ecdisAlarmFlood、E21 cargoHeatingFailure)以 injectFault recordOnly: true 注入(--validate 無警告;state.faults[] 出現)
+        Assert.All(sc.Timeline.SelectMany(t => t.Actions).Where(a => a.Kind == "injectFault" && !ScenarioValidator.ModelledFaults.Contains(a.AsString())),
+            a => Assert.True(a.RecordOnly, $"{a.AsString()} 須標 recordOnly: true"));
         // 參數引用:新鍵皆為「假設值,待公司程序」來源
         var resolved = ScenarioLoader.LastResolvedParameters;
         var ps = TestData.Parameters();
@@ -253,6 +254,9 @@ public class ScenarioLibraryLateCourseTests
         Assert.Equal(798.0, FirstT(ev, SimEventKinds.EncounterStarted, targetId: "X1"));   // 關鍵事件藏在干擾 5(T+12)與 6(T+14)之間
         Assert.Equal(new[] { 780.0, 780.0 }, ev.Where(x => x.Kind == SimEventKinds.EnvironmentRampDone).Select(x => x.T));
         Assert.Equal(1800.0, T(ev, "timeUp"));
+        // 只記錄故障 ecdisAlarmFlood 於 T+8 注入(recordOnly):faults[] 出現,核心行為不變
+        Assert.Equal(480.0, ev.Single(x => x.Kind == SimEventKinds.FaultInjected).T);
+        Assert.Equal(new[] { "ecdisAlarmFlood" }, e.BuildState().Faults);
         Assert.All(s.Assessment.Required, r => Assert.Equal("missed", r.State));
         Assert.Contains(s.Assessment.HardFails, h => h.Id == "cpaHard");
         Assert.Equal("fail", Band(s, "minCpa").State);
@@ -264,10 +268,44 @@ public class ScenarioLibraryLateCourseTests
 
     /// <summary>
     /// 學員腳本(合理操作):交班檢查表 → 每次干擾 20 s 內授權/延後(acknowledge verbal)→ 警報氾濫時指派專人處理 → 以自動舵修正流壓循跡(每次 ≤ 4°)→
-    /// X1 會遇開始 60 s 後瞭望報告;X1 起步(對地 > 2 kn)即減至 DSAH 並向右 20°(由 X1 艉後通過)→ X1 通過最近點且在左舷後回航跡。固定:必要事件全部 met、無硬性失敗、容許帶皆 ok、到達口門外。
+    /// X1 起步(對地 &gt; 2 kn)即瞭望報告,並減至 DSAH、向右 20°(由 X1 艉後通過)→ X1 通過最近點且在左舷後回航跡。固定:必要事件全部 met、無硬性失敗、容許帶皆 ok、到達口門外。
+    /// 關鍵事件計時起點為 X1 實際起步橫越(timelineTriggered crossingTurn,780 s):循跡修正流壓時 X1 會遇開始約在 718 s(早於起步),
+    /// 原本「會遇開始 + 60 s 瞭望報告」(778 s)在新的計時起點之前、不計入,故改為看到 X1 起步才報告(偵測的是橫越動態而非漂航船)。
     /// </summary>
     [Fact]
     public void E15_ScriptedSterileBridgeMeetsRequirements()
+    {
+        var (s, ev, x1) = RunE15Sterile(null);
+        Assert.Equal("acknowledge:lookoutReport", Req(s, "crossingDetected").By);
+        // 計時起點 = X1 起步(crossingTurn 780 s),晚於循跡時的 X1 會遇開始
+        Assert.True(x1 < T(ev, "crossingTurn"), $"X1 會遇開始 {x1}");
+        Assert.InRange(Req(s, "crossingDetected").DtS!.Value, 0, Param("bridge.distraction.criticalDetection_s"));
+        Assert.InRange(Req(s, "crossingAction").DtS!.Value, 0, Param("navigation.encounter.earlyAction_s"));
+        Assert.True(Req(s, "crossingAction").DtS > 0);                          // X1 起步後才行動(不是起步前的行動)
+    }
+
+    /// <summary>
+    /// 回歸(審查發現):X1 會遇已開始(循跡時約 718 s)、X1 起步(780 s)之前的正常動作 —— 見 X1 在航道附近先減速(車鐘 HAH → SAH)
+    /// 或修正流壓一次改 5° —— 已發出 X1 的 encounterFirstAction(每筆會遇只發一次)。expect 以 <c>includePrior: true</c> 計入:
+    /// 規則於 crossingTurn 開始計時時該會遇仍進行中且已有首次行動 → 以 dt = 0 判 met(與舊起點「after encounterStarted X1」的判定一致),
+    /// 而不是等不到第二次 encounterFirstAction、逾時判 missed 扣 10 分。
+    /// </summary>
+    [Theory]
+    [InlineData("telegraph")]
+    [InlineData("autopilot5")]
+    public void E15_ActionBeforeCrossingTurnStillCountsAsFirstAction(string variant)
+    {
+        var (s, ev, x1) = RunE15Sterile(variant);
+        var first = FirstT(ev, SimEventKinds.EncounterFirstAction, targetId: "X1");
+        Assert.True(x1 < first && first < T(ev, "crossingTurn"), $"X1 會遇 {x1}、首次行動 {first}");
+        Assert.Equal(("met", 0.0, "event:encounterFirstAction"), (Req(s, "crossingAction").State, Req(s, "crossingAction").DtS, Req(s, "crossingAction").By));
+        var met = ev.Single(x => x.Kind == SimEventKinds.RequiredEventMet && x.ItemId == "crossingAction");
+        Assert.Equal((780.0, first), (met.T, met.DataNumber("prior_t")));
+        Assert.DoesNotContain(ev, x => x.Kind == SimEventKinds.RequiredEventMissed);
+    }
+
+    /// <summary>E15 合理操作腳本(<paramref name="variant"/>:null 基本;telegraph 750 s 車鐘 SAH;autopilot5 750 s 自動舵 +5°);固定共同結果並重播。</summary>
+    private (AssessmentSummary Summary, List<SimEvent> Events, double? X1) RunE15Sterile(string? variant)
     {
         var keeper = new TrackKeeper(74);
         double? x1 = null;
@@ -276,6 +314,12 @@ public class ScenarioLibraryLateCourseTests
         var (e, ev, path) = Run(E15, 1800, (eng, events, t) =>
         {
             if (t == 20) eng.Enqueue(SimCommand.Acknowledge("checklist"));
+            if (t == 750 && variant == "telegraph") eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.SAH));   // 見 X1 漂航在航道附近,先減速
+            if (t == 750 && variant == "autopilot5")
+            {
+                keeper.Override(Math.Round(keeper.Set + 5));                                                      // 修正流壓一次改 5°
+                eng.Enqueue(SimCommand.Autopilot(true, keeper.Set));
+            }
             foreach (var (item, note) in new[] { ("cargoPlanCall", "授權大副處理卸貨計畫,引航中不簽字"), ("pscEmail", "PSC 郵件靠妥後回覆"),
                          ("ecdisAlarmFlood", "指派二副確認 ECDIS 警報,船副專注航跡與交通"), ("companyCall", "告知公司正在引航進港,靠妥後回電") })
             {
@@ -286,7 +330,6 @@ public class ScenarioLibraryLateCourseTests
                 }
             }
             x1 ??= FirstT(events, SimEventKinds.EncounterStarted, targetId: "X1");
-            if (x1 is { } a && t == (int)a + 60) eng.Enqueue(SimCommand.Acknowledge("lookoutReport", role: "lookout", note: "X1 右舷貨船,注意動態"));
             if (x1 is not null && t % 5 == 0)
             {
                 var st = eng.BuildState();
@@ -294,8 +337,9 @@ public class ScenarioLibraryLateCourseTests
                 var rel = Units.NormalizeHeadingDeg(tx.BearingDeg - st.Heading);
                 if (avoidAt is null && tx.Sog > 2)
                 {
-                    // X1 起步橫越:讓路船及早大幅向右並減速,由 X1 艉後通過(第 15、16 條)
+                    // X1 起步橫越:瞭望報告,讓路船及早大幅向右並減速,由 X1 艉後通過(第 15、16 條)
                     avoidAt = t;
+                    eng.Enqueue(SimCommand.Acknowledge("lookoutReport", role: "lookout", note: "X1 右舷貨船起步,往北橫越我航道"));
                     keeper.Enabled = false;
                     keeper.Override(Math.Round(keeper.Set + 20));
                     eng.Enqueue(SimCommand.Telegraph(TelegraphOrder.DSAH));
@@ -315,12 +359,13 @@ public class ScenarioLibraryLateCourseTests
         var s = e.Assessment!.BuildSummary(e.Tick, final: true);
         Dump(ev, s);
         Assert.All(s.Assessment.Required, r => Assert.Equal("met", r.State));
-        Assert.Equal("acknowledge:lookoutReport", Req(s, "crossingDetected").By);
+        Assert.Equal(780.0, T(ev, "crossingTurn"));
         Assert.False(s.Assessment.HardFailed, string.Join(",", s.Assessment.HardFails.Select(h => h.Id)));
         Assert.All(s.Assessment.Bands, b => Assert.Equal("ok", b.State));
         Assert.Equal("arrived", ev.Single(x => x.Kind == SimEventKinds.ExerciseEnded).ItemId);
         Assert.Equal(100.0, s.Assessment.Score);
         AssertReplays(path!);
+        return (s, ev, x1);
     }
 
     // ------------------------------------------------------------------ E16
@@ -404,13 +449,14 @@ public class ScenarioLibraryLateCourseTests
     // ------------------------------------------------------------------ E17
 
     [Fact]
-    public void E17_LoadsAlongsideWithOneTugAndWindProfile()
+    public void E17_LoadsAlongsideWithTwoTugsAndWindProfile()
     {
         var sc = Load(E17);
         Assert.Equal(LoadingCondition.Ballast, sc.Ship.Loading);
-        var tug = Assert.Single(sc.Tugs!);                                   // 拖船可用數縮減後只剩 TG1(TUG2 為目標船,改派後駛離)
-        Assert.Equal("TG1", tug.Id);
-        Assert.Contains(sc.Targets, t => t.Id == "TUG2" && t.ShipType == "tug");
+        Assert.Equal(new[] { "TG1", "TG2" }, sc.Tugs!.Select(t => t.Id));     // 兩艘拖船都在 tugs[];T+7 以時間表 tugControl 讓 TG2 unavailable
+        Assert.Empty(sc.Targets);                                            // 不再以目標船駛離表示拖船縮減
+        var reduce = sc.Timeline.Single(t => t.Id == "tugReduced").Actions.Single(a => a.Kind == "tugControl");
+        Assert.Equal(("TG2", "unavailable"), (reduce.Field("id"), reduce.Field("mode")));
         Assert.All(sc.Berth!.Lines, l => Assert.Equal("fast", l.Initial));
         static double Wind(Scenario.Scenario sc, string id) => sc.Timeline.Single(t => t.Id == id).Actions.Single(a => a.Kind == "setEnvironment").Payload.GetProperty("wind").GetProperty("trueSpeed").GetDouble();
         Assert.Equal(15.0, sc.Environment.Wind.TrueSpeed);
@@ -420,8 +466,8 @@ public class ScenarioLibraryLateCourseTests
     }
 
     /// <summary>
-    /// 無人操作(留在泊位):T+1 min 港方要求離港 → T+7 degraded(拖船 2 → 1、風 15 → 25 kn)→ T+25 emergency(25 → 40 kn)→ T+45 時間到;
-    /// 決策、主機備便、拖船計畫與使用、強風前離泊全部逾時;船靠在碰墊上(吹攏風),TUG2 駛離。
+    /// 無人操作(留在泊位):T+1 min 港方要求離港 → T+7 degraded(拖船 2 → 1:TG2 unavailable、風 15 → 25 kn)→ T+25 emergency(25 → 40 kn)→ T+45 時間到;
+    /// 決策、主機備便、拖船計畫與使用、強風前離泊全部逾時(TG2 離開發 tugUnavailable 而非 tugCommand,不會使 tugUsed 達成);船靠在碰墊上(吹攏風)。
     /// </summary>
     [Fact]
     public void E17_NoOperatorEscalatesInOrder()
@@ -434,7 +480,11 @@ public class ScenarioLibraryLateCourseTests
         Assert.Equal(240.0, T(ev, "companyQuery"));
         Assert.Equal(2700.0, T(ev, "timeUp"));
         Assert.Equal(new[] { 1020.0, 1020.0, 1020.0, 2100.0, 2100.0, 2100.0 }, ev.Where(x => x.Kind == SimEventKinds.EnvironmentRampDone).Select(x => x.T));
-        Assert.Equal(420.0, ev.Single(x => x.Kind == TrafficEventKinds.Control && x.TargetId == "TUG2").T);
+        var gone = ev.Single(x => x.Kind == SimEventKinds.TugUnavailable);
+        Assert.Equal((420.0, "TG2", SimEventSources.Timeline), (gone.T, gone.ItemId, gone.Source));      // 時間表 tugReduced 的 tugControl 動作
+        Assert.DoesNotContain(ev, x => x.Kind == SimEventKinds.TugCommand);
+        Assert.DoesNotContain(ev, x => x.Kind == SimEventKinds.TimelineTriggered && x.ItemId == "firstTugOrder");
+        Assert.Equal(new[] { ("TG1", "free"), ("TG2", "unavailable") }, e.BuildState().Tugs!.Select(t => (t.Id, t.Status)));
         Assert.Equal(40.0, Units.MpsToKn(e.Environment.WindTrueSpeedMps), 6);
         Assert.All(s.Assessment.Required, r => Assert.Equal("missed", r.State));
         Assert.DoesNotContain(ev, x => x.Kind == SimEventKinds.TimelineTriggered && x.ItemId == "clearOfBerth");
@@ -444,8 +494,8 @@ public class ScenarioLibraryLateCourseTests
 
     /// <summary>
     /// 學員腳本(合理操作):交班檢查表 → 港方要求後決定離港並通報公司、通知機艙備便 → 拖船縮減後修正計畫(艏倒纜開艉、一艘拖船拉艉)→
-    /// TG1 左舷艉帶纜待命 → 留艏倒纜、右滿舵微速進車開艉 → 解艏倒纜、慢速退俥、TG1 依開出角拉艉(抵抗吹攏風) → 離開泊位區後 60 s 結束(強風前)。
-    /// 固定:必要事件全部 met、無硬性失敗(碼頭硬接觸、斷纜)、容許帶皆 ok、拖船有工作時間。
+    /// TG1 左舷艉帶纜待命(TG2 已離開:對 TG2 下令被 tugUnavailable 拒絕)→ 留艏倒纜、右滿舵微速進車開艉 → 解艏倒纜、慢速退俥、TG1 依開出角拉艉(抵抗吹攏風) →
+    /// 離開泊位區後 60 s 結束(強風前)。固定:必要事件全部 met、無硬性失敗(碼頭硬接觸、斷纜)、容許帶皆 ok、拖船有工作時間。
     /// </summary>
     [Fact]
     public void E17_ScriptedEarlyDepartureWithOneTug()
@@ -460,6 +510,7 @@ public class ScenarioLibraryLateCourseTests
                 case 100: eng.Enqueue(SimCommand.Acknowledge("notifyEcr", note: "主機備便")); break;
                 case 260: eng.Enqueue(SimCommand.Acknowledge("verbal", note: "回覆公司:港方已要求離港,風力持續增強,維持離港決定")); break;
                 case 440: eng.Enqueue(SimCommand.Acknowledge("verbal", note: "只剩一艘拖船:艏倒纜與俥舵開艉,TG1 左舷艉拉住艉,提前離泊")); break;
+                case 445: eng.Enqueue(SimCommand.TugControl("TG2", "pull", 270, 0)); break;   // TG2 已離開:commandRejected tugUnavailable
                 case 450: eng.Enqueue(SimCommand.TugControl("TG1", "pull", 270, 0)); break;   // 帶纜(connect_s 90)後待命
                 case 560:
                     foreach (var l in new[] { "HEAD", "AFTSPRING", "STERN" }) eng.Enqueue(SimCommand.Mooring(l, "letGo"));
@@ -493,6 +544,9 @@ public class ScenarioLibraryLateCourseTests
         Assert.True(T(ev, "clearOfBerth") < Param("typhoon.e17.stormAt_s"));
         Assert.Equal("endAfterClear", ev.Single(x => x.Kind == SimEventKinds.ExerciseEnded).ItemId);
         Assert.True(s.Berthing!.Tugs.Single(x => x.Id == "TG1").WorkingTimeS > 0);
+        Assert.Equal(0.0, s.Berthing.Tugs.Single(x => x.Id == "TG2").WorkingTimeS);
+        var rejected = ev.Single(x => x.Kind == SimEventKinds.CommandRejected);
+        Assert.Equal(("tugControl", "tugUnavailable", 444.0), (rejected.DataString("command"), rejected.DataString("reason"), rejected.T));   // t − 1 s 送入的指令於該步套用
         Assert.True(s.Assessment.Passed, $"score {s.Assessment.Score}");
         AssertReplays(path!);
     }
@@ -579,8 +633,11 @@ public class ScenarioLibraryLateCourseTests
         static double Depth(Scenario.Scenario sc, string id) => sc.Timeline.Single(t => t.Id == id).Actions.Single(a => a.Kind == "setEnvironment").Payload.GetProperty("waterDepth").GetDouble();
         Assert.Equal(new[] { 7.6, 7.2, 6.6 }, new[] { e21.Environment.WaterDepth, Depth(e21, "companyPressure"), Depth(e21, "tideWindowClosing") });
         Assert.Equal(new[] { 8.9, 8.6, 8.4 }, new[] { e18.Environment.WaterDepth, Depth(e18, "tideLower"), Depth(e18, "barShoaling") });
-        // 只記錄故障 cargoHeatingFailure 以時間表項目 + 訊息表示(不注入,--validate 無警告)
-        Assert.Contains(e21.Timeline, t => t.Id == "cargoHeatingFailure" && t.Actions.All(a => a.Kind is "voiceScript" or "message"));
+        // 只記錄故障 cargoHeatingFailure 以 injectFault recordOnly: true 注入(--validate 無警告),原本的語音/訊息保留
+        var heating = e21.Timeline.Single(t => t.Id == "cargoHeatingFailure");
+        Assert.Equal(new[] { "injectFault", "voiceScript", "message", "message" }, heating.Actions.Select(a => a.Kind));
+        Assert.True(heating.Actions[0].RecordOnly);
+        Assert.Equal("cargoHeatingFailure", heating.Actions[0].AsString());
     }
 
     /// <summary>
@@ -601,7 +658,8 @@ public class ScenarioLibraryLateCourseTests
         Assert.Equal(120.0, temps[0]);
         Assert.All(temps.Zip(temps.Skip(1)), p => Assert.Equal(300.0, p.Second - p.First));
         Assert.Equal(2, ev.Count(x => x.Kind == SimEventKinds.VoiceScript && x.ItemId == "tideWindowClosing"));
-        Assert.Empty(e.BuildState().Faults ?? Array.Empty<string>());               // 只記錄故障未注入
+        Assert.Equal(new[] { "cargoHeatingFailure" }, e.BuildState().Faults);       // 只記錄故障已注入(recordOnly)
+        Assert.Equal(120.0, ev.Single(x => x.Kind == SimEventKinds.FaultInjected).T);
         Assert.Equal(2264.0, T(ev, "arrived"));
         Assert.All(s.Assessment.Required, r => Assert.Equal("missed", r.State));
         Assert.Equal("fail", Band(s, "speed").State);

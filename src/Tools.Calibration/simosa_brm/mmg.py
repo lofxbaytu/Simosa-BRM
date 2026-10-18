@@ -671,15 +671,18 @@ class MMGShip:
         自動舵啟用中注入使自動舵不可用的故障(autopilotFailure / gyroFailure)時自動舵跳脫:舵令同步到目前舵角、
         模式回 fu(C# TripAutopilot;是否跳脫可由呼叫前後的 ``ctl.autopilot`` 判斷)。
         ``tugLineBreak``:``args`` 是指令的 args.args 物件(C# FaultArgString;呼叫端不得把 args 本身傳入),
-        其 ``id`` 指定的拖船須存在(否則 ``CommandRejected`` unknownTug、不加入 faults);
+        其 ``id`` 指定的拖船須存在且未離開(否則 ``CommandRejected`` unknownTug / tugUnavailable、不加入 faults);
         斷該船(省略 = 第一艘拉中/待命中的拖船)的拖纜,tugLineParted 事件記入 ``external_events``。"""
         name = str(name)
         tug_id = args.get("id") if isinstance(args, dict) and isinstance(args.get("id"), str) else None
         if name == FAULT_TUG_LINE_BREAK and tug_id is not None:
             if not self.external.supported:
                 raise CommandRejected("externalForcesUnsupported", "動力學模型不支援外力")
-            if self.external.tug(tug_id) is None:
+            tug = self.external.tug(tug_id)
+            if tug is None:
                 raise CommandRejected("unknownTug", f"沒有拖船 {tug_id}")
+            if tug.status == "unavailable":  # 已離開的拖船沒有拖纜可斷(同 C# tugUnavailable,不加入 faults)
+                raise CommandRejected("tugUnavailable", f"拖船 {tug_id} 已離開")
         if name not in self.faults:
             self.faults.append(name)
         if self.ctl.autopilot and not self.autopilot_available:

@@ -221,8 +221,8 @@ describe('事件文字、嚴重度與拒絕原因', () => {
     expect(externalEventSeverity(ev('cpaAlarm'))).toBeNull();
   });
 
-  it('19 種拒絕原因都有中文標籤且併入 REJECT_REASON_LABEL', () => {
-    const reasons = ['externalForcesUnsupported', 'unknownTug', 'unknownTugMode', 'tugModeUnavailable', 'tugLineParted', 'invalidPower', 'noAnchorData', 'unknownAnchor', 'anchorAlreadyOut', 'anchorStowed', 'chainFullyOut', 'invalidTarget', 'unknownAction', 'noBerth', 'unknownMooringLine', 'unknownBollard', 'bollardOutOfReach', 'mooringLineNotFast', 'mooringLineParted'];
+  it('20 種拒絕原因都有中文標籤且併入 REJECT_REASON_LABEL', () => {
+    const reasons = ['externalForcesUnsupported', 'unknownTug', 'unknownTugMode', 'tugModeUnavailable', 'tugLineParted', 'invalidPower', 'noAnchorData', 'unknownAnchor', 'anchorAlreadyOut', 'anchorStowed', 'chainFullyOut', 'invalidTarget', 'unknownAction', 'noBerth', 'unknownMooringLine', 'unknownBollard', 'bollardOutOfReach', 'mooringLineNotFast', 'mooringLineParted', 'tugUnavailable'];
     expect(Object.keys(EXTERNAL_REJECT_REASON_LABEL).sort()).toEqual([...reasons].sort());
     for (const r of reasons) {
       expect(REJECT_REASON_LABEL[r]).toMatch(/[一-鿿]/);

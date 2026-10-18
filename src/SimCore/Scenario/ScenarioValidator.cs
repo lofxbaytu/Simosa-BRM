@@ -6,7 +6,8 @@ namespace SimosaBRM.SimCore.Scenario;
 
 /// <summary>
 /// 載入時的靜態檢查(規劃書第 9.1 節「自動檢查」、情境引擎設計第 2.4 節):結構錯誤(同 <see cref="Scenario.StructuralIssues"/>)、
-/// 初始狀態已成立的硬性失敗(error)、初始即成立的時間表條件/過晚的 time 觸發/無 cooldown 的 always/缺音檔/只記錄的故障、
+/// 初始狀態已成立的硬性失敗(error)、初始即成立的時間表條件/過晚的 time 觸發/無 cooldown 的 always/缺音檔/
+/// 只記錄的故障(injectFault 物件形式 recordOnly: true 明示預期者不警告)、
 /// 航段短於到達半徑、CPA 門檻大於航道走廊寬度(warning)。
 /// 主控程序啟動與 loadScenario 時印出;<c>--validate</c> 只檢查不執行。
 /// </summary>
@@ -33,6 +34,11 @@ public static class ScenarioValidator
         void Error(string path, string msg) => issues.Add(new ScenarioIssue(ScenarioIssueSeverity.Error, path, msg));
         void Warn(string path, string msg) => issues.Add(new ScenarioIssue(ScenarioIssueSeverity.Warning, path, msg));
         if (issues.Any(i => i.Severity == ScenarioIssueSeverity.Error)) return issues;
+        // expect 的 includePrior 只對指定 targetId 的 encounterFirstAction 有效(AssessmentEngine.PriorFirstAction);其餘位置不作用
+        for (var i = 0; i < scenario.Assessment.Required.Count; i++)
+            foreach (var leaf in scenario.Assessment.Required[i].Expect.Leaves())
+                if (leaf.Event is { IncludePrior: true } ev && (ev.Kind != Engine.SimEventKinds.EncounterFirstAction || ev.TargetId is null))
+                    Warn($"assessment.required[{i}].expect", $"includePrior 只對指定 targetId 的 encounterFirstAction 有效,此處({ev.Kind}{(ev.TargetId is null ? ",未指定 targetId" : "")})不作用");
         if (scenario.Origin is null || scenario.Initial.Position is null) return issues;
 
         var proj = new LocalTangentPlane(scenario.Origin.Lat, scenario.Origin.Lon);
@@ -110,7 +116,9 @@ public static class ScenarioValidator
                 if (a.Kind == "injectFault" && a.AsString() is { } fault)
                 {
                     if (!FaultCatalogue.Contains(fault)) Warn(path, $"故障 {fault} 不在故障目錄中");
-                    else if (!ModelledFaults.Contains(fault)) Warn(path, $"故障 {fault} 只記錄與廣播,儀器端需自行反應");
+                    // recordOnly: true = 作者明示「只記錄,由儀器/腳本反應」,不警告;標在核心有模型的故障上則警告(標記與行為不符)
+                    else if (!ModelledFaults.Contains(fault) && !a.RecordOnly) Warn(path, $"故障 {fault} 只記錄與廣播,儀器端需自行反應(預期如此時加 recordOnly: true)");
+                    else if (ModelledFaults.Contains(fault) && a.RecordOnly) Warn(path, $"故障 {fault} 由核心模擬(會改變行為),recordOnly: true 不適用");
                 }
                 if (a.Kind == "voiceScript" && a.AsVoiceScript()?.File is { } file)
                 {

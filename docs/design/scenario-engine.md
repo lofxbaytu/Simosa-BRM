@@ -459,7 +459,7 @@ public sealed record TrafficEvent : SimEvent { }   // Source 固定 "traffic";Tr
 | assessment | `speedLimitExceeded` / `speedLimitRestored` | `data: {sog_kn, limit_kn, source: leg\|zone, id}` |
 | assessment | `encounterStarted` / `encounterFirstAction` / `encounterClosed` | `targetId`;`data: {range_nm, cpa_nm, tcpa_min, action, headingChange_deg, speedChange_kn}` |
 | assessment | `requiredEventPending` | `after` 事件發生、必要事件開始計時(D33);`itemId` = 規則 id;`data: {after: kind, afterItemId, afterSeq, start_t, within_s(已解析的參數值), deadline_t = start_t + within_s, penalty}`,教官站據此倒數 |
-| assessment | `requiredEventMet` / `requiredEventMissed` | `itemId` = 規則 id;`data: {dt_s, within_s, by: kind, late, penalty}`;逾時以 `dt_s > within_s` 判定(與 `faultResponses.withinFirstAction = dt ≤ within_s` 一致),動作落在期限與下一整秒評估之間時同一 tick 先補發 `requiredEventMissed` 再發 `requiredEventMet {late: true}`(D35) |
+| assessment | `requiredEventMet` / `requiredEventMissed` | `itemId` = 規則 id;`data: {dt_s, within_s, by: kind, late, penalty, prior_t?}`(`prior_t` 只在 `includePrior` 以開始計時前的首次行動達成時出現,此時 `dt_s = 0`);逾時以 `dt_s > within_s` 判定(與 `faultResponses.withinFirstAction = dt ≤ within_s` 一致),動作落在期限與下一整秒評估之間時同一 tick 先補發 `requiredEventMissed` 再發 `requiredEventMet {late: true}`(D35) |
 | assessment | `hardFail` | `itemId` = 規則 id;`data: {rule, value, limit, paramKey}` |
 | assessment | `bandWarn` / `bandFail` | 指標首次進入 warn/fail 帶 |
 | instructor | `acknowledge` | `data: {kind, role, note, itemId}` |
@@ -600,6 +600,10 @@ distToWp = |B − P|;brgToWp = atan2(B − P)
 - 硬性失敗:`grounding`、`collision`(旗標/事件)、`cpa`(任一非 escort 目標 `MinCpaNm < lessThan` 且曾 `tcpa > 0`)、`ukc`、`zoneEntered`、`event {kind}`(通用);成立即發 `hardFail`(一次),`passed = false`。
 - 容許帶(`bands`):`direction: above`(預設,值越大越差)或 `below`;`fail: 2x` 表示 `warn × 2`;分數 = `start − Σ penalty`,每條規則一次(進入 fail 帶取 `failPenalty`,否則 warn 帶取 `penalty`);下限 0。
 - 必要事件:`after` 事件發生後開始計時;`expect` 任一達成 → `requiredEventMet`(`dt_s`);逾 `within_s` 未達成 → `requiredEventMissed` + `penalty`(若後來達成,改記 `late = true`,扣 `min(penalty, latePenaltyPer_s × 逾時秒)`);`after` 事件未發生 → 規則 `notApplicable`。
+  只比對 `after` 之後的事件;例外是 `expect` 的 `{event: {kind: encounterFirstAction, targetId, includePrior: true}}`:每筆會遇只發一次 `encounterFirstAction`,
+  `after` 晚於會遇開始時(例如 E15 以 X1 起步 `crossingTurn` 為起點)起步前的正常動作會先用掉它;加上 `includePrior` 後,開始計時當下若該目標最新一筆會遇仍進行中且已有首次行動,
+  即以 `dt_s = 0` 判 met(`requiredEventMet.data.prior_t` = 首次行動時刻;已結束的會遇不計)。未給 `includePrior` 的規則語意不變(E02 `standOnAction` 等不計入先前行動);
+  用在其他事件或未指定 `targetId` 時 `--validate` 警告且不作用。
 - `passed = !hardFailed && score ≥ passMark`;`endExercise` 或紀錄關閉時定稿(`final = true`)。
 - 依 A-I/12,summary 標示 `"advisory": true`(自動評分僅輔助,最終由評估員判定;第 8.3 節)。
 

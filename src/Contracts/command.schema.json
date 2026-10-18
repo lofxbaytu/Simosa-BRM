@@ -291,11 +291,11 @@
   "$defs": {
     "tugControlArgs": {
       "type": "object",
-      "description": "tugControl 的 args(docs/design/physics-tugs-anchors-mooring.md 第 2 節)。接受時發事件 tugCommand {id, mode, from, status, direction_deg, power_pct};拒絕時 commandRejected {reason: unknownTug|unknownTugMode|tugModeUnavailable|tugLineParted|invalidPower|externalForcesUnsupported}。push↔pull 換位需 modeChange_s(依拖船就位的工作側判定:推 → standby → 拉 仍需換位;換位/帶纜中下 standby 計時照走)、free → push/pull 需 connect_s(期間無出力);status parted 的拖船只調方向/出力或下 free 時保持 parted(故障清除才轉 free);出力一階上升(riseTime_s)、方向以 turnRate_degPerSec 迴轉;自船對水速度高於 fullUpTo_kn 時效能遞減。拖纜斷裂以 injectFault {name: tugLineBreak, args: {id}} 注入(id 未定義時 commandRejected {command: injectFault, reason: unknownTug}、動力學不支援外力時 reason externalForcesUnsupported,皆不加入 faults[])。",
+      "description": "tugControl 的 args(docs/design/physics-tugs-anchors-mooring.md 第 2 節)。接受時發事件 tugCommand {id, mode, from, status, direction_deg, power_pct};拒絕時 commandRejected {reason: unknownTug|tugUnavailable|unknownTugMode|tugModeUnavailable|tugLineParted|invalidPower|externalForcesUnsupported}。mode unavailable(教官或情境時間表 tugControl 動作的拖船縮減):拖船立即失去出力並離開(state.tugs[].mode/status unavailable),發事件 tugUnavailable {id, mode, from, fromStatus, status, force_t}(而非 tugCommand),之後對該拖船的任何指令(含再下 unavailable)以 tugUnavailable 拒絕,tugLineBreak 不再作用於它(指定 id 時 injectFault 以 tugUnavailable 拒絕)。push↔pull 換位需 modeChange_s(依拖船就位的工作側判定:推 → standby → 拉 仍需換位;換位/帶纜中下 standby 計時照走)、free → push/pull 需 connect_s(期間無出力);status parted 的拖船只調方向/出力或下 free 時保持 parted(故障清除才轉 free);出力一階上升(riseTime_s)、方向以 turnRate_degPerSec 迴轉;自船對水速度高於 fullUpTo_kn 時效能遞減。拖纜斷裂以 injectFault {name: tugLineBreak, args: {id}} 注入(id 未定義時 commandRejected {command: injectFault, reason: unknownTug}、id 為已離開(unavailable)的拖船時 reason tugUnavailable、動力學不支援外力時 reason externalForcesUnsupported,皆不加入 faults[]、不發 faultInjected)。",
       "required": ["id"],
       "properties": {
         "id": { "type": "string", "description": "情境 tugs[].id" },
-        "mode": { "type": "string", "enum": ["push", "pull", "standby", "free"], "description": "省略 = 不變" },
+        "mode": { "type": "string", "enum": ["push", "pull", "standby", "free", "unavailable"], "description": "省略 = 不變;unavailable = 拖船離開、本練習不再可用(不可恢復)" },
         "direction_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "作用於自船的力方向,相對船艏順時針(0 向前、90 向右舷、180 向後、270 向左舷);省略 = 不變" },
         "power_pct": { "type": "number", "minimum": 0, "maximum": 100, "description": "出力(繫柱拖力的百分比);省略 = 不變" }
       }

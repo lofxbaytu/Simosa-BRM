@@ -42,8 +42,9 @@ LOADINGS = ("full", "ballast", "intermediate")
 # ---- 結構檢查用的允許清單(與 C# SimCore 相同;來源檔案見各註解)
 TIMELINE_ACTIONS = (  # ScenarioTimeline.cs TimelineAction.AllowedKinds
     "injectFault", "clearFault", "setEnvironment", "targetControl", "voiceScript", "message", "phase", "freeze",
-    "autopilot", "ownShip", "timeScale", "arm", "disarm", "endExercise",
+    "autopilot", "ownShip", "timeScale", "arm", "disarm", "endExercise", "tugControl",
 )
+TUG_CONTROL_MODES = ("push", "pull", "standby", "free", "unavailable")  # 時間表 tugControl.mode(C# Scenario.CheckTugControlAction)
 FORBIDDEN_ACTIONS = ("loadScenario", "reset", "restore", "snapshot")  # TimelineAction.ForbiddenKinds
 TRIGGER_LEAF_TYPES = (  # TriggerCondition.LeafTypes
     "time", "ownDistance", "ownHeading", "ownSpeed", "ukc", "xtd", "routeLeg", "zone", "phase", "event", "fault", "telegraph", "autopilot", "manual",
@@ -380,6 +381,8 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
     wp_names = {s for w in waypoints if isinstance(w, dict) and (s := _lenient_str(w.get("name"))) is not None}
     target_ids = {s.upper() for t in targets if isinstance(t, dict) and (s := _lenient_str(t.get("id"))) is not None}
     all_item_ids = {s for t in timeline if isinstance(t, dict) and (s := _lenient_str(t.get("id"))) is not None}
+    tug_ids = {s.upper() for t in (raw.get("tugs") or []) if isinstance(t, dict) and (s := _lenient_str(t.get("id"))) is not None} \
+        if isinstance(raw.get("tugs"), list) else set()
 
     # ---- timeline
     item_ids: set[str] = set()
@@ -424,6 +427,25 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
             elif kind in ("injectFault", "clearFault"):
                 if not (_action_string(payload) or "").strip():
                     error(ap, f"{kind} 缺少故障名稱")
+                # recordOnly: true = 作者明示「只記錄,由儀器/腳本反應」(C# 驗證器據此不警告);須為布林值
+                if kind == "injectFault" and isinstance(payload, dict) and "recordOnly" in payload and not isinstance(payload["recordOnly"], bool):
+                    error(ap, "injectFault.recordOnly 須為布林值")
+            elif kind == "tugControl":
+                # 與指令相同的 args;id 須為情境 tugs[].id(C# Scenario.CheckTugControlAction)
+                if not isinstance(payload, dict):
+                    error(ap, "tugControl 須為物件 {id, mode?, direction_deg?, power_pct?}")
+                else:
+                    tid = _lenient_str(payload.get("id"))
+                    if tid is None or not tid.strip():
+                        error(ap, "tugControl 缺少 id")
+                    elif tid.upper() not in tug_ids:
+                        error(ap, f"tugControl 引用不存在的拖船:{tid}(須為 tugs[].id)")
+                    if "mode" in payload and not (isinstance(payload["mode"], str) and payload["mode"].lower() in TUG_CONTROL_MODES):
+                        error(ap, f"tugControl.mode 須為 push|pull|standby|free|unavailable:{payload['mode']}")
+                    if "power_pct" in payload and not ((pw := _lenient_number(payload["power_pct"])) is not None and 0 <= pw <= 100):
+                        error(ap, "tugControl.power_pct 須為 0–100")
+                    if "direction_deg" in payload and _lenient_number(payload["direction_deg"]) is None:
+                        error(ap, "tugControl.direction_deg 須為數值")
             elif kind == "phase":
                 if not (_action_string(payload) or "").strip():
                     error(ap, "phase 缺少階段名稱")

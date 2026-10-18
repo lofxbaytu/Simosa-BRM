@@ -1,0 +1,120 @@
+# E22c 1.39 教室模式迷你情境:對資深者提出質疑(規劃書第 8.0 節 1.39 人因單元、第 8.1 節 E22 與「引水人/教官是錯的」規則;設計 docs/design/scenario-library.md 第 20 節;schema src/Contracts/scenario.schema.json)
+# 台灣西南外海開闊水域(示意座標,無航道/港口幾何,待 ENC 校正;水深一律 60 m),白天,FSB1 滿載 HAH 約 7.5 kn、自動舵 180°;約 12 分鐘。
+# 腳本(1.39 教室模式:不套用三步升級,無硬性失敗):T+1 s 交班開場 → T+150 s 船長上駕駛台,對右舷橫越的讓路情況(X1 由西向東,自船為讓路船)
+#   下令「左舵十,從他船艏前過」(違反 COLREG 第 15、16 條)→ 學員須在 bridge.e22.challenge_s 內提出質疑(acknowledge verbal;PACE:探詢 → 提醒 → 質疑 → 緊急)→
+#   質疑後船長接受(語音);未質疑則舵工照令執行(timeline ownShip 左舵 10、60 s 後回正)→ T+300 s 討論點 → T+12 min 結束。無人操作時 X1 約 0.4 nm 通過。
+# 評估(講評為主):提出質疑(verbal)、接班檢查表;講評以舵令/航跡與 summary.collisionAvoidance 判讀。
+id: E22c_challenge_senior
+name: 1.39 教室迷你情境 — 對資深者提出質疑
+description: >-
+  船長上駕駛台後對右舷橫越的讓路情況下了不當的舵令(向左、從他船艏前過)。練習以 PACE(探詢、提醒、質疑、緊急)
+  對資深者提出質疑、權力距離與團隊心理安全;1.39 領導與團隊合作單元的教室討論素材(約 12 分鐘)。
+seed: 20261224
+startTimeUtc: "2026-12-24T02:00:00Z"            # 當地 10:00
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 22.4000, lon: 120.0000 }          # 台灣西南外海(示意)
+initial:
+  position: { lat: 22.4000, lon: 120.0000 }
+  heading: 180
+  speed: 7.5
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 12, trueDir: 30, gustiness: 0.1 }
+  current: { set: 180, drift: 0.3 }
+  waterDepth: 60
+  visibility_nm: 10
+briefing:
+  text: |
+    交班(10:00 地方時):No.1 滿載南下,自動舵 180°、HAH 約 7.5 kn,開闊水域、能見度良好;右舷(西側)有一艘向東航行的貨船 X1,約 2 nm。
+    書面航程計畫:航向 180° 直航(示意)。船長(帶領者扮演或語音腳本)稍後上駕駛台。
+    公司政策:任何人對航行安全有疑慮時都必須提出(停止作業權),船長鼓勵質疑。
+    教室模式(1.39 領導與團隊合作):討論點時請學員說出「當時想說什麼、為什麼沒說出口、怎樣說才有效(PACE)」。
+  attachments:
+    - { title: "航程計畫(高雄外海南下,示意)", file: docs/passage-plan-E22.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+    - { title: "1.39 單元講義:領導、權力距離與質疑(PACE)", file: docs/IMO-1.39-challenge.pdf }
+  roles:
+    - { role: officer, required: true }
+    - { role: master, playedBy: leader }
+    - { role: helmsman }
+  minParticipants: 2
+  duration_s: 720
+timeline:
+  - id: handover
+    name: 交班開場
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:自動舵一八零,半速。右舷那艘貨船往東走,方位變化很小,要注意。船長說等一下上來。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對 X1 的 CPA/方位變化與讓路責任;完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 180°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 180 }
+  - id: masterOrder
+    name: 船長下不當舵令
+    when: { type: time, atLeast: 150 }
+    actions:
+      - voiceScript: { role: master, channel: bridge, text: "改手操舵。左舵十,我們從他船頭前面過去,比較快。", lang: zh-TW }
+      - message: { to: instructor, text: "「資深者是錯的」:X1 在右舷橫越,自船為讓路船,應向右、從他船艉後通過(COLREG 第 15、16 條)。期望 90 s 內提出質疑(acknowledge verbal)", severity: warning }
+  - id: masterAccepts
+    name: 船長接受質疑
+    when: { type: event, kind: requiredEventMet, itemId: challengeMaster }
+    actions:
+      - voiceScript: { role: master, channel: bridge, text: "你說得對,我們是讓路船。改右轉,從他船後面過。謝謝你提出來。", lang: zh-TW }
+  - id: masterOrderExecuted
+    name: 未質疑:舵工照令執行
+    when: { type: event, kind: requiredEventMissed, itemId: challengeMaster }
+    actions:
+      - autopilot: { enabled: false }
+      - ownShip: { rudder: -10 }
+      - voiceScript: { role: helmsman, channel: bridge, text: "左舵十,舵在左十。", lang: zh-TW }
+  - id: helmsmanSteadies
+    name: 舵工回正
+    when: { type: time, atLeast: 60, since: { event: timelineTriggered, itemId: masterOrderExecuted } }
+    actions:
+      - ownShip: { rudder: 0 }
+  - id: discussionPoint
+    name: 討論點(教室模式暫停)
+    phase: discussion
+    when: { type: time, atLeast: 300 }
+    actions:
+      - message: { to: instructor, text: "討論點:可暫停(freeze)帶領討論 — 權力距離、PACE 的四個層次、船長如何建立讓部屬敢質疑的氣氛", severity: info }
+  - id: timeUp
+    name: 迷你情境結束
+    when: { type: time, atLeast: 720 }
+    actions:
+      - endExercise: { reason: 迷你情境結束(進入講評) }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  hardFail: []                                    # 1.39 教室模式:無硬性失敗(講評為主)
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 10
+    - id: challengeMaster
+      after: { event: timelineTriggered, itemId: masterOrder }
+      expect: { acknowledge: { kind: verbal } }
+      within_s: "${params:bridge.e22.challenge_s}"
+      penalty: 25
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: X1
+    name: MING YANG
+    mmsi: 416522201
+    shipType: cargo
+    loa: 130
+    beam: 20
+    draft: 7
+    initial:
+      position: { lat: 22.37491, lon: 119.97602 }  # 右舷前方約 2.0 nm,航向 090° 10 kn;無人操作約 T+9.5 min 在艏前約 0.4 nm 通過
+      heading: 90
+      speed: 10
+    behaviour: { mode: scripted, script: [ { t: 0, heading: 90, speed: 10 } ] }

@@ -689,11 +689,13 @@ public sealed class SimulationEngine
             case SimCommandType.InjectFault:
                 if (cmd.FaultName() is { } f && f.Length > 0)
                 {
-                    // tugLineBreak 指定 args.id 時須為已定義的拖船(且動力學支援外力);否則拒絕、不加入 faults[](避免故障亮起卻沒有作用)
+                    // tugLineBreak 指定 args.id 時須為已定義且仍可用的拖船(且動力學支援外力);否則拒絕、不加入 faults[](避免故障亮起卻沒有作用):
+                    // 已離開(tugControl mode unavailable)的拖船沒有拖纜可斷 → tugUnavailable(與 tugControl 對它的拒絕原因相同)
                     if (f == FaultNames.TugLineBreak && FaultArgString(cmd, "id") is { } tugId)
                     {
                         if (!_external.Supported) { RejectCommand(cmd, source, itemId, CommandRejectReasons.ExternalForcesUnsupported); break; }
-                        if (_external.Tug(tugId) is null) { RejectCommand(cmd, source, itemId, CommandRejectReasons.UnknownTug); break; }
+                        if (_external.Tug(tugId) is not { } lineTug) { RejectCommand(cmd, source, itemId, CommandRejectReasons.UnknownTug); break; }
+                        if (lineTug.Status == TugStatus.Unavailable) { RejectCommand(cmd, source, itemId, CommandRejectReasons.TugUnavailable); break; }
                     }
                     var already = _faults.Contains(f);
                     // 感測器層先記下注入時的指示值(凍結/保持值、漂移起點),再把名稱加入 faults[]
@@ -1001,6 +1003,10 @@ public sealed class SimulationEngine
                 break;
             case "targetControl":
                 ApplyInternal(new SimCommand { Type = SimCommandType.TargetControl, Args = action.Payload }, SimEventSources.Timeline, id);
+                break;
+            case "tugControl":
+                // 與指令相同的 args(拖船縮減:mode unavailable);拒絕時 commandRejected source timeline
+                ApplyInternal(new SimCommand { Type = SimCommandType.TugControl, Args = action.Payload }, SimEventSources.Timeline, id);
                 break;
             case "voiceScript":
                 Raise(NewEvent(SimEventKinds.VoiceScript, SimEventSources.Timeline, id, null, action.AsVoiceScript()?.Text, action.Payload, visible));

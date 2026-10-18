@@ -271,9 +271,10 @@ export type TimelineActionKind =
   | 'timeScale'
   | 'arm'
   | 'disarm'
-  | 'endExercise';
+  | 'endExercise'
+  | 'tugControl';
 
-export const TIMELINE_ACTION_KINDS: readonly TimelineActionKind[] = ['injectFault', 'clearFault', 'setEnvironment', 'targetControl', 'voiceScript', 'message', 'phase', 'freeze', 'autopilot', 'ownShip', 'timeScale', 'arm', 'disarm', 'endExercise'] as const;
+export const TIMELINE_ACTION_KINDS: readonly TimelineActionKind[] = ['injectFault', 'clearFault', 'setEnvironment', 'targetControl', 'voiceScript', 'message', 'phase', 'freeze', 'autopilot', 'ownShip', 'timeScale', 'arm', 'disarm', 'endExercise', 'tugControl'] as const;
 
 /** 不允許作為時間表動作的指令(設計文件第 1.1.2 節)。 */
 export const FORBIDDEN_ACTIONS: readonly string[] = ['loadScenario', 'reset', 'restore', 'snapshot'] as const;
@@ -347,6 +348,8 @@ export function actionSummary(a: TimelineAction): string {
       return `停用項目 ${str(v)}`;
     case 'endExercise':
       return `結束練習${isRecord(v) && v['reason'] ? `:${str(v['reason'])}` : ''}`;
+    case 'tugControl':
+      return `拖船令 ${isRecord(v) ? `${str(v['id'])} ${str(v['mode'])}`.trim() : str(v)}`;
     default:
       return `${a.kind} ${typeof v === 'string' ? v : JSON.stringify(v)}`;
   }

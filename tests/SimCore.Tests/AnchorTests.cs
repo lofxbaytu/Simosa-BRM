@@ -194,6 +194,120 @@ public class AnchorTests
         Assert.Single(events, x => x.Kind == "anchorBrakeSlipping");
     }
 
+    /// <summary>把錨放在使錨鏈孔水平張力為 <paramref name="h"/>(N)的位置(錨鏈孔正前方,懸鏈線著底區)。</summary>
+    private static void PlaceAtTension(AnchorUnit u, in StateVector ship, double h, double depth = 20.0)
+    {
+        var (he, hn) = BodyFrame.ToEnu(ship, u.HawseXb, u.HawseYb);
+        (u.AnchorX, u.AnchorY) = (he, hn + Catenary.TouchdownDistance(h / u.Spec.ChainSubmergedWeightPerM, u.Length, u.VerticalSpan(depth)));
+    }
+
+    /// <summary>
+    /// 絞盤停轉遲滯:錨鏈拉直時張力每 tick 在過載上下擺動(剛性極高的錨鏈),停轉期間只發一次 anchorWindlassStalled;
+    /// 張力 &lt; 0.9 × 過載拉力的 tick 照常收鏈;連續 5 s 低於 0.9 倍才解除,之後再超載才再發事件。
+    /// </summary>
+    [Fact]
+    public void WindlassStallHasHysteresis()
+    {
+        var (u, ship) = AnchoredAtTension(5e3);
+        Assert.Null(u.Command("heave", null, ship, 20.0));
+        var events = new List<ExternalEvent>();
+        var high = 1.6 * Fsb1Spec.WindlassPullN;
+        var l0 = u.Length;
+        for (var i = 0; i < 100; i++)
+        {
+            PlaceAtTension(u, ship, i % 2 == 0 ? high : 5e3);
+            u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+            Assert.True(u.Stalled);
+        }
+        Assert.Single(events, x => x.Kind == "anchorWindlassStalled");
+        Assert.Equal(50 * Fsb1Spec.HeavingRateMps * Dt, l0 - u.Length, 1e-9);     // 只有低張力的 tick 收鏈
+        // 0.9 倍與 1.0 倍之間:停轉期間不收鏈(遲滯帶)
+        var lBand = u.Length;
+        PlaceAtTension(u, ship, 0.95 * Fsb1Spec.WindlassOverloadPullN - u.Spec.ChainSubmergedWeightPerM * u.VerticalSpan(20.0));
+        u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        Assert.Equal(lBand, u.Length);
+        Assert.True(u.Stalled);
+        // 連續 5 s 低張力才解除
+        for (var i = 0; i < 249; i++)
+        {
+            PlaceAtTension(u, ship, 5e3);
+            u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        }
+        Assert.True(u.Stalled);
+        Assert.True(u.StallQuietS > 4.9);
+        PlaceAtTension(u, ship, 5e3);
+        u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        Assert.False(u.Stalled);
+        Assert.Equal(0.0, u.StallQuietS);
+        PlaceAtTension(u, ship, high);
+        u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        Assert.Equal(2, events.Count(x => x.Kind == "anchorWindlassStalled"));
+    }
+
+    /// <summary>剎車滑出遲滯:張力反覆超過剎車握持力時只發一次 anchorBrakeSlipping;連續 5 s 低於 0.9 倍才清除旗標。</summary>
+    [Fact]
+    public void BrakeSlipHasHysteresis()
+    {
+        var (u, ship) = AnchoredAtTension(5e3);
+        var hv = u.VerticalSpan(20.0);
+        var events = new List<ExternalEvent>();
+        void Taut()
+        {
+            var (he, hn) = BodyFrame.ToEnu(ship, u.HawseXb, u.HawseYb);
+            (u.AnchorX, u.AnchorY) = (he, hn + Math.Sqrt(u.Length * u.Length - hv * hv) - 0.01);
+        }
+        for (var i = 0; i < 100; i++)
+        {
+            if (i % 2 == 0) Taut(); else PlaceAtTension(u, ship, 5e3);
+            u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+            Assert.True(u.Slipping);
+        }
+        Assert.Single(events, x => x.Kind == "anchorBrakeSlipping");
+        for (var i = 0; i < 250; i++)
+        {
+            PlaceAtTension(u, ship, 5e3);
+            u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+            Assert.Equal(i < 248, u.Slipping);   // 交替最後一 tick 已是低張力(計時 0.02 s)
+        }
+        Taut();
+        u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        Assert.Equal(2, events.Count(x => x.Kind == "anchorBrakeSlipping"));
+    }
+
+    /// <summary>
+    /// 改下指令立即解除滑出旗標(設計文件第 3.3 節「改下指令時立即解除」):剎車滑出後改下 brake / heave(模式仍為 braked/heaving),
+    /// 旗標與解除計時歸零,再次滑出時再發一次 anchorBrakeSlipping(教官站與講評看得到第二次滑出)。
+    /// </summary>
+    [Theory]
+    [InlineData("brake")]
+    [InlineData("heave")]
+    public void NewCommandClearsBrakeSlipFlag(string action)
+    {
+        var (u, ship) = AnchoredAtTension(5e3);
+        var hv = u.VerticalSpan(20.0);
+        var events = new List<ExternalEvent>();
+        void Taut()
+        {
+            var (he, hn) = BodyFrame.ToEnu(ship, u.HawseXb, u.HawseYb);
+            (u.AnchorX, u.AnchorY) = (he, hn + Math.Sqrt(u.Length * u.Length - hv * hv) - 0.01);
+        }
+        Taut();
+        u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        Assert.True(u.Slipping);
+        Assert.Single(events, x => x.Kind == "anchorBrakeSlipping");
+        PlaceAtTension(u, ship, 5e3);
+        u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        Assert.True(u.Slipping && u.SlipQuietS > 0.0);
+        Assert.Null(u.Command(action, null, ship, 20.0));
+        Assert.False(u.Slipping);
+        Assert.Equal(0.0, u.SlipQuietS);
+        Assert.False(u.Stalled);
+        Taut();
+        u.PostStep(ship, 20.0, Dt, Seabed.Sand, 100.0, 0.5, 0.0, events);
+        Assert.True(u.Slipping);
+        Assert.Equal(2, events.Count(x => x.Kind == "anchorBrakeSlipping"));
+    }
+
     [Fact]
     public void LetGoWithoutTargetRunsToBitterEnd()
     {

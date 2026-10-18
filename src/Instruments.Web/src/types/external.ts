@@ -4,11 +4,14 @@
 
 import type { Position } from './state.js';
 
-export type TugMode = 'push' | 'pull' | 'standby' | 'free';
-export const TUG_MODES: readonly TugMode[] = ['push', 'pull', 'standby', 'free'] as const;
+/** unavailable:拖船離開、本練習不再可用(時間表或教官 tugControl;不可恢復)。 */
+export type TugMode = 'push' | 'pull' | 'standby' | 'free' | 'unavailable';
+export const TUG_MODES: readonly TugMode[] = ['push', 'pull', 'standby', 'free', 'unavailable'] as const;
+/** 操作用模式(拖船面板的模式鈕;unavailable 不可恢復,不放在一般模式鈕)。 */
+export const TUG_OPERATING_MODES: readonly TugMode[] = ['push', 'pull', 'standby', 'free'] as const;
 
-export type TugStatus = 'standby' | 'connecting' | 'repositioning' | 'working' | 'free' | 'parted';
-export const TUG_STATUSES: readonly TugStatus[] = ['standby', 'connecting', 'repositioning', 'working', 'free', 'parted'] as const;
+export type TugStatus = 'standby' | 'connecting' | 'repositioning' | 'working' | 'free' | 'parted' | 'unavailable';
+export const TUG_STATUSES: readonly TugStatus[] = ['standby', 'connecting', 'repositioning', 'working', 'free', 'parted', 'unavailable'] as const;
 
 export interface TugState {
   id: string;

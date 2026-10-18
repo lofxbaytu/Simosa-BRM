@@ -31,8 +31,8 @@ EXTERNAL_HASH_MARKER = 0x45585446_4F524345
 BANK_HASH_MARKER = 0x42414E4B_45464354
 
 # 列舉順序與 C# 相同(雜湊用索引;對外名稱 = ContractJson.EnumName 的 camelCase)
-TUG_MODES = ("standby", "push", "pull", "free")
-TUG_STATUSES = ("standby", "connecting", "repositioning", "working", "free", "parted")
+TUG_MODES = ("standby", "push", "pull", "free", "unavailable")  # C# TugMode 的序數(雜湊);unavailable 列在最後
+TUG_STATUSES = ("standby", "connecting", "repositioning", "working", "free", "parted", "unavailable")
 ANCHOR_MODES = ("stowed", "running", "veering", "heaving", "braked")
 MOORING_STATUSES = ("stowed", "fast", "heaving", "slacking", "letGo", "parted")
 SEABED_TYPES = ("mud", "sand", "clay", "rock")
@@ -219,7 +219,17 @@ class TugUnit:
         return 1.0 / (1.0 + z * z)
 
     def command(self, mode: str, direction_deg: float | None, power_pct: float | None) -> str | None:
-        """指令;None = 接受,否則拒絕原因(tugModeUnavailable、tugLineParted)。"""
+        """指令;None = 接受,否則拒絕原因(tugUnavailable、tugModeUnavailable、tugLineParted)。
+        mode unavailable:拖船立即失去出力並離開,之後任何指令(含再下 unavailable)以 tugUnavailable 拒絕(C# TugUnit.Command)。"""
+        if self.status == "unavailable":
+            return "tugUnavailable"
+        if mode == "unavailable":
+            self.mode = "unavailable"
+            self.status = "unavailable"
+            self.force_n = 0.0
+            self.timer_ticks = 0
+            self.last_working_mode = "standby"
+            return None
         if (mode == "push" and not self.allow_push) or (mode == "pull" and not self.allow_pull):
             return "tugModeUnavailable"
         if mode == "pull" and self.line_parted:
@@ -257,6 +267,8 @@ class TugUnit:
         return None
 
     def part_line(self) -> float:
+        if self.status == "unavailable":
+            return 0.0
         before = self.force_n
         self.line_parted = True
         if self.mode in ("pull", "standby"):
@@ -279,11 +291,11 @@ class TugUnit:
                 self.status = "working" if self.mode in ("push", "pull") else "standby"
         self.efficiency = self.speed_efficiency(self.mode, speed) if self.mode in ("push", "pull") else 1.0
         target = self.bollard_pull_n * self.power_order * self.efficiency if self.status == "working" else 0.0
-        if self.status in ("free", "parted"):
+        if self.status in ("free", "parted", "unavailable"):
             self.force_n = 0.0
         else:
             self.force_n += (target - self.force_n) * self._alpha
-        if self.status not in ("free", "parted"):
+        if self.status not in ("free", "parted", "unavailable"):
             diff = wrap_rad_pi(self.direction_order - self.direction)
             step = self.turn_rate * dt
             self.direction = wrap_rad_pi(self.direction + (step if diff > step else (-step if diff < -step else diff)))
@@ -491,6 +503,10 @@ class AnchorUnit:
     UPLIFT_ZERO = 15.0 * math.pi / 180.0
     DRAG_HYSTERESIS = 0.95
     BROUGHT_UP_SOG = 0.15
+    # 絞盤停轉與剎車滑出的遲滯(C# OverloadReleaseFraction / OverloadClearS):超載期間旗標,
+    # 張力連續 5 s 低於門檻 0.9 倍才解除;停轉期間張力 ≥ 0.9 × 過載拉力時不收鏈
+    OVERLOAD_RELEASE = 0.9
+    OVERLOAD_CLEAR_S = 5.0
 
     def __init__(self, side: str, spec: AnchorParticulars, draft_fore: float) -> None:
         self.side = side
@@ -511,6 +527,8 @@ class AnchorUnit:
         self.fully_out = False
         self.slipping = False
         self.stalled = False
+        self.stall_quiet_s = 0.0
+        self.slip_quiet_s = 0.0
         # 最近步末(廣播)
         self.last = CATENARY_ZERO
         self.last_holding = 0.0
@@ -555,7 +573,7 @@ class AnchorUnit:
             self.mode = "running"
             self.target_length = min(max(target, self.length), self.max_length) if target is not None else None
             self.brought_up_pending = True
-            self.stalled = False
+            self._clear_overload()
             return None
         if action == "veer":
             if self.mode == "stowed":
@@ -564,7 +582,7 @@ class AnchorUnit:
                 return "chainFullyOut"
             self.mode = "veering"
             self.target_length = min(max(target, self.length), self.max_length) if target is not None else None
-            self.stalled = False
+            self._clear_overload()
             return None
         if action == "heave":
             if self.mode == "stowed":
@@ -574,14 +592,14 @@ class AnchorUnit:
             self.mode = "heaving"
             self.target_length = max(0.0, target) if target is not None else None
             self.fully_out = False
-            self.stalled = False
+            self._clear_overload()
             return None
         if action == "brake":
             if self.mode == "stowed":
                 return "anchorStowed"
             self.mode = "braked"
             self.target_length = None
-            self.stalled = False
+            self._clear_overload()
             return None
         if action == "release":
             if self.mode == "stowed":
@@ -590,7 +608,7 @@ class AnchorUnit:
                 return "chainFullyOut"
             self.mode = "running"
             self.target_length = None
-            self.stalled = False
+            self._clear_overload()
             return None
         return "unknownAction"
 
@@ -615,25 +633,34 @@ class AnchorUnit:
                 self.mode = "braked"
                 self.target_length = None
         elif self.mode == "heaving":
-            stalled = r.top_tension > sp.windlass_overload_pull_n
-            if stalled != self.stalled:
-                self.stalled = stalled
-                if stalled:
-                    events.append(_event("anchorWindlassStalled", self.side, f"{self.side} 絞盤超載停轉",
-                                         {"side": self.side, "tension_t": r.top_tension / TONNE_FORCE,
-                                          "windlassLimit_t": sp.windlass_overload_pull_n / TONNE_FORCE}))
-            if not stalled:
+            # 遲滯:超過過載拉力即進入停轉期間(發一次事件);期間內張力 ≥ 0.9 × 過載拉力時不收鏈,
+            # 連續 OVERLOAD_CLEAR_S 秒低於 0.9 倍才解除(再超載才再發事件)
+            limit = sp.windlass_overload_pull_n
+            over = r.top_tension > limit
+            if self.stalled:
+                released, self.stall_quiet_s = self._relax(r.top_tension, limit, dt, self.stall_quiet_s)
+                self.stalled = not released
+            if over and not self.stalled:
+                self.stalled = True
+                events.append(_event("anchorWindlassStalled", self.side, f"{self.side} 絞盤超載停轉",
+                                     {"side": self.side, "tension_t": r.top_tension / TONNE_FORCE,
+                                      "windlassLimit_t": limit / TONNE_FORCE}))
+            blocked = over or (self.stalled and r.top_tension >= self.OVERLOAD_RELEASE * limit)
+            if not blocked:
                 self.length = max(self.target_length if self.target_length is not None else 0.0, self.length - sp.heaving_rate_mps * dt)
                 if self.target_length is not None and self.length <= self.target_length + 1e-9:
                     self.mode = "braked"
                     self.target_length = None
-                self.slipping = False
+                self._relax_slip(r.top_tension, dt)
             else:
                 self._slip_if_over_brake(k, depth, dt, r, events)
         elif self.mode == "braked":
             self._slip_if_over_brake(k, depth, dt, r, events)
         if self.mode not in ("braked", "heaving"):
             self.slipping = False
+            self.slip_quiet_s = 0.0
+        if self.mode != "heaving":
+            self._clear_stall()
 
         if not self.on_bottom and self.length > h:
             self.on_bottom = True
@@ -648,7 +675,7 @@ class AnchorUnit:
                 self.length = 0.0
                 self.mode = "stowed"
                 self.target_length = None
-                self.stalled = False
+                self._clear_stall()
                 events.append(_event("anchorHoused", self.side, f"{self.side} 錨收妥", {"side": self.side}))
             self.last = self.solve(k, depth)[0]
             self.last_holding = 0.0
@@ -679,9 +706,15 @@ class AnchorUnit:
 
     def _slip_if_over_brake(self, k: Kin, depth: float, dt: float, r: CatenaryResult, events: list[dict[str, Any]]) -> None:
         sp = self.spec
-        if self.fully_out or not self.on_bottom or not (r.top_tension > sp.brake_holding_n):
+        if self.fully_out or not self.on_bottom:
             self.slipping = False
+            self.slip_quiet_s = 0.0
             return
+        if not (r.top_tension > sp.brake_holding_n):
+            # 遲滯:滑出期間須連續 5 s 低於 0.9 × 剎車握持力才清除旗標(期間再滑出不重發事件)
+            self._relax_slip(r.top_tension, dt)
+            return
+        self.slip_quiet_s = 0.0
         l0 = self.length
         l1 = min(self.max_length, self.length + self.SLIP_RATE * dt)
         for _ in range(40):
@@ -699,6 +732,33 @@ class AnchorUnit:
         if self.length >= self.max_length - 1e-9:
             self.length = self.max_length
             self._reach_bitter_end(events)
+
+    @classmethod
+    def _relax(cls, tension: float, threshold: float, dt: float, quiet: float) -> tuple[bool, float]:
+        """停轉/滑出期間的解除計時(C# Relax):回傳 (是否解除, 新計時)。"""
+        if tension < cls.OVERLOAD_RELEASE * threshold:
+            quiet += dt
+            if quiet >= cls.OVERLOAD_CLEAR_S - 1e-9:
+                return True, 0.0
+            return False, quiet
+        return False, 0.0
+
+    def _relax_slip(self, tension: float, dt: float) -> None:
+        if not self.slipping:
+            return
+        released, self.slip_quiet_s = self._relax(tension, self.spec.brake_holding_n, dt, self.slip_quiet_s)
+        if released:
+            self.slipping = False
+
+    def _clear_stall(self) -> None:
+        self.stalled = False
+        self.stall_quiet_s = 0.0
+
+    def _clear_overload(self) -> None:
+        """改下指令時立即解除停轉與滑出旗標(C# AnchorUnit.ClearOverload;設計文件第 3.3 節)。"""
+        self._clear_stall()
+        self.slipping = False
+        self.slip_quiet_s = 0.0
 
     def _reach_bitter_end(self, events: list[dict[str, Any]]) -> None:
         if self.fully_out:
@@ -1336,15 +1396,22 @@ class ExternalForceModel:
         tug = self.tug(tid)
         if tug is None:
             return "unknownTug", None
+        if tug.status == "unavailable":  # 已離開的拖船:任何指令皆拒絕(先於模式檢查,同 C#)
+            return "tugUnavailable", None
         m = tug.mode if mode is None else str(mode).lower()
         if m not in TUG_MODES:
             return "unknownTugMode", None
         if power_pct is not None and (power_pct < 0 or power_pct > 100):
             return "invalidPower", None
         frm = tug.mode
+        frm_status = tug.status
+        force_before = tug.force_n
         reject = tug.command(m, direction_deg, power_pct)
         if reject is not None:
             return reject, None
+        if m == "unavailable":  # 拖船離開:tugUnavailable 而非 tugCommand(C# ExternalForceModel.TugControl)
+            return None, _event("tugUnavailable", tug.id, f"拖船 {tug.id} 離開(不再可用)", {
+                "id": tug.id, "mode": m, "from": frm, "fromStatus": frm_status, "status": tug.status, "force_t": force_before / TONNE_FORCE})
         dir_deg = normalize_heading_deg(tug.direction_order * RAD2DEG)
         return None, _event("tugCommand", tug.id, f"{tug.id} {m} {dir_deg:.0f}° {tug.power_order * 100:.0f}%", {
             "id": tug.id, "mode": m, "from": frm, "status": tug.status, "direction_deg": dir_deg, "power_pct": tug.power_order * 100.0})
@@ -1358,8 +1425,8 @@ class ExternalForceModel:
         else:
             tug = next((t for t in self.tugs if not t.line_parted and t.mode == "pull" and t.status != "free"), None)
             if tug is None:
-                tug = next((t for t in self.tugs if not t.line_parted and t.status not in ("free", "parted")), None)
-        if tug is None or tug.line_parted:
+                tug = next((t for t in self.tugs if not t.line_parted and t.status not in ("free", "parted", "unavailable")), None)
+        if tug is None or tug.line_parted or tug.status == "unavailable":
             return None
         mode = tug.mode
         before = tug.part_line()
@@ -1424,6 +1491,9 @@ class ExternalForceModel:
                 | (16 if a.slipping else 0) | (32 if a.stalled else 0)
             out.append(struct.pack("<qddqdd", ANCHOR_MODES.index(a.mode), a.length, -1.0 if a.target_length is None else a.target_length,
                                    flags, a.anchor_x, a.anchor_y))
+            # 停轉/滑出遲滯計時只在期間內追加(C# WriteHash;未曾超載的錨雜湊與舊版相同)
+            if a.stalled or a.slipping:
+                out.append(struct.pack("<dd", a.stall_quiet_s, a.slip_quiet_s))
         if self.berth is not None:
             b = self.berth
             out.append(struct.pack("<qd", 1 if b.quay_in_contact else 0, b.quay_max_penetration))

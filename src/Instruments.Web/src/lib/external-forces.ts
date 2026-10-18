@@ -50,7 +50,7 @@ export const SHACKLE_LENGTH_M = 27.5;
 
 // ------------------------------------------------------------------ 標籤
 
-export const TUG_MODE_LABEL: Readonly<Record<TugMode, string>> = { push: '推頂', pull: '拖拉', standby: '待命', free: '解纜' };
+export const TUG_MODE_LABEL: Readonly<Record<TugMode, string>> = { push: '推頂', pull: '拖拉', standby: '待命', free: '解纜', unavailable: '已離開' };
 
 export const TUG_STATUS_LABEL: Readonly<Record<TugStatus, string>> = {
   standby: '待命',
@@ -59,6 +59,7 @@ export const TUG_STATUS_LABEL: Readonly<Record<TugStatus, string>> = {
   working: '出力中',
   free: '已解纜',
   parted: '拖纜斷裂',
+  unavailable: '已離開(本練習不可用)',
 };
 
 export const ANCHOR_SIDE_LABEL: Readonly<Record<AnchorSide, string>> = { port: '左錨', starboard: '右錨' };
@@ -98,6 +99,7 @@ export const EXTERNAL_REJECT_REASON_LABEL: Readonly<Record<string, string>> = {
   unknownTugMode: '未知的拖船模式',
   tugModeUnavailable: '此拖船不可用該模式',
   tugLineParted: '拖纜已斷,不能拖拉',
+  tugUnavailable: '拖船已離開,本練習不可用',
   invalidPower: '出力需在 0–100 %',
   noAnchorData: '船舶資料沒有錨具規格',
   unknownAnchor: '未知的錨(左/右)',

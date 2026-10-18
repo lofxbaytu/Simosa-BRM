@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Parameters;
@@ -116,6 +117,12 @@ public sealed class Scenario
                         break;
                     case "injectFault" or "clearFault":
                         if (string.IsNullOrWhiteSpace(act.AsString())) Error(ap, $"{act.Kind} 缺少故障名稱");
+                        if (act.Kind == "injectFault" && act.Payload.ValueKind == JsonValueKind.Object && act.Payload.TryGetProperty("recordOnly", out var ro)
+                            && ro.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                            Error(ap, "injectFault.recordOnly 須為布林值");
+                        break;
+                    case "tugControl":
+                        CheckTugControlAction(act, ap, Error);
                         break;
                     case "phase":
                         if (string.IsNullOrWhiteSpace(act.AsString())) Error(ap, "phase 缺少階段名稱");
@@ -248,6 +255,20 @@ public sealed class Scenario
     /// </summary>
     internal static bool ItemIdRefersToTimeline(string? eventKind)
         => eventKind is null || !(eventKind.StartsWith("alert", StringComparison.Ordinal) || eventKind.StartsWith("bnwas", StringComparison.Ordinal));
+
+    /// <summary>時間表 tugControl 動作(與指令相同 args):id 須為情境 tugs[].id,mode/power_pct/direction_deg 須合法。</summary>
+    private void CheckTugControlAction(TimelineAction act, string path, Action<string, string> error)
+    {
+        if (act.Payload.ValueKind != JsonValueKind.Object) { error(path, "tugControl 須為物件 {id, mode?, direction_deg?, power_pct?}"); return; }
+        var id = act.Field("id");
+        if (string.IsNullOrWhiteSpace(id)) error(path, "tugControl 缺少 id");
+        else if (Tugs?.Any(t => string.Equals(t.Id, id, StringComparison.OrdinalIgnoreCase)) != true) error(path, $"tugControl 引用不存在的拖船:{id}(須為 tugs[].id)");
+        if (act.Payload.TryGetProperty("mode", out var m)
+            && (m.ValueKind != JsonValueKind.String || m.GetString()?.ToLowerInvariant() is not ("push" or "pull" or "standby" or "free" or "unavailable")))
+            error(path, $"tugControl.mode 須為 push|pull|standby|free|unavailable:{m}");
+        if (act.Payload.TryGetProperty("power_pct", out _) && act.NumberField("power_pct") is not (>= 0 and <= 100)) error(path, "tugControl.power_pct 須為 0–100");
+        if (act.Payload.TryGetProperty("direction_deg", out _) && act.NumberField("direction_deg") is null) error(path, "tugControl.direction_deg 須為數值");
+    }
 
     private static void CheckCondition(TriggerCondition c, string path, Action<string, string> error,
         HashSet<string> zoneIds, HashSet<string> wpNames, HashSet<string> targetIds)

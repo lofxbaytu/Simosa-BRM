@@ -3,10 +3,14 @@
 #   kaohsiung-anchorage-b-e15.json;示意,待 ENC 校正):外錨地 A 區在航線西北方 2.4 nm 以上,B 區(E15 專用)在航線北側、走廊外約 0.2 nm 起。
 # FSB2 滿載(7.2 m)引水人已在 Charlie 登船(帶領者扮演),HAH 約 9 kn、自動舵 074°(含流壓修正);漲潮流向西北 0.8 kn(壓向左舷、外錨地 B 區側)、東北風 18 kn。
 # 時間表:每 2 分鐘一次干擾(T+2 起至 T+22;貨物計畫電話、港口國管制(PSC)郵件、代理行 VHF、公司電話、機艙電話、ECDIS 警報氾濫……),
-#   以 voiceScript / message 表示(ECDIS 警報氾濫 ecdisAlarmFlood 為只記錄故障,為使 --validate 無警告改以重複訊息表示,不注入故障);
+#   以 voiceScript / message 表示;T+8 注入只記錄故障 ecdisAlarmFlood(injectFault recordOnly: true:核心不改變行為、加入 state.faults[],
+#   由儀器/訊息反應;--validate 不警告),警報內容仍以重複訊息表示;
 #   T+8 degraded(ecdisAlarmFlood:警報氾濫 + 漲潮增強至 1.4 kn,未再修正時航跡偏差);T+13 起右舷貨船 X1 改向橫越(關鍵事件,藏在干擾中);
 #   X1 距自船 1.0 nm 內或 T+21 emergency(crossingCloseQuarters;時間後備 bridge.e15.emergencyAt_s);漂入外錨地(A 或 B 區)時 VTS 提醒;到達口門外 OUTER 或 T+30 結束。
-# 評估:關鍵事件的偵測(acknowledge lookoutReport / report 或對 X1 的首次行動)與反應時間(X1 encounterFirstAction)、航跡(XTD 走廊)、CPA、
+# 評估:關鍵事件的偵測(acknowledge lookoutReport / report 或對 X1 的首次行動)與反應時間(X1 encounterFirstAction),計時起點為 X1 實際起步橫越
+#   (timelineTriggered crossingTurn;不用 X1 會遇開始:學員循跡修正流壓時會遇可能早於 X1 起步就開始,偵測/反應期限被提前消耗);
+#   X1 會遇已開始、起步前的首次行動(例如先減速或修正流壓一次改 5°)已用掉 X1 的 encounterFirstAction(每筆會遇只發一次),
+#   以 includePrior: true 計入(開始計時當下 dt = 0 判 met,與舊起點 after encounterStarted X1 的判定一致)、航跡(XTD 走廊)、CPA、
 #   「無干擾駕駛台」:貨物計畫電話/PSC 郵件/公司電話/警報氾濫各須在期限內由值班駕駛員授權他人處理或拒絕(acknowledge verbal,note 記錄處置)。
 id: E15_distraction_workload_kaohsiung
 name: 高雄引航進港中的干擾與工作負荷過載
@@ -114,7 +118,8 @@ timeline:
     when: { type: time, atLeast: "${params:bridge.e15.alarmFloodAt_s}" }
     actions:
       - setEnvironment: { current: { set: 315, drift: 1.4 }, ramp_s: 300 }
-      - message: { to: all, text: "ECDIS 警報:安全等深線、偏航、區域進入、AIS 目標遺失……(警報氾濫;ecdisAlarmFlood 以訊息表示)", severity: alarm }
+      - injectFault: { name: ecdisAlarmFlood, recordOnly: true }   # 只記錄故障:state.faults[] 出現 ecdisAlarmFlood,ECDIS/教官站據以反應
+      - message: { to: all, text: "ECDIS 警報:安全等深線、偏航、區域進入、AIS 目標遺失……(警報氾濫)", severity: alarm }
       - message: { to: instructor, text: "警報氾濫 + 漲潮 0.8 → 1.4 kn(5 分鐘漸變):觀察是否指派專人處理/確認警報(acknowledge verbal 或 report)而不忽略航跡偏差", severity: warning }
   - id: alarmFloodRepeat
     name: ECDIS 警報持續(重複)
@@ -233,14 +238,15 @@ assessment:
       within_s: "${params:bridge.distraction.response_s}"
       penalty: 5
     - id: crossingDetected
-      after: { event: encounterStarted, targetId: X1 }
-      expect: { any: [ { acknowledge: { kind: lookoutReport } }, { acknowledge: { kind: report } }, { event: { kind: encounterFirstAction, targetId: X1 } } ] }
+      after: { event: timelineTriggered, itemId: crossingTurn }   # X1 實際起步橫越(與 X1 script t = 780 同時)
+      expect: { any: [ { acknowledge: { kind: lookoutReport } }, { acknowledge: { kind: report } }, { event: { kind: encounterFirstAction, targetId: X1, includePrior: true } } ] }
       within_s: "${params:bridge.distraction.criticalDetection_s}"
       penalty: 10
       latePenaltyPer_s: 0.05
     - id: crossingAction
-      after: { event: encounterStarted, targetId: X1 }
-      expect: { event: { kind: encounterFirstAction, targetId: X1 } }
+      after: { event: timelineTriggered, itemId: crossingTurn }
+      # includePrior:X1 起步前(會遇已開始)的首次行動已用掉 encounterFirstAction 時,開始計時當下以 dt = 0 判 met
+      expect: { event: { kind: encounterFirstAction, targetId: X1, includePrior: true } }
       within_s: "${params:navigation.encounter.earlyAction_s}"
       penalty: 10
       latePenaltyPer_s: 0.05
