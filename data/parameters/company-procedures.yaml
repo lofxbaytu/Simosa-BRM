@@ -154,7 +154,7 @@ parameters:
   # 情境庫 E15–E18、E21(docs/design/scenario-library.md 第 9–14 節;全部為假設值,待公司程序)
   bridge.distraction.response_s:   { value: 60,  unit: s, source: ASSUMED-E15, clause: "", description: 引航/進港中與航行無關的干擾(電話、郵件、VHF)到值班駕駛員授權他人處理或拒絕/延後(acknowledge verbal;無干擾駕駛台) }
   bridge.distraction.alarmFloodResponse_s: { value: 120, unit: s, source: ASSUMED-E15, clause: "", description: ECDIS 警報氾濫到指派專人確認/處理警報(acknowledge verbal 或 report) }
-  bridge.distraction.criticalDetection_s: { value: 240, unit: s, source: ASSUMED-E15, clause: "", description: 干擾中的關鍵事件(橫越目標會遇開始)到瞭望/雷達報告或首次避讓行動 }
+  bridge.distraction.criticalDetection_s: { value: 240, unit: s, source: ASSUMED-E15, clause: "", description: 干擾中的關鍵事件(X1 起步橫越,時間表項目 crossingTurn)到瞭望/雷達報告或首次避讓行動 }
   bridge.e15.alarmFloodAt_s:       { value: 480, unit: s, source: ASSUMED-E15, clause: "", description: E15 ECDIS 警報氾濫與漲潮增強(劣化階段)的時刻(自情境開始) }
   bridge.e15.closeQuarters_nm:     { value: 1.0, unit: nm, source: ASSUMED-E15, clause: "", description: E15 橫越目標進入此距離時進入緊急階段 }
   bridge.e15.emergencyAt_s:        { value: 1260, unit: s, source: ASSUMED-E15, clause: "", description: E15 緊急階段的時間後備(橫越目標未進入近距離時) }
