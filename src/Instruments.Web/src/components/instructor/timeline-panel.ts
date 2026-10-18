@@ -346,6 +346,17 @@ export class TimelinePanel extends LitElement {
     this.holdingId = null;
   }
 
+  /**
+   * 快速鈕:常用種類 + 本情境必要事件 expect 用到的 acknowledge 種類(例如 F01 的 prediction、E03 的 lookoutReport、
+   * E10 的 driftCalculation),否則教官只能送「其他」,這些必要事件永遠無法達成。
+   */
+  quickAcks(): string[] {
+    const kinds = new Set<string>(QUICK_ACKS);
+    for (const r of this.assessment?.required ?? [])
+      for (const e of r.expect) if (e.type === 'acknowledge' && e.kind !== 'other') kinds.add(e.kind);
+    return [...kinds];
+  }
+
   private ack(kind: string): void {
     const input: Parameters<typeof acknowledgeCommand>[0] = { kind, role: this.ackRole };
     if (this.note.trim()) input.note = this.note.trim();
@@ -395,7 +406,7 @@ export class TimelinePanel extends LitElement {
           : nothing}
         <div class="section">確認(核心偵測不到的動作)</div>
         <div class="ack-row" role="group" aria-label="確認快速鈕">
-          ${QUICK_ACKS.map((k) => html`<button class="ack" data-ack=${k} ?disabled=${this.unsupported} @click=${() => this.ack(k)}>${ACK_KIND_LABEL[k]}</button>`)}
+          ${this.quickAcks().map((k) => html`<button class="ack" data-ack=${k} ?disabled=${this.unsupported} @click=${() => this.ack(k)}>${ACK_KIND_LABEL[k] ?? k}</button>`)}
           <button class="ack" data-ack="other" ?disabled=${this.unsupported} @click=${() => this.ack('other')}>其他</button>
         </div>
         <div class="ack-form">

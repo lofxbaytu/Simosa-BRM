@@ -81,6 +81,8 @@ public sealed record OwnShipState
     [JsonPropertyName("anchors")] public IReadOnlyList<AnchorStatusState>? Anchors { get; init; }
     /// <summary>泊位碰墊接觸與繫纜(情境無 berth 時省略)</summary>
     [JsonPropertyName("berth")] public BerthStatusState? Berth { get; init; }
+    /// <summary>岸壁效應(情境無 banks 時省略;設計文件 physics-bank-effect.md 第 5 節)</summary>
+    [JsonPropertyName("bank")] public Physics.External.BankEffectState? Bank { get; init; }
 }
 
 /// <summary>真值區塊(state.schema.json <c>truth</c>)。</summary>

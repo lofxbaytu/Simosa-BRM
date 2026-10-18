@@ -1,0 +1,30 @@
+{
+  "id": "taichung-inner-harbour",
+  "description": "台中港防波堤內迴船池前減速區與出港船設計航跡示意定義(供 E06 狹窄航道/防波堤口橫流;規劃書第 3.4、8.1 節 E06;補充 taichung-harbour-entrance.json,不重複其航道/防波堤)。減速區自口門(WP2)沿航道 125° 向內約 900 m 起、至迴船池(WP3 外約 300 m)止、寬 350 m(同口門寬),內港速限 6 kn 由此區起算(以對地速度計;口門到減速區之間沿用航道速限),與簡報「迴船池前減速」一致。出港船設計航跡為航道中心線向北側平移 110 m(進港船左舷,左舷對左舷通過)。皆為示意值,非 ENC/港方資料,不可用於實際航行或評估,待 ENC 校正(並核對台中港港口規定)。E06 兩個版本的 zones[innerSpeedLimit] 多邊形與此檔 speedLimitZones[0].polygon 相同、OUT1 起點與航點在 outboundTrack 上(測試檢查一致)。",
+  "source": "示意(依 taichung-harbour-entrance.json 的示意航道換算;待 ENC 校正)",
+  "speedLimitZones": [
+    {
+      "id": "innerSpeedLimit",
+      "name": "迴船池前減速區(示意)",
+      "speedLimit_kn": 6,
+      "alongFromEntrance_m": [900, 1800],
+      "polygon": [
+        { "lat": 24.29163, "lon": 120.49325 },
+        { "lat": 24.28697, "lon": 120.50051 },
+        { "lat": 24.28438, "lon": 120.49854 },
+        { "lat": 24.28905, "lon": 120.49127 }
+      ]
+    }
+  ],
+  "outboundTrack": {
+    "name": "出港船設計航跡(中心線北側 110 m,示意)",
+    "offsetFromCentreline_m": -110,
+    "course_deg": 305,
+    "points": [
+      { "name": "OUT-START", "lat": 24.28908, "lon": 120.49611 },
+      { "name": "OUT-GATE", "lat": 24.29581, "lon": 120.48562 },
+      { "name": "OUT-WP1", "lat": 24.3102, "lon": 120.46321 },
+      { "name": "OUT-SEA", "lat": 24.33418, "lon": 120.42585 }
+    ]
+  }
+}

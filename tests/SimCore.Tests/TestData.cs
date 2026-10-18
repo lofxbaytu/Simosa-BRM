@@ -61,13 +61,45 @@ internal static class TestData
         return new SimulationEngine(Fsb1(), sc, options: options);
     }
 
-    public static string TestRecordsDirectory
+    /// <summary>
+    /// 測試紀錄檔目錄:每次測試執行一個子目錄 build/test-records/run-&lt;pid&gt;-&lt;時間&gt;,行程結束時刪除;
+    /// 啟動時清掉先前執行(含當機)留下的紀錄。長情境的 25 Hz 狀態紀錄一份可達數百 MB,不清會在開發機
+    /// (D:\Simosa BRM)累積數 GB(CLAUDE.md:輸出留在專案內,但不得無限制成長)。
+    /// 需要保留以便除錯時設環境變數 SIMOSA_KEEP_TEST_RECORDS=1。
+    /// </summary>
+    public static string TestRecordsDirectory => RunRecordsDirectory.Value;
+
+    private static readonly Lazy<string> RunRecordsDirectory = new(() =>
     {
-        get
+        var root = Path.Combine(Root, "build", "test-records");
+        Directory.CreateDirectory(root);
+        var keep = System.Environment.GetEnvironmentVariable("SIMOSA_KEEP_TEST_RECORDS") == "1";
+        if (!keep)
         {
-            var dir = Path.Combine(Root, "build", "test-records");
-            Directory.CreateDirectory(dir);
-            return dir;
+            foreach (var f in Directory.GetFiles(root)) TryDelete(() => File.Delete(f));
+            // testhost 結束時不一定觸發 ProcessExit,所以啟動時刪掉建立者行程已不存在的 run-* 目錄
+            foreach (var d in Directory.GetDirectories(root, "run-*"))
+                if (!OwnerAlive(Path.GetFileName(d))) TryDelete(() => Directory.Delete(d, recursive: true));
         }
+        var dir = Path.Combine(root, $"run-{System.Environment.ProcessId}-{DateTime.UtcNow:yyyyMMddHHmmss}");
+        Directory.CreateDirectory(dir);
+        if (!keep) AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDelete(() => Directory.Delete(dir, recursive: true));
+        return dir;
+    }, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    /// <summary>run-&lt;pid&gt;-&lt;時間&gt; 目錄的建立者行程是否仍在執行(其他測試行程正在用就不刪)。</summary>
+    private static bool OwnerAlive(string name)
+    {
+        var parts = name.Split('-');
+        if (parts.Length < 2 || !int.TryParse(parts[1], out var pid)) return false;
+        if (pid == System.Environment.ProcessId) return true;
+        try { using var p = System.Diagnostics.Process.GetProcessById(pid); return !p.HasExited; }
+        catch (ArgumentException) { return false; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    private static void TryDelete(Action delete)
+    {
+        try { delete(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 }

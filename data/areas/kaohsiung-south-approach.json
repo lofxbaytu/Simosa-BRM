@@ -1,0 +1,93 @@
+{
+  "id": "kaohsiung-south-approach",
+  "description": "高雄港南區(第二港口)外 Charlie 引水站進港示意定義(供 E04 進港與引水人登船;規劃書第 3.4、8.1 節 E04)。引水站位置與 E05 原點相同;VTS 報告點 K1、等候區、出港航道延長線、第二港口口門位置與 E04 航線皆為示意值,依公開地理常識描繪,非港方公告/ENC 資料,不可用於實際航行或評估,待 ENC 與高雄港 VTS/引水站規定校正。E04 的 route 航點與此檔 route 相同、zones 多邊形與 fairway/holdingArea 相同(測試檢查一致);外錨地沿用 kaohsiung-anchorage.json(本檔不重複定義)。",
+  "source": "示意(引水站、口門、報告點與等候區位置誤差可達數百公尺;待 ENC 校正)",
+  "pilotStations": [
+    {
+      "id": "CHARLIE",
+      "name": "Charlie 引水站(南區,示意)",
+      "lat": 22.53,
+      "lon": 120.24
+    }
+  ],
+  "harbourEntrances": [
+    {
+      "id": "KHH-2",
+      "name": "高雄第二港口口門(示意)",
+      "lat": 22.552,
+      "lon": 120.305,
+      "outboundCourse_deg": 250
+    }
+  ],
+  "route": [
+    {
+      "name": "START",
+      "lat": 22.41174,
+      "lon": 120.1127,
+      "note": "引水站西南 10 nm(E04 開場)"
+    },
+    {
+      "name": "K1",
+      "lat": 22.44722,
+      "lon": 120.15089,
+      "note": "VTS 報告點(引水站西南 7 nm,示意)"
+    },
+    {
+      "name": "HOLD",
+      "lat": 22.49452,
+      "lon": 120.20181,
+      "note": "等候點(引水站西南 3 nm)"
+    },
+    {
+      "name": "CHARLIE",
+      "lat": 22.53,
+      "lon": 120.24,
+      "note": "引水人登船點"
+    }
+  ],
+  "fairway": {
+    "name": "出港航道延長線(示意;未獲 VTS 許可勿進入或停留)",
+    "axis_deg": 250,
+    "halfWidth_nm": 0.4,
+    "polygon": [
+      {
+        "lat": 22.544,
+        "lon": 120.30239
+      },
+      {
+        "lat": 22.51801,
+        "lon": 120.22554
+      },
+      {
+        "lat": 22.53059,
+        "lon": 120.22061
+      },
+      {
+        "lat": 22.55657,
+        "lon": 120.29746
+      }
+    ]
+  },
+  "holdingArea": {
+    "name": "引水站外等候區(示意,HOLD ±0.8 nm)",
+    "polygon": [
+      {
+        "lat": 22.48114,
+        "lon": 120.18741
+      },
+      {
+        "lat": 22.48114,
+        "lon": 120.21621
+      },
+      {
+        "lat": 22.5079,
+        "lon": 120.21621
+      },
+      {
+        "lat": 22.5079,
+        "lon": 120.18741
+      }
+    ]
+  },
+  "anchorageFile": "data/areas/kaohsiung-anchorage.json"
+}

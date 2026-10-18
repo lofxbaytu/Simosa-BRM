@@ -486,6 +486,17 @@
           }
         }
       }
+    },
+    "banks": {
+      "type": "object",
+      "description": "岸壁/航道邊坡(規劃書第 6.2 節下標 B 岸壁效應、R2;docs/design/physics-bank-effect.md):向岸吸力與艏離岸力矩。只有情境有此區段時才計算(未使用者雜湊不變);file(data/areas/*.json)+ ids 於載入時解析並內嵌為 definitions(紀錄 header 含完整幾何),lines 為情境內直接定義(兩者合併)。Python 參考實作忽略",
+      "properties": {
+        "file": { "type": "string", "description": "岸壁檔(相對專案根目錄或情境檔目錄),例如 data/areas/mailiao-channel-banks.json" },
+        "ids": { "type": "array", "items": { "type": "string" }, "description": "岸壁檔 banks[].id(省略 = 全部)" },
+        "lines": { "type": "array", "items": { "$ref": "#/$defs/bankDefinition" }, "description": "情境內直接定義的岸壁" },
+        "definitions": { "type": "array", "items": { "$ref": "#/$defs/bankDefinition" }, "description": "載入時由 file 內嵌(手寫情境不需填)" },
+        "scale": { "type": "number", "minimum": 0, "default": 1, "description": "岸壁效應整體倍率(文獻係數的校正/教學調整;0 = 只顯示距離不施力)" }
+      }
     }
   },
   "examples": [
@@ -811,6 +822,22 @@
         "winchPull_t": { "type": "number", "exclusiveMinimum": 0, "default": 10 },
         "pretension_t": { "type": "number", "minimum": 0, "default": 2 },
         "initial": { "type": "string", "enum": ["stowed", "fast"], "default": "stowed" }
+      }
+    },
+    "bankDefinition": {
+      "type": "object",
+      "description": "一段岸壁折線:vertical = 垂直岸壁/護岸(折線為岸壁面);sloped = 斜坡岸/浚深邊坡(折線為坡腳,等效垂直岸壁在坡上 (岸腳 + 岸頂)/2 水深處,即向陸側 slope·(h − topDepth)/2)",
+      "required": ["id", "line"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "source": { "type": "string" },
+        "type": { "type": "string", "enum": ["vertical", "sloped"], "default": "vertical" },
+        "line": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/position" }, "description": "岸壁折線({lat, lon} 或 {x, y})" },
+        "waterSide": { "type": "string", "enum": ["left", "right"], "default": "right", "description": "沿折線方向看水域在哪側" },
+        "slope": { "type": "number", "exclusiveMinimum": 0, "description": "斜坡 1:n 的 n(水平/垂直;sloped 必填)" },
+        "topDepth_m": { "type": "number", "minimum": 0, "default": 0, "description": "岸頂(淺灘)水深;0 = 露出水面,> 0 = 淹沒岸(強度 × (h − topDepth)/h)" },
+        "channelDepth_m": { "type": "number", "exclusiveMinimum": 0, "description": "岸腳(航道)水深 = 適用水深;省略 = 自船所在水深" }
       }
     },
     "position": {
@@ -1843,9 +1870,10 @@
                     "anchorDecision",
                     "notifyCompany",
                     "notifySar",
+                    "lookoutReport",
                     "other"
                   ],
-                  "description": "prediction:船舶熟悉 F01–F03 執行前記下的預測(itemId = 預測提示項目,note = 預測值);driftCalculation:漂流計算(E10);anchorDecision:緊急下錨決策(E10,錨物理另行實作前以此代表);notifyCompany:通報公司 DPA/海務;notifySar:通報海巡/搜救中心或 GMDSS 遇險/緊急呼叫(E10、E11)"
+                  "description": "prediction:船舶熟悉 F01–F03 執行前記下的預測(itemId = 預測提示項目,note = 預測值);driftCalculation:漂流計算(E10);anchorDecision:緊急下錨決策(E10,錨物理另行實作前以此代表);notifyCompany:通報公司 DPA/海務;notifySar:通報海巡/搜救中心或 GMDSS 遇險/緊急呼叫(E10、E11);lookoutReport:瞭望員報告目標/燈號/霧號(E03)"
                 }
               }
             },

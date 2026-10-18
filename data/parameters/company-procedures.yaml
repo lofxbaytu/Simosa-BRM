@@ -24,6 +24,11 @@ sources:                              # 程序文件索引;parameters[].source �
   ASSUMED-E12: { title: "假設值,待公司程序(E12 錨泊/緊急下錨;規劃書第 8.1 節 E12、STCW A-II/2 錨泊,待公司錨泊程序與船長常規命令核對)", revision: "0", date: 2026-10-17 }
   ASSUMED-E13: { title: "假設值,待公司程序(E13 拖船協助靠泊;規劃書第 8.1 節 E13,待公司靠泊程序與麥寮港拖船規定核對)", revision: "0", date: 2026-10-17 }
   ASSUMED-E14: { title: "假設值,待公司程序(E14 無拖船離泊;規劃書第 8.1 節 E14,待公司離泊程序核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-HANDOVER: { title: "假設值,待公司程序(情境庫交班開場;規劃書第 8.1 節設計規則「由真實的交接班與書面航程計畫開始」,待船長常規命令 DWO-007 交接班章節核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E02: { title: "假設值,待公司程序(E02 沿岸密集交通/COLREG;規劃書第 8.1 節 E02,待 DWO-007 避碰與 VHF 使用章節核對;航道寬度為示意航道,待 ENC 校正)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E03: { title: "假設值,待公司程序(E03 限制能見度;規劃書第 8.1 節 E03、COLREG 第 19 條,待 DWO-007 能見度不良章節核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E04: { title: "假設值,待公司程序(E04 高雄南口進港與引水人登船;規劃書第 3.4、8.1 節 E04,待公司進港程序、高雄港引水站與 VTS 規定核對)", revision: "0", date: 2026-10-17 }
+  ASSUMED-E06: { title: "假設值,待公司程序(E06 台中港狹窄航道/防波堤口橫流;規劃書第 3.4、8.1 節 E06,待公司受限水域程序與台中港港口規定核對)", revision: "0", date: 2026-10-17 }
 parameters:
   navigation.cpa.openSea_nm:      { value: 1.0,  unit: nm,  source: DWO-007, clause: "4.2", description: 開闊海最小 CPA }
   navigation.cpa.coastal_nm:      { value: 0.5,  unit: nm,  source: DWO-007, clause: "4.2", description: 沿岸/港外最小 CPA }
@@ -105,4 +110,37 @@ parameters:
   unberthing.e14.windShiftAt_s:    { value: 300, unit: s, source: ASSUMED-E14, clause: "", description: E14 風向改變(吹攏 → 吹開)的時刻(自情境開始) }
   unberthing.engineStartReport_s:  { value: 60,  unit: s, source: ASSUMED-E14, clause: "", description: 主機起動失敗到通知機控室/船長 }
   unberthing.windShiftResponse_s:  { value: 90,  unit: s, source: ASSUMED-E14, clause: "", description: 風向改變到首個操船反應(側推/舵令/車令) }
+  # 情境庫 E02–E04、E06(docs/design/scenario-library.md;全部為假設值,待公司程序)
+  bridge.handover.checklist_s:     { value: 300, unit: s, source: ASSUMED-HANDOVER, clause: "", description: 交班開場到接班者完成交班檢查表(航程計畫、交通、儀器、常規命令;acknowledge checklist) }
+  navigation.xtd.coastalLane_m:    { value: 1500, unit: m, source: ASSUMED-E02, clause: "", description: 分道航行型航道單向航道內的航跡走廊半寬(示意航道半寬 1 nm;避讓後仍須留在航道內) }
+  navigation.tss.separationZoneClearance_m: { value: 370, unit: m, source: ASSUMED-E02, clause: "", description: 與分隔帶(禁區)的最小距離(約 0.2 nm;進入分隔帶即容許帶失敗,COLREG 第 10 條) }
+  navigation.encounter.earlyAction_s: { value: 360, unit: s, source: ASSUMED-E02, clause: "", description: 讓路船:會遇開始(偵測距離內且 CPA 低於關注門檻)到首次避讓行動(第 16 條及早行動) }
+  navigation.encounter.standOnAction_s: { value: 300, unit: s, source: ASSUMED-E02, clause: "", description: 直航船:讓路船明顯未採取行動(時間表提示)到自船行動(第 17 條 (a)(ii)) }
+  navigation.vhf.challengeResponse_s: { value: 120, unit: s, source: ASSUMED-E02, clause: "", description: 不明/干擾 VHF 呼叫到辨識呼叫船並回應或回報船長 }
+  navigation.xtd.approach_m:       { value: 900, unit: m, source: ASSUMED-E04, clause: "", description: 進港接近段(引水站外)航跡走廊半寬(約 0.5 nm;含等候期間的漂移與迴旋) }
+  navigation.vts.report_s:         { value: 120, unit: s, source: ASSUMED-E04, clause: "", description: 通過 VTS 報告點到完成報告(acknowledge report) }
+  navigation.cpa.restrictedVisibility_nm: { value: 1.0, unit: nm, source: ASSUMED-E03, clause: "", description: 能見度不良時最小 CPA(容許帶 warn) }
+  navigation.restrictedVisibility.safeSpeed_kn: { value: 8, unit: kn, source: ASSUMED-E03, clause: "", min: 4, max: 12, description: 能見度約 0.5 nm 時的安全速度上限(第 19 條;示意霧區航段速限) }
+  navigation.restrictedVisibility.denseFogSpeed_kn: { value: 6, unit: kn, source: ASSUMED-E03, clause: "", min: 3, max: 10, description: 能見度約 0.2 nm 時的安全速度上限 }
+  navigation.restrictedVisibility.speedReduction_s: { value: 300, unit: s, source: ASSUMED-E03, clause: "", description: 進入霧區航段後減至安全速度的容許時間(超速時間容許帶 warn;滿載船自 FAH 減速約需 3–5 分鐘) }
+  navigation.restrictedVisibility.callMaster_s: { value: 120, unit: s, source: ASSUMED-E03, clause: "", description: 能見度降至約 0.5 nm 到通知船長 }
+  navigation.restrictedVisibility.checklist_s: { value: 300, unit: s, source: ASSUMED-E03, clause: "", description: 能見度降低到完成能見度不良檢查表(霧號、主機備便、加派瞭望、手操舵) }
+  navigation.restrictedVisibility.lookoutReport_s: { value: 180, unit: s, source: ASSUMED-E03, clause: "", description: 無 AIS 雷達目標進入會遇到瞭望/雷達觀測報告(acknowledge lookoutReport 或 report) }
+  navigation.restrictedVisibility.closeQuartersAction_s: { value: 120, unit: s, source: ASSUMED-E03, clause: "", description: 近距離出現的目標(聽到霧號)到減速或避讓動作(第 19 條 (d)(e)) }
+  pilot.boardingSpeedMax_kn:       { value: 8,   unit: kn, source: ASSUMED-E04, clause: "", min: 4, max: 10, description: 引水人登船時對水速度上限(引水站要求通常 6–8 kn) }
+  pilot.mpx_s:                     { value: 600, unit: s, source: ASSUMED-E04, clause: "", description: 引水人登船到完成船長/引水人資訊交換(MPX;acknowledge checklist) }
+  pilot.revisedEtaReport_s:        { value: 300, unit: s, source: ASSUMED-E04, clause: "", description: 引水人延誤通知到向船長/代理行回報修正 ETA 與等待計畫 }
+  pilot.challenge_s:               { value: 180, unit: s, source: ASSUMED-E04, clause: "", description: 引水站/引水船的不當要求(上風舷登船、航速過快)到提出質疑或確認替代方案 }
+  pilot.e04.pilotLateAt_s:         { value: 420, unit: s, source: ASSUMED-E04, clause: "", description: E04 引水站通知引水人延誤的時刻(自情境開始) }
+  pilot.e04.vtsHoldAt_s:           { value: 900, unit: s, source: ASSUMED-E04, clause: "", description: E04 VTS 要求在引水站外等候的時刻 }
+  pilot.e04.emergencyAt_s:         { value: 1980, unit: s, source: ASSUMED-E04, clause: "", description: E04 漲潮流壓增強與出港船通報(緊急階段)的時刻 }
+  pilot.e04.boardingSideChangeAt_s: { value: 2400, unit: s, source: ASSUMED-E04, clause: "", description: E04 引水船要求改變登船舷側的時刻 }
+  pilot.leeConfirmBeforeBoarding_s: { value: 300, unit: s, source: ASSUMED-E04, clause: "", description: 引水人登船前多久內的「下風舷確認」仍計入登船安排(引水船靠上時先確認引水梯在下風舷;假設值,待公司程序) }
+  pilot.e04.holdResponse_s:        { value: 300, unit: s, source: ASSUMED-E04, clause: "", description: VTS 要求等候到減速(車令/轉速令) }
+  port.taichung.channelSpeedLimit_kn: { value: 10, unit: kn, source: ASSUMED-E06, clause: "", description: 台中港進港航道速限(示意;港方規定待核對) }
+  port.taichung.innerSpeedLimit_kn: { value: 6,  unit: kn, source: ASSUMED-E06, clause: "", description: 台中港防波堤內迴船池速限(示意) }
+  navigation.channel.leadingLightReport_s: { value: 60, unit: s, source: ASSUMED-E06, clause: "", description: 導燈被遮蔽到回報引水人/船長並改用雷達平行指標或 ECDIS }
+  navigation.channel.outboundResponse_s: { value: 90, unit: s, source: ASSUMED-E06, clause: "", description: 出港船在航道內的通報到首個操船反應(舵令/車令)或確認會船計畫 }
+  navigation.channel.e06.emergencyAfter_s: { value: 300, unit: s, source: ASSUMED-E06, clause: "", description: E06 進入外航道(流速增加)後,出港船最遲出現的時間(另以接近防波堤口觸發) }
+  manoeuvring.channel.rudderOrdersMax: { value: 40, unit: count, source: ASSUMED-E06, clause: "", description: 狹窄航道通過期間舵令次數上限(舵令紀律;manoeuvring.rudderOrders 容許帶 warn) }
 overrides: {}                         # 保留:依船舶 ID 覆寫(第一版不解析)

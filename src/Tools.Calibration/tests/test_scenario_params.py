@@ -47,7 +47,12 @@ SKIP_LEAVES = {"timeScale"}
 # E08(sensors/alerts/bnwas 區段與 bnwas.dormant_s 參數引用)。
 REQUIRED_FIXTURES = {
     "E01_baseline",
+    "E02_coastal_traffic_strait",
+    "E03_restricted_visibility_strait",
+    "E04_pilot_boarding_kaohsiung",
     "E05_pilot_traffic",
+    "E06_taichung_channel_ebb",
+    "E06_taichung_channel_flood",
     "E07_steering_failure",
     "E08_gyro_failure",
     "E09_blackout",

@@ -1,0 +1,309 @@
+# E04 進港與引水人登船 — 高雄南口(第二港口)Charlie 引水站(規劃書第 8.1 節 E04、第 3.4 節高雄港;設計 docs/design/scenario-library.md 第 4 節;schema src/Contracts/scenario.schema.json)
+# 引水站、VTS 報告點 K1、等候區、出港航道延長線與第二港口口門皆為示意值(data/areas/kaohsiung-south-approach.json,示意,待 ENC 校正)。
+# FSB2 滿載(7.2 m)自東南亞返航,距 Charlie 引水站 10 nm(西南方),FAH 約 10 kn、自動舵 045°;漲潮流向西北 1.2 kn(橫流壓向左舷)、東北偏北風 22 kn。
+# 時間表(參數集 pilot.e04.*):T+7 引水人延誤(degraded)→ T+15 VTS 要求在引水站西南 3 nm 外等候 → T+33 漲潮增強至 1.8 kn + 出港油輪 OUT1 出港(emergency)
+#          → T+40 引水船要求改左舷(上風舷)以 10 kn 登船(「引水人/教官是錯的」:應質疑或改向做下風)→ T+55 引水船出發;教官手動「引水人登船」「下風舷確認」。
+# 評估:航程計畫監控(XTD 走廊 navigation.xtd.approach_m、K1 報告點)、修正 ETA 回報、等候減速、質疑不當登船要求、登船時航速(自動:登船 5 s 內 STW < pilot.boardingSpeedMax_kn)、
+#       下風舷(教官手動項目)、MPX(acknowledge checklist);課程前段情境,不注入技術故障。
+id: E04_pilot_boarding_kaohsiung
+name: 高雄南口進港與引水人登船
+description: >-
+  距 Charlie 引水站 10 nm 起依書面航程計畫與預定 ETA 進港:VTS 報告、引水人延誤、VTS 要求等候、
+  漲潮流壓與出港油輪,引水船臨時要求改上風舷且速度過快;練習航程計畫監控、工作負荷、質疑與 MPX。
+seed: 20260404
+startTimeUtc: "2026-04-04T00:00:00Z"
+timeScale: 1
+ship:
+  id: FSB2
+  loading: full
+origin: { lat: 22.5300, lon: 120.2400 }          # Charlie 引水站(與 E05 相同,示意)
+initial:
+  position: { lat: 22.41174, lon: 120.1127 }      # 引水站西南 10 nm(航線 START)
+  heading: 45
+  speed: 10.0
+  telegraph: FAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 22, trueDir: 20, gustiness: 0.15 }   # 東北偏北風:航向 045° 時風在左舷艏,右舷為下風舷
+  current: { set: 315, drift: 1.2 }              # 漲潮向西北(規劃書第 3.4 節:最大 1.8 kn)
+  waterDepth: 40
+  visibility_nm: 8
+briefing:
+  text: |
+    交班(08:00 地方時):No.2 滿載瀝青(吃水 7.2 m)自馬尼拉返航高雄,距 Charlie 引水站 10 nm,FAH 10 kn,自動舵 045°。
+    書面航程計畫:START → K1(VTS 報告點,距引水站 7 nm)→ HOLD(西南 3 nm)→ CHARLIE;走廊半寬見參數集 navigation.xtd.approach_m(約 0.5 nm);
+    預定引水人登船 09:00(T+60),右舷引水梯(東北偏北風 22 kn 時右舷為下風舷),登船航速依引水站要求 ≤ 參數集 pilot.boardingSpeedMax_kn。
+    漲潮向西北約 1.2 kn,航線左側(西北)為外錨地與出港航道延長線;高雄 VTS(示意頻道)於 K1 報告。
+    接班者完成交班檢查表後由教官確認(acknowledge checklist)。引水人登船後由帶領者扮演引水人進行 MPX。
+  attachments:
+    - { title: "航程計畫(Charlie 引水站進港,示意)", file: docs/passage-plan-E04.pdf }
+    - { title: "引水人登船安排(SOLAS V/23)", file: docs/pilot-boarding-arrangement.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: vts, playedBy: voiceScript }
+    - { role: pilotStation, playedBy: voiceScript }
+    - { role: agent, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 4800
+route:
+  name: Charlie 引水站進港(示意)
+  xtdLimit_m: "${params:navigation.xtd.approach_m}"
+  waypoints:                                      # 與 data/areas/kaohsiung-south-approach.json route 相同
+    - { name: START, lat: 22.41174, lon: 120.1127 }
+    - { name: K1, lat: 22.44722, lon: 120.15089, checkpoint: true, report: "高雄 VTS 報告點 K1(示意)" }
+    - { name: HOLD, lat: 22.49452, lon: 120.20181, checkpoint: true }
+    - { name: CHARLIE, lat: 22.5300, lon: 120.2400, arrivalRadius_m: 300 }
+zones:
+  - id: fairway
+    name: 出港航道延長線(示意)
+    type: reporting
+    polygon:                                      # 與 data/areas/kaohsiung-south-approach.json fairway.polygon 相同
+      - { lat: 22.544, lon: 120.30239 }
+      - { lat: 22.51801, lon: 120.22554 }
+      - { lat: 22.53059, lon: 120.22061 }
+      - { lat: 22.55657, lon: 120.29746 }
+  - id: holdingArea
+    name: 引水站外等候區(示意)
+    type: reporting
+    polygon:                                      # 與 data/areas/kaohsiung-south-approach.json holdingArea.polygon 相同
+      - { lat: 22.48114, lon: 120.18741 }
+      - { lat: 22.48114, lon: 120.21621 }
+      - { lat: 22.5079, lon: 120.21621 }
+      - { lat: 22.5079, lon: 120.18741 }
+  - id: anchorage
+    name: 高雄外錨地 A 區(示意,同 kaohsiung-anchorage.json)
+    type: reporting
+    polygon:
+      - { lat: 22.57, lon: 120.205 }
+      - { lat: 22.6, lon: 120.205 }
+      - { lat: 22.6, lon: 120.24 }
+      - { lat: 22.57, lon: 120.24 }
+timeline:
+  - id: handover
+    name: 交班(航程計畫與 ETA)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:距 Charlie 引水站十浬,自動舵 045,FAH 十節。引水人預定九點登船,右舷引水梯。漲潮往西北一點二節,注意流壓。K1 要報高雄 VTS。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對航程計畫、ETA、流壓修正、登船安排與 VTS 報告點,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 045°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 45 }
+  - id: vtsAck
+    name: VTS 回覆(通過 K1)
+    when: { type: routeLeg, passedWaypoint: K1 }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.2,高雄 VTS 收到,請保持守聽,抵達引水站前再報。", lang: zh-TW }
+  - id: pilotLate
+    name: 引水人延誤
+    phase: degraded
+    when: { type: time, atLeast: "${params:pilot.e04.pilotLateAt_s}" }
+    actions:
+      - voiceScript: { role: pilotStation, channel: vhfPort, text: "FS Bitumen No.2,這裡是高雄引水站。引水人前一艘船延誤,登船時間延後約二十分鐘,請調整到達時間。", lang: zh-TW }
+      - message: { to: instructor, text: "引水人延誤:觀察是否重新計算 ETA/減速計畫、回報船長與代理行(acknowledge report)", severity: warning }
+  - id: vtsHold
+    name: VTS 要求等候
+    when: { type: time, atLeast: "${params:pilot.e04.vtsHoldAt_s}" }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.2,高雄 VTS。有出港油輪預計半小時後出港,請在 Charlie 引水站西南三浬外等候,不要進入出港航道延長線。", lang: zh-TW }
+      - message: { to: instructor, text: "VTS 要求等候:觀察是否減速(車令/轉速)、選定等候位置並修正流壓(漲潮往西北,錨地與航道延長線在左側)", severity: warning }
+  - id: floodAndOutbound
+    name: 漲潮增強與出港油輪
+    phase: emergency
+    when: { type: time, atLeast: "${params:pilot.e04.emergencyAt_s}" }
+    actions:
+      - setEnvironment: { current: { set: 315, drift: 1.8 }, ramp_s: 600 }
+      - targetControl: { id: OUT1, activate: true }
+      - voiceScript: { role: vts, channel: vhfPort, text: "高雄 VTS 廣播:出港油輪 GRAND PEARL 已出口門,航向 250,吃水受限。各船保持在出港航道延長線以外。", lang: zh-TW }
+      - message: { to: instructor, text: "漲潮流 1.2 → 1.8 kn(10 分鐘漸變)+ OUT1 出港:觀察流壓修正、與錨地/航道延長線距離、對 OUT1 的會遇判斷", severity: alarm }
+  - id: boardingSideChange
+    name: 引水船要求改左舷登船(不當要求)
+    when: { type: time, atLeast: "${params:pilot.e04.boardingSideChangeAt_s}" }
+    actions:
+      - voiceScript: { role: pilotStation, channel: vhfPort, text: "引水船呼叫 FS Bitumen No.2:請改左舷放引水梯,航速保持十節,航向不變。", lang: zh-TW }
+      - message: { to: instructor, text: "「引水人/教官是錯的」:航向 045° 時左舷為上風舷、10 kn 超過登船航速;觀察是否質疑(acknowledge verbal)並提出改向做下風/減速的替代方案", severity: warning }
+  - id: fairwayEntered
+    name: 進入出港航道延長線
+    when: { type: zone, id: fairway, inside: true }
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "FS Bitumen No.2,高雄 VTS,你船已進入出港航道延長線,請說明意圖。", lang: zh-TW }
+  - id: anchorageEntered
+    name: 漂入外錨地
+    when: { type: zone, id: anchorage, inside: true }
+    actions:
+      - message: { to: instructor, text: "自船已進入外錨地(流壓);觀察是否察覺並修正", severity: warning }
+  - id: pilotOnBoard
+    name: 引水人登船(教官)
+    manual: true
+    actions:
+      - message: { to: all, text: "引水人已登船,前往駕駛台。", severity: info }
+  - id: boardingSpeedOk
+    name: 登船時航速符合
+    when:
+      all:
+        - { type: event, kind: timelineTriggered, itemId: pilotOnBoard }
+        - { not: { type: time, atLeast: 5, since: { event: timelineTriggered, itemId: pilotOnBoard } } }
+        - { type: ownSpeed, metric: stw, lessThan: "${params:pilot.boardingSpeedMax_kn}" }
+    actions:
+      - message: { to: instructor, text: "登船時對水速度在引水站要求以內", severity: info }
+  - id: pilotBoatClear
+    name: 引水船離開
+    delay_s: 30
+    when: { type: event, kind: timelineTriggered, itemId: pilotOnBoard }
+    actions:
+      - targetControl: { id: PILOT, remove: true }   # 引水船駛離(以移除目標表示,避免跟隨中與自船外形相交)
+  - id: leeConfirmed
+    name: 下風舷確認(教官)
+    manual: true
+    repeat: { every_s: 10, max: 5 }               # 可重複:太早按(登船前超過 pilot.leeConfirmBeforeBoarding_s)時,登船後可再按一次
+    actions:
+      - message: { to: instructor, text: "教官確認:引水梯在下風舷(引水船靠上時或引水人登船後按;登船前 5 分鐘以上按的需於登船後再按一次)", severity: info }
+  - id: leeAtBoarding
+    name: 登船時下風舷已確認
+    when:                                         # 不論先後:引水人已登船、下風舷已確認,且最近一次確認距今未超過 pilot.leeConfirmBeforeBoarding_s
+      all:
+        - { type: event, kind: timelineTriggered, itemId: pilotOnBoard }
+        - { type: event, kind: timelineTriggered, itemId: leeConfirmed }
+        - { not: { type: time, atLeast: "${params:pilot.leeConfirmBeforeBoarding_s}", since: { event: timelineTriggered, itemId: leeConfirmed } } }
+    actions:
+      - message: { to: instructor, text: "登船安排:引水梯在下風舷已確認", severity: info }
+  - id: endAfterBoarding
+    name: 登船後結束
+    delay_s: 660
+    when: { type: event, kind: timelineTriggered, itemId: pilotOnBoard }
+    actions:
+      - endExercise: { reason: 引水人登船與 MPX 完成 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 4800 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  encounter:
+    detectionRange_nm: "${params:navigation.encounter.detectionRange_nm}"
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: collision, rule: collision }
+    - { id: cpaHard, rule: cpa, lessThan: "${params:navigation.cpa.hardFail_nm}", excludeEscorts: true }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.approach_m}", fail: 2x, penalty: 10, failPenalty: 20 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 300, penalty: 5, failPenalty: 15 }
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.coastal_nm}", fail: "${params:navigation.cpa.hardFail_nm}", penalty: 10, failPenalty: 30, excludeEscorts: true }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: vtsReport
+      after: { event: reportPointPassed, waypoint: K1 }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:navigation.vts.report_s}"
+      penalty: 5
+    - id: revisedEta
+      after: { event: timelineTriggered, itemId: pilotLate }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:pilot.revisedEtaReport_s}"
+      penalty: 5
+    - id: holdSpeed
+      after: { event: timelineTriggered, itemId: vtsHold }
+      expect: { any: [ telegraphChange, rpmOrder ] }
+      within_s: "${params:pilot.e04.holdResponse_s}"
+      penalty: 10
+      latePenaltyPer_s: 0.05
+    - id: boardingChallenge
+      after: { event: timelineTriggered, itemId: boardingSideChange }
+      expect: { any: [ { acknowledge: { kind: verbal } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:pilot.challenge_s}"
+      penalty: 10
+    - id: boardingSpeed
+      after: { event: timelineTriggered, itemId: pilotOnBoard }
+      expect: { event: { kind: timelineTriggered, itemId: boardingSpeedOk } }
+      within_s: 5
+      penalty: 10
+    - id: boardingLee
+      after: { event: timelineTriggered, itemId: pilotOnBoard }
+      expect: { event: { kind: timelineTriggered, itemId: leeAtBoarding } }   # 登船前 pilot.leeConfirmBeforeBoarding_s 內或登船後 120 s 內的「下風舷確認」
+      within_s: 120
+      penalty: 10
+    - id: mpx
+      after: { event: timelineTriggered, itemId: pilotOnBoard }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:pilot.mpx_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: OUT1
+    name: GRAND PEARL
+    mmsi: 416504001
+    shipType: tanker
+    loa: 230
+    beam: 42
+    draft: 13.5
+    callSign: BGPL
+    destination: SINGAPORE
+    lights: constrainedByDraught
+    initial:
+      position: { lat: 22.54914, lon: 120.29654 }  # 第二港口口門外 0.5 nm(示意)
+      heading: 250
+      speed: 10
+    behaviour:
+      mode: waypoints
+      waypoints:
+        - { lat: 22.53002, lon: 120.23999, speed: 10 }   # 經 Charlie 引水站
+        - { lat: 22.4957, lon: 120.13849, speed: 12 }
+      stopAtEnd: false
+    trigger: { type: time, time: 86400 }          # 不自動出現:由時間表 floodAndOutbound 以 targetControl activate 啟動
+  - id: INB1
+    name: WAN HAI 301
+    mmsi: 416504002
+    shipType: cargo
+    loa: 170
+    beam: 27
+    draft: 9.5
+    destination: KAOHSIUNG
+    initial:
+      position: { lat: 22.4500, lon: 120.2300 }    # 自船右舷前方,同樣等候引水的貨櫃船(漂航)
+      heading: 330
+      speed: 1
+    behaviour: { mode: hold }
+  - id: FISH1
+    name: FISH1
+    shipType: fishing
+    loa: 15
+    beam: 4
+    draft: 1.5
+    lights: fishing
+    aisOn: false
+    initial:
+      position: { lat: 22.4700, lon: 120.1650 }    # 航線左側漁船(無 AIS)
+      heading: 120
+      speed: 3
+    behaviour: { mode: hold }
+  - id: PILOT
+    name: PILOT 5
+    mmsi: 416504005
+    shipType: pilot
+    loa: 18
+    beam: 5
+    draft: 1.5
+    callSign: BPL5
+    initial:
+      position: { lat: 22.5300, lon: 120.2400 }    # 引水站
+      heading: 225
+      speed: 0
+    behaviour:
+      mode: follow
+      follow: { leader: own, bearing: 225, range: 120, gain: 0.05, maxSpeed: 18 }   # 依引水站要求在自船左舷後方待命(船舯後 85 m、左 85 m)
+      # 站位須在跟隨避讓矩形(自船艉後 18 m)之後:引水船自艏前或右舷接近時核心先繞到同側艉後的過渡點,
+      # 站位若在矩形旁(例如 240°/70 m),從右舷過渡點到左舷站位的直線會穿過自船,引水船便停在右舷後方。
+    motion: { speedTau: 8, maxRot: 120 }
+    trigger: { type: time, time: 3300 }          # T+55 引水船出發(延誤後)

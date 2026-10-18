@@ -1,0 +1,230 @@
+# E03 限制能見度沿岸 — 台灣海峽中部分道航行型航道(規劃書第 8.1 節 E03、第 3.4 節春季西岸霧;設計 docs/design/scenario-library.md 第 3 節;schema src/Contracts/scenario.schema.json)
+# 與 E02 同一幾何(壞能見度版本):示意北行航道、分隔帶與中心線 CL0–CL4(data/areas/taiwan-strait-central-lanes.json,示意,待 ENC 校正)。
+# FSB1 滿載北上,FAH 約 10.5 kn,自動舵 020°,北向流 0.5 kn;初始能見度 2 nm,霧區以航段表示(進入航段 1 → 0.5 nm、航段 2 → 0.2 nm,setEnvironment 漸變)。
+# 交通:R1 漁船(無 AIS,航段 1 中心線左側 0.6 nm 幾乎停止,一長二短霧號)、R2 機動船(無 AIS,一長聲霧號;於 CL2 前出現在右舷前方約 2.3 nm,2 分鐘後轉向自船 → 近距離)、S1/S2 南行航道對向船(AIS)。
+# R2 的出現距離使「保持 FAH 不應變」形成近距離(< navigation.cpa.hardFail_nm),而第 19 條 (d)(e) 的合理應變(減至最低舵效速度、停俥、向右大幅避讓)可保持 ≥ 0.5 nm。
+# 三步升級:normal(2 nm,交班)→ 航段 1 degraded(0.5 nm,R1 雷達目標)→ 航段 2 emergency(0.2 nm,R2 近距離轉向);課程前段情境,不注入技術故障。
+# 評估:第 19 條安全速度(霧區航段速限 navigation.restrictedVisibility.*_kn,超速時間容許帶 speedReduction_s)、會遇行動(R2 出現 → 減速/避讓)、
+#       雷達與瞭望整合(R1 會遇開始 → acknowledge lookoutReport;教官站未支援該 kind 前可用 report)、通知船長、能見度不良檢查表、CPA(能見度不良門檻)、航跡走廊與分隔帶。
+id: E03_restricted_visibility_strait
+name: 台灣海峽限制能見度沿岸航行
+description: >-
+  與 E02 同一示意航道的壞能見度版本:能見度 2 → 0.5 → 0.2 nm,僅雷達可見的無 AIS 漁船與機動船,
+  近距離目標轉向自船;練習第 19 條安全速度與減速決策、霧號、瞭望與雷達整合、通知船長。
+seed: 20260315
+startTimeUtc: "2026-03-15T22:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 23.9000, lon: 119.9800 }          # = CL0
+initial:
+  position: { lat: 23.9000, lon: 119.9800 }
+  heading: 20
+  speed: 10.5
+  telegraph: FAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 8, trueDir: 200, gustiness: 0.05 }   # 春季西南微風(平流霧)
+  current: { set: 20, drift: 0.5 }               # 弱北向流(速限以對地速度計)
+  waterDepth: 60
+  visibility_nm: 2
+briefing:
+  text: |
+    交班(06:00 地方時):No.1 滿載瀝青,麥寮 → 台中,示意北行航道(中心線 020°)北上,FAH 10.5 kn,自動舵 020°;北向流約 0.5 kn、西南風 8 kn。
+    能見度 2 nm,前方有平流霧(預報能見度降至 0.5 nm 以下)。主機已備便(機控室有人),航行燈開啟;雷達 X/S 兩台運作,AIS 正常。
+    交班內容:航程計畫 CL0 → CL3、走廊與分隔帶同 E02;目前雷達目標:對向南行船 2 艘(AIS)、左舷前方約 3.8 nm(中心線左側)有一個幾乎不動的弱回波(無 AIS)。
+    船長常規命令(假設值,參數集 navigation.restrictedVisibility.*):能見度 ≤ 0.5 nm 通知船長、安全速度 8 kn,≤ 0.2 nm 時 6 kn;霧號、加派瞭望、手操舵;
+    能見度不良時最小 CPA 1 nm。依第 19 條:只以雷達發現的近距離情況應及早避讓,對正橫前方目標避免向左轉;聽到正橫前方霧號應減至最低舵效速度。
+  attachments:
+    - { title: "航程計畫(麥寮 → 台中,示意航道)", file: docs/passage-plan-E02.pdf }
+    - { title: 能見度不良檢查表, file: docs/restricted-visibility-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: lookout, required: true }
+    - { role: helmsman, required: true }
+    - { role: ecr, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 3600
+route:
+  name: 示意北行航道(CL0 → CL3,霧區)
+  xtdLimit_m: "${params:navigation.xtd.coastalLane_m}"
+  waypoints:                                      # 與 data/areas/taiwan-strait-central-lanes.json centreline 相同
+    - { name: CL0, lat: 23.9000, lon: 119.9800 }
+    - { name: CL1, lat: 23.93143, lon: 119.99244 }
+    - { name: CL2, lat: 23.97856, lon: 120.0111, speedLimit_kn: "${params:navigation.restrictedVisibility.safeSpeed_kn}" }       # 航段 1(CL1 → CL2,能見度約 0.5 nm)
+    - { name: CL3, lat: 24.0257, lon: 120.02976, speedLimit_kn: "${params:navigation.restrictedVisibility.denseFogSpeed_kn}" }   # 航段 2(CL2 → CL3,能見度約 0.2 nm)
+    - { name: CL4, lat: 24.08855, lon: 120.05464, arrivalRadius_m: 500, speedLimit_kn: "${params:navigation.restrictedVisibility.denseFogSpeed_kn}" }
+zones:
+  - id: separationZone
+    name: 分隔帶(示意,禁止進入)
+    type: noGo
+    polygon:                                      # 與 data/areas/taiwan-strait-central-lanes.json lanes.separationZone 相同
+      - { lat: 23.86144, lon: 119.9357 }
+      - { lat: 24.15999, lon: 120.05389 }
+      - { lat: 24.15713, lon: 120.06244 }
+      - { lat: 23.85858, lon: 119.94425 }
+timeline:
+  - id: handover
+    name: 交班(能見度 2 nm)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:能見度兩浬,前面有霧。自動舵 020,FAH,主機備便。雷達左舷前方三點八浬一個弱回波,幾乎不動,沒有 AIS。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否核對能見度不良的常規命令(安全速度、霧號、瞭望、通知船長),完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 020°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 20 }
+  - id: fogThickens
+    name: 進入霧區(能見度 → 0.5 nm)
+    phase: degraded
+    when: { type: routeLeg, atLeast: 1 }
+    actions:
+      - setEnvironment: { visibility_nm: 0.5, ramp_s: 300 }
+      - voiceScript: { role: lookout, channel: bridge, text: "霧變濃了,前方已經看不到海平線,能見度大概半浬。", lang: zh-TW }
+      - message: { to: instructor, text: "能見度 2 → 0.5 nm(5 分鐘漸變):觀察通知船長、減至安全速度、霧號、能見度不良檢查表、雷達標繪 R1", severity: warning }
+  - id: r1FogSignalHeard
+    name: 聽到 R1 霧號(一長二短)
+    when: { type: ownDistance, target: R1, lessThan: 1.0 }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "右舷前方聽到一長二短的霧號,看不到船。", lang: zh-TW }
+  - id: r1FogSignal
+    name: R1 霧號(每 2 分鐘)
+    repeat: { every_s: 120, max: 20 }
+    when: { type: ownDistance, target: R1, lessThan: 1.0 }
+    actions:
+      - targetControl: { id: R1, sound: prolongedTwoShort }   # 第 35 條 (c):從事捕魚之船舶,一長聲繼以二短聲
+  - id: denseFog
+    name: 濃霧(能見度 → 0.2 nm)
+    phase: emergency
+    when: { type: routeLeg, atLeast: 2 }
+    actions:
+      - setEnvironment: { visibility_nm: 0.2, ramp_s: 240 }
+      - message: { to: all, text: "濃霧:能見度降至約 0.2 nm(4 分鐘漸變)。", severity: warning }
+  - id: r2FogSignal
+    name: R2 霧號(每 2 分鐘一長聲)
+    repeat: { every_s: 120, max: 20 }
+    when: { type: event, kind: targetActivated, targetId: R2 }
+    actions:
+      - targetControl: { id: R2, sound: prolonged }          # 第 35 條 (a):機動船對水有速度,每 2 分鐘一長聲
+  - id: r2Heard
+    name: 聽到 R2 霧號(正橫前方)
+    delay_s: 20
+    when: { type: event, kind: targetActivated, targetId: R2 }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "右舷前方有一長聲霧號,看不到船!雷達上兩浬多有回波,沒有 AIS。", lang: zh-TW }
+      - message: { to: instructor, text: "R2(無 AIS)近距離出現並將轉向自船:觀察是否減至最低舵效速度或停俥、避免向左轉、持續雷達標繪", severity: alarm }
+  - id: cpaCoach
+    name: CPA 警報提示(教官)
+    repeat: { every_s: 120, max: 3 }
+    when: { type: event, kind: cpaAlarm }
+    actions:
+      - message: { to: instructor, text: "有目標 CPA 低於能見度不良門檻:觀察雷達標繪與避讓決策", severity: warning }
+  - id: end
+    name: 練習結束
+    when: { any: [ { type: time, atLeast: 3600 }, { type: ownDistance, waypoint: CL3, lessThan: 0.3 } ] }
+    actions:
+      - endExercise: { reason: 航段完成 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.restrictedVisibility_nm}"
+  encounter:
+    detectionRange_nm: "${params:navigation.encounter.detectionRange_nm}"
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: collision, rule: collision }
+    - { id: cpaHard, rule: cpa, lessThan: "${params:navigation.cpa.hardFail_nm}", excludeEscorts: true }
+  bands:
+    - { id: safeSpeed, metric: manoeuvring.timeOverSpeedLimit_s, warn: "${params:navigation.restrictedVisibility.speedReduction_s}", fail: 2x, penalty: 10, failPenalty: 25 }
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.restrictedVisibility_nm}", fail: "${params:navigation.cpa.coastal_nm}", penalty: 10, failPenalty: 30, excludeEscorts: true }
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.coastalLane_m}", fail: 1.3x, penalty: 5, failPenalty: 15 }
+    - { id: separationZone, metric: track.minDistanceToNoGo_m, direction: below, warn: "${params:navigation.tss.separationZoneClearance_m}", fail: 1, penalty: 5, failPenalty: 20 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: callMaster
+      after: { event: timelineTriggered, itemId: fogThickens }
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:navigation.restrictedVisibility.callMaster_s}"
+      penalty: 10
+    - id: fogChecklist
+      after: { event: timelineTriggered, itemId: fogThickens }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:navigation.restrictedVisibility.checklist_s}"
+      penalty: 5
+    - id: lookoutReportR1
+      after: { event: encounterStarted, targetId: R1 }
+      expect: { any: [ { acknowledge: { kind: lookoutReport } }, { acknowledge: { kind: report } } ] }
+      within_s: "${params:navigation.restrictedVisibility.lookoutReport_s}"
+      penalty: 10
+    - id: closeQuartersAction
+      after: { event: targetActivated, targetId: R2 }
+      expect: { any: [ telegraphChange, rpmOrder, rudderOrder, { event: { kind: encounterFirstAction, targetId: R2 } } ] }
+      within_s: "${params:navigation.restrictedVisibility.closeQuartersAction_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.1
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: R1
+    name: R1
+    shipType: fishing
+    loa: 20
+    beam: 5
+    draft: 2
+    lights: fishing
+    aisOn: false                                  # 只有雷達(與瞭望聽霧號)
+    initial:
+      position: { x: 1363, y: 6993 }              # 航段 1(CL1–CL2 之間):沿航道 3.8 nm、中心線左 0.6 nm(放網漂流,對地幾乎停止)
+      heading: 200
+      speed: 0.5                                  # 對水 0.5 kn 向 200°,抵銷 0.5 kn 北向流:不橫越航道
+    behaviour: { mode: hold }
+  - id: R2
+    name: R2
+    shipType: cargo
+    loa: 90
+    beam: 15
+    draft: 6
+    aisOn: false
+    initial:
+      position: { x: 5446, y: 11715 }             # 自船距 CL2 0.25 nm 時出現:右舷前方約 2.3 nm(前 2.2、右 0.6 nm)
+      heading: 220
+      speed: 6
+    behaviour:
+      mode: scripted
+      script:
+        - { t: 0, heading: 220, speed: 6 }        # 不轉向時 CPA 約 0.2–0.3 nm(依自船航速)
+        - { t: 120, heading: 275, speed: 6, rot: 60 }   # 2 分鐘後轉向自船(近距離)
+    trigger: { type: ownDistance, point: { lat: 23.97856, lon: 120.0111 }, lessThan: 0.25 }
+  - id: S1
+    name: TS TAIPEI
+    mmsi: 416503005
+    shipType: cargo
+    loa: 170
+    beam: 27
+    draft: 9
+    destination: KAOHSIUNG
+    initial:
+      position: { x: -376, y: 11962 }             # 南行航道對向(AIS)
+      heading: 200
+      speed: 12
+    behaviour: { mode: hold }
+  - id: S2
+    name: GOLDEN OCEAN
+    mmsi: 416503006
+    shipType: tanker
+    loa: 180
+    beam: 30
+    draft: 10
+    destination: MAILIAO
+    initial:
+      position: { x: 4058, y: 24144 }
+      heading: 200
+      speed: 13.5
+    behaviour: { mode: hold }

@@ -726,6 +726,25 @@
           }
         }
       }
+    },
+    "bank": {
+      "type": "object",
+      "description": "岸壁效應(情境有 banks 區段且動力學接受外力時輸出;C# 產生,Python 不輸出;docs/design/physics-bank-effect.md 第 5 節)。力為船體座標:Y 右舷正、N 艏向右正(與 u/v/r 相同)",
+      "required": ["Y_kN", "N_kNm", "side", "parameter"],
+      "properties": {
+        "Y_kN": { "type": "number", "description": "岸壁橫向力(kN,右舷正;向岸吸力)" },
+        "N_kNm": { "type": "number", "description": "岸壁艏搖力矩(kN·m,艏向右正;艏離岸時與 Y 反號)" },
+        "side": { "type": "string", "enum": ["port", "starboard", "none"], "description": "岸壁橫向力 Y_kN 指向的舷側(Y 的正負;|Y| < 1e-6 N 時 none)。不等於岸在哪一舷:船艏先進入岸壁時艏部壓力墊使力推離岸;岸的舷側見 nearestSide,畫力箭頭以 Y_kN 為準" },
+        "parameter": { "type": "number", "description": "加權距離參數 D(無因次;正 = 右舷岸較近,兩岸等距時 0)" },
+        "distance_m": { "type": "number", "minimum": 0, "description": "船舯至最近等效岸壁的橫向距離(m;影響寬度內無岸壁時省略)" },
+        "clearance_m": { "type": "number", "description": "船側至最近等效岸壁(distance_m − B/2)" },
+        "nearestSide": { "type": "string", "enum": ["port", "starboard"], "description": "最近岸壁在哪一舷" },
+        "bankId": { "type": "string", "description": "最近岸壁 id" },
+        "port_m": { "type": "number", "minimum": 0, "description": "左舷最近等效岸壁距離(船舯,m;影響寬度內無時省略)" },
+        "starboard_m": { "type": "number", "minimum": 0, "description": "右舷最近等效岸壁距離(船舯,m)" },
+        "depthRatio": { "type": "number", "description": "水深吃水比 h/T" },
+        "influence_m": { "type": "number", "description": "影響寬度 y_inf(自船舯,m)" }
+      }
     }
   },
   "$defs": {

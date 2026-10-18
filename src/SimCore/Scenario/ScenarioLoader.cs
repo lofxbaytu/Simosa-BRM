@@ -47,6 +47,8 @@ public static class ScenarioLoader
         if (set is not null && resolved.Count > 0) scenario.ParameterSetInfo = set.ToInfo(resolved);
         // 泊位參照(berth.file + id)內嵌為 definition,紀錄 header 因此含完整泊位定義(設計文件 physics-tugs-anchors-mooring.md 第 4.1 節)
         ScenarioExternalForces.ResolveBerth(scenario, baseDirectory);
+        // 岸壁參照(banks.file + ids)同樣內嵌為 definitions(設計文件 physics-bank-effect.md 第 2 節)
+        ScenarioBankLoader.ResolveBanks(scenario, baseDirectory);
         return scenario;
     }
 

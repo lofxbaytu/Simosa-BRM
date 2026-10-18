@@ -86,6 +86,10 @@ public sealed class SimulationEngine
     private ExternalForceModel _external = null!;
     private StateVector _initialMotion;
     private readonly List<ExternalEvent> _externalEvents = new();
+    // 岸壁效應(設計文件 docs/design/physics-bank-effect.md);情境有 banks 區段時建立,Initialize/Restore 時依情境重建
+    private BankEffectModel? _bank;
+    /// <summary>外力模組 + 岸壁的和(兩者皆 Active 時用;_external/_bank 重建時一併重建)</summary>
+    private SumForceField? _sumField;
 
     public EngineOptions Options { get; }
     public ShipParticulars Ship { get; private set; }
@@ -151,6 +155,8 @@ public sealed class SimulationEngine
     public Bnwas Bnwas => _bnwas;
     /// <summary>外力模組(拖船/錨/泊位;<see cref="ExternalForceModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
     public ExternalForceModel External => _external;
+    /// <summary>岸壁效應(情境無 banks 時 null;<see cref="BankEffectModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
+    public BankEffectModel? Bank => _bank;
     /// <summary>自動舵可啟用:無 autopilotFailure,且電羅經未失效(指示航向有效)</summary>
     public bool AutopilotAvailable => !_faults.Contains(FaultNames.AutopilotFailure) && !_faults.Contains(FaultNames.GyroFailure);
 
@@ -291,6 +297,8 @@ public sealed class SimulationEngine
         _bnwasSource = SimEventSources.Engine;
         _initialMotion = Motion;
         _external = CreateExternal();
+        _bank = CreateBank();
+        _sumField = _bank is null ? null : new SumForceField(_external, _bank);
         _externalEvents.Clear();
         _startsRemaining = Ship.Engine.MaxConsecutiveStarts;
         AttachTraffic(TrafficManager.FromScenario(sc, _projection, Options.Dt));
@@ -312,6 +320,19 @@ public sealed class SimulationEngine
         _rescore = _rescoreScenario is { } rs ? new AssessmentEngine(rs, Ship, this, _projection, Options.Dt, RaiseRescore, _rescoreTargets ?? Options.ManoeuvreTargets) : null;
         var depthZones = _assessment.Zones.DepthZones();
         if (depthZones.Count > 0) Environment.Depth = new ZoneDepth((ConstantDepth)Environment.Depth, depthZones);
+        RefreshBank();
+    }
+
+    /// <summary>依目前情境建立岸壁效應模組(情境無 banks 時 null)。</summary>
+    private BankEffectModel? CreateBank()
+        => BankEffectModel.Create(Ship, Loading, Scenario, _projection, Dynamics.SupportsExternalForces);
+
+    /// <summary>岸壁效應的步末結果(雜湊與 state.bank):以目前狀態、所在水深與實際轉速重算(純函數,故快照不需新欄位)。</summary>
+    private void RefreshBank()
+    {
+        if (_bank is not { Active: true } b) return;
+        b.PreStep(_act.Rpm);
+        b.UpdateLast(Motion, Environment.Depth.DepthAt(Motion.X, Motion.Y), _act.Rpm);
     }
 
     /// <summary>依目前情境、船舶與裝載建立外力模組(初始狀態:拖船 initial、錨收存或情境初始已錨泊、繫纜 initial)。</summary>
@@ -1132,11 +1153,16 @@ public sealed class SimulationEngine
 
         var sample = Environment.SampleAt(Motion.X, Motion.Y);
         // 外力(拖船/錨/碰墊/繫纜):只在情境使用時走含外力的積分(未使用時位元與舊版相同)
+        // 岸壁效應:情境有 banks 時與外力模組相加(螺槳載荷取步首轉速,四階段共用);兩者皆未使用時走舊積分多載
         var external = _external.Active;
-        if (external)
+        var bank = _bank is { Active: true } bk ? bk : null;
+        if (external || bank is not null)
         {
-            _external.PreStep(Motion, Options.Dt);
-            Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt, _external);
+            if (external) _external.PreStep(Motion, Options.Dt);
+            bank?.PreStep(controls.C1.Rpm);
+            // 只有外力模組 → 與舊版相同的 _external;只有岸壁 → _bank;兩者 → 和
+            IExternalForceField field = bank is null ? _external : external ? _sumField! : bank;
+            Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt, field);
         }
         else Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
         Tick++;
@@ -1147,6 +1173,8 @@ public sealed class SimulationEngine
             foreach (var ev in _externalEvents)
                 Raise(NewEvent(ev.Kind, SimEventSources.Engine, ev.ItemId, null, ev.Message, ev.Data, visible: true));
         }
+        // 岸壁效應步末結果(雜湊與 state.bank;步末位置的水深、實際轉速)
+        bank?.UpdateLast(Motion, Environment.Depth.DepthAt(Motion.X, Motion.Y), _act.Rpm);
 
         if (!Aground && UnderKeelClearance() <= 0.0)
         {
@@ -1226,6 +1254,9 @@ public sealed class SimulationEngine
         // 主機起動故障(engineStartFailure)只在成立或留有狀態時追加(未使用者雜湊與舊版相同)
         var hashStart = _act.StartFailureActive || _act.HasStartFailureState;
         if (hashStart) size += 8 * 8;
+        // 岸壁效應只在情境有 banks 且動力學接受外力時追加(未使用者雜湊與舊版相同)
+        var hashBank = _bank is { Active: true };
+        if (hashBank) size += BankEffectModel.HashLongs * 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
@@ -1282,6 +1313,7 @@ public sealed class SimulationEngine
             BinaryPrimitives.WriteInt64LittleEndian(buf[o..], _act.StartBlocked ? 1 : 0); o += 8;
             BinaryPrimitives.WriteInt64LittleEndian(buf[o..], BitConverter.DoubleToInt64Bits(_act.StartAttemptTimerSec)); o += 8;
         }
+        if (hashBank) o += _bank!.WriteHash(buf[o..]);
         SHA256.HashData(buf[..o], _hash);
     }
 
@@ -1373,6 +1405,9 @@ public sealed class SimulationEngine
         // 外力模組:重建為初始狀態再套用快照(舊快照或未使用外力者即為初始狀態)
         _external = CreateExternal();
         if (s.External is { } ext) _external.Restore(ext);
+        // 岸壁效應:無跨步狀態,依情境重建幾何,於還原完成後以還原的狀態重算步末結果(RefreshBank)
+        _bank = CreateBank();
+        _sumField = _bank is null ? null : new SumForceField(_external, _bank);
 
         Tick = s.Tick;
         Motion = new StateVector(s.Motion.U, s.Motion.V, s.Motion.R, s.Motion.X, s.Motion.Y, s.Motion.Psi);
@@ -1454,6 +1489,7 @@ public sealed class SimulationEngine
         if (hash.Length != 32) throw new InvalidDataException("快照雜湊長度錯誤");
         hash.CopyTo(_hash, 0);
         _snapshots.RemoveAll(x => x.Tick > s.Tick);
+        RefreshBank();
 
         static IDepthProvider SetDepth(ConstantDepth existing, double value) { existing.Depth = value; return existing; }
     }
@@ -1611,6 +1647,7 @@ public sealed class SimulationEngine
             Tugs = _external.TugStates(m, _projection),
             Anchors = _external.AnchorStates(_projection),
             Berth = _external.BerthState(),
+            Bank = _bank is { Active: true } bank ? bank.State() : null,
         };
     }
 }

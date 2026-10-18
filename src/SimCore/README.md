@@ -328,3 +328,19 @@ targets:
 - **確定性**:無亂數;外力模組只在使用時(有拖船/泊位,或錨曾被使用)走含外力積分並追加雜湊位元組,舊情境雜湊不變;`EngineSnapshot.External`(選填,Version 仍 3);
   三個新指令寫一般 `input` 行,重播一致(`ExternalForceEngineTests`)。
 - **限制**:Python 參考實作尚未實作這些力項;3 自由度(垂直分量、鏈彈性不計);拖船無自身運動學與俥流;評估指標(接近速度、接觸能量)尚未接到評估模組(事件已記錄)。
+
+## 11. 岸壁效應(`Physics/External/BankEffect.cs`;設計文件 `docs/design/physics-bank-effect.md`)
+
+規劃書第 6.2 節下標 B 與第 458 行(AMC、Flanders Hydraulics(Lataire, Vantorre)回歸模型)、R2「受限水域含岸壁與運河效應」。
+
+- **情境** `banks{file, ids, lines[], definitions[], scale}`:岸壁折線(`{lat, lon}` 或 `{x, y}`)、`type vertical | sloped`、`waterSide`、`slope`(1:n)、`topDepth_m`(岸頂/淺灘水深)、`channelDepth_m`(適用水深);
+  `file`(`data/areas/*.json` 的 `banks[]`,例如示意的 `mailiao-channel-banks.json`)於載入時內嵌為 `definitions`,紀錄 header 含完整幾何。**只有情境有 `banks` 時才計算**。
+- **力**:沿船長 [−L, +L] 三角加權的至岸距離倒數(y_inf 型加權距離參數 D,前/後半分開),× h/T 修正 1 + a·T/(h − T)、× ½ρLT·u²(前導半艏部壓力墊推離、後隨半吸向岸)、
+  正車螺槳載荷項 ∝ (nD)²(艉部)。向岸吸力 Y_B、艏離岸力矩 N_B;影響寬度 y_inf = 5B(1 + 16 Fnh⁸) 之外為 0;斜坡岸以半深處為等效垂直岸壁,淹沒岸強度 × (h − h_top)/h;
+  船寬跨越等效岸壁線(淹沒岸/斜坡岸上方)時依船寬在水域側的比例線性淡出、整個船寬在陸側(含薄堤背面)時為 0,力對位置連續。
+  **係數為文獻量級估計值**(兩船無模型試驗),`banks.scale` 可整體調整。
+- **接線**:外力場介面 `IExternalForceField`;MMG 與暫代模型接受,與拖船/錨/泊位外力在每個 RK4 階段相加(`SumForceField`);螺槳轉速取步首值(四階段共用)。
+- **確定性**:準靜態純函數,無跨步狀態(快照無新欄位;還原後以還原狀態重算);啟用時於雜湊鏈最後追加 `BANKEFCT` 區塊(9 個 int64),未使用 banks 的情境雜湊與舊版逐位元相同。
+- **狀態** `state.bank{Y_kN, N_kNm, side, parameter, distance_m, clearance_m, nearestSide, bankId, port_m, starboard_m, depthRatio, influence_m}`(情境有 banks 時輸出;
+  `side` 為 Y 的方向,岸的舷側為 `nearestSide`)。
+- **測試** `tests/SimCore.Tests/BankEffectTests.cs`、`BankEffectReviewTests.cs`(橫越岸線連續性、薄堤背面、side 語意);Python 參考實作忽略 `banks`。

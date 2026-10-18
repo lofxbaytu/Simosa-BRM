@@ -163,6 +163,12 @@ export const ACK_KIND_LABEL: Readonly<Record<string, string>> = {
   steeringMode: '切換操舵模式',
   anchorReady: '備錨',
   gyroCheck: '羅經比對異常',
+  prediction: '記下預測',
+  driftCalculation: '漂流計算',
+  anchorDecision: '下錨決策',
+  notifyCompany: '通報公司',
+  notifySar: '通報搜救',
+  lookoutReport: '瞭望報告',
   other: '其他',
 };
 

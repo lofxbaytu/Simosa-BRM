@@ -1,0 +1,317 @@
+# E02 沿岸航行與密集交通/COLREG — 台灣海峽中部分道航行型航道(規劃書第 8.1 節 E02、第 3.4 節;設計 docs/design/scenario-library.md 第 2 節;schema src/Contracts/scenario.schema.json)
+# 航道、分隔帶與中心線 CL0–CL4 為示意值(data/areas/taiwan-strait-central-lanes.json,示意,待 ENC 校正);與 E03 為同一幾何(好/壞能見度版本)。
+# FSB1 滿載(瀝青)麥寮 → 台中沿岸北上,北行航道中心線 020°,FAH 約 10.5 kn,北向潮流 1.0 kn、東北風 18 kn;16:20(地方時)交班,約 17:10 日落(白天轉黃昏)。
+# 交通 10 艘:X2 右舷橫越(自船讓路)、X1 左舷橫越的讓路船「不採取行動」(colreg obey: false)、O1 右舷後方追越、F1–F4 漁船群(T+25 出現,多數無 AIS)、
+#            X3 近對遇並於 T+40 以 VHF 要求「右舷對右舷」(干擾呼叫)、S1/S2 南行航道對向船。
+# 三步升級:normal(交班、X2 讓路)→ T+10 min degraded(X1 未讓路,第 17 條)→ T+25 min emergency(O1 追越 + 漁船群)→ T+40 VHF 干擾呼叫;課程前段情境,不注入技術故障。
+# 評估:CPA 容許帶(參數集 navigation.cpa.*)、讓路船及早行動(會遇開始 → 首次行動 ≤ navigation.encounter.earlyAction_s)、直航船行動(≤ standOnAction_s)、
+#       航跡走廊(navigation.xtd.coastalLane_m)、分隔帶距離、VHF 干擾回應、交班檢查表、VTS 報告;改變幅度見 summary.collisionAvoidance.targets[].courseChange_deg / substantial(講評)。
+id: E02_coastal_traffic_strait
+name: 台灣海峽沿岸航行與密集交通
+description: >-
+  彰化外海分道航行型航道(示意)北上,黃昏前交班接手;6 至 10 艘目標:右舷橫越船須及早大幅讓路,
+  左舷橫越的讓路船不採取行動(第 17 條),T+25 追越船與漁船群同時壓縮避讓空間,T+40 他船以 VHF 要求違反 COLREG 的會船方式。
+seed: 20261120
+startTimeUtc: "2026-11-20T08:20:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 23.9000, lon: 119.9800 }          # = CL0(示意航道中心線起點)
+initial:
+  position: { lat: 23.9000, lon: 119.9800 }
+  heading: 20
+  speed: 10.5
+  telegraph: FAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 18, trueDir: 45, gustiness: 0.1 }
+  current: { set: 20, drift: 1.0 }               # 漲潮北向流(沿航道)
+  waterDepth: 60
+  visibility_nm: 10
+briefing:
+  text: |
+    交班(16:20 地方時):No.1 滿載瀝青,麥寮 → 台中,沿示意北行航道(中心線 020°)北上,FAH 10.5 kn,自動舵 020°;北向流約 1 kn、東北風 18 kn,能見度 10 nm,約 17:10 日落。
+    交班內容:航程計畫 CL0 → CL4(CL2 為台中 VTS 報告點)、航道寬 2 nm(走廊半寬見參數集 navigation.xtd.coastalLane_m)、西側分隔帶禁止進入;
+    目前雷達/AIS 目標:右舷前方 4 nm 橫越貨輪 X2(自船讓路)、左舷前方 3.7 nm 橫越貨輪 X1(對方讓路)、右舷後方 1.9 nm 追越船 O1、南行航道對向船 2 艘。
+    船長常規命令:沿岸最小 CPA 0.5 nm(參數集 navigation.cpa.coastal_nm),CPA 低於 1 nm 須通知船長;讓路時及早、大幅(≥ 30°)行動並讓對方明顯看出。
+    接班者完成交班檢查表後由教官確認(acknowledge checklist);通過 CL2 時向 VTS 報告(acknowledge report)。
+  attachments:
+    - { title: "航程計畫(麥寮 → 台中,示意航道)", file: docs/passage-plan-E02.pdf }
+    - { title: 交班檢查表, file: docs/handover-checklist.pdf }
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: lookout, required: true }
+    - { role: helmsman }
+    - { role: otherShip, playedBy: voiceScript }
+    - { role: vts, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 3600
+route:
+  name: 示意北行航道(CL0 → CL4)
+  xtdLimit_m: "${params:navigation.xtd.coastalLane_m}"
+  waypoints:                                      # 與 data/areas/taiwan-strait-central-lanes.json centreline 相同
+    - { name: CL0, lat: 23.9000, lon: 119.9800 }
+    - { name: CL1, lat: 23.93143, lon: 119.99244 }
+    - { name: CL2, lat: 23.97856, lon: 120.0111, checkpoint: true, report: "台中 VTS 報告點(示意)" }
+    - { name: CL3, lat: 24.0257, lon: 120.02976 }
+    - { name: CL4, lat: 24.08855, lon: 120.05464, arrivalRadius_m: 500 }
+zones:
+  - id: separationZone
+    name: 分隔帶(示意,禁止進入)
+    type: noGo
+    polygon:                                      # 與 data/areas/taiwan-strait-central-lanes.json lanes.separationZone 相同
+      - { lat: 23.86144, lon: 119.9357 }
+      - { lat: 24.15999, lon: 120.05389 }
+      - { lat: 24.15713, lon: 120.06244 }
+      - { lat: 23.85858, lon: 119.94425 }
+timeline:
+  - id: handover
+    name: 交班(航程計畫與交通)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:自動舵 020,FAH 十點五節。右舷前方四浬 X2 橫越,我們讓路;左舷 X1 橫越,對方讓路;右舷後方 O1 追越。CL2 要報台中 VTS。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察接班者是否核對航程計畫、交通、儀器與常規命令,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 020°(交班狀態)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 20 }
+  - id: crossingNoAction
+    name: T+10 左舷橫越船未讓路
+    phase: degraded
+    when: { type: time, atLeast: 600 }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "報告,左舷前方那艘貨輪 X1,方位一直沒變,距離大約兩浬,看不出有讓路。", lang: zh-TW }
+      - message: { to: instructor, text: "X1(讓路船)不採取行動:觀察五短聲/燈號警告、通知船長、依第 17 條 (a)(ii) 行動(避免向左轉)。學員若以自動舵改設定航向向右改向(系統不自動計入直航船行動),請按「口頭」確認", severity: warning }
+  - id: overtakingAndFishing
+    name: T+25 追越船與漁船群
+    phase: emergency
+    when: { type: time, atLeast: 1500 }
+    actions:
+      - voiceScript: { role: lookout, channel: bridge, text: "右舷後方追越船 O1 已經很近;正前方兩到三浬有一群漁船在作業,好幾艘雷達上才看得到,沒有 AIS。", lang: zh-TW }
+      - message: { to: instructor, text: "O1 追越(自船為直航船)+ 漁船群(F1–F4,自船航線前方 2–3 nm):觀察是否減速、待追越船通過後向右繞過漁船群(注意分隔帶在左側),及早通知船長", severity: warning }
+  - id: dusk
+    name: 日落、黃昏
+    when: { type: time, atLeast: 1800 }
+    actions:
+      - setEnvironment: { visibility_nm: 6, ramp_s: 900 }
+      - message: { to: all, text: "日落(約 17:10):注意航行燈與漁船燈號判讀,能見度將降至約 6 nm(黃昏霾)。", severity: info }
+  - id: vhfInterference
+    name: T+40 VHF 干擾呼叫
+    when: { type: time, atLeast: 2400 }
+    actions:
+      - voiceScript: { role: otherShip, channel: vhf16, text: "Bitumen ship, Bitumen ship, this is the bulk carrier on your port bow. Please alter to port, we pass starboard to starboard.", lang: en }
+      - voiceScript: { role: otherShip, channel: vhf16, text: "Vessel calling, say again your name and position… (多台同時發話,雜訊)", lang: en }
+      - message: { to: instructor, text: "VHF 干擾:身分不明的呼叫要求向左轉、右舷對右舷(X3 近對遇,原本將左舷對左舷 0.35 nm 通過,向左轉會橫越其船艏);觀察是否以 AIS/方位辨識呼叫船、依第 14 條行動並回報船長,不盲從 VHF", severity: warning }
+  - id: cpaCoach
+    name: CPA 警報提示(教官)
+    repeat: { every_s: 120, max: 5 }
+    when: { type: event, kind: cpaAlarm }
+    actions:
+      - message: { to: instructor, text: "有目標 CPA 低於沿岸門檻:觀察是否通知船長、及早大幅行動", severity: warning }
+  - id: end
+    name: 練習結束
+    when: { any: [ { type: time, atLeast: 3300 }, { type: routeLeg, passedWaypoint: CL4 } ] }
+    actions:
+      - endExercise: { reason: 航段完成 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.coastal_nm}"
+  encounter:
+    detectionRange_nm: "${params:navigation.encounter.detectionRange_nm}"
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: collision, rule: collision }
+    - { id: cpaHard, rule: cpa, lessThan: "${params:navigation.cpa.hardFail_nm}", excludeEscorts: true }
+  bands:
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.coastal_nm}", fail: "${params:navigation.cpa.hardFail_nm}", penalty: 10, failPenalty: 30, excludeEscorts: true }
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.coastalLane_m}", fail: 1.3x, penalty: 5, failPenalty: 15 }
+    - { id: separationZone, metric: track.minDistanceToNoGo_m, direction: below, warn: "${params:navigation.tss.separationZoneClearance_m}", fail: 1, penalty: 5, failPenalty: 20 }
+    - { id: rotOver, metric: manoeuvring.timeRotOverLimit_s, warn: 0, fail: 30, penalty: 5, failPenalty: 10 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: giveWayEarlyAction
+      after: { event: encounterStarted, targetId: X2 }
+      expect: { event: { kind: encounterFirstAction, targetId: X2 } }
+      within_s: "${params:navigation.encounter.earlyAction_s}"
+      penalty: 15
+      latePenaltyPer_s: 0.05
+    - id: standOnAction
+      after: { event: timelineTriggered, itemId: crossingNoAction }
+      # 自動舵改設定航向(核心觀察 autopilotHeading)尚未列入 expect 名稱(需核心 ExpectSpec.SimpleNames 與 schema 同步加入);在那之前由教官以「口頭」確認,
+      # X1 的 encounterFirstAction 通常已被讓 X2 的行動用掉(一次行動同時記給所有進行中的會遇)
+      expect: { any: [ rudderOrder, telegraphChange, rpmOrder, autopilotOff, { event: { kind: encounterFirstAction, targetId: X1 } }, { acknowledge: { kind: verbal } } ] }
+      within_s: "${params:navigation.encounter.standOnAction_s}"
+      penalty: 10
+      latePenaltyPer_s: 0.05
+    - id: callMasterCrossing
+      after: { event: timelineTriggered, itemId: crossingNoAction }
+      expect: { acknowledge: { kind: callMaster } }
+      within_s: "${params:navigation.encounter.standOnAction_s}"
+      penalty: 5
+    - id: vhfChallenge
+      after: { event: timelineTriggered, itemId: vhfInterference }
+      expect: { any: [ { acknowledge: { kind: report } }, { acknowledge: { kind: verbal } }, { acknowledge: { kind: callMaster } } ] }
+      within_s: "${params:navigation.vhf.challengeResponse_s}"
+      penalty: 5
+    - id: vtsReport
+      after: { event: reportPointPassed, waypoint: CL2 }
+      expect: { acknowledge: { kind: report } }
+      within_s: "${params:navigation.vts.report_s}"
+      penalty: 5
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: X2
+    name: WAN HAI 168
+    mmsi: 416502001
+    shipType: cargo
+    loa: 145
+    beam: 23
+    draft: 8.5
+    callSign: BKWH
+    destination: XIAMEN
+    initial:
+      position: { x: 6998, y: 2852 }              # 右舷前方約 4.1 nm,航向 290° 橫越;不行動時 T+15 min CPA 約 0.1 nm(自船讓路)
+      heading: 290
+      speed: 12
+    behaviour:
+      mode: colreg
+      colreg: { obey: true, cpaThreshold: 1.0, tcpaThreshold: 12, turn: 30, lastResort: true }   # 直航船;自船不讓時依第 17 條最後手段
+  - id: X1
+    name: HUA YANG 9
+    mmsi: 416502002
+    shipType: cargo
+    loa: 120
+    beam: 20
+    draft: 7.0
+    callSign: BHY9
+    destination: TAICHUNG
+    initial:
+      position: { x: -4544, y: 5217 }             # 左舷前方約 3.7 nm,航向 075° 橫越;T+22 min 於自船艏前約 0.25 nm 通過(讓路船,不行動)
+      heading: 75
+      speed: 11
+    behaviour:
+      mode: colreg
+      colreg: { obey: false }                     # 「不守規則」:辨識情境但不讓路
+  - id: O1
+    name: EVER GLORY
+    mmsi: 416502003
+    shipType: cargo
+    loa: 210
+    beam: 32
+    draft: 11
+    callSign: BKEG
+    destination: KEELUNG
+    initial:
+      position: { x: -59, y: -3626 }              # 右舷後方約 2.0 nm,15 kn 追越;約 T+25 min 於自船右舷約 0.6 nm 正橫
+      heading: 20
+      speed: 15
+    behaviour:
+      mode: colreg
+      colreg: { obey: true, cpaThreshold: 0.4, tcpaThreshold: 10, turn: 20 }   # 追越船(讓路):只在很近時才讓
+  - id: X3
+    name: PACIFIC DAWN
+    mmsi: 563502004
+    shipType: cargo
+    loa: 190
+    beam: 32
+    draft: 10
+    callSign: 9VPD
+    destination: KAOHSIUNG
+    initial:
+      position: { x: 10232, y: 29619 }            # 正前方約 17 nm,南下近對遇;不行動時約 T+45 min 左舷約 0.35 nm 通過(VHF 卻要求右舷對右舷)
+      heading: 200
+      speed: 12
+    behaviour:
+      mode: colreg
+      colreg: { obey: true, cpaThreshold: 0.3, tcpaThreshold: 6, turn: 20 }   # 只在很近時才小幅右轉(VHF 要求自船左轉)
+  - id: S1
+    name: TS TAIPEI
+    mmsi: 416502005
+    shipType: cargo
+    loa: 170
+    beam: 27
+    draft: 9
+    destination: KAOHSIUNG
+    initial:
+      position: { x: -376, y: 11962 }             # 南行航道(中心線西側 2.4 nm)對向
+      heading: 200
+      speed: 12
+    behaviour: { mode: hold }
+  - id: S2
+    name: GOLDEN OCEAN
+    mmsi: 416502006
+    shipType: tanker
+    loa: 180
+    beam: 30
+    draft: 10
+    destination: MAILIAO
+    initial:
+      position: { x: 4058, y: 24144 }
+      heading: 200
+      speed: 13.5
+    behaviour: { mode: hold }
+  - id: F1
+    name: CHIN HSING 12
+    mmsi: 416502011
+    shipType: fishing
+    loa: 22
+    beam: 5.5
+    draft: 2.2
+    lights: fishing
+    initial:
+      position: { x: 3857, y: 12026 }             # T+25 時自船前方 2.0 nm、左 0.3 nm(作業中,幾乎停止)
+      heading: 90
+      speed: 0.5
+    behaviour: { mode: hold }
+    trigger: { type: time, time: 1500 }
+  - id: F2
+    name: F2
+    shipType: fishing
+    loa: 18
+    beam: 5
+    draft: 2
+    lights: fishing
+    aisOn: false                                  # 無 AIS(只有雷達/目視)
+    initial:
+      position: { x: 4719, y: 12500 }             # 前方 2.4 nm、右 0.05 nm(自船航線上)
+      heading: 200
+      speed: 1
+    behaviour: { mode: hold }
+    trigger: { type: time, time: 1500 }
+  - id: F3
+    name: F3
+    shipType: fishing
+    loa: 20
+    beam: 5
+    draft: 2
+    lights: fishing
+    aisOn: false
+    initial:
+      position: { x: 3841, y: 13608 }             # 前方 2.8 nm、左 0.6 nm
+      heading: 300
+      speed: 1
+    behaviour: { mode: hold }
+    trigger: { type: time, time: 1500 }
+  - id: F4
+    name: F4
+    shipType: fishing
+    loa: 16
+    beam: 4.5
+    draft: 1.8
+    lights: fishing
+    aisOn: false
+    initial:
+      position: { x: 4878, y: 14019 }             # 前方 3.2 nm、左 0.15 nm
+      heading: 45
+      speed: 0.8
+    behaviour: { mode: hold }
+    trigger: { type: time, time: 1500 }

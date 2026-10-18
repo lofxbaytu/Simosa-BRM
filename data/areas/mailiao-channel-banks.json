@@ -1,0 +1,46 @@
+{
+  "id": "mailiao-channel-banks",
+  "description": "麥寮港進港航道岸壁/邊坡示意定義(供岸壁效應開發與 F03 類航道測試;規劃書第 6.2 節下標 B、R2)。航道以 F03/E07 航線 WP1→WP2→WP3→BERTH 為中心線,假設浚深底寬 250 m(中心線兩側各 125 m 為坡腳)、邊坡 1:5、航道水深 12.5 m(與 F03 zones channel 相同)、坡頂外淺灘水深 5 m;WP3 之後北側改為垂直護岸(終止於泊位前,不與 mailiao-berth.json 碼頭線重疊)。全部為示意值,非港方浚深圖或 ENC 資料,不可用於實際操船或評估;取得港方資料後取代。",
+  "source": "示意(由航線中心線兩側等距偏移 125 m 產生;邊坡、水深為假設)",
+  "banks": [
+    {
+      "id": "MLC-N",
+      "name": "進港航道北側邊坡(示意,WP1–WP3)",
+      "type": "sloped",
+      "slope": 5,
+      "topDepth_m": 5,
+      "channelDepth_m": 12.5,
+      "waterSide": "right",
+      "line": [
+        { "lat": 23.780885, "lon": 120.09924 },
+        { "lat": 23.796999, "lon": 120.121395 },
+        { "lat": 23.806061, "lon": 120.148582 }
+      ]
+    },
+    {
+      "id": "MLC-S",
+      "name": "進港航道南側邊坡(示意,WP1–BERTH)",
+      "type": "sloped",
+      "slope": 5,
+      "topDepth_m": 5,
+      "channelDepth_m": 12.5,
+      "waterSide": "left",
+      "line": [
+        { "lat": 23.779115, "lon": 120.10076 },
+        { "lat": 23.795001, "lon": 120.122605 },
+        { "lat": 23.803897, "lon": 120.149291 },
+        { "lat": 23.806381, "lon": 120.170157 }
+      ]
+    },
+    {
+      "id": "MLC-N-WALL",
+      "name": "內港北側垂直護岸(示意,WP3 以東)",
+      "type": "vertical",
+      "waterSide": "right",
+      "line": [
+        { "lat": 23.806119, "lon": 120.148843 },
+        { "lat": 23.807994, "lon": 120.164593 }
+      ]
+    }
+  ]
+}

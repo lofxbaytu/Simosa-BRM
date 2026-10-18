@@ -50,6 +50,8 @@ public sealed class Scenario
     public ScenarioAnchors? Anchors { get; set; }
     /// <summary>泊位(碼頭線、碰墊、繫船柱;data/areas/*.json 參照)與自船繫纜</summary>
     public ScenarioBerth? Berth { get; set; }
+    /// <summary>岸壁/航道邊坡(規劃書第 6.2 節下標 B 岸壁效應;設計文件 physics-bank-effect.md;未給 = 不計算,雜湊與舊版相同)</summary>
+    public ScenarioBanks? Banks { get; set; }
 
     /// <summary>載入時解析的參數集摘要(無引用時 null;不序列化,紀錄標頭另有 parameterSet 欄位)</summary>
     [JsonIgnore] public ParameterSetInfo? ParameterSetInfo { get; set; }
@@ -191,6 +193,8 @@ public sealed class Scenario
 
         // 拖船、錨、泊位(設計文件 physics-tugs-anchors-mooring.md)
         ScenarioExternalForces.CheckStructure(this, Error);
+        // 岸壁(設計文件 physics-bank-effect.md)
+        ScenarioBankLoader.CheckStructure(this, Error);
 
         var ruleIds = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < Assessment.HardFail.Count; i++)

@@ -205,7 +205,39 @@ export interface VoiceScriptData {
 }
 
 /** 教官確認種類(command.schema.json acknowledge.args.kind)。 */
-export type AcknowledgeKind = 'verbal' | 'notifyEcr' | 'callMaster' | 'report' | 'checklist' | 'steeringMode' | 'anchorReady' | 'gyroCheck' | 'other';
+export type AcknowledgeKind =
+  | 'verbal'
+  | 'notifyEcr'
+  | 'callMaster'
+  | 'report'
+  | 'checklist'
+  | 'steeringMode'
+  | 'anchorReady'
+  | 'gyroCheck'
+  | 'prediction'
+  | 'driftCalculation'
+  | 'anchorDecision'
+  | 'notifyCompany'
+  | 'notifySar'
+  | 'lookoutReport'
+  | 'other';
 
 /** gyroCheck:羅經交叉核對發現異常(E08;sensors-alerts.md 第 8 節)。 */
-export const ACKNOWLEDGE_KINDS: readonly AcknowledgeKind[] = ['verbal', 'notifyEcr', 'callMaster', 'report', 'checklist', 'steeringMode', 'anchorReady', 'gyroCheck', 'other'] as const;
+/** 與 scenario.schema.json expectSpec.acknowledge.kind 列舉一致;不在清單內的種類送出時會被改成 other,情境的必要事件就無法達成。 */
+export const ACKNOWLEDGE_KINDS: readonly AcknowledgeKind[] = [
+  'verbal',
+  'notifyEcr',
+  'callMaster',
+  'report',
+  'checklist',
+  'steeringMode',
+  'anchorReady',
+  'gyroCheck',
+  'prediction',
+  'driftCalculation',
+  'anchorDecision',
+  'notifyCompany',
+  'notifySar',
+  'lookoutReport',
+  'other',
+] as const;
