@@ -35,7 +35,8 @@ public sealed class AuditLog
         lock (Gate)
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(Path))!);
-            using var fs = new FileStream(Path, FileMode.Append, FileAccess.Write, FileShare.Read);
+            // FileShare.ReadWrite:讓其他行程(船上 status 指令、教官端檢視)在同步服務寫入中仍可讀取;Windows 上以 FileShare.Read 開檔會使讀取端失敗
+            using var fs = new FileStream(Path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
             var bytes = Encoding.UTF8.GetBytes(text);
             fs.Write(bytes);
             fs.Flush(flushToDisk: true);
@@ -45,9 +46,18 @@ public sealed class AuditLog
     /// <summary>讀回所有行(測試與 status 顯示用)。</summary>
     public IReadOnlyList<JsonObject> ReadAll()
     {
-        if (!File.Exists(Path)) return Array.Empty<JsonObject>();
-        return File.ReadLines(Path, Encoding.UTF8).Where(l => l.Length > 0)
-            .Select(l => JsonNode.Parse(l) as JsonObject).Where(o => o is not null).Cast<JsonObject>().ToList();
+        // 與 Write 同一把鎖(同行程不讀到半行),並以 FileShare.ReadWrite | Delete 開檔:寫入端仍開著檔案時,
+        // Windows 上 File.ReadLines(只允許共用 Read)會丟 IOException(CI windows-latest 的 SyncTests 曾因此失敗)
+        lock (Gate)
+        {
+            if (!File.Exists(Path)) return Array.Empty<JsonObject>();
+            using var fs = new FileStream(Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(fs, Encoding.UTF8);
+            var list = new List<JsonObject>();
+            while (reader.ReadLine() is { } l)
+                if (l.Length > 0 && JsonNode.Parse(l) is JsonObject o) list.Add(o);
+            return list;
+        }
     }
 }
 

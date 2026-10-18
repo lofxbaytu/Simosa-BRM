@@ -49,6 +49,19 @@ def test_ballast_file_is_marked_estimated(ballast_coeffs) -> None:
     assert ref["displacement_t"] < full["reference"]["displacement_t"]
 
 
+
+def _close(a: object, b: object, rel: float = 1e-9, abs_: float = 1e-12) -> bool:
+    """遞迴比較 JSON 結構;數值以相對誤差比較,其餘逐值相等。"""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(float(a), float(b), rel_tol=rel, abs_tol=abs_)
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], rel, abs_) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_close(x, y, rel, abs_) for x, y in zip(a, b))
+    return a == b
+
 def test_ballast_file_matches_tool_output(ballast_coeffs) -> None:
     """係數檔 = 目前工具的經驗估計 + 滿載識別修正轉移(滿載重新識別或經驗式改變後須重新產生壓載檔)。"""
     sp = load_particulars("FSB2", "ballast")
@@ -56,7 +69,8 @@ def test_ballast_file_matches_tool_output(ballast_coeffs) -> None:
     regen = transfer_identification(est, load_coefficients("FSB2", "full"))
     msg = "data/ships/FSB2/coefficients.ballast.json 與工具輸出不一致,請以 README 的 estimate --transfer-from full 指令重新產生"
     for section in ("mass", "propeller", "rudder", "engine", "thruster", "wind", "squat", "reference"):
-        assert json.dumps(regen[section], sort_keys=True) == json.dumps(ballast_coeffs[section], sort_keys=True), f"{section}:{msg}"
+        # 浮點數依平台(numpy/BLAS)最後一位可能不同,以相對 1e-9 比較(CI ubuntu 與開發機曾差在第 16 位)
+        assert _close(regen[section], ballast_coeffs[section]), f"{section}:{msg}"
     for key in ("Xvv", "Xvr", "Xrr", "Xvvvv", "Yv", "Yr", "Yvvv", "Yvvr", "Yvrr", "Yrrr", "Nv", "Nr", "Nvvv", "Nvvr", "Nvrr", "Nrrr"):
         assert regen["hull"][key] == pytest.approx(ballast_coeffs["hull"][key], rel=1e-12), f"hull.{key}:{msg}"
     r_new, r_old = regen["hull"]["resistance"], ballast_coeffs["hull"]["resistance"]
