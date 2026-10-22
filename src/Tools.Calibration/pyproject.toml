@@ -30,11 +30,16 @@ packages = ["simosa_brm"]
 dev = ["pytest>=8.0"]
 
 [tool.uv]
-# 規則:所有快取留在專案資料夾內(CLAUDE.md);Windows 上 tools/setup-windows.ps1 另設 UV_CACHE_DIR
+# 規則:所有快取留在專案資料夾內(CLAUDE.md)。注意 uv 以「目前目錄」解析此相對路徑,
+# 不是以本檔所在目錄:uv 指令須在 src/Tools.Calibration(本設定)或專案根目錄(根 uv.toml)執行,
+# 或從別處以 `uv --directory src/Tools.Calibration …`;Windows 上 tools/setup-windows.ps1 另設
+# UV_CACHE_DIR(絕對路徑)為準。見 tests/test_repo_datapaths.py。
 cache-dir = "../../.cache/uv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-cache_dir = ".cache/pytest"
-# tmp_path 等暫存檔也留在專案內(CLAUDE.md);pytest 會清空此目錄,須為專用目錄
-addopts = "-ra --basetemp=../../build/test-tmp/pytest"
+# cache_dir 相對 rootdir(本檔所在目錄)解析 → 專案根目錄 .cache/pytest
+cache_dir = "../../.cache/pytest"
+# tmp_path 等暫存檔也留在專案內(build/test-tmp/pytest):不可在此寫 --basetemp(相對路徑以 cwd 解析,
+# 從別的目錄執行會落到專案外),改由 tests/conftest.py 的 pytest_configure 以絕對路徑設定
+addopts = "-ra"

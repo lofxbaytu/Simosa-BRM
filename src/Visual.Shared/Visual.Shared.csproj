@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    視景共用類別庫(規劃書第 5.2 節 Visual、第 7.3 節品質分級、第 10.1 節 Godot 方案):
+    狀態訂閱(ws://…:8765)、時間插值/外推、ENU → 場景座標、品質分級決策、區域/船模資料 → 幾何參數。
+    不依賴 Godot,可單元測試;Visual.Godot 以 ProjectReference 引用。只訂閱狀態、不做物理(規劃書第 10.1 節)。
+  -->
+  <PropertyGroup>
+    <RootNamespace>SimosaBRM.Visual.Shared</RootNamespace>
+    <AssemblyName>SimosaBRM.Visual.Shared</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SimCore/SimCore.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,23 @@
+<Project Sdk="Godot.NET.Sdk/4.5.1">
+  <!--
+    3D 視景客戶端(Godot 4.5 .NET)。建置:`dotnet build src/Visual.Godot/Visual.Godot.csproj`(輸出於 .godot/mono/temp/bin/,在專案內;
+    NuGet 套件依根目錄 nuget.config 放在 .cache/nuget)。不加入 SimosaBRM.sln(無 Godot 的 CI 不建置;docs/design/visual-client.md 第 9 節)。
+    Visual.Shared 提供狀態訂閱/插值、座標、品質分級、區域與船模資料;此專案只負責 Godot 節點與渲染。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <RollForward>Major</RollForward>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>SimosaBRM.Visual.Godot</RootNamespace>
+    <AssemblyName>SimosaBRM.Visual.Godot</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Godot.NET.Sdk 自行決定輸出到 .godot/mono/temp/;覆蓋根目錄 Directory.Build.props 的 build/bin 設定 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Visual.Shared/Visual.Shared.csproj" />
+  </ItemGroup>
+</Project>

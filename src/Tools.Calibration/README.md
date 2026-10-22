@@ -6,7 +6,9 @@
 
 ## 用法
 
-需要 Python 3.12+ 與 [uv](https://github.com/astral-sh/uv)。所有快取與輸出留在專案資料夾內(`.cache/uv`、`.venv`、`build/`;CLAUDE.md)。
+需要 [uv](https://github.com/astral-sh/uv)(Python 3.12+ 機器上沒有時 uv 會自動下載受管 CPython;Windows 上執行過 `tools\setup-windows.ps1` 後裝在 `..\..\.cache\uv-python`,否則 uv 預設裝到 `%APPDATA%\uv\python`)。所有快取與輸出留在專案資料夾內(`.cache/uv`、`.venv`、`build/`;CLAUDE.md)。
+
+**執行目錄規則**:uv 把 `cache-dir` 的相對路徑當成相對於「目前目錄」而非設定檔所在目錄,所以 uv 指令要在本目錄(pyproject 的 `../../.cache/uv`)或專案根目錄(根 `uv.toml` 的 `.cache/uv`)執行;在其他目錄(例如 `src\` 或 `tests\`)會另建一份 `src\.cache\uv`。從別處執行請用 `uv --directory src\Tools.Calibration run pytest -q`(`--directory` 先切換目錄再解析設定)。設定了 UV_CACHE_DIR(setup-windows.ps1 以絕對路徑設定)就不受此限。pytest 的暫存目錄(`tmp_path`)由 `tests/conftest.py` 固定為專案的 `build/test-tmp/pytest`、快取為 `.cache/pytest`,與目前目錄無關(`tests/test_repo_datapaths.py` 驗證這些規則)。
 
 ```powershell
 cd "D:\Simosa BRM\src\Tools.Calibration"

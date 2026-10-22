@@ -1,0 +1,21 @@
+{
+  "description": "視景客戶端的情境 → 區域檔對照(docs/design/visual-client.md 第 5 節):鍵為 state.scenario.id 的前綴(最長相符者優先),值為 data/areas/ 下的區域 id。視景啟動時未給 --area 便依此載入;未列的情境只畫海面與船。所有港口幾何為示意(非 ENC),僅供視景。",
+  "scenarios": {
+    "E01": ["mailiao-channel-banks", "mailiao-berth"],
+    "E05": ["kaohsiung-approach", "kaohsiung-south-approach"],
+    "E07": ["mailiao-channel-banks"],
+    "E08": ["kaohsiung-approach"],
+    "E09": ["kaohsiung-approach", "kaohsiung-second-port-inbound", "kaohsiung-e20-passage"],
+    "E12": ["taichung-harbour-entrance"],
+    "E13": ["taichung-harbour-entrance", "taichung-inner-harbour"],
+    "E14": ["taichung-harbour-entrance", "taichung-inner-harbour"],
+    "E15": ["kaohsiung-approach", "kaohsiung-anchorage", "kaohsiung-anchorage-b-e15"],
+    "E16": ["keelung-approach"],
+    "E17": ["anping-approach"],
+    "E18": ["taiwan-strait-central-lanes"],
+    "E19": ["mailiao-small-oil-berth", "mailiao-channel-banks"],
+    "E20": ["kaohsiung-approach", "kaohsiung-e20-passage", "kaohsiung-anchorage"],
+    "E21": ["kaohsiung-south-oil-berth"],
+    "E22": ["kaohsiung-approach"]
+  }
+}

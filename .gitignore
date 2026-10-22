@@ -19,3 +19,8 @@ build/records/
 
 # xunit/VSTest 輸出
 TestResults/
+
+# Godot 視景(src/Visual.Godot):匯入快取、.NET 暫存輸出、匯出輸出;Godot 編輯器/使用者資料經啟動腳本導向 .cache/godot/(已被 .cache/ 涵蓋)
+src/Visual.Godot/.godot/
+src/Visual.Godot/export/
+build/visual/

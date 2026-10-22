@@ -22,7 +22,7 @@ cd "D:\Simosa BRM"
 .\tools\setup-windows.ps1
 ```
 
-它會設定使用者環境變數(NUGET_PACKAGES、DOTNET_CLI_HOME、UV_CACHE_DIR、PLAYWRIGHT_BROWSERS_PATH 等指到 `.cache\`)並檢查工具版本。需要的工具:.NET 8 SDK、Node.js 22 LTS(pnpm)、uv(Python 3.12+)、Git + Git LFS;安裝程式本身可選擇裝到 `D:\Tools\`。
+它會設定使用者環境變數(NUGET_PACKAGES、DOTNET_CLI_HOME、UV_CACHE_DIR、UV_PYTHON_INSTALL_DIR、UV_TOOL_DIR、PLAYWRIGHT_BROWSERS_PATH 等指到 `.cache\`)並檢查工具版本。需要的工具:.NET 8 SDK、Node.js 22 LTS(pnpm)、uv、Git + Git LFS;安裝程式本身可選擇裝到 `D:\Tools\`。Python 3.12+ 不必另外安裝:機器上沒有時 `uv sync` 會自動下載受管 CPython,setup-windows.ps1 以 UV_PYTHON_INSTALL_DIR 把它放在 `.cache\uv-python\`(uv 預設為 `%APPDATA%\uv\python`,即 `C:\`,而且只能用環境變數改)。uv 的相對 `cache-dir` 設定是以執行時的目前目錄解析,因此 uv 指令請在專案根目錄或 `src\Tools.Calibration` 下執行(或從別處用 `uv --directory src\Tools.Calibration …`);執行過 setup-windows.ps1 後 UV_CACHE_DIR 為絕對路徑,不受此限。
 
 ## 儲存庫結構
 
@@ -57,7 +57,7 @@ uv sync
 uv run simosa-brm identify --ship FSB1 --loading full
 uv run simosa-brm validate --ship FSB1 --loading full     # 報告在 build/calibration/FSB1/
 uv run simosa-brm serve --ship FSB1 --port 8765            # 給網頁儀器用的 WebSocket
-uv run pytest -q
+uv run pytest -q                                           # 暫存檔在 build/test-tmp/pytest、快取在 .cache/pytest(任何目前目錄皆同)
 
 # 網頁儀器
 cd src/Instruments.Web
