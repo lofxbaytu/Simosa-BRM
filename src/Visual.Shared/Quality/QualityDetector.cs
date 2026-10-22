@@ -28,6 +28,7 @@ public sealed record QualityDecision(QualityTier Tier, string Reason);
 /// 2. 內顯(Intel Iris Xe/UHD/Arc Graphics、AMD Radeon Graphics/7xxM/8xxM、Apple M)+ 系統記憶體 ≥ 16 GB → 中;否則 → 低。
 /// 3. 未知 GPU(軟體渲染、llvmpipe、headless)→ 低。
 /// 之後若有實測幀率:低於 30 fps 降一級(規劃書:內顯基準 ≥30 fps),高於 90 fps 且目前為中則升到高。
+/// 系統記憶體未知(null)時內顯保守取低,理由寫「未知」而非 0 GB;暖機再偵測用 <see cref="Refine"/>。
 /// </summary>
 public static class QualityDetector
 {
@@ -40,6 +41,7 @@ public static class QualityDetector
     {
         var name = hw.GpuName ?? string.Empty;
         var memGB = (hw.SystemMemoryMB ?? 0) / 1024.0;
+        var memText = hw.SystemMemoryMB is null ? "未知" : $"{memGB:F0} GB";
         QualityTier tier;
         string reason;
 
@@ -66,12 +68,12 @@ public static class QualityDetector
             if (memGB >= 15.5)
             {
                 tier = QualityTier.Mid;
-                reason = $"內建顯示晶片 {name},系統記憶體 {memGB:F0} GB → 中";
+                reason = $"內建顯示晶片 {name},系統記憶體 {memText} → 中";
             }
             else
             {
                 tier = QualityTier.Low;
-                reason = $"內建顯示晶片 {name},系統記憶體 {memGB:F0} GB(<16 GB)→ 低";
+                reason = $"內建顯示晶片 {name},系統記憶體 {memText}(<16 GB)→ 低";
             }
         }
         else
@@ -94,5 +96,16 @@ public static class QualityDetector
             }
         }
         return new QualityDecision(tier, reason);
+    }
+
+    /// <summary>
+    /// 啟動暖機(前 3 秒)後以實測幀率再偵測:沿用啟動時的硬體資訊(GPU 名稱、裝置類型、系統記憶體)只補上 MeasuredFps,
+    /// 否則記憶體/類型未知會讓所有內顯機落到「0 GB → 低」(審查發現)。只允許降級(實測 < 30 fps);
+    /// 升級不在暖機做(渲染器無法執行中切換,且升級會改變量測條件),回傳啟動分級。
+    /// </summary>
+    public static QualityDecision Refine(HardwareInfo startup, QualityDecision initial, double measuredFps)
+    {
+        var refined = Detect(startup with { MeasuredFps = measuredFps });
+        return refined.Tier < initial.Tier ? refined : initial;
     }
 }

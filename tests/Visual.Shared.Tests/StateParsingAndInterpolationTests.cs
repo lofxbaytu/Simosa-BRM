@@ -232,3 +232,71 @@ public class StateInterpolatorTests
         Assert.Equal(4, b.Targets!.Count);
     }
 }
+
+/// <summary>審查發現(visual):幀成批到達(啟動第一幀、網路停頓後 TCP 一次送達)時速率不得膨脹、顯示時間不得倒退。</summary>
+public class StateInterpolatorBurstTests
+{
+    private static OwnShipState Frame(int k) => SmokeSequence.Frame(k) with { RadarEnvironment = null };
+
+    [Fact]
+    public void FourFramesAtSameWallThenOneLaterDoesNotRegress()
+    {
+        // 4 幀同牆鐘 0.12 + 第 5 幀於 0.17(每 0.05 s 一幀 → 真實速率 0.8)
+        var it = new StateInterpolator();
+        for (var k = 0; k < 4; k++) it.Push(Frame(k), 0.12);
+        var first = it.Sample(0.12)!;
+        Assert.InRange(it.Rate, 0.99, 1.01); // 牆鐘無資訊 → 沿用 1.0
+        var prev = first.SimTime;
+        var prevEast = first.Own.East;
+        for (var k = 4; k < 16; k++)
+        {
+            var wall = 0.12 + (k - 3) * 0.05;
+            it.Push(Frame(k), wall);
+            Assert.InRange(it.Rate, 0.0, 1.05);
+            var s = it.Sample(wall)!;
+            Assert.True(s.SimTime >= prev - 1e-9, $"第 {k} 幀:顯示時間 {s.SimTime:F3} < 前次 {prev:F3}");
+            Assert.True(s.Own.East >= prevEast - 1e-6, $"第 {k} 幀:自船東向倒退");
+            Assert.False(s.Stalled);
+            prev = s.SimTime; prevEast = s.Own.East;
+        }
+        Assert.InRange(it.Rate, 0.75, 0.85); // 成批幀離開環形緩衝後收斂到真實速率
+    }
+
+    [Fact]
+    public void StallThenBurstOnLiveStreamKeepsDisplayTimeMonotonic()
+    {
+        // 25 Hz 正常 10 幀,120 ms 停頓後 3 幀於 0.52 同到;60 Hz 取樣
+        var it = new StateInterpolator();
+        for (var k = 0; k < 10; k++) it.Push(Frame(k), k * 0.04);
+        var prev = double.NegativeInfinity;
+        var regressions = 0;
+        var fed = 10;
+        for (var i = 0; i <= 60; i++)
+        {
+            var now = 0.36 + i / 60.0;
+            if (now >= 0.52 && fed == 10) { for (; fed < 13; fed++) it.Push(Frame(fed), 0.52); }
+            else if (now >= 0.56 && fed >= 13 && now >= 0.52 + (fed - 12) * 0.04) { it.Push(Frame(fed), now); fed++; }
+            var s = it.Sample(now)!;
+            if (s.SimTime < prev - 1e-9) regressions++;
+            Assert.InRange(it.Rate, 0.8, 1.1); // 60 Hz 取樣的餵入量化造成 ±25% 抖動;舊程式在此為 1.5–3
+            prev = s.SimTime;
+        }
+        Assert.Equal(0, regressions);
+    }
+
+    [Fact]
+    public void RateStillTracksTimescaleAndFreezeWithRobustEstimate()
+    {
+        var it = new StateInterpolator();
+        for (var k = 0; k < 8; k++) it.Push(Frame(k * 10), k * 0.04); // timescale 10
+        Assert.InRange(it.Rate, 9.9, 10.1);
+        var frozen = new StateInterpolator();
+        for (var k = 0; k < 8; k++) frozen.Push(Frame(5), k * 0.04);
+        Assert.Equal(0.0, frozen.Rate);
+        // 到達抖動 ±25%:速率仍在 1 附近
+        var jitter = new StateInterpolator();
+        var wall = 0.0;
+        for (var k = 0; k < 8; k++) { wall += k % 2 == 0 ? 0.03 : 0.05; jitter.Push(Frame(k), wall); }
+        Assert.InRange(jitter.Rate, 0.85, 1.15);
+    }
+}

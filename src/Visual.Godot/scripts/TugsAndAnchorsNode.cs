@@ -8,7 +8,8 @@ namespace SimosaBRM.Visual.Godot;
 
 /// <summary>
 /// 拖船(state.tugs[].pos 為示意位置)與纜線、錨鏈(state.anchors[].position)示意。
-/// 拖船以小型程序化船體表示(28 × 9 m),艏向:push 朝向自船(force 方向)、pull 背向;纜線以 ImmediateMesh 畫自拖船艏至自船側。
+/// 拖船以小型程序化船體表示(28 × 9 m),艏向與纜線連接點由 Visual.Shared 的 TugPresentation 決定(push/pull 艏向 = 自船艏向 + 力方向:
+/// 推頂時艏頂住自船、纜線自艏;拖拉時艏背向自船、纜線自艉);纜線以 ImmediateMesh 畫到自船側。
 /// 錨鏈:自錨鏈孔(particulars 無則取 0.44 LOA 前、±0.15 B)到錨位(海底,深度取 waterDepth)。每幀重建兩條線(頂點數極少)。
 /// </summary>
 public partial class TugsAndAnchorsNode : Node3D
@@ -54,25 +55,20 @@ public partial class TugsAndAnchorsNode : Node3D
                 if (!_tugs.TryGetValue(tug.Id, out var node))
                 {
                     node = new ShipNode { Name = "tug_" + tug.Id };
-                    node.Build(HullParameters.ForTarget(tug.Id, tug.Name ?? tug.Id, "tug", 28, 9, 3.5), new Color(0.15f, 0.15f, 0.18f), "towing", withLowPoly: false);
+                    node.Build(HullParameters.ForTarget(tug.Id, tug.Name ?? tug.Id, "tug", TugPresentation.LoaM, TugPresentation.BeamM, TugPresentation.DraftM), new Color(0.15f, 0.15f, 0.18f), "towing", withLowPoly: false);
                     AddChild(node);
                     _tugs[tug.Id] = node;
                 }
-                // 拖船艏向:推 → 面向自船(力方向 + 艏向);拉 → 背向;其他 → 與自船同向
-                var heading = tug.Mode switch
-                {
-                    "push" => Units.NormalizeHeadingDeg(own.HeadingDeg + tug.DirectionDeg + 180.0),
-                    "pull" => Units.NormalizeHeadingDeg(own.HeadingDeg + tug.DirectionDeg),
-                    _ => own.HeadingDeg,
-                };
+                // 拖船艏向(審查發現:push 曾加 180° 而背對自船):push/pull 都 = 自船艏向 + 力方向;其他與自船同向
+                var heading = TugPresentation.HeadingDeg(own.HeadingDeg, tug.Mode, tug.DirectionDeg);
                 // 拖船位置相對自船是示意值(ENU):以 pos 的 x/y 為準
                 node.SetPose(tug.Pos.X, tug.Pos.Y, heading);
                 var dx = tug.Pos.X - own.East; var dy = tug.Pos.Y - own.North;
                 node.ApplyLod(Math.Sqrt(dx * dx + dy * dy), double.MaxValue, drawDistance, lightsOn);
                 if (tug.Status is "working" or "connecting" or "repositioning" && tug.LineParted != true)
                 {
-                    // 纜線:拖船艏 → 自船最近側(以自船中心往拖船方向、距離半船寬處)
-                    var bow = SceneCoordinates.BodyToWorldOffset(14, 0, 2, heading);
+                    // 纜線:拖船連接點(推頂自艏、拖拉自艉)→ 自船最近側(以自船中心往拖船方向、距離半船寬處)
+                    var bow = SceneCoordinates.BodyToWorldOffset(TugPresentation.LineAttachForwardM(tug.Mode), 0, 2, heading);
                     var a = SceneCoordinates.FromEnu(tug.Pos.X, tug.Pos.Y, 0) + bow;
                     var len = Math.Max(1e-3, Math.Sqrt(dx * dx + dy * dy));
                     var b = SceneCoordinates.FromEnu(own.East + dx / len * ownHull.Beam * 0.5, own.North + dy / len * ownHull.Beam * 0.5, ownHull.Depth - ownHull.Draft);

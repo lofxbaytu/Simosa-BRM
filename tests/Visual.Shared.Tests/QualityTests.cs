@@ -184,3 +184,67 @@ public class QualityPersistenceTests
         Directory.Delete(dir, true);
     }
 }
+
+/// <summary>審查發現(visual):暖機 3 秒後的再偵測不得丟掉啟動時的記憶體/裝置類型,否則內顯基準機被無條件降為 low。</summary>
+public class WarmupRefinementTests
+{
+    [Theory]
+    [InlineData("Intel(R) Iris(R) Xe Graphics", 16384, "integrated")]
+    [InlineData("AMD Radeon(TM) Graphics", 32768, "integrated")]
+    [InlineData("Intel(R) Arc(TM) Graphics", 32768, "integrated")]
+    [InlineData("Intel(R) Graphics", 16384, "integrated")]
+    public void HighMeasuredFpsNeverDemotesStartupTier(string gpu, int ram, string type)
+    {
+        var startup = new HardwareInfo { GpuName = gpu, SystemMemoryMB = ram, DeviceType = type };
+        var initial = QualityDetector.Detect(startup);
+        Assert.Equal(QualityTier.Mid, initial.Tier);
+        foreach (var fps in new[] { 60.0, 120.0 })
+        {
+            var refined = QualityDetector.Refine(startup, initial, fps);
+            Assert.True(refined.Tier >= initial.Tier, $"{gpu} @ {fps} fps → {refined.Reason}");
+            Assert.DoesNotContain("0 GB", refined.Reason);
+        }
+        // 實測 < 30 fps 才降一級,理由要帶實測值
+        var slow = QualityDetector.Refine(startup, initial, 22);
+        Assert.Equal(QualityTier.Low, slow.Tier);
+        Assert.Contains("22 fps", slow.Reason);
+    }
+
+    [Fact]
+    public void DiscreteGpuIsNotPromotedByWarmup()
+    {
+        // 暖機只允許降級(升級需重啟或手動;渲染器無法執行中切換)
+        var startup = new HardwareInfo { GpuName = "NVIDIA GeForce GTX 1650", VramMB = 4096, SystemMemoryMB = 16384, DeviceType = "discrete" };
+        var initial = QualityDetector.Detect(startup);
+        Assert.Equal(QualityTier.Mid, initial.Tier);
+        Assert.Equal(QualityTier.Mid, QualityDetector.Refine(startup, initial, 120).Tier);
+        Assert.Equal(QualityTier.Low, QualityDetector.Refine(startup, initial, 20).Tier);
+    }
+
+    [Fact]
+    public void UnknownSystemMemoryIsReportedAsUnknownNotZero()
+    {
+        var d = QualityDetector.Detect(new HardwareInfo { GpuName = "Intel(R) Iris(R) Xe Graphics", SystemMemoryMB = null, DeviceType = "integrated" });
+        Assert.Equal(QualityTier.Low, d.Tier); // 記憶體未知 → 保守取低
+        Assert.DoesNotContain("0 GB", d.Reason);
+        Assert.Contains("未知", d.Reason);
+    }
+}
+
+/// <summary>審查發現(visual):auto 模式必須能依 quality.json 的上次分級以 Compatibility 渲染器啟動(tools/visual-run.* 用同一規則)。</summary>
+public class StartupRendererTests
+{
+    [Fact]
+    public void AutoFollowsPersistedOverrideThenLastAutoTier()
+    {
+        Assert.Equal(RendererKind.ForwardPlus, QualityPersistence.StartupRenderer(new PersistedQuality(), null));
+        Assert.Equal(RendererKind.Compatibility, QualityPersistence.StartupRenderer(new PersistedQuality { LastAutoTier = "low" }, null));
+        Assert.Equal(RendererKind.ForwardPlus, QualityPersistence.StartupRenderer(new PersistedQuality { LastAutoTier = "mid" }, null));
+        Assert.Equal(RendererKind.Compatibility, QualityPersistence.StartupRenderer(new PersistedQuality { ManualOverride = "low", LastAutoTier = "high" }, null));
+        Assert.Equal(RendererKind.ForwardPlus, QualityPersistence.StartupRenderer(new PersistedQuality { ManualOverride = "mid", LastAutoTier = "low" }, null));
+        Assert.Equal(RendererKind.Compatibility, QualityPersistence.StartupRenderer(new PersistedQuality { ManualOverride = "auto", LastAutoTier = "low" }, null));
+        // 啟動參數優先
+        Assert.Equal(RendererKind.Compatibility, QualityPersistence.StartupRenderer(new PersistedQuality { LastAutoTier = "high" }, QualityTier.Low));
+        Assert.Equal(RendererKind.ForwardPlus, QualityPersistence.StartupRenderer(new PersistedQuality { ManualOverride = "low" }, QualityTier.Mid));
+    }
+}

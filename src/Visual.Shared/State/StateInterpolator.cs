@@ -27,6 +27,10 @@ public sealed class VisualSample
 /// 顯示時間 = 最新幀 t + rate·(now − 到達) − 緩衝(rate·DelaySeconds);落在兩幀之間時線性插值(航向走最短弧),
 /// 超過最新幀時以 COG/SOG/ROT 外推,最多 MaxExtrapolationSeconds,之後凍結(Stalled)。
 /// 模擬時間倒退(重設/倒帶/重播)或跳躍超過 JumpThresholdSeconds 時清空歷史重新開始。
+/// 速率估計(審查發現:幀成批到達時最舊/最新兩幀的 Δt/Δ牆鐘會膨脹 2–3 倍,顯示時間倒退並卡在最舊幀):
+/// 同一牆鐘到達的幀(間隔 ≤ DegenerateIntervalSeconds:啟動第一幀、網路停頓後 TCP 一次送達、GC 卡頓)不含速率資訊,
+/// 有成批幀時以「有效到達間隔的中位數 × 間隔數」作 Δ牆鐘下限(偏向低估:低估只造成幀間微小停頓,高估才會倒退),
+/// 有效間隔不到一半時沿用前一次估計;沒有成批幀時直接用最舊/最新兩幀(抖動在緩衝內平均掉)。顯示時間另外保證單調不減(估計暫時偏高時暫停而非倒退;Reset 時清除)。
 /// 目標船以 id 配對插值;只在單側出現者取最新幀。雷達環境只在關鍵幀帶出,故另外保留並於時間倒退時清除。
 /// 無每幀配置(除回傳的 VisualSample 與目標清單;清單容量重用)。
 /// </summary>
@@ -35,14 +39,18 @@ public sealed class StateInterpolator
     private sealed record Frame(OwnShipState State, double Wall);
 
     private readonly Frame?[] _ring;
+    private readonly double[] _intervals; // 有效到達間隔(排序用;容量 capacity − 1,無每幀配置)
     private int _count;
     private int _head; // 下一個寫入位置
+    private double _lastSimT = double.NegativeInfinity; // 上次 Sample 回傳的顯示時間(單調保證)
     private RadarEnvironmentState? _radar;
     private readonly List<(TargetState, Pose)> _targetBuffer = new();
 
     public double DelaySeconds { get; init; } = 0.08;
     public double MaxExtrapolationSeconds { get; init; } = 0.25;
     public double JumpThresholdSeconds { get; init; } = 5.0;
+    /// <summary>到達間隔 ≤ 此值視為成批到達(同一牆鐘),不用於速率估計</summary>
+    public double DegenerateIntervalSeconds { get; init; } = 0.002;
     public int Capacity => _ring.Length;
     public int Count => _count;
     public OwnShipState? Latest => _count == 0 ? null : _ring[(_head - 1 + _ring.Length) % _ring.Length]!.State;
@@ -54,6 +62,7 @@ public sealed class StateInterpolator
     {
         if (capacity < 2) throw new ArgumentOutOfRangeException(nameof(capacity));
         _ring = new Frame?[capacity];
+        _intervals = new double[capacity - 1];
     }
 
     /// <summary>收到一幀(wall 為到達時的牆鐘秒,任意基準)。</summary>
@@ -82,6 +91,7 @@ public sealed class StateInterpolator
         _count = 0;
         _head = 0;
         Rate = 1.0;
+        _lastSimT = double.NegativeInfinity;
         Resets++;
     }
 
@@ -92,9 +102,28 @@ public sealed class StateInterpolator
         if (_count < 2) { Rate = 1.0; return; }
         var oldest = FrameAt(0);
         var newest = FrameAt(_count - 1);
-        var dWall = newest.Wall - oldest.Wall;
+        var dT = newest.State.T - oldest.State.T;
+        if (dT <= 1e-9) { Rate = 0.0; return; } // 凍結:模擬時間不動,與牆鐘無關
+        var n = _count - 1;
+        var valid = 0;
+        for (var i = 0; i < n; i++)
+        {
+            var d = FrameAt(i + 1).Wall - FrameAt(i).Wall;
+            if (d > DegenerateIntervalSeconds) _intervals[valid++] = d;
+        }
+        double dWall;
+        if (valid == n)
+        {
+            dWall = newest.Wall - oldest.Wall; // 無成批幀:到達抖動在整個緩衝內平均掉
+        }
+        else
+        {
+            if (valid * 2 < n) return; // 多數幀成批到達:牆鐘無資訊,沿用前值
+            Array.Sort(_intervals, 0, valid);
+            dWall = Math.Max(newest.Wall - oldest.Wall, n * _intervals[valid / 2]);
+        }
         if (dWall <= 1e-6) return;
-        Rate = Math.Clamp((newest.State.T - oldest.State.T) / dWall, 0.0, 100.0);
+        Rate = Math.Clamp(dT / dWall, 0.0, 100.0);
     }
 
     /// <summary>取某牆鐘時刻要顯示的內容;尚無幀時回傳 null。</summary>
@@ -103,6 +132,7 @@ public sealed class StateInterpolator
         if (_count == 0) return null;
         var newest = FrameAt(_count - 1);
         var simT = newest.State.T + Rate * (wall - newest.Wall - DelaySeconds);
+        if (simT < _lastSimT) simT = _lastSimT; // 顯示時間單調:成批到達/速率暫估偏高時暫停而非倒退
         _targetBuffer.Clear();
 
         // 介於兩幀之間:找包住 simT 的幀對
@@ -136,7 +166,9 @@ public sealed class StateInterpolator
     }
 
     private VisualSample Build(double simT, Pose own, IReadOnlyList<(TargetState, Pose)> targets, OwnShipState latest, bool extrapolating, bool stalled)
-        => new()
+    {
+        _lastSimT = simT;
+        return new()
         {
             SimTime = simT,
             Own = own,
@@ -146,6 +178,7 @@ public sealed class StateInterpolator
             Extrapolating = extrapolating,
             Stalled = stalled,
         };
+    }
 
     private IReadOnlyList<(TargetState, Pose)> TargetsOf(OwnShipState s)
     {

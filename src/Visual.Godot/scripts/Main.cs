@@ -17,7 +17,10 @@ namespace SimosaBRM.Visual.Godot;
 /// <summary>
 /// 主場景(docs/design/visual-client.md 第 2 節):
 /// 啟動參數 → 專案根目錄/資料 → 硬體偵測與品質等級 → 建立海面/天候/港口/自船/目標船/拖船錨/相機/HUD → 訂閱狀態流。
-/// 每顯示幀:自 StateClient 取插值樣本 → 更新各節點 → 自動降級檢查 → HUD。無頭煙霧模式(--smoke)以假狀態序列餵入並輸出 build/visual/smoke.json。
+/// 每顯示幀:自 StateClient 取插值樣本 → 更新各節點 → 自動降級檢查 → HUD。無頭煙霧模式(--smoke)以假狀態序列餵入並輸出 build/visual/smoke.json
+/// (煙霧時鐘固定每顯示幀 1/60 s,N 幀 = N/60 s 模擬時間,與主機幀距無關)。
+/// 品質持久化(build/visual/quality.json):啟動偵測後、每次等級改變(暖機再偵測、自動降級、手動覆寫)、Esc 與視窗關閉時寫入;
+/// 無頭/煙霧模式不寫(避免 CI 的 headless=low 影響實機的啟動渲染器)。
 /// 視景不做物理、不送指令(規劃書第 10.1 節)。
 /// </summary>
 public partial class Main : Node3D
@@ -25,11 +28,13 @@ public partial class Main : Node3D
     private LaunchOptions _options = new();
     private string _root = "";
     private readonly Stopwatch _clock = Stopwatch.StartNew();
-    private double _manualClock; // 煙霧模式用的確定性時鐘
+    private double _manualClock; // 煙霧模式用的確定性時鐘(固定步長)
+    private const double SmokeStepSeconds = 1.0 / 60.0;
     private StateClient? _client;
     private StateInterpolator _interp = new();
     private AdaptiveQualityController _quality = new(QualityTier.Low);
     private QualityDecision _decision = new(QualityTier.Low, "尚未偵測");
+    private HardwareInfo _hardware = new() { GpuName = "" }; // 啟動時偵測到的硬體;暖機再偵測沿用(只補實測幀率)
     private QualitySettings _settings = QualitySettings.For(QualityTier.Low);
     private string _persistPath = "";
     private PersistedQuality _persisted = new();
@@ -80,11 +85,13 @@ public partial class Main : Node3D
         _quality.Changed += OnQualityChanged;
         _settings = QualitySettings.For(_quality.Current);
         GD.Print($"[visual] 品質:{QualitySettings.TierName(_quality.Current)}(偵測:{_decision.Reason};渲染器 {RenderingServer.GetCurrentRenderingMethod()})");
+        if (RendererMismatch) GD.Print("[visual] 低品質應使用 Compatibility 渲染器:本次已記錄到 build/visual/quality.json,下次以 tools/visual-run.* -Quality auto 啟動即套用(--rendering-method gl_compatibility)");
 
         SetupWindow();
         LoadShip();
         BuildScene();
         ApplyQuality(_settings);
+        Persist(); // 啟動偵測結果立即記錄(視窗關閉鈕離開也有 quality.json)
 
         if (_options.Smoke)
         {
@@ -130,9 +137,12 @@ public partial class Main : Node3D
             if (info.ContainsKey("physical")) mem = (long)info["physical"] / (1024 * 1024);
         }
         catch (Exception) { }
-        var hw = new HardwareInfo { GpuName = Headless ? "headless" : name, DeviceType = type, SystemMemoryMB = mem, ScreenWidth = DisplayServer.ScreenGetSize().X, ScreenHeight = DisplayServer.ScreenGetSize().Y };
-        return QualityDetector.Detect(hw);
+        _hardware = new HardwareInfo { GpuName = Headless ? "headless" : name, DeviceType = type, SystemMemoryMB = mem, ScreenWidth = DisplayServer.ScreenGetSize().X, ScreenHeight = DisplayServer.ScreenGetSize().Y };
+        return QualityDetector.Detect(_hardware);
     }
+
+    /// <summary>目前等級要求 Compatibility 渲染器但本程序以 Forward+ 啟動(渲染器只能在啟動時決定;下次啟動由腳本依 quality.json 套用)。</summary>
+    private bool RendererMismatch => _settings.Renderer == RendererKind.Compatibility && RenderingServer.GetCurrentRenderingMethod() != "gl_compatibility";
 
     private void SetupWindow()
     {
@@ -252,6 +262,7 @@ public partial class Main : Node3D
         _qualityLog.Add(line);
         GD.Print("[quality] " + line);
         CallDeferred(nameof(ApplyCurrentQuality));
+        Persist(); // 自動降級/暖機再偵測/手動覆寫都記錄 lastAutoTier,啟動腳本據此選渲染器
         try
         {
             var log = Path.Combine(_root, "build", "visual", "quality.log");
@@ -269,12 +280,15 @@ public partial class Main : Node3D
 
     private void Persist()
     {
+        if (Headless || _options.Smoke) return; // 無頭/煙霧不寫 quality.json
         try
         {
+            // lastAutoTier:無手動覆寫時目前生效的自動等級(偵測 + 暖機 + 自動降級);有覆寫時為偵測結果
+            var autoTier = _quality.ManualOverride is null ? _quality.Current : _decision.Tier;
             QualityPersistence.Save(_persistPath, _persisted with
             {
                 ManualOverride = _quality.ManualOverride is { } t ? QualitySettings.TierName(t) : null,
-                LastAutoTier = QualitySettings.TierName(_decision.Tier),
+                LastAutoTier = QualitySettings.TierName(autoTier),
                 LastGpu = RenderingServer.GetVideoAdapterName(),
                 HudVisible = _hud?.Visible ?? true,
                 FovDeg = _camera.FovDeg,
@@ -320,7 +334,9 @@ public partial class Main : Node3D
             {
                 _warmupDone = true;
                 var fps = _warmupFrames / _warmupSeconds;
-                var refined = QualityDetector.Detect(new HardwareInfo { GpuName = RenderingServer.GetVideoAdapterName(), SystemMemoryMB = null, MeasuredFps = fps, DeviceType = null });
+                // 沿用啟動時的硬體資訊只補實測幀率(審查發現:記憶體/類型設 null 會把所有內顯機降為 low);只允許降級
+                var refined = QualityDetector.Refine(_hardware, _decision, fps);
+                GD.Print($"[visual] 暖機 {_warmupSeconds:F1} s 實測 {fps:F0} fps → {QualitySettings.TierName(refined.Tier)}");
                 if (_quality.ManualOverride is null && refined.Tier < _decision.Tier)
                 {
                     _decision = refined;
@@ -343,7 +359,9 @@ public partial class Main : Node3D
         sb.Append("HDG ").Append(s.Own.HeadingDeg.ToString("000")).Append("°  SOG ").Append(st.Sog.ToString("0.0")).Append(" kn  ROT ").Append(st.Rot.ToString("+0;-0")).Append(" °/min\n");
         sb.Append("舵 ").Append(st.Rudder.ToString("+0;-0")).Append("°  RPM ").Append(st.Rpm.ToString("0")).Append("  ").Append(st.Telegraph).Append('\n');
         sb.Append("能見度 ").Append((look.VisibilityM / 1852.0).ToString("0.0")).Append(" nm  風 ").Append(st.Wind.TrueDir.ToString("000")).Append('/').Append(st.Wind.TrueSpeed.ToString("0")).Append(" kn  海況 ").Append(look.SeaState.ToString("0")).Append(look.Rain > 0.05 ? "  雨" : "").Append('\n');
-        sb.Append("視角 ").Append(_camera.View?.Label).Append("  FOV ").Append(_camera.FovDeg.ToString("0")).Append("°  品質 ").Append(QualitySettings.TierName(_quality.Current)).Append(_quality.ManualOverride is null ? "(自動)" : "(手動)").Append("  ").Append(RenderingServer.GetCurrentRenderingMethod()).Append('\n');
+        sb.Append("視角 ").Append(_camera.View?.Label).Append("  FOV ").Append(_camera.FovDeg.ToString("0")).Append("°  品質 ").Append(QualitySettings.TierName(_quality.Current)).Append(_quality.ManualOverride is null ? "(自動)" : "(手動)").Append("  ").Append(RenderingServer.GetCurrentRenderingMethod());
+        if (RendererMismatch) sb.Append("(低品質建議 Compatibility 渲染器:已記錄,重啟後生效)");
+        sb.Append('\n');
         sb.Append("fps ").Append(Engine.GetFramesPerSecond()).Append("  連線 ").Append(_client?.Connection).Append("  t ").Append(s.SimTime.ToString("0.0")).Append(" s  ×").Append(_client?.Rate.ToString("0.0"));
         if (s.Stalled) sb.Append("  [狀態停滯]");
         if (st.Flags?.Frozen == true) sb.Append("  [凍結]");
@@ -357,7 +375,7 @@ public partial class Main : Node3D
 
     private void FeedSmoke(double delta)
     {
-        _manualClock += delta;
+        _manualClock += SmokeStepSeconds; // 固定步長(與主機實際幀距無關;delta 只用於幀時間量測)
         // 25 Hz:牆鐘走到 k/25 時餵第 k 幀(第 0 幀帶雷達環境作為關鍵幀;之後每 25 幀一次)
         while (_smokeFed <= (int)(_manualClock * SmokeSequence.Hz))
         {
@@ -382,6 +400,7 @@ public partial class Main : Node3D
                 OwnEast = sample.Own.East,
                 OwnNorth = sample.Own.North,
                 Heading = sample.Own.HeadingDeg,
+                SogKn = sample.Own.SogKn,
                 Extrapolating = sample.Extrapolating,
                 Stalled = sample.Stalled,
             });
@@ -430,6 +449,11 @@ public partial class Main : Node3D
                 GetTree().Quit();
                 break;
         }
+    }
+
+    public override void _Notification(int what)
+    {
+        if (what == NotificationWMCloseRequest) Persist(); // 視窗關閉鈕離開也記錄 quality.json
     }
 
     public override void _ExitTree()

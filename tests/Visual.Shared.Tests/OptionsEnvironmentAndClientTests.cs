@@ -235,3 +235,58 @@ public class StateClientTests
         return p;
     }
 }
+
+/// <summary>審查發現(visual):煙霧 ok 判準必須與幀數/牆鐘幀距無關(--smoke=30 也要能 ok),並偵測顯示時間倒退。</summary>
+public class SmokeReportCriteriaTests
+{
+    private static SmokeFrame F(int i, double simT, double east, double north, int nodes = 111, int meshes = 2, double sog = 8)
+        => new() { Frame = i, SimTime = simT, FrameTimeMs = 1, Nodes = nodes, TargetsDrawn = 2, HarbourMeshes = meshes, OwnEast = east, OwnNorth = north, Heading = 45, SogKn = sog };
+
+    private static List<SmokeFrame> Progressing(int n, double stepS)
+    {
+        // 8 kn = 4.115 m/s,航向 045
+        var v = 8 * 1852.0 / 3600.0;
+        return Enumerable.Range(0, n).Select(i => F(i, i * stepS, v * i * stepS * Math.Sqrt(0.5), v * i * stepS * Math.Sqrt(0.5))).ToList();
+    }
+
+    [Fact]
+    public void ThirtyFramesAtHeadlessFrameSpacingAreOk()
+    {
+        var r = SmokeReport.Build(Progressing(30, 0.0075), "low", "bridge", new[] { "a" }, true, Array.Empty<string>()); // 位移 0.58 m
+        Assert.True(r.Ok, string.Join(";", r.Notes));
+        Assert.True(SmokeReport.Build(Progressing(200, 0.0075), "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+        Assert.True(SmokeReport.Build(Progressing(3, 1.0 / 60), "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+    }
+
+    [Fact]
+    public void RegressingOrStuckSimTimeIsNotOk()
+    {
+        var stuck = new List<SmokeFrame> { F(0, 0.04, 0.1, 0.1) };
+        for (var i = 1; i < 10; i++) stuck.Add(F(i, 0.0, 0, 0));
+        for (var i = 10; i < 200; i++) stuck.Add(F(i, (i - 9) * 0.0075, (i - 9) * 0.03, (i - 9) * 0.03));
+        Assert.False(SmokeReport.Build(stuck, "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+        var frozen = Enumerable.Range(0, 50).Select(i => F(i, 0, 0, 0)).ToList();
+        Assert.False(SmokeReport.Build(frozen, "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+    }
+
+    [Fact]
+    public void MissingHarbourOrNodesOrErrorNoteIsNotOk()
+    {
+        var frames = Progressing(30, 1.0 / 60);
+        Assert.True(SmokeReport.Build(frames, "low", "bridge", new[] { "a" }, true, new[] { "警告:僅提示" }).Ok);
+        Assert.False(SmokeReport.Build(frames, "low", "bridge", new[] { "a" }, true, new[] { "ERROR:區域載入失敗" }).Ok);
+        var noHarbour = frames.Select(f => f with { HarbourMeshes = 0 }).ToList();
+        Assert.False(SmokeReport.Build(noHarbour, "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+        var noNodes = frames.Select(f => f with { Nodes = 0 }).ToList();
+        Assert.False(SmokeReport.Build(noNodes, "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+    }
+
+    [Fact]
+    public void DisplacementMustMatchSogWhenSimTimeIsLongEnough()
+    {
+        // 模擬 2 s 卻沒有移動(姿態未更新)→ 不 ok;移動量與 SOG × Δt 一致 → ok
+        var still = Enumerable.Range(0, 120).Select(i => F(i, i / 60.0, 0, 0)).ToList();
+        Assert.False(SmokeReport.Build(still, "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+        Assert.True(SmokeReport.Build(Progressing(120, 1.0 / 60), "low", "bridge", new[] { "a" }, true, Array.Empty<string>()).Ok);
+    }
+}

@@ -2,8 +2,9 @@
 #   .\tools\visual-run.ps1 -View bridge -Monitor 0
 #   .\tools\visual-run.ps1 -View portWing -Monitor 1
 #   .\tools\visual-run.ps1 -View stbdWing -Monitor 2
-# 品質 low 以 Compatibility 渲染器啟動(--rendering-method gl_compatibility);mid/high 用 Forward+;auto 依偵測(先以 Forward+ 啟動,
-# 若偵測結果為 low 則下次以 -Quality low 啟動;build\visual\quality.json 記錄上次偵測)。
+# 品質 low 以 Compatibility 渲染器啟動(--rendering-method gl_compatibility);mid/high 用 Forward+;auto(預設)讀 build\visual\quality.json
+# (視景在偵測、自動降級、離開時寫入):manualOverride 為 low,或無覆寫且 lastAutoTier 為 low → Compatibility,否則 Forward+
+# (與 Visual.Shared QualityPersistence.StartupRenderer 同一規則;第一次啟動沒有檔案 → Forward+,偵測為 low 後下次自動改用 Compatibility)。
 # Godot 的使用者資料以 APPDATA/LOCALAPPDATA 環境變數導向 .cache\godot\appdata(只影響本程序);quality.json、quality.log、smoke.json 在 build\visual\。
 param(
   [string]$Godot = $env:SIMOSA_GODOT,
@@ -37,7 +38,20 @@ if ($Build -or -not (Test-Path (Join-Path $proj '.godot\mono\temp\bin\Debug\Simo
   if ($LASTEXITCODE -ne 0) { throw 'dotnet build 失敗' }
 }
 $engineArgs = @('--path', $proj)
-if ($Quality -eq 'low') { $engineArgs += @('--rendering-method', 'gl_compatibility') }
+$useCompat = ($Quality -eq 'low')
+if ($Quality -eq 'auto') {
+  $qj = Join-Path $root 'build\visual\quality.json'
+  if (Test-Path $qj) {
+    try {
+      $q = Get-Content $qj -Raw | ConvertFrom-Json
+      $ov = ("$($q.manualOverride)").Trim().ToLowerInvariant()
+      $la = ("$($q.lastAutoTier)").Trim().ToLowerInvariant()
+      if ($ov -eq 'low' -or (($ov -eq '' -or $ov -eq 'auto') -and $la -eq 'low')) { $useCompat = $true }
+      Write-Host "quality.json:manualOverride=$ov lastAutoTier=$la → 渲染器 $(if ($useCompat) { 'Compatibility' } else { 'Forward+' })"
+    } catch { Write-Warning "無法讀取 $qj($_);以 Forward+ 啟動" }
+  }
+}
+if ($useCompat) { $engineArgs += @('--rendering-method', 'gl_compatibility') }
 $userArgs = @("--view=$View", "--monitor=$Monitor", "--ws=$Ws", "--quality=$Quality", "--data-dir=$root", "--ship=$Ship", "--loading=$Loading", "--daynight=$DayNight")
 if ($Area) { $userArgs += "--area=$Area" }
 if ($StartUtc) { $userArgs += "--start-utc=$StartUtc" }

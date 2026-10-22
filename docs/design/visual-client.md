@@ -60,7 +60,9 @@ SimCore.Host ──ws 8765 (state 25 Hz, event, assessment)──▶ Visual.Shar
 
 - 狀態幀:`src/Contracts/state.schema.json`(C# 型別 `SimCore.Contracts.OwnShipState`)。視景使用:`t`、`pos`、`heading`、`cog`、`sog`、`rot`、`rudder`、`rpm`、`telegraph`、`wind`、`visibility_nm`、`flags`、`targets[]`(`pos/heading/cog/sog/rot/loa/beam/draft/shipType/lights/aisOn`;**AIS 關閉者仍畫**,視景是「眼睛看到的」)、`tugs[]`(`pos/mode/status/direction_deg/lineParted`)、`anchors[]`(`side/status/position`)、`berth`(只讀;碰墊/繫船柱來自區域檔)、`radarEnvironment`(雨區;**只在關鍵幀帶出**,插值器保留最後一次、時間倒退時清除)、`scenario.id`(查區域對照)。`truth/sensors/alerts` 可解析但視景不顯示(學員端不應看到真值)。
 - 事件框 `{"type":"event", "event":{"kind":…}}` 與 `{"type":"assessment"}` 只記最近事件 kind 於 HUD。
-- **插值/外推**(`StateInterpolator`):保留最近 8 幀的 (t, 到達牆鐘);速率 = Δt/Δ牆鐘(即時 1、凍結 0、timescale 10 → 10);顯示時間 = 最新 t + 速率 × (now − 到達 − 0.08 s 緩衝);落在兩幀間線性插值(航向走最短弧);超出最新幀以 COG/SOG/ROT 外推最多 0.25 s,之後凍結並標示 `Stalled`;t 倒退(重設/倒帶/重播)或前跳 > 5 s(快照還原)清空歷史。目標船以 id 配對插值,只在單側者取最新幀。測試:`StateInterpolatorTests`。
+- **插值/外推**(`StateInterpolator`):保留最近 8 幀的 (t, 到達牆鐘);速率 = Δt/Δ牆鐘(即時 1、凍結 0、timescale 10 → 10);顯示時間 = 最新 t + 速率 × (now − 到達 − 0.08 s 緩衝);落在兩幀間線性插值(航向走最短弧);超出最新幀以 COG/SOG/ROT 外推最多 0.25 s,之後凍結並標示 `Stalled`;t 倒退(重設/倒帶/重播)或前跳 > 5 s(快照還原)清空歷史。目標船以 id 配對插值,只在單側者取最新幀。
+  - **成批到達**(啟動第一幀、網路停頓後 TCP 一次送達數幀、GC 卡頓):同牆鐘(間隔 ≤ 2 ms)到達的幀不含速率資訊,速率改以「有效間隔的中位數 × 間隔數」作 Δ牆鐘下限(有效間隔不到一半時沿用前值;沒有成批幀時直接用最舊/最新兩幀),避免估到 2–3 倍;顯示時間另外保證單調不減(暫停而非倒退;Reset 例外)。凍結(Δt = 0)直接判為速率 0。測試:`StateInterpolatorTests`、`StateInterpolatorBurstTests`。
+- **拖船姿態**(`TugPresentation`):`direction_deg` 為力方向(相對船艏),核心把 push 拖船放在力方向反側、pull 放在力方向一個纜長處,所以 push/pull 艏向都 = 自船艏向 + 力方向(推頂艏頂自船、纜線自艏;拖拉艏背向自船、纜線自艉);standby/free 與自船同向。測試:`TugPresentationTests`。
 
 ## 5. 區域與船模資料
 
@@ -76,10 +78,10 @@ SimCore.Host ──ws 8765 (state 25 Hz, event, assessment)──▶ Visual.Shar
 | 中 | Forward+ | 1.0 | 6 nm | 128×128 Gerstner(2 組波)+ 泡沫 | 有 | 2× | 有 | 2.0 / 1.0 nm |
 | 高 | Forward+ | 1.0 | 10 nm | 256×256 Gerstner(3 組波)+ 泡沫 | 有 + 輝光 | 4× | 有 | 4.0 / 2.0 nm |
 
-- **自動偵測**(`QualityDetector`,啟動時):GPU 名稱/類型 + 系統記憶體 → 獨顯高階(RTX 20 以上、RX 6600 以上、Arc A5/A7、Quadro)→ 高;其他獨顯 → 中;內顯(Iris Xe/UHD/Arc Graphics、Radeon Graphics/7xxM/8xxM、Apple M)且記憶體 ≥ 16 GB → 中,否則 → 低;未知/軟體渲染 → 低。啟動後前 3 秒實測幀率 < 30 fps 再降一級。
+- **自動偵測**(`QualityDetector`,啟動時):GPU 名稱/類型 + 系統記憶體 → 獨顯高階(RTX 20 以上、RX 6600 以上、Arc A5/A7、Quadro)→ 高;其他獨顯 → 中;內顯(Iris Xe/UHD/Arc Graphics、Radeon Graphics/7xxM/8xxM、Apple M)且記憶體 ≥ 16 GB → 中,否則 → 低(記憶體未知時理由寫「未知」);未知/軟體渲染 → 低。啟動後前 3 秒實測幀率 → `QualityDetector.Refine`:**沿用啟動時的硬體資訊只補上實測幀率**,< 30 fps 降一級;不升級(渲染器無法執行中切換)。測試:`WarmupRefinementTests`(內顯基準機 60/120 fps 不得低於啟動分級)。
 - **執行中自動降級**(`AdaptiveQualityController`):幀率 < 25 fps 連續累積 5 s → 降一級(低為下限);幀率 ≥ 27 fps 歸零(25–27 為遲滯帶,維持累積);降級後 30 s 冷卻;不自動升級(避免來回跳);每幀 dt > 0.5 s 視為卡頓忽略。每次改變寫 `build/visual/quality.log` 與 HUD;煙霧報告亦列出。
-- **手動覆寫**:啟動參數 `--quality=` 或 HUD 的下拉(自動/低/中/高);覆寫期間停用自動降級;持久化到 `build/visual/quality.json`(含上次偵測結果、GPU、HUD 開關、FOV);下次啟動優先順序:啟動參數 > 持久化覆寫 > 自動偵測。
-- 渲染器無法在執行中切換:低品質由啟動腳本以 `--rendering-method gl_compatibility` 啟動(`tools/visual-run.*` 依 `--quality=low` 加參數);自動模式先以 Forward+ 啟動,若偵測為低仍可運作(只縮放解析度與簡化海面),下次啟動以 `-Quality low` 取得 Compatibility 渲染器。
+- **手動覆寫**:啟動參數 `--quality=` 或 HUD 的下拉(自動/低/中/高);覆寫期間停用自動降級;持久化到 `build/visual/quality.json`(`manualOverride`、`lastAutoTier` = 無覆寫時目前生效的自動等級(偵測 + 暖機 + 自動降級)、GPU、HUD 開關、FOV);寫入時機:啟動偵測後、每次等級改變、Esc、視窗關閉鈕;無頭/煙霧模式不寫(避免 CI 的 headless=low 影響實機)。下次啟動優先順序:啟動參數 > 持久化覆寫 > 自動偵測。
+- 渲染器無法在執行中切換:由啟動腳本以 `--rendering-method gl_compatibility` 決定(`QualityPersistence.StartupRenderer` 規則,`tools/visual-run.ps1/.sh` 實作同一規則):`-Quality low` → Compatibility;`auto`(預設)讀 `quality.json`,`manualOverride` 為 low、或無覆寫且 `lastAutoTier` 為 low → Compatibility,否則 Forward+。第一次啟動沒有檔案 → Forward+,偵測/暖機/自動降級為 low 後立即寫入,**下次 auto 啟動自動改用 Compatibility**(不必手動加 `-Quality low`);本次仍以 Forward+ 執行時 HUD/主控台提示「重啟後生效」。測試:`StartupRendererTests`。
 
 ## 7. 啟動參數與多螢幕部署
 
@@ -119,9 +121,9 @@ Godot 預設把編輯器設定、匯出範本、`user://`(紀錄、快取)寫到
 
 ## 9. 建置、測試與無頭驗證
 
-- **Visual.Shared**:在 `SimosaBRM.sln` 內,`dotnet build SimosaBRM.sln -c Release && dotnet test SimosaBRM.sln -c Release --no-build`(CI 的 .NET 工作自動涵蓋;`tests/Visual.Shared.Tests` 84 個測試:解析、插值/外推、座標、品質偵測與遲滯、持久化、區域幾何與三角化、船模參數與網格繞向、視角、啟動參數、環境對應、太陽位置、煙霧報告、WebSocket 連線/重連(本機 HttpListener))。
+- **Visual.Shared**:在 `SimosaBRM.sln` 內,`dotnet build SimosaBRM.sln -c Release && dotnet test SimosaBRM.sln -c Release --no-build`(CI 的 .NET 工作自動涵蓋;`tests/Visual.Shared.Tests` 105 個測試:解析、插值/外推(含成批到達)、座標、拖船姿態、品質偵測與遲滯、暖機再偵測、啟動渲染器、持久化、區域幾何與三角化、船模參數與網格繞向、視角、啟動參數、環境對應、太陽位置、煙霧報告、WebSocket 連線/重連(本機 HttpListener))。
 - **Visual.Godot**:不在 sln(無 Godot 的 CI 不建置)。`dotnet build src/Visual.Godot/Visual.Godot.csproj`(Godot.NET.Sdk 4.5.1 自 nuget.org)→ `.godot/mono/temp/bin/Debug/SimosaBRM.Visual.Godot.dll`。Godot 從 `Debug` 載入,故 Godot 執行前用 Debug 建置(或在編輯器按 Build)。
-- **無頭煙霧驗證**:`tools/visual-headless-check.sh --godot <Godot> [--frames 200] [--quality low]`(Windows `.ps1`):dotnet build → `--headless --import` → `--headless -- --smoke=N`:載入 E05 示意區域(`kaohsiung-approach`、`kaohsiung-south-approach`)與假狀態序列(`SmokeSequence`:自船 045/8 kn、4 艘目標、拖船、雨區關鍵幀每秒一次),每幀記錄處理時間、節點數、畫出的目標數、自船位置到 `build/visual/smoke.json`;`ok` = 有幀、自船有移動、節點 > 0;結束碼 0/1。
+- **無頭煙霧驗證**:`tools/visual-headless-check.sh --godot <Godot> [--frames 200] [--quality low]`(Windows `.ps1`):dotnet build → `--headless --import` → `--headless -- --smoke=N`:載入 E05 示意區域(`kaohsiung-approach`、`kaohsiung-south-approach`)與假狀態序列(`SmokeSequence`:自船 045/8 kn、4 艘目標、拖船、雨區關鍵幀每秒一次),每幀記錄處理時間、節點數、畫出的目標數、自船位置/SOG 到 `build/visual/smoke.json`。煙霧時鐘固定每顯示幀 1/60 s(N 幀 = N/60 s 模擬時間,與主機幀距無關)。`ok`(與幀數無關;`--smoke=30` 亦可)= 有幀、每幀節點 > 0、港口網格 > 0、顯示時間單調不減且有前進、無 `ERROR` 開頭備註;模擬前進 ≥ 0.5 s 時再檢查自船位移 ≈ SOG × Δt(0.5–1.5 倍);失敗原因附在 `notes`(「ok 失敗:…」);結束碼 0/1。測試:`SmokeReportCriteriaTests`。
 - **本容器實跑結果(2026-10-22,Godot 4.5.1 .NET headless,無 GPU)**:200 幀、111 個節點、2 個區域 2 個網格 44 三角形、自船 340 三角形、畫出目標 2/4(其餘超出低品質 3.5 nm 繪製距離)、平均 0.15 ms、最大 12.55 ms(第一幀建立幾何),`ok=true`,結束碼 0。headless 幀時間只證明功能與無例外,**不代表內顯機幀率**。
 - **匯出**:`export_presets.cfg` 已有 Windows Desktop 與 Linux 預設(輸出到 `build/visual/export/`);本容器無匯出範本(`.cache/godot/xdg/data/godot/export_templates/4.5.1.stable.mono/` 缺 `linux_release.x86_64`),`--export-release` 失敗,**列為待辦**:取得 `Godot_v4.5.1-stable_mono_export_templates.tpz` 後放入該目錄(Windows:`.cache\godot\appdata\roaming\Godot\export_templates\4.5.1.stable.mono\`)再執行 `tools/visual-headless-check.ps1 -Export`。
 
@@ -149,7 +151,7 @@ Godot 預設把編輯器設定、匯出範本、`user://`(紀錄、快取)寫到
 3. 海面為單層 Gerstner(2–3 組波)無次表面散射與船行波/舵螺槳水花;無潮汐水位變化。
 4. 天候:雨為相機周圍粒子示意(中/高品質);霧為均勻指數霧;無雲層/閃電;日夜依 `--start-utc`(狀態無時間欄位;建議之後在 state 加 `utc`)。
 5. 錨鏈為直線(非懸鏈線);拖船纜線連到自船側面近似點(契約無連接點座標);繫纜(berth.lines)未畫。
-6. 渲染器無法執行中切換;自動模式第一次啟動用 Forward+,偵測為低時下次啟動才用 Compatibility(第 6 節)。
+6. 渲染器無法執行中切換;自動模式第一次啟動用 Forward+,偵測為低時寫入 `quality.json`,下次 `auto` 啟動由腳本自動改用 Compatibility(第 6 節);本次執行期間只套用縮放/距離等設定。
 7. 匯出範本未取得,未產生可散布的 .exe(第 9 節);船上部署時由更新包(第 5.5 節)攜帶已匯出的視景程式。
 8. 內顯機實測幀率尚未進行(第 10 節步驟);headless 數據只證明功能。
 9. 多視窗同步:各程序獨立平滑,未做跨程序幀鎖;若日後改多投影(Class B)需另做同步。
