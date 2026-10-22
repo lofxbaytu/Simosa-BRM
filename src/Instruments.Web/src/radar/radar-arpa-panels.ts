@@ -5,7 +5,7 @@ import { html, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { StoreElement, inputNumber } from './store-element.js';
 import { panelStyles } from './radar-styles.js';
-import { SORT_LABEL, formatTcpa, sortTracks, trackStateLabel, type ArpaSortKey } from './arpa.js';
+import { SORT_LABEL, formatTcpa, sortTracks, targetSource, trackStateLabel, type ArpaSortKey } from './arpa.js';
 import { formatBearing, formatRangeNm } from './geometry.js';
 import type { RadarTrack } from './protocol.js';
 import { normalizeHeading } from '../lib/angles.js';
@@ -55,7 +55,7 @@ export class RadarArpaTable extends StoreElement {
         <table aria-label="ARPA 目標表">
           <thead>
             <tr>
-              ${th('id', 'No')}<th>狀態</th>${th('range', 'RNG')}<th>BRG</th>${trial ? nothing : html`<th>CRS</th><th>SPD</th>`}${th('cpa', 'CPA')}${th('tcpa', 'TCPA')}
+              ${th('id', 'No')}<th title="來源:○ 雷達、◬ 融合(AIS 關聯)、○△ AIS 未關聯">SRC</th><th>狀態</th>${th('range', 'RNG')}<th>BRG</th>${trial ? nothing : html`<th>CRS</th><th>SPD</th>`}${th('cpa', 'CPA')}${th('tcpa', 'TCPA')}
               ${trial ? html`<th title="試操船 CPA / TCPA">T-CPA</th><th>T-TCPA</th>` : nothing}
             </tr>
           </thead>
@@ -75,8 +75,10 @@ export class RadarArpaTable extends StoreElement {
       t.state === 'tracking' && t.dangerous ? 'danger' : '',
       t.state === 'lost' ? 'lost' : '',
     ].join(' ');
+    const src = targetSource(t);
     return html`<tr class=${cls} @click=${() => s.select(t.id)}>
       <td>${t.label}${t.acquisition === 'auto' ? html`<span class="muted"> A</span>` : nothing}</td>
+      <td class="src ${src.source}" title=${src.label}>${src.symbol}${t.ais?.associated ? html` <span class="muted">${t.ais.name}</span>` : nothing}</td>
       <td>${trackStateLabel(t)}${t.manoeuvring ? html`<span class="warning" title="目標操船中"> M</span>` : nothing}</td>
       <td>${formatRangeNm(t.range_nm)}</td>
       <td>${brg(t.bearing_deg)}</td>
@@ -123,6 +125,10 @@ export class RadarTargetData extends StoreElement {
           : nothing}
         ${item('追蹤時間', `${Math.floor(t.age_s / 60)}:${String(Math.floor(t.age_s % 60)).padStart(2, '0')}`)}
         ${item('漏掃描', String(t.misses))}
+        ${item('來源', `${targetSource(t).symbol} ${t.ais ? (t.ais.associated ? '融合' : 'AIS 未關聯') : '雷達'}`)}
+        ${t.ais
+          ? html`${item('AIS', `${t.ais.name} (${t.ais.mmsi})`)} ${item('AIS 位置差', `${t.ais.positionOffset_m.toFixed(0)} m`, t.ais.associated ? '' : 'warning')}`
+          : nothing}
       </div>
       <div class="row">
         <button @click=${() => s.send({ cmd: 'cancel', id: t.id })}>取消此目標</button>

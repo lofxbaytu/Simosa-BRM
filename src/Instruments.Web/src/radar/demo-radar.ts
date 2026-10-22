@@ -33,6 +33,8 @@ const ACQUIRE_TO_TRACK_S = 30;
 
 interface DemoShip {
   name: string;
+  /** 示範 AIS(radar.schema.json trackAis):追蹤中 3 s 後出現;offset_m > 250 為未關聯候選(模擬 aisError) */
+  ais?: { mmsi: number; offset_m: number };
   x0: number;
   y0: number;
   course: number;
@@ -48,8 +50,8 @@ function ship(name: string, brg: number, rngNm: number, course: number, speed: n
 }
 
 export const DEMO_SHIPS: readonly DemoShip[] = [
-  ship('T1', 75, 3.6, 290, 13, 180, 60),
-  ship('T2', 20, 2.4, 44, 5, 120, 55),
+  { ...ship('T1', 75, 3.6, 290, 13, 180, 60), ais: { mmsi: 416001001, offset_m: 35 } },
+  { ...ship('T2', 20, 2.4, 44, 5, 120, 55), ais: { mmsi: 416001002, offset_m: 420 } },
   ship('T3', 320, 2.0, 100, 3, 25, 44),
 ];
 
@@ -419,6 +421,10 @@ export class DemoRadarSource implements RadarSource {
       const tc = trialCpa(dE, dN, vt, vo, tv, this.trial.delay_min);
       out.trialCpa_nm = tc.cpaNm;
       out.trialTcpa_min = tc.tcpaMin;
+    }
+    // AIS 融合示範:追蹤 3 s 後關聯(位置差小)或候選未關聯(差異大,模擬 aisError)
+    if (s.ais && this.t - tr.startT >= ACQUIRE_TO_TRACK_S + 3) {
+      out.ais = { mmsi: s.ais.mmsi, name: s.name, associated: s.ais.offset_m <= 250, positionOffset_m: s.ais.offset_m };
     }
     return out;
   }

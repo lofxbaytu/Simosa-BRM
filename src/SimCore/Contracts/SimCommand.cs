@@ -33,9 +33,9 @@ public enum SimCommandType
     GetAssessment,
     /// <summary>操舵模式(value: fu|nfu|autopilot|emergency;args:pump 1|2|both、nfu 的 direction port|starboard|stop、autopilot 的 heading/rotLimit;規劃書第 7.2 節)</summary>
     SteeringMode,
-    /// <summary>警報確認(value 或 args.id:警報 id,省略或 "all" = 全部;BAM MSC.302(87));視為駕駛台操作(BNWAS 重設)</summary>
+    /// <summary>警報確認(value 或 args.id:警報 id,省略或 "all" = 全部;args.station bridge|portWing|stbdWing|ecr,省略 = bridge;Category A 或已轉移的警報只能在負責站確認;BAM MSC.302(87));駕駛台三站未被拒絕的確認視為駕駛台操作(BNWAS 重設),ecr 不重設</summary>
     AlertAcknowledge,
-    /// <summary>警報靜音 silence_s(value 或 args.id,省略或 "all" = 全部);視為駕駛台操作</summary>
+    /// <summary>警報靜音 silence_s(value 或 args.id,省略或 "all" = 全部;args.station 省略 = bridge,不限制靜音、只決定是否視為駕駛台操作重設 BNWAS)</summary>
     AlertSilence,
     /// <summary>BNWAS 模式(value: off|auto|on;args.dormant_s 180–720、args.stage3_s;MSC.128(75) 保護的模式開關,由教官站操作)</summary>
     BnwasMode,
@@ -47,6 +47,13 @@ public enum SimCommandType
     Anchor,
     /// <summary>繫纜(args:lineId、action makeFast|heave|slack|letGo、bollard、tension_t(預張力/絞纜目標)、length_m(slack 長度);第 4 節)</summary>
     Mooring,
+    /// <summary>警報責任轉移(args:id、station bridge|portWing|stbdWing|ecr;MSC.302(87) responsibility transferred;只有 AlertCatalogue.TransferTargets 允許的站)</summary>
+    AlertTransfer,
+    /// <summary>
+    /// 雷達控制操作紀錄(由雷達服務轉送;args:radar x|s、client、cmd、ok、error?、id?、value?、request{原指令欄位}):
+    /// 只寫 input 行並發 radarControl 事件,不影響物理;無情境引擎時雜湊不變,有情境引擎時只有事件序號計入雜湊(與 acknowledge 相同;規劃書第 8.3 節第 7 類)
+    /// </summary>
+    RadarControl,
 }
 
 /// <summary>
@@ -91,12 +98,18 @@ public sealed record SimCommand
     public static SimCommand SteeringMode(SteeringMode mode, string? pump = null, string? direction = null, double? heading = null)
         => new() { Type = SimCommandType.SteeringMode, Value = Str(ContractJson.EnumName(mode)), Args = pump is null && direction is null && heading is null ? null : Obj(new { pump, direction, heading }) };
 
-    /// <summary>警報確認(<paramref name="id"/> 省略 = 全部)。</summary>
-    public static SimCommand AlertAcknowledge(string? id = null)
-        => new() { Type = SimCommandType.AlertAcknowledge, Args = id is null ? null : Obj(new { id }) };
-    /// <summary>警報靜音(<paramref name="id"/> 省略 = 全部)。</summary>
-    public static SimCommand AlertSilence(string? id = null)
-        => new() { Type = SimCommandType.AlertSilence, Args = id is null ? null : Obj(new { id }) };
+    /// <summary>警報確認(<paramref name="id"/> 省略 = 全部;<paramref name="station"/> 省略 = bridge)。</summary>
+    public static SimCommand AlertAcknowledge(string? id = null, string? station = null)
+        => new() { Type = SimCommandType.AlertAcknowledge, Args = id is null && station is null ? null : Obj(new { id, station }) };
+    /// <summary>警報責任轉移到 <paramref name="station"/>(bridge|portWing|stbdWing|ecr;轉回原站即解除轉移)。</summary>
+    public static SimCommand AlertTransfer(string id, string station)
+        => new() { Type = SimCommandType.AlertTransfer, Args = Obj(new { id, station }) };
+    /// <summary>雷達控制操作紀錄(雷達服務轉送用;<paramref name="request"/> 為原指令物件去掉 cmd/reqId)。</summary>
+    public static SimCommand RadarControl(string radar, string client, string cmd, bool ok, string? error = null, int? id = null, double? value = null, object? request = null)
+        => new() { Type = SimCommandType.RadarControl, Args = Obj(new { radar, client, cmd, ok, error, id, value, request }) };
+    /// <summary>警報靜音(<paramref name="id"/> 省略 = 全部;<paramref name="station"/> 只決定是否視為駕駛台操作重設 BNWAS,省略 = bridge)。</summary>
+    public static SimCommand AlertSilence(string? id = null, string? station = null)
+        => new() { Type = SimCommandType.AlertSilence, Args = id is null && station is null ? null : Obj(new { id, station }) };
     /// <summary>BNWAS 模式(off|auto|on;休眠期 180–720 s)。</summary>
     public static SimCommand BnwasMode(Scenario.BnwasMode mode, double? dormantS = null)
         => new() { Type = SimCommandType.BnwasMode, Value = Str(ContractJson.EnumName(mode)), Args = dormantS is null ? null : Obj(new { dormant_s = dormantS }) };

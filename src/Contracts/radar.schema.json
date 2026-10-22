@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simosa-brm/contracts/radar.schema.json",
   "title": "RadarProtocol",
-  "description": "雷達/ARPA 感測器服務(src/Sensors.Radar,規劃書第 5.2 節 Radar、第 7.2 節 MSC.192(79))的 WebSocket 協定:ws://<host>:8766/radar/x 與 /radar/s。伺服器送出二進位影像幀(spokeFrame,格式見 docs/design/radar-arpa.md 第 4 節)與 JSON 文字框(status、tracks、event、ack);客戶端送出 JSON 控制指令(command)。單位:距離 nm(_m 後綴為公尺)、速度 kn、角度度(航向/方位 0–360,真方位;rel 前綴為相對艏向)、時間 s(_min 後綴為分);ENU x 東、y 北(m,與 state.schema.json pos.x/y 同一座標)。",
+  "description": "雷達/ARPA 感測器服務(src/Sensors.Radar,規劃書第 5.2 節 Radar、第 7.2 節 MSC.192(79))的 WebSocket 協定:ws://<host>:8766/radar/x 與 /radar/s。伺服器送出二進位影像幀(spokeFrame,格式見 docs/design/radar-arpa.md 第 4 節)與 JSON 文字框(status、tracks、event、ack);客戶端送出 JSON 控制指令(command)。顯示量程為每客戶端獨立:range 指令只改該連線的量程(偏心由客戶端自行以較大量程涵蓋),影像幀依各客戶端量程分送、status.range_nm 為該連線的量程;其他設定(gain/sea/rain/tune/standby/transmit/guardZone/trialManoeuvre/cpaLimits)為整台雷達共用。學員控制指令(getStatus/getTracks 除外)由雷達服務轉送 SimCore.Host 成為 radarControl 指令(command.schema.json)進紀錄。單位:距離 nm(_m 後綴為公尺)、速度 kn、角度度(航向/方位 0–360,真方位;rel 前綴為相對艏向)、時間 s(_min 後綴為分);ENU x 東、y 北(m,與 state.schema.json pos.x/y 同一座標)。",
   "oneOf": [
     { "$ref": "#/$defs/statusMessage" },
     { "$ref": "#/$defs/tracksMessage" },
@@ -48,10 +48,10 @@
         "failed": { "type": "boolean", "description": "state.faults 含本台的失效故障(X:radarFailure/radarFailureX/blackout;S:radarFailureS/blackout)" },
         "degraded": { "type": "boolean", "description": "state.faults 含 radarDegraded(X)/radarDegradedS(S):靈敏度 −15 dB" },
         "headingValid": { "type": "boolean", "description": "航向輸入有效;無效時 ARPA 停止穩定化" },
-        "range_nm": { "type": "number" },
+        "range_nm": { "type": "number", "description": "本連線(客戶端)的顯示量程;各客戶端獨立" },
         "rangeScales": { "type": "array", "items": { "type": "number" } },
         "pulse": { "type": "string", "enum": ["short", "medium", "long"] },
-        "pulseLength_m": { "type": "number", "description": "cτ/2(m)" },
+        "pulseLength_m": { "type": "number", "description": "cτ/2(m);影像實際使用的脈衝:由 ARPA 影像重取樣的量程(預設 6、12 nm)為 ARPA 處理脈衝 45 m(medium),其餘依量程(≤ 0.75 nm 10.5、≤ 3 nm 45、≤ 12 nm 75、以上 180)" },
         "gain": { "type": "number", "minimum": 0, "maximum": 100 },
         "sea": { "type": "number", "minimum": 0, "maximum": 100, "description": "STC" },
         "rain": { "type": "number", "minimum": 0, "maximum": 100, "description": "FTC" },
@@ -148,7 +148,19 @@
         "bct_min": { "type": "number" },
         "trialCpa_nm": { "type": "number", "description": "試操船啟用時" },
         "trialTcpa_min": { "type": "number" },
-        "past": { "type": "array", "items": { "$ref": "#/$defs/pastPosition" }, "description": "過去位置(每 30 s,最多 10 點)" }
+        "past": { "type": "array", "items": { "$ref": "#/$defs/pastPosition" }, "description": "過去位置(每 30 s,最多 10 點)" },
+        "ais": { "$ref": "#/$defs/trackAis" }
+      }
+    },
+    "trackAis": {
+      "type": "object",
+      "description": "AIS 融合(IEC 62288 雷達/AIS 關聯概念;docs/design/radar-arpa.md 第 3.1 節):ARPA 目標與 state.targets[].ais 報告的關聯。只在有候選或已關聯時提供;AIS 關閉或報告偏離門檻(aisError)時省略",
+      "required": ["mmsi", "name", "associated", "positionOffset_m"],
+      "properties": {
+        "mmsi": { "type": "integer" },
+        "name": { "type": "string" },
+        "associated": { "type": "boolean", "description": "已關聯(同一 MMSI 連續 3 次通過距離門檻與航向/速度一致性);false = 候選中或保持期(差異過大)" },
+        "positionOffset_m": { "type": "number", "description": "ARPA 預測位置與 AIS 報告位置的距離(m)" }
       }
     },
     "tracksMessage": {
@@ -178,7 +190,7 @@
           "type": "object",
           "required": ["kind", "t", "message"],
           "properties": {
-            "kind": { "type": "string", "enum": ["acquireStarted", "tracking", "newTarget", "acquireFailed", "targetLost", "deleted", "cancelled", "dangerousTarget", "radarFailure", "radarRestored", "radarDegraded", "headingLost"] },
+            "kind": { "type": "string", "enum": ["acquireStarted", "tracking", "newTarget", "acquireFailed", "targetLost", "deleted", "cancelled", "dangerousTarget", "radarFailure", "radarRestored", "radarDegraded", "headingLost", "aisAssociated"] },
             "t": { "type": "number" },
             "targetId": { "type": "integer" },
             "message": { "type": "string" }
@@ -207,7 +219,7 @@
       "properties": {
         "cmd": { "type": "string", "enum": ["range", "gain", "sea", "rain", "tune", "standby", "transmit", "acquire", "cancel", "guardZone", "trialManoeuvre", "cpaLimits", "environment", "getStatus", "getTracks"] },
         "reqId": { "description": "任意值,原樣回傳於 ack" },
-        "value": { "type": "number", "description": "range(nm,換成最近的標準量程)、gain/sea/rain/tune(0–100)" },
+        "value": { "type": "number", "description": "range(nm,換成最近的標準量程;只改本連線的顯示量程)、gain/sea/rain/tune(0–100)" },
         "auto": { "type": "boolean", "description": "tune:自動調諧" },
         "bearing": { "type": "number", "description": "acquire:方位(度;預設真方位)" },
         "range": { "type": "number", "description": "acquire:距離(nm)" },

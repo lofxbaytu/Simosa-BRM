@@ -31,7 +31,8 @@ public sealed record EnvironmentLook
 /// <summary>
 /// 狀態 → 環境呈現:能見度 → 霧密度(距離 visibility 處透射率 5 %:density = −ln(0.05)/visibility);
 /// 真風 → 海況(Douglas,依 Beaufort 近似)與波高;radarEnvironment 雨區(多邊形或圓)含自船位置 → 雨;
-/// 日夜:state 無時間,依啟動參數 daynight 或 --start-utc + 模擬秒數 + 自船經緯度的太陽高度(簡化天文公式,誤差約 1°)。
+/// 日夜:啟動參數 daynight 為 day/dusk/night 時固定;auto 時依 state.utc(核心:情境 startTimeUtc 或載入時的實際時鐘 + t)
+/// 與自船經緯度算太陽高度(簡化天文公式,誤差約 1°);state 無 utc(舊核心/Python 未設)時退回 --start-utc + 模擬秒數,兩者皆無則白天。
 /// 無物理效果,只影響畫面(規劃書第 10.1 節)。
 /// </summary>
 public static class EnvironmentMapper
@@ -45,7 +46,7 @@ public static class EnvironmentMapper
         var fog = -Math.Log(0.05) / visM;
         var wind = s.Wind.TrueSpeed;
         var sea = radar?.SeaState ?? SeaStateFromWind(wind);
-        var (elev, az) = SunPosition(mode, startUtc, s.T, s.Pos.Lat, s.Pos.Lon);
+        var (elev, az) = SunPosition(mode, s.Utc, startUtc, s.T, s.Pos.Lat, s.Pos.Lon);
         var daylight = Math.Clamp((elev + 6.0) / 12.0, 0.0, 1.0); // −6°(民用曙暮光)→ 0,+6° → 1
         return new EnvironmentLook
         {
@@ -117,8 +118,15 @@ public static class EnvironmentMapper
         return best;
     }
 
-    /// <summary>太陽高度與方位(度)。手動模式回固定值:day 45°、dusk −3°、night −30°。</summary>
+    /// <summary>太陽高度與方位(度)。手動模式回固定值:day 45°、dusk −3°、night −30°;auto 無 --start-utc 時為白天。</summary>
     public static (double ElevationDeg, double AzimuthDeg) SunPosition(DayNightMode mode, DateTimeOffset? startUtc, double simSeconds, double latDeg, double lonDeg)
+        => SunPosition(mode, null, startUtc, simSeconds, latDeg, lonDeg);
+
+    /// <summary>
+    /// 太陽高度與方位(度):auto 時優先用 state.utc(<paramref name="stateUtc"/>,ISO 8601),無或不可解析時退回 --start-utc + 模擬秒數,
+    /// 兩者皆無則白天(45°)。
+    /// </summary>
+    public static (double ElevationDeg, double AzimuthDeg) SunPosition(DayNightMode mode, string? stateUtc, DateTimeOffset? startUtc, double simSeconds, double latDeg, double lonDeg)
     {
         switch (mode)
         {
@@ -126,9 +134,26 @@ public static class EnvironmentMapper
             case DayNightMode.Dusk: return (-3.0, 260.0);
             case DayNightMode.Night: return (-30.0, 0.0);
         }
-        if (startUtc is null) return (45.0, 180.0);
-        var t = startUtc.Value.ToUniversalTime().AddSeconds(simSeconds);
-        return SolarPosition(t, latDeg, lonDeg);
+        var t = ResolveUtc(stateUtc, startUtc, simSeconds);
+        return t is { } utc ? SolarPosition(utc, latDeg, lonDeg) : (45.0, 180.0);
+    }
+
+    /// <summary>顯示幀的 UTC:state.utc 可解析者優先;否則 --start-utc + 模擬秒數;皆無為 null。</summary>
+    public static DateTimeOffset? ResolveUtc(string? stateUtc, DateTimeOffset? startUtc, double simSeconds)
+    {
+        if (TryParseUtc(stateUtc, out var fromState)) return fromState;
+        return startUtc?.ToUniversalTime().AddSeconds(simSeconds);
+    }
+
+    /// <summary>ISO 8601(無時區視為 UTC)→ DateTimeOffset(UTC)。</summary>
+    public static bool TryParseUtc(string? iso, out DateTimeOffset utc)
+    {
+        utc = default;
+        if (string.IsNullOrWhiteSpace(iso)) return false;
+        if (!DateTimeOffset.TryParse(iso, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dto)) return false;
+        utc = dto.ToUniversalTime();
+        return true;
     }
 
     /// <summary>簡化太陽位置(NOAA 近似;高度角誤差約 1°,足夠日夜/黃昏判定與光照方向)。</summary>

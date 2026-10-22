@@ -141,6 +141,8 @@ export interface OwnShipState {
   t: number;
   /** 核心步數(50 Hz) */
   tick: number;
+  /** UTC 時刻(ISO 8601,毫秒,Z)= 練習開始時刻(情境 startTimeUtc,未給時為載入情境的實際時鐘)+ t;選填、不進雜湊 */
+  utc?: string;
   shipId: ShipId;
   pos: Position;
   heading: number;

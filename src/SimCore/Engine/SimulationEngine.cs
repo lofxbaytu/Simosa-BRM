@@ -35,6 +35,12 @@ public sealed class EngineOptions
     /// 使目標值檔案日後更新也不改變舊紀錄的重播摘要(只影響 summary 比較,不影響物理與雜湊)。
     /// </summary>
     public Assessment.ManoeuvreTargets? ManoeuvreTargets { get; init; }
+    /// <summary>
+    /// 情境未給 <c>startTimeUtc</c> 時用來取「練習開始時刻」的實際時鐘(既有 NMEA 時間規則:主控程序傳 <see cref="TimeProvider.System"/>;測試可固定)。
+    /// 解析出的開始時刻會寫回情境 <c>startTimeUtc</c>,因此紀錄標頭帶有它、重播沿用而不取現在時間。
+    /// null(預設;單元測試與重播)= 不以實際時鐘代入:情境無 startTimeUtc 時 state 省略 utc,使同一情境分別建立的引擎狀態 JSON 逐位元相同。
+    /// </summary>
+    public TimeProvider? Clock { get; init; }
 }
 
 /// <summary>
@@ -108,6 +114,12 @@ public sealed class SimulationEngine
     public long Tick { get; private set; }
     /// <summary>模擬時間(秒)= Tick × dt(以乘法計算,避免累加誤差)</summary>
     public double Time => Tick * Options.Dt;
+    /// <summary>
+    /// 練習開始的 UTC 時刻(state.utc = StartUtc + Time;NMEA 時間規則相同):情境 <c>startTimeUtc</c>,未給時於載入情境時取
+    /// <see cref="EngineOptions.Clock"/> 的現在時刻並寫回情境(紀錄標頭因此帶有它,重播得到相同的 utc);兩者皆無為 null(state 省略 utc)。
+    /// 不進快照與雜湊。
+    /// </summary>
+    public DateTime? StartUtc { get; private set; }
     public bool Frozen { get; private set; }
     public double TimeScale { get; private set; } = 1.0;
     public bool Aground { get; private set; }
@@ -249,6 +261,7 @@ public sealed class SimulationEngine
         Loading = sc.Ship.Loading;
         Dynamics = _dynamicsFactory(Ship, Loading);
         _projection = new LocalTangentPlane(sc.Origin!.Lat, sc.Origin.Lon);
+        StartUtc = ResolveStartUtc(sc);
 
         var pos = sc.Initial.Position!;
         double x, y;
@@ -537,9 +550,10 @@ public sealed class SimulationEngine
     private void ApplyCore(SimCommand cmd, string source, string? itemId)
     {
         var fromInstructor = source == SimEventSources.Instructor;
-        // 駕駛台操作重設 BNWAS(MSC.128(75) 4.1.4:任何可辨識的值班官操作);時間表動作不是駕駛台上的人為操作,不重設
+        // 駕駛台操作重設 BNWAS(MSC.128(75) 4.1.4:任何可辨識的值班官操作);時間表動作不是駕駛台上的人為操作,不重設。
+        // 警報確認/靜音在各自分支處理(AlertBridgeOperation):只有駕駛台三站且未被核心拒絕者才重設,機控室 ecr 的操作與被拒絕的指令不重設
         if (fromInstructor && cmd.Type is SimCommandType.Rudder or SimCommandType.Telegraph or SimCommandType.Rpm or SimCommandType.Thruster
-                or SimCommandType.Autopilot or SimCommandType.SteeringMode or SimCommandType.AlertAcknowledge or SimCommandType.AlertSilence)
+                or SimCommandType.Autopilot or SimCommandType.SteeringMode)
             ResetBnwas(ContractJson.EnumName(cmd.Type), source, explicitReset: false);
         switch (cmd.Type)
         {
@@ -775,15 +789,40 @@ public sealed class SimulationEngine
 
             case SimCommandType.AlertAcknowledge:
             {
+                // args.station(bridge|portWing|stbdWing|ecr)省略 = bridge:Category A 與已轉移責任的警報只能在負責站確認(MSC.302(87) 第 6 節)
                 var id = AlertIdOf(cmd);
-                if (_alerts.Acknowledge(Tick, id) < 0) RejectCommand(cmd, source, itemId, CommandRejectReasons.UnknownAlert);
+                var station = cmd.ArgAsString("station");
+                var r = _alerts.Acknowledge(Tick, id, station);
+                if (r < 0) RejectCommand(cmd, source, itemId, AlertRejectReason(r));
+                else AlertBridgeOperation(cmd, station, fromInstructor, source);
+                break;
+            }
+
+            case SimCommandType.AlertTransfer:
+            {
+                // 責任轉移(MSC.302(87) responsibility transferred):只有 AlertCatalogue.TransferTargets 允許的站;事件 alertTransferred(source engine,同其他警報事件)
+                var r = _alerts.Transfer(Tick, AlertIdOf(cmd), cmd.ArgAsString("station"));
+                if (r < 0) RejectCommand(cmd, source, itemId, AlertRejectReason(r));
+                break;
+            }
+
+            case SimCommandType.RadarControl:
+            {
+                // 雷達服務轉送的學員雷達操作(規劃書第 8.3 節第 7 類):只寫 input 行(CommandApplied)並發事件供評估/講評;不影響物理;
+                // 事件序號與 acknowledge 同類(重播時由 input 行重發,序列一致)
+                var radar = cmd.ArgAsString("radar") ?? "x";
+                var rc = cmd.ArgAsString("cmd") ?? "?";
+                var ok = cmd.ArgAsBool("ok") ?? true;
+                Raise(NewEvent(SimEventKinds.RadarControl, SimEventSources.Instructor, radar, null, $"雷達 {radar.ToUpperInvariant()} {rc}{(ok ? "" : "(失敗)")}", cmd.Args));
                 break;
             }
 
             case SimCommandType.AlertSilence:
             {
+                // 靜音不受站別限制;args.station 只決定是否視為駕駛台操作(機控室頁面的靜音不重設 BNWAS)
                 var id = AlertIdOf(cmd);
                 if (_alerts.Silence(Tick, id) < 0) RejectCommand(cmd, source, itemId, CommandRejectReasons.UnknownAlert);
+                else AlertBridgeOperation(cmd, cmd.ArgAsString("station"), fromInstructor, source);
                 break;
             }
 
@@ -840,6 +879,25 @@ public sealed class SimulationEngine
     /// <summary>警報指令的 id(value 字串或 args.id;省略 = 全部)。</summary>
     private static string? AlertIdOf(SimCommand cmd)
         => cmd.Value is { ValueKind: JsonValueKind.String } ? cmd.ValueAsString() : cmd.ArgAsString("id");
+
+    /// <summary><see cref="AlertManager"/> 負值結果 → commandRejected 的 reason。</summary>
+    private static string AlertRejectReason(int r) => r switch
+    {
+        AlertManager.RejectStationRequired => CommandRejectReasons.AlertStationRequired,
+        AlertManager.RejectNotTransferable => CommandRejectReasons.AlertNotTransferable,
+        AlertManager.RejectUnknownStation => CommandRejectReasons.UnknownStation,
+        _ => CommandRejectReasons.UnknownAlert,
+    };
+
+    /// <summary>
+    /// 核心接受的警報確認/靜音視為駕駛台操作重設 BNWAS(MSC.128(75) 4.1.4:駕駛台上值班官可辨識的操作):只限指令佇列(學員/教官)且 <paramref name="station"/>
+    /// 屬駕駛台三站(省略 = bridge、兩翼);機控室(ecr)或未知站的操作不是駕駛台操作。被拒絕的指令(alertStationRequired/unknownAlert/unknownStation)由呼叫端不經此處,
+    /// 因此誤按也不會解除值班警報(AlertStationTests.EcrAcknowledgeDoesNotResetBnwas / RejectedAcknowledgeDoesNotResetBnwas)。
+    /// </summary>
+    private void AlertBridgeOperation(SimCommand cmd, string? station, bool fromInstructor, string source)
+    {
+        if (fromInstructor && AlertStations.IsBridgeStation(station)) ResetBnwas(ContractJson.EnumName(cmd.Type), source, explicitReset: false);
+    }
 
     private void ResetBnwas(string by, string source, bool explicitReset)
     {
@@ -1509,6 +1567,40 @@ public sealed class SimulationEngine
         static IDepthProvider SetDepth(ConstantDepth existing, double value) { existing.Depth = value; return existing; }
     }
 
+    // ------------------------------------------------------------------ UTC 時刻(state.utc)
+
+    /// <summary>state.utc 的格式(ISO 8601,毫秒,Z;25 Hz 幀距 40 ms 故毫秒足夠)。</summary>
+    public const string UtcFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
+
+    /// <summary>
+    /// 情境 startTimeUtc(ISO 8601)可解析者直接採用;否則有 Options.Clock 時取其現在時刻(截到毫秒)並寫回情境 startTimeUtc,
+    /// 使紀錄標頭的情境帶有開始時刻、重播與 NMEA 閘道(主控程序在建立引擎後讀情境 startTimeUtc)都用同一個起點;無時鐘則 null。
+    /// Reset 再次呼叫時已有值,不變。
+    /// </summary>
+    private DateTime? ResolveStartUtc(Scenario.Scenario sc)
+    {
+        if (TryParseUtc(sc.StartTimeUtc, out var given)) return given;
+        if (Options.Clock is not { } clock) return null;
+        var now = clock.GetUtcNow().UtcDateTime;
+        now = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+        sc.StartTimeUtc = now.ToString(UtcFormat, System.Globalization.CultureInfo.InvariantCulture);
+        return now;
+    }
+
+    /// <summary>ISO 8601 → UTC DateTime(無時區者視為 UTC)。</summary>
+    public static bool TryParseUtc(string? iso, out DateTime utc)
+    {
+        utc = default;
+        if (string.IsNullOrWhiteSpace(iso)) return false;
+        if (!DateTime.TryParse(iso, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var dt)) return false;
+        utc = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+        return true;
+    }
+
+    /// <summary>模擬時間 t(秒)對應的 UTC 字串(state.utc);無開始時刻為 null(state 省略 utc)。</summary>
+    public string? UtcAt(double simSeconds) => StartUtc?.AddSeconds(simSeconds).ToString(UtcFormat, System.Globalization.CultureInfo.InvariantCulture);
+
     // ------------------------------------------------------------------ 廣播狀態
 
     /// <summary>Squat:動力學模型提供者(MMG:ICORELS)優先,否則 Barrass 開闊水域簡式。</summary>
@@ -1598,6 +1690,7 @@ public sealed class SimulationEngine
         {
             T = Time,
             Tick = Tick,
+            Utc = UtcAt(Time),
             ShipId = Ship.Id,
             Pos = new GeoPosition { Lat = indLat, Lon = indLon, X = ind.X, Y = ind.Y },
             Heading = ind.HeadingDeg,

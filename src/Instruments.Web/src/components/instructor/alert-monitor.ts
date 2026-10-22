@@ -19,11 +19,13 @@ import {
   BNWAS_DORMANT_MAX_S,
   BNWAS_DORMANT_MIN_S,
   BNWAS_MODE_LABEL,
+  ALERT_STATION_LABEL,
   alertAcknowledgeCommand,
   alertCounts,
   alertHistory,
   alertSilenceCommand,
   alertVisual,
+  responsibleStation,
   bnwasCounts,
   bnwasDisplay,
   bnwasModeCommand,
@@ -192,7 +194,7 @@ export class AlertMonitor extends LitElement {
                 const sil = silenceRemaining(a, this.simTime);
                 return html`<tr class="tone-${v.tone} ${v.needsAck ? 'unack' : ''}" data-alert=${a.id}>
                   <td>${alertIcon(v, `${ALERT_PRIORITY_LABEL[a.priority]}・${ALERT_STATE_LABEL[a.state]}`)}</td>
-                  <td class="txt" title="${a.id} · ${ALERT_SOURCE_LABEL[a.source] ?? a.source} · ${a.category}">${a.text}${a.escalated ? html`<span class="tag">已升級</span>` : nothing}${a.count > 1 ? html`<span class="tag">×${a.count}</span>` : nothing}</td>
+                  <td class="txt" title="${a.id} · ${ALERT_SOURCE_LABEL[a.source] ?? a.source} · ${a.category} · 負責站 ${ALERT_STATION_LABEL[responsibleStation(a)]}">${a.text}${a.escalated ? html`<span class="tag">已升級</span>` : nothing}${a.count > 1 ? html`<span class="tag">×${a.count}</span>` : nothing}${a.transferredTo ? html`<span class="tag transferred" title="責任已轉移">→ ${ALERT_STATION_LABEL[a.transferredTo]}</span>` : a.category === 'A' ? html`<span class="tag" title="Category A:只能在負責站確認">${ALERT_STATION_LABEL[responsibleStation(a)]}</span>` : nothing}</td>
                   <td class="st">${ALERT_STATE_LABEL[a.state]}${sil !== undefined ? ` ${Math.ceil(sil)} s` : ''}</td>
                   <td class="t">${shortTime(a.raisedAt_s)}</td>
                   <td>${v.needsAck ? html`<button class="ack-for" title="教官代為確認(送 alertAcknowledge)" ?disabled=${this.unsupported} @click=${() => this.ack(a.id)}>代為確認</button>` : nothing}</td>

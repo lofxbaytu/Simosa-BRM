@@ -116,6 +116,7 @@ public sealed class AssessmentEngine
         if (e.Kind == SimEventKinds.Grounding) Metrics.OnGrounding();
         if (e.Kind == SimEventKinds.Frozen) Metrics.OnFreeze();
         Metrics.OnAlertEvent(e);
+        Metrics.OnRadarControl(e);
         if (Rules.Ended) return;
         // 必要事件:after 起算(發 requiredEventPending,附已解析的 within_s 與期限 deadline_t,供教官站倒數)、expect 達成
         foreach (var rule in _a.Required)
@@ -417,6 +418,7 @@ public sealed class AssessmentEngine
             case "general.maxSog_kn": return m.MaxSogKn;
             default:
                 if (name.StartsWith("berthing.", StringComparison.Ordinal) || name.StartsWith("anchoring.", StringComparison.Ordinal)) return Berthing.Metric(name, sit?.Time ?? _engine.Time);
+                if (name.StartsWith("radar.", StringComparison.Ordinal)) return Metrics.RadarMetric(name);
                 return name.StartsWith("manoeuvres.", StringComparison.Ordinal) ? Manoeuvres.Metric(name) : null;
         }
     }

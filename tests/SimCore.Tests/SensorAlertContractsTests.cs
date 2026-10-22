@@ -80,7 +80,17 @@ public class SensorAlertContractsTests
         foreach (var t in new[] { SimCommandType.AlertAcknowledge, SimCommandType.AlertSilence, SimCommandType.BnwasMode, SimCommandType.BnwasReset })
             Assert.Contains(ContractJson.EnumName(t), types);
         var examples = schema.RootElement.GetProperty("examples").EnumerateArray().Select(x => SimCommand.Parse(x.GetRawText())!).ToList();
-        Assert.Equal("gyroFailure", examples.Single(c => c.Type == SimCommandType.AlertAcknowledge).ArgAsString("id"));
+        Assert.Equal("gyroFailure", examples.First(c => c.Type == SimCommandType.AlertAcknowledge).ArgAsString("id"));
+        // 工作站與責任轉移、雷達控制紀錄(sensors-alerts.md 第 3.6 節、radar-arpa.md 第 5.1 節)
+        foreach (var t in new[] { SimCommandType.AlertTransfer, SimCommandType.RadarControl }) Assert.Contains(ContractJson.EnumName(t), types);
+        Assert.Equal("bridge", examples.Single(c => c.Type == SimCommandType.AlertAcknowledge && c.ArgAsString("station") is not null).ArgAsString("station"));
+        var transfer = examples.Single(c => c.Type == SimCommandType.AlertTransfer);
+        Assert.Equal("ecr", transfer.ArgAsString("station"));
+        var radar = examples.Single(c => c.Type == SimCommandType.RadarControl);
+        Assert.Equal("range", radar.ArgAsString("cmd"));
+        Assert.Equal(3.0, radar.Arg("request")!.Value.GetProperty("value").GetDouble());
+        Assert.Equal("""{"type":"alertTransfer","args":{"id":"mainEngine","station":"ecr"}}""", SimCommand.AlertTransfer("mainEngine", "ecr").ToJson());
+        Assert.Equal("""{"type":"alertAcknowledge","args":{"id":"shallowWater","station":"ecr"}}""", SimCommand.AlertAcknowledge("shallowWater", "ecr").ToJson());
         Assert.Null(examples.Single(c => c.Type == SimCommandType.AlertSilence).Args);
         var bm = examples.Single(c => c.Type == SimCommandType.BnwasMode);
         Assert.Equal("on", bm.ValueAsString());

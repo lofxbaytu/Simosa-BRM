@@ -265,6 +265,10 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
   // 情境引擎新增的選填欄位(設計文件第 5.1 節):有就解析,型別錯誤記入 issues 但不影響其他欄位
   const vis = optNum(raw, 'visibility_nm', issues, 'visibility_nm');
   if (vis !== undefined) state.visibility_nm = vis;
+  // utc(選填):ISO 8601 字串;型別錯誤記入 issues,不影響其他欄位(缺省時沿用前一幀不合理,故不繼承 base)
+  const utc = raw['utc'];
+  if (typeof utc === 'string' && utc.trim() !== '') state.utc = utc;
+  else if (utc !== undefined && utc !== null) issues.push('utc');
   if (isRecord(raw['scenario'])) {
     const sc = parseScenarioStatus(raw['scenario'], issues);
     if (sc) state.scenario = sc;

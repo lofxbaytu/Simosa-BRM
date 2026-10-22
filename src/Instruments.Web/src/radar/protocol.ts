@@ -72,6 +72,16 @@ export interface PastPosition {
 
 export type TrackState = 'acquiring' | 'tracking' | 'lost';
 
+/** AIS 融合(tracks[].ais;radar.schema.json trackAis):候選或已關聯時提供。 */
+export interface TrackAis {
+  mmsi: number;
+  name: string;
+  /** 已關聯(連續 3 次通過門檻);false = 候選中或保持期(差異過大) */
+  associated: boolean;
+  /** ARPA 預測位置與 AIS 報告位置的距離(m) */
+  positionOffset_m: number;
+}
+
 export interface RadarTrack {
   id: number;
   label: string;
@@ -101,6 +111,7 @@ export interface RadarTrack {
   trialCpa_nm?: number;
   trialTcpa_min?: number;
   past: PastPosition[];
+  ais?: TrackAis;
 }
 
 export interface OwnShipReport {
@@ -309,6 +320,11 @@ export function parseTrack(o: Obj): RadarTrack | null {
   for (const k of OPTIONAL_TRACK_FIELDS) {
     const v = num(o[k]);
     if (v !== undefined) tr[k] = v;
+  }
+  const ais = o['ais'];
+  if (isObj(ais)) {
+    const mmsi = num(ais['mmsi']);
+    if (mmsi !== undefined) tr.ais = { mmsi, name: str(ais['name']), associated: bool(ais['associated']), positionOffset_m: num(ais['positionOffset_m']) ?? 0 };
   }
   return tr;
 }

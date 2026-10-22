@@ -27,6 +27,7 @@ import math
 import random
 import struct
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from collections import deque
@@ -208,6 +209,34 @@ class ForceBreakdown:
     u_r: float = 0.0
 
 
+def parse_utc(iso: str | None) -> datetime | None:
+    """ISO 8601 → aware UTC datetime(C# DateTime.TryParse AdjustToUniversal|AssumeUniversal 的對應:無時區視為 UTC;不可解析 → None)。"""
+    if not iso or not str(iso).strip():
+        return None
+    text = str(iso).strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def format_utc(dt: datetime) -> str:
+    """state.utc 格式:yyyy-MM-ddTHH:mm:ss.fffZ(毫秒,四捨五入到最近毫秒以吸收 timedelta 的浮點誤差;與 C# UtcFormat 相同)。"""
+    dt = dt.astimezone(timezone.utc)
+    micro = dt.microsecond
+    ms = int(round(micro / 1000.0))
+    base = dt.replace(microsecond=0)
+    if ms >= 1000:
+        base += timedelta(seconds=1)
+        ms -= 1000
+    return base.strftime("%Y-%m-%dT%H:%M:%S") + f".{ms:03d}Z"
+
+
 class MMGShip:
     """一艘自船的 MMG 模型 + 致動器 + 環境。"""
 
@@ -226,6 +255,9 @@ class MMGShip:
         self.ctl = Controls()
         self.aground = False
         self.faults: list[str] = []
+        # 練習開始的 UTC 時刻(state.utc = start_utc + t;與 C# SimulationEngine.StartUtc 相同:情境 startTimeUtc,未給時由伺服器以實際時鐘代入);
+        # None 時 state_json 不輸出 utc(不進雜湊)
+        self.start_utc: datetime | None = None
         self._eng_mode = "stopped"  # stopped | run | reversing | starting
         self._eng_timer = 0.0
         self._n_target = 0.0
@@ -1179,6 +1211,22 @@ class MMGShip:
             payload += self.bank.hash_bytes()
         return hashlib.sha256(payload).hexdigest()
 
+    def set_start_utc(self, iso_or_none: str | None) -> datetime:
+        """設定練習開始 UTC(C# SimulationEngine.ResolveStartUtc 的規則):ISO 8601 可解析者採用(無時區視為 UTC),
+        否則取現在時刻(截到毫秒)。回傳採用的時刻。"""
+        start = parse_utc(iso_or_none)
+        if start is None:
+            now = datetime.now(timezone.utc)
+            start = now.replace(microsecond=now.microsecond - now.microsecond % 1000)
+        self.start_utc = start
+        return start
+
+    def utc_at(self, t: float) -> str | None:
+        """模擬時間 t(秒)的 UTC 字串(state.utc;格式同 C# UtcFormat:yyyy-MM-ddTHH:mm:ss.fffZ);未設定開始時刻時 None。"""
+        if self.start_utc is None:
+            return None
+        return format_utc(self.start_utc + timedelta(seconds=t))
+
     def state_json(self) -> dict[str, Any]:
         """依 state.schema.json 的自船狀態(wind.trueSpeed 為含陣風係數的有效風速,與 C# BuildState 相同)。"""
         s = self.state
@@ -1198,9 +1246,11 @@ class MMGShip:
         else:
             eng_state = "stopped" if self._eng_mode == "stopped" else ("starting" if self._eng_mode in ("starting", "reversing") else "running")
         load_pct = min(100.0, 100.0 * (abs(s.n) / self.n_max) ** 3) if self.n_max > 0 else 0.0
+        utc = self.utc_at(s.t)
         return {
             "t": round(s.t, 6),
             "tick": s.tick,
+            **({"utc": utc} if utc is not None else {}),
             "shipId": self.sp.ship_id,
             "pos": {"lat": lat, "lon": lon, "x": s.x, "y": s.y},
             "heading": deg360(s.psi),

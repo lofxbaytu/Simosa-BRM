@@ -36,6 +36,11 @@
       "type": "integer",
       "description": "核心步數(50 Hz)"
     },
+    "utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC 時刻(ISO 8601,例 2026-01-01T02:00:05.040Z)= 練習開始時刻 + t;開始時刻為情境 startTimeUtc,未給時為載入情境時的實際時鐘(核心寫回情境,重播沿用紀錄標頭);選填、不進雜湊;視景日夜據此"
+    },
     "shipId": {
       "type": "string",
       "enum": [
@@ -516,7 +521,7 @@
     },
     "alerts": {
       "type": "array",
-      "description": "警報清單(BAM,MSC.302(87);依 priority、raisedAt_s 排序;無警報時省略;Python 不輸出)。指令 alertAcknowledge / alertSilence 操作",
+      "description": "警報清單(BAM,MSC.302(87);依 priority、raisedAt_s 排序;無警報時省略;Python 不輸出)。指令 alertAcknowledge / alertSilence / alertTransfer 操作;station / transferredTo 為工作站與責任轉移(docs/design/sensors-alerts.md 第 3.6 節)",
       "items": {
         "type": "object",
         "required": [
@@ -600,6 +605,16 @@
           "audible": {
             "type": "boolean",
             "description": "目前有聲響(activeUnacknowledged 且 priority 為 emergencyAlarm/alarm/warning)"
+          },
+          "station": {
+            "type": "string",
+            "enum": ["bridge", "portWing", "stbdWing", "ecr"],
+            "description": "負責站(相關工作站;MSC.302(87) 第 6 節;本版成立時皆為 bridge)。Category A 警報只能在負責站以 alertAcknowledge {id, station} 確認(未帶 station 視為 bridge);Category B 任一站皆可"
+          },
+          "transferredTo": {
+            "type": "string",
+            "enum": ["bridge", "portWing", "stbdWing", "ecr"],
+            "description": "責任已轉移到的站(MSC.302(87) 第 7.3 節 responsibility transferred;指令 alertTransfer {id, station});未轉移時省略。轉移後只有接收站可確認"
           }
         }
       }

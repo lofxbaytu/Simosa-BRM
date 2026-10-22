@@ -17,6 +17,8 @@ public static class MetricNames
         "general.duration_s", "general.distance_nm", "general.avgSog_kn", "general.maxSog_kn",
         // 警報與 BNWAS(sensors-alerts.md 第 5 節;Python scenario.py METRIC_NAMES 尚未加入,情境 bands 暫勿引用)
         "alerts.meanAckTime_s", "alerts.maxAckTime_s", "alerts.unacknowledged", "alerts.escalations", "bnwas.stage2Count", "bnwas.stage3Count",
+        // 雷達操作(規劃書第 8.3 節第 7 類;radarControl 事件,由雷達服務轉送;Python scenario.py METRIC_NAMES 同步)
+        "radar.controlCount", "radar.acquisitions", "radar.rangeChanges",
     };
 
     // 操縱量測 manoeuvres.*(ManoeuvreTracker.MetricNameList;ship-familiarisation.md 第 2.6 節):同 id 最近一次 measured 的量測值;

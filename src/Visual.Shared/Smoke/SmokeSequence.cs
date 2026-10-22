@@ -1,6 +1,7 @@
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Geo;
 using SimosaBRM.SimCore.Scenario;
+using SimosaBRM.Visual.Shared.Area;
 
 namespace SimosaBRM.Visual.Shared.Smoke;
 
@@ -8,12 +9,20 @@ namespace SimosaBRM.Visual.Shared.Smoke;
 /// 無頭煙霧測試用的假狀態序列(不連 Host):仿 E05(高雄港外,原點 22.53N 120.24E,自船 FSB1 航向 045、8 kn,
 /// 三艘目標船與一艘跟隨的引水船、一艘拖船、右錨示意、一個雨區)。25 Hz,直線運動,ROT 固定;純粹供視景功能驗證,
 /// 非物理(規劃書第 10.1 節:視景不做物理)。
+/// 自第 <see cref="BerthSegmentStartFrame"/> 幀(t = 2 s)起另帶示意泊位 <see cref="SmokeBerthId"/> 與四條繫纜
+/// (正常/黃/紅/斷纜各一;泊位幾何由 <see cref="SmokeBerthArea"/> 給出、沿自船航跡左舷 22 m,船仍直線前進 — 只驗證繫纜節點,非物理)。
+/// 每幀亦帶 utc(2026-05-05T22:30:00Z + t,高雄當地 06:30,日出前後)供日夜自動模式驗證。
 /// </summary>
 public static class SmokeSequence
 {
     public const double OriginLat = 22.53;
     public const double OriginLon = 120.24;
     public const double Hz = 25.0;
+    /// <summary>自此幀起狀態帶 berth(t = 2 s)</summary>
+    public const int BerthSegmentStartFrame = 50;
+    public const string SmokeBerthId = "SMOKE-BERTH";
+    public const string SmokeAreaId = "smoke-berth";
+    public static readonly DateTimeOffset StartUtc = new(2026, 5, 5, 22, 30, 0, TimeSpan.Zero);
 
     public static LocalTangentPlane Origin => new(OriginLat, OriginLon);
 
@@ -36,6 +45,7 @@ public static class SmokeSequence
         {
             T = t,
             Tick = index * 2,
+            Utc = StartUtc.AddSeconds(t).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture),
             ShipId = "FSB1",
             Pos = new GeoPosition { Lat = lat, Lon = lon, X = ownPose.X, Y = ownPose.Y },
             Heading = 45.0,
@@ -68,6 +78,7 @@ public static class SmokeSequence
                 new AnchorStatusState { Side = "port", Status = "stowed", LengthM = 0, TensionT = 0, OnBottomM = 0 },
                 new AnchorStatusState { Side = "starboard", Status = "stowed", LengthM = 0, TensionT = 0, OnBottomM = 0 },
             },
+            Berth = index >= BerthSegmentStartFrame ? SmokeBerth() : null,
             RadarEnvironment = withRadarEnvironment ? new RadarEnvironmentState
             {
                 RainAreas = new[]
@@ -76,6 +87,50 @@ public static class SmokeSequence
                 },
                 SeaState = 3,
             } : null,
+        };
+    }
+
+    /// <summary>
+    /// 示意泊位的繫纜狀態(自 BerthSegmentStartFrame 起每幀相同):HEAD 12/50 t(正常)、FWDSPRING 收纜 32/50 t(黃)、
+    /// AFTSPRING 44/50 t(紅)、STERN 斷纜(不畫、閃爍)。
+    /// </summary>
+    public static BerthStatusState SmokeBerth() => new()
+    {
+        Id = SmokeBerthId,
+        Name = "煙霧示意泊位",
+        Contacts = Array.Empty<FenderContactState>(),
+        QuayContact = false,
+        Lines = new[]
+        {
+            new MooringLineState { Id = "HEAD", Status = "fast", TensionT = 12, MblT = 50, BollardId = "P4", LengthM = 60 },
+            new MooringLineState { Id = "FWDSPRING", Status = "heaving", TensionT = 32, MblT = 50, BollardId = "P3", LengthM = 40 },
+            new MooringLineState { Id = "AFTSPRING", Status = "fast", TensionT = 44, MblT = 50, BollardId = "P2", LengthM = 40 },
+            new MooringLineState { Id = "STERN", Status = "parted", TensionT = 0, MblT = 50, BollardId = "P1" },
+        },
+    };
+
+    /// <summary>
+    /// 示意泊位幾何(ENU):碼頭線沿航向 045、在自船 t = 2 s 位置的左舷 22 m(半船寬 9 m + 碰墊 + 餘裕),長 160 m、水側為右;
+    /// 繫船柱 P1–P4 在 chainage 10/50/110/150 m、退縮 3 m;無碰墊。供 Main 於煙霧模式加入港口幾何,使繫纜找得到繫船柱。
+    /// </summary>
+    public static AreaGeometry SmokeBerthArea()
+    {
+        var (x, y, h) = Advance(-3600.0, -3900.0, 45.0, 8.0, 0.0, BerthSegmentStartFrame / Hz);
+        var hr = Units.DegToRad(h);
+        var (fe, fn) = (Math.Sin(hr), Math.Cos(hr));       // 艏向單位向量
+        var (pe, pn) = (-Math.Cos(hr), Math.Sin(hr));      // 左舷單位向量
+        const double offset = 22.0, half = 80.0;
+        var a = new EnuPoint(x + pe * offset - fe * half, y + pn * offset - fn * half);
+        var b = new EnuPoint(x + pe * offset + fe * half, y + pn * offset + fn * half);
+        var quay = new[] { a, b };
+        var bollards = new List<(string Id, EnuPoint Pos)>();
+        var chainages = new[] { 10.0, 50.0, 110.0, 150.0 };
+        for (var i = 0; i < chainages.Length; i++) bollards.Add(("P" + (i + 1), AreaLoader.AlongQuay(quay, "right", chainages[i], -3.0)));
+        return new AreaGeometry
+        {
+            Id = SmokeAreaId,
+            SourceFile = "(smoke)",
+            Berths = new[] { new BerthGeometry(SmokeBerthId, "煙霧示意泊位", quay, "right", Array.Empty<(string, EnuPoint)>(), bollards) },
         };
     }
 

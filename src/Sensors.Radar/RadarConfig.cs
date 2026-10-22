@@ -86,6 +86,20 @@ public sealed class ArpaConfig
     public double TcpaLimitMin { get; set; } = 12.0;
     /// <summary>兩追蹤目標距離小於此值(m)時標示交換風險</summary>
     public double SwapRiskM { get; set; } = 250.0;
+
+    // AIS 融合(IEC 62288 / IEC 62388 第 11.4 節的關聯概念;docs/design/radar-arpa.md 第 3.1 節)
+    /// <summary>關聯距離門檻(m):|ARPA 預測位置 − AIS 報告位置| ≤ AisGateM + AisGateFraction × 距離</summary>
+    public double AisGateM { get; set; } = 150.0;
+    public double AisGateFraction { get; set; } = 0.02;
+    /// <summary>已關聯者的保持門檻倍數(超過 AisGate × 此倍數連續 AisMisses 次才解除;期間 positionOffset_m 顯示差異)</summary>
+    public double AisHoldGateFactor { get; set; } = 2.0;
+    /// <summary>航向/速度一致性(兩者 SOG 皆 ≥ AisMinSpeedKn 時才檢查)</summary>
+    public double AisCourseDeg { get; set; } = 30.0;
+    public double AisSpeedKn { get; set; } = 3.0;
+    public double AisMinSpeedKn { get; set; } = 2.0;
+    /// <summary>連續 N 次(追蹤清單週期 1 Hz)同一 MMSI 通過門檻才判定關聯;連續 M 次失敗才解除</summary>
+    public int AisHits { get; set; } = 3;
+    public int AisMisses { get; set; } = 3;
 }
 
 /// <summary>

@@ -40,6 +40,15 @@ public sealed record PastPosition(
     [property: JsonPropertyName("lat")] double Lat,
     [property: JsonPropertyName("lon")] double Lon);
 
+/// <summary>追蹤目標的 AIS 關聯(tracks 訊息 targets[].ais;候選或已關聯時提供)。</summary>
+public sealed record AisTrackReport(
+    [property: JsonPropertyName("mmsi")] int Mmsi,
+    [property: JsonPropertyName("name")] string Name,
+    /// <summary>已關聯(連續 N 次通過門檻);false = 候選中或保持期(差異過大)</summary>
+    [property: JsonPropertyName("associated")] bool Associated,
+    /// <summary>ARPA 預測位置與 AIS 報告位置的距離(m;aisError 注入時可見差異)</summary>
+    [property: JsonPropertyName("positionOffset_m")] double PositionOffsetM);
+
 /// <summary>追蹤目標(tracks 訊息 targets[])。向量與 CPA 只在 state = tracking 時提供。</summary>
 public sealed record TrackReport
 {
@@ -71,6 +80,8 @@ public sealed record TrackReport
     [JsonPropertyName("trialCpa_nm")] public double? TrialCpaNm { get; init; }
     [JsonPropertyName("trialTcpa_min")] public double? TrialTcpaMin { get; init; }
     [JsonPropertyName("past")] public IReadOnlyList<PastPosition>? Past { get; init; }
+    /// <summary>AIS 關聯(無候選時省略)</summary>
+    [JsonPropertyName("ais")] public AisTrackReport? Ais { get; init; }
 }
 
 public sealed record TrialReport(

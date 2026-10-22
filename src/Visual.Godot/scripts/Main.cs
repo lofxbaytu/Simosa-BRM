@@ -18,7 +18,8 @@ namespace SimosaBRM.Visual.Godot;
 /// 主場景(docs/design/visual-client.md 第 2 節):
 /// 啟動參數 → 專案根目錄/資料 → 硬體偵測與品質等級 → 建立海面/天候/港口/自船/目標船/拖船錨/相機/HUD → 訂閱狀態流。
 /// 每顯示幀:自 StateClient 取插值樣本 → 更新各節點 → 自動降級檢查 → HUD。無頭煙霧模式(--smoke)以假狀態序列餵入並輸出 build/visual/smoke.json
-/// (煙霧時鐘固定每顯示幀 1/60 s,N 幀 = N/60 s 模擬時間,與主機幀距無關)。
+/// (煙霧時鐘固定每顯示幀 1/60 s,N 幀 = N/60 s 模擬時間,與主機幀距無關;t ≥ 2 s 起帶示意泊位與繫纜,泊位幾何由 SmokeSequence.SmokeBerthArea 併入港口)。
+/// 日夜:--daynight=auto 時依 state.utc(無則 --start-utc + t;EnvironmentMapper)。
 /// 品質持久化(build/visual/quality.json):啟動偵測後、每次等級改變(暖機再偵測、自動降級、手動覆寫)、Esc 與視窗關閉時寫入;
 /// 無頭/煙霧模式不寫(避免 CI 的 headless=low 影響實機的啟動渲染器)。
 /// 視景不做物理、不送指令(規劃書第 10.1 節)。
@@ -46,12 +47,15 @@ public partial class Main : Node3D
     private HarbourNode _harbour = null!;
     private ShipNode _ownShip = null!;
     private TargetShipsNode _targets = null!;
+    private MooringLinesNode _mooring = null!;
+    private List<BerthGeometry> _berths = new();
     private TugsAndAnchorsNode _tugs = null!;
     private CameraRig _camera = null!;
     private HudLayer? _hud;
     private readonly List<string> _loadedAreas = new();
     private LocalTangentPlane? _origin;
     private string? _scenarioId;
+    private string? _berthLookedUp; // 已依其補載區域檔的 state.berth.id(找不到也記住,避免每幀重建)
     private bool _harbourBuilt;
     private bool _warmupDone;
     private double _warmupSeconds;
@@ -188,6 +192,8 @@ public partial class Main : Node3D
         AddChild(_targets);
         _tugs = new TugsAndAnchorsNode { Name = "tugsAnchors" };
         AddChild(_tugs);
+        _mooring = new MooringLinesNode { Name = "mooringLines" };
+        AddChild(_mooring);
         _camera = new CameraRig { Name = "cameraRig" };
         AddChild(_camera);
         _camera.Configure(_ownHull, _options.View, _persisted.FovDeg);
@@ -207,11 +213,17 @@ public partial class Main : Node3D
         }
     }
 
-    /// <summary>第一幀(或情境改變)時依狀態反推 ENU 原點並載入區域幾何。</summary>
+    /// <summary>
+    /// 第一幀(或情境改變)時依狀態反推 ENU 原點並載入區域幾何。state.berth.id 所在的泊位不在已載入區域時(對照表漏列/錯列,或泊位稍後才出現在狀態中),
+    /// 依 berth.id 掃描 data/areas 補上泊位檔並重建一次(審查發現 utc-mooring:E13/E14/E17 的繫纜原本永遠畫不出來)。
+    /// </summary>
     private void EnsureHarbour(OwnShipState state)
     {
         var scenario = state.Scenario?.Id;
-        if (_harbourBuilt && string.Equals(scenario, _scenarioId, StringComparison.Ordinal)) return;
+        var berthId = state.Berth?.Id;
+        var berthKnown = berthId is null || string.Equals(berthId, _berthLookedUp, StringComparison.OrdinalIgnoreCase)
+            || _berths.Any(b => string.Equals(b.Id, berthId, StringComparison.OrdinalIgnoreCase));
+        if (_harbourBuilt && string.Equals(scenario, _scenarioId, StringComparison.Ordinal) && berthKnown) return;
         if (_harbourBuilt)
         {
             foreach (var c in _harbour.GetChildren()) c.QueueFree();
@@ -220,11 +232,13 @@ public partial class Main : Node3D
             _loadedAreas.Clear();
         }
         _scenarioId = scenario;
+        _berthLookedUp = berthId;
         _origin = OriginSolver.FromPosition(state.Pos);
         var catalogue = AreaCatalogue.Load(_root);
         IReadOnlyList<string> ids = _options.Areas.Count > 0 ? _options.Areas
             : _options.Smoke ? new[] { "kaohsiung-approach", "kaohsiung-south-approach" }
             : catalogue.AreasForScenario(scenario);
+        if (!_options.Smoke) ids = catalogue.WithBerthArea(ids, berthId); // 泊位後備:補上 state.berth.id 所在的區域檔(煙霧用合成泊位)
         var geoms = new List<AreaGeometry>();
         foreach (var id in ids)
         {
@@ -240,9 +254,16 @@ public partial class Main : Node3D
                 _notes.Add($"區域 {id} 載入失敗:{ex.Message}");
             }
         }
+        if (_options.Smoke) geoms.Add(SmokeSequence.SmokeBerthArea()); // 煙霧:示意泊位(繫船柱)供繫纜節點驗證
         _harbour.Build(geoms);
+        _berths = geoms.SelectMany(g => g.Berths).ToList();
         _harbourBuilt = true;
-        GD.Print($"[visual] 港口幾何:{geoms.Count} 個區域、{_harbour.MeshCount} 個網格、{_harbour.Triangles} 三角形(原點 {_origin.OriginLat:F4}, {_origin.OriginLon:F4};情境 {scenario ?? "未知"})");
+        if (berthId is not null && !_berths.Any(b => string.Equals(b.Id, berthId, StringComparison.OrdinalIgnoreCase)))
+        {
+            GD.PushWarning($"泊位 {berthId} 不在已載入區域 [{string.Join(",", _loadedAreas)}] 亦不在 data/areas/*.json,繫纜無法畫出");
+            _notes.Add($"泊位 {berthId} 找不到區域檔,繫纜無法畫出");
+        }
+        GD.Print($"[visual] 港口幾何:{geoms.Count} 個區域、{_harbour.MeshCount} 個網格、{_harbour.Triangles} 三角形(原點 {_origin.OriginLat:F4}, {_origin.OriginLon:F4};情境 {scenario ?? "未知"}{(berthId is null ? "" : $";泊位 {berthId}")})");
     }
 
     private void ApplyQuality(QualitySettings s)
@@ -315,6 +336,7 @@ public partial class Main : Node3D
             _harbour.SetOverviewMode(_camera.Kind == ViewKind.Overview);
             _targets.Update(sample, _settings, look.NavigationLightsOn);
             _tugs.Update(sample, _ownHull, look.NavigationLightsOn, _settings.DrawDistanceM);
+            _mooring.Update(sample, _ownHull, _berths, _runSeconds);
             var cam = _camera.Camera.GlobalPosition;
             _ocean.Update(delta, cam, look);
             _weather.Update(look, cam);
@@ -368,6 +390,8 @@ public partial class Main : Node3D
         if (st.Flags?.Aground == true) sb.Append("  [擱淺]");
         if (st.Flags?.Collision == true) sb.Append("  [碰撞]");
         sb.Append("\n目標 ").Append(_targets.DrawnCount).Append('/').Append(_targets.NodeCount).Append("  港口網格 ").Append(_harbour.MeshCount);
+        if (st.Berth is { } berth) sb.Append("  泊位 ").Append(berth.Id).Append(" 繫纜 ").Append(_mooring.DrawnCount).Append('/').Append(_mooring.InStateCount);
+        if (st.Utc is { } utc) sb.Append("  UTC ").Append(utc);
         if (_client?.LastEventKind is { } ev) sb.Append("  最近事件 ").Append(ev);
         sb.Append("\n鍵:1–5 視角、滑鼠拖曳環視、滾輪視野、H HUD、F11 全螢幕、Esc 離開");
         return sb;
@@ -403,6 +427,8 @@ public partial class Main : Node3D
                 SogKn = sample.Own.SogKn,
                 Extrapolating = sample.Extrapolating,
                 Stalled = sample.Stalled,
+                MooringLinesInState = _mooring.InStateCount,
+                MooringLinesDrawn = _mooring.DrawnCount,
             });
         }
         _smokeRendered++;

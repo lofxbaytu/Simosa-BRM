@@ -123,6 +123,15 @@ class SimServer:
         self.clients: set[Any] = set()
         self.snapshots: dict[str, dict[str, Any]] = {}
         self._accum = 0.0
+        # state.utc 起點:情境 startTimeUtc,未給時為現在(與 C# 相同規則);寫回情境 dict 使之後的 ack/重設沿用同一起點
+        self._apply_start_utc()
+
+    def _apply_start_utc(self) -> None:
+        """練習開始 UTC(MMGShip.set_start_utc):情境 startTimeUtc 可解析者採用,否則現在時刻並寫回情境(C# ResolveStartUtc 相同)。"""
+        start_iso = self.scenario.get("startTimeUtc") if self.scenario is not None else None
+        self.ship.set_start_utc(start_iso if isinstance(start_iso, str) else None)
+        if self.scenario is not None and not isinstance(start_iso, str):
+            self.scenario["startTimeUtc"] = self.ship.utc_at(0.0)
 
     # ---- 情境 ----
     def load_scenario(self, ref: str) -> dict[str, Any]:
@@ -135,6 +144,7 @@ class SimServer:
         self.time_scale = float(sc["timeScale"])
         self.snapshots.clear()
         self._accum = 0.0
+        self._apply_start_utc()
         return sc
 
     def state_json(self) -> dict[str, Any]:

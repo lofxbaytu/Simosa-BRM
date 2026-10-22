@@ -37,6 +37,8 @@ public readonly record struct AlertInputs(
 /// 駕駛台警報管理(BAM,MSC.302(87);設計文件 docs/design/sensors-alerts.md 第 3 節)。每步依 <see cref="AlertInputs"/> 判定各警報條件,
 /// 執行狀態機:成立 → activeUnacknowledged;silence → activeSilenced(<c>alerts.silence_s</c> 後重響);acknowledge → activeAcknowledged
 /// (rectifiedUnacknowledged → normal);條件解除 → normal 或 rectifiedUnacknowledged;warning 未確認 <c>alerts.escalate_s</c> 升級為 alarm。
+/// 工作站(MSC.302(87) 第 6、7.3 節):每筆警報有負責站 <see cref="AlertRecord.Station"/>(本版皆 bridge)與責任轉移 <see cref="AlertRecord.TransferredTo"/>;
+/// Category A 與已轉移的警報只能在負責站確認(<see cref="AlertRecord.CanAcknowledgeAt"/>),未帶 station 的指令視為 bridge,既有行為不變。
 /// 事件以 (kind, record, message, data) 回呼引擎發出(source = engine,itemId = 警報 id)。
 /// </summary>
 public sealed class AlertManager
@@ -196,40 +198,82 @@ public sealed class AlertManager
         };
         if (kind == SimEventKinds.AlertAcknowledged) data["ackTime_s"] = (tick - rec.RaisedTick) * _dt;
         if (rec.SilencedUntilTick >= 0) data["silencedUntil_s"] = rec.SilencedUntilTick * _dt;
+        // 站別只在使用時(非 bridge 或已轉移)寫入 data,未使用站別的既有紀錄事件內容不變
+        if (rec.Station != AlertStations.Bridge || rec.TransferredTo is not null)
+        {
+            data["station"] = rec.Station;
+            data["transferredTo"] = rec.TransferredTo;
+        }
         foreach (var (k, v) in extra) data[k] = v;
         _raise(kind, rec, d.Text, data);
     }
 
     // ------------------------------------------------------------------ 操作
 
-    /// <summary>確認(id = null 或 "all":全部可確認者)。回傳確認的警報數;未知 id 回傳 −1。</summary>
-    public int Acknowledge(long tick, string? id)
+    /// <summary><see cref="Acknowledge"/> / <see cref="Transfer"/> 的拒絕結果(負值;≥ 0 為處理的警報數)。</summary>
+    public const int RejectUnknownAlert = -1;
+    public const int RejectStationRequired = -2;
+    public const int RejectNotTransferable = -3;
+    public const int RejectUnknownStation = -4;
+
+    /// <summary>
+    /// 確認(id = null 或 "all":全部在 <paramref name="station"/> 可確認者;不可在該站確認的略過)。<paramref name="station"/> null = bridge。
+    /// 回傳確認的警報數;未知 id −1;指定的警報不能在該站確認(Category A 或已轉移)−2;未知站 −4。
+    /// </summary>
+    public int Acknowledge(long tick, string? id, string? station = null)
     {
         var all = id is null || string.Equals(id, "all", StringComparison.OrdinalIgnoreCase);
-        if (!all && AlertCatalogue.Find(id!) is null) return -1;
+        if (!all && AlertCatalogue.Find(id!) is null) return RejectUnknownAlert;
+        var st = AlertStations.Normalize(station);
+        if (!AlertStations.IsKnown(st)) return RejectUnknownStation;
         var n = 0;
         foreach (var rec in State.Alerts.ToArray())
         {
             if (!all && rec.Id != id) continue;
+            if (!rec.CanAcknowledgeAt(st))
+            {
+                if (all) continue;
+                // 指定的警報仍需確認時才算拒絕;已確認者(無事可做)不拒絕,與既有「無效 id 以外一律接受」一致
+                return rec.State is AlertState.ActiveUnacknowledged or AlertState.ActiveSilenced or AlertState.RectifiedUnacknowledged ? RejectStationRequired : n;
+            }
             switch (rec.State)
             {
                 case AlertState.ActiveUnacknowledged or AlertState.ActiveSilenced:
                     rec.State = AlertState.ActiveAcknowledged;
                     rec.AckTick = tick;
                     rec.SilencedUntilTick = -1;
-                    RaiseEvent(SimEventKinds.AlertAcknowledged, rec, tick);
+                    RaiseEvent(SimEventKinds.AlertAcknowledged, rec, tick, AckExtra(st));
                     n++;
                     break;
                 case AlertState.RectifiedUnacknowledged:
                     rec.AckTick = tick;
                     State.Alerts.Remove(rec);
                     rec.State = AlertState.Normal;
-                    RaiseEvent(SimEventKinds.AlertAcknowledged, rec, tick);
+                    RaiseEvent(SimEventKinds.AlertAcknowledged, rec, tick, AckExtra(st));
                     n++;
                     break;
             }
         }
         return n;
+    }
+
+    /// <summary>alertAcknowledged 的 data.ackStation 只在非 bridge 確認時寫入(既有事件內容不變)。</summary>
+    private static (string, object?)[] AckExtra(string station)
+        => station == AlertStations.Bridge ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("ackStation", station) };
+
+    /// <summary>
+    /// 責任轉移(MSC.302(87) 第 7.3 節):把警報 <paramref name="id"/> 的確認責任轉到 <paramref name="station"/>;轉回原負責站即解除轉移。
+    /// 只允許 <see cref="AlertCatalogue.TransferTargets"/> 列出的站。回傳 1;警報不在目前清單 −1;不可轉移 −3;未知站 −4。
+    /// </summary>
+    public int Transfer(long tick, string? id, string? station)
+    {
+        if (id is null || Find(id) is not { } rec) return RejectUnknownAlert;
+        if (!AlertStations.IsKnown(station)) return RejectUnknownStation;
+        if (!AlertCatalogue.CanTransfer(rec.Definition, station!)) return RejectNotTransferable;
+        var from = rec.ResponsibleStation;
+        rec.TransferredTo = station == rec.Station ? null : station;
+        RaiseEvent(SimEventKinds.AlertTransferred, rec, tick, ("station", station), ("from", from), ("transferredTo", rec.TransferredTo));
+        return 1;
     }
 
     /// <summary>靜音(id = null 或 "all"):有聲響且未確認者暫停聲響 silence_s。回傳靜音數;未知 id 回傳 −1。</summary>
@@ -267,14 +311,19 @@ public sealed class AlertManager
                     RaisedAtS = a.RaisedTick * _dt, AcknowledgedAtS = a.AckTick >= 0 ? a.AckTick * _dt : null,
                     SilencedUntilS = a.SilencedUntilTick >= 0 ? a.SilencedUntilTick * _dt : null,
                     Escalated = a.Escalated, Count = a.Count, Audible = a.Audible,
+                    Station = a.Station, TransferredTo = a.TransferredTo,
                 };
             }).ToArray();
     }
 
     public const int HashLongsHeader = 4;
     public const int HashLongsPerAlert = 7;
+    /// <summary>站別區塊(只在任一警報的站別非 bridge 或已轉移時追加:標記 + 每筆 2 個 int64),未使用站別的情境雜湊不變</summary>
+    public const int HashLongsPerAlertStation = 2;
 
-    public int HashSize => (HashLongsHeader + State.Alerts.Count * HashLongsPerAlert) * 8;
+    private bool HashStations => State.Alerts.Any(a => a.Station != AlertStations.Bridge || a.TransferredTo is not null);
+
+    public int HashSize => (HashLongsHeader + State.Alerts.Count * HashLongsPerAlert + (HashStations ? 1 + State.Alerts.Count * HashLongsPerAlertStation : 0)) * 8;
 
     public int WriteHash(Span<byte> buf)
     {
@@ -284,6 +333,11 @@ public sealed class AlertManager
         };
         foreach (var a in State.Alerts)
             v.AddRange(new long[] { AlertCatalogue.IndexOf(a.Id), (long)a.Priority, (long)a.State, a.RaisedTick, a.AckTick, a.SilencedUntilTick, a.Count });
+        if (HashStations)
+        {
+            v.Add(0x414C5254_53544E53); // 區塊標記("ALRTSTNS")
+            foreach (var a in State.Alerts) v.AddRange(new long[] { AlertStations.IndexOf(a.Station), AlertStations.IndexOf(a.TransferredTo) });
+        }
         for (var i = 0; i < v.Count; i++) BinaryPrimitives.WriteInt64LittleEndian(buf[(i * 8)..], v[i]);
         return v.Count * 8;
     }

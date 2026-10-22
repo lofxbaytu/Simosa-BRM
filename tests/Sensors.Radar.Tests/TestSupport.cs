@@ -4,8 +4,12 @@ using SimosaBRM.SimCore.Traffic;
 
 namespace SimosaBRM.Sensors.Radar.Tests;
 
-/// <summary>等速直線目標(ENU 起點 m、航向度、速度 kn)。</summary>
-internal sealed record LinearTarget(string Id, double X0, double Y0, double CourseDeg, double SpeedKn, double Loa = 120, double Beam = 20, string Type = "cargo", double Draft = 7)
+/// <summary>
+/// 等速直線目標(ENU 起點 m、航向度、速度 kn)。<paramref name="AisOn"/> 時狀態含 AIS 報告(MMSI = <paramref name="Mmsi"/>、船名 = Id),
+/// 報告位置 = 真位置 + (<paramref name="AisErrEast"/>, <paramref name="AisErrNorth"/>)(模擬 aisError 注入)。
+/// </summary>
+internal sealed record LinearTarget(string Id, double X0, double Y0, double CourseDeg, double SpeedKn, double Loa = 120, double Beam = 20, string Type = "cargo", double Draft = 7,
+    bool AisOn = false, int Mmsi = 0, double AisErrEast = 0, double AisErrNorth = 0)
 {
     public (double X, double Y) At(double t)
     {
@@ -69,13 +73,23 @@ internal sealed class LinearScene
             var (tx, ty) = tg.At(t);
             var (tl, tn) = Ltp.ToGeodetic(tx, ty);
             var g = Truth(tg.Id, t);
+            AisReport? ais = null;
+            if (tg.AisOn)
+            {
+                var (al, an) = Ltp.ToGeodetic(tx + tg.AisErrEast, ty + tg.AisErrNorth);
+                ais = new AisReport
+                {
+                    Mmsi = tg.Mmsi, Name = tg.Id, ShipType = 70, NavStatus = 0, Lat = al, Lon = an, Cog = tg.CourseDeg, Sog = tg.SpeedKn, Heading = tg.CourseDeg, Rot = 0,
+                    DimToBow = tg.Loa / 2, DimToStern = tg.Loa / 2, DimToPort = tg.Beam / 2, DimToStarboard = tg.Beam / 2, Draught = tg.Draft,
+                };
+            }
             targets.Add(new TargetState
             {
-                Id = tg.Id, Name = tg.Id, Mmsi = 1, ShipType = tg.Type, Loa = tg.Loa, Beam = tg.Beam, Draft = tg.Draft,
+                Id = tg.Id, Name = tg.Id, Mmsi = tg.Mmsi, ShipType = tg.Type, Loa = tg.Loa, Beam = tg.Beam, Draft = tg.Draft,
                 Pos = new GeoPosition { Lat = tl, Lon = tn, X = tx, Y = ty },
                 Heading = tg.CourseDeg, Cog = tg.CourseDeg, Sog = tg.SpeedKn, Rot = 0,
                 RangeNm = g.RangeNm, BearingDeg = Units.RadToDeg(g.BearingRad), CpaNm = g.CpaNm, TcpaMin = g.TcpaMin,
-                BcrNm = g.BcrNm, BctMin = g.BctMin, AisOn = false, Lights = "powerDriven", Behaviour = "hold",
+                BcrNm = g.BcrNm, BctMin = g.BctMin, AisOn = tg.AisOn, Lights = "powerDriven", Behaviour = "hold", Ais = ais,
             });
         }
         var indicated = Units.NormalizeHeadingDeg(OwnCourseDeg + HeadingErrorDeg);

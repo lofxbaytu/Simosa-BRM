@@ -54,7 +54,7 @@ export type AssessmentEventKind =
   | 'bandFail';
 
 /** 教官指令產生的事件 kind;steeringModeChanged / commandRejected 來源依指令來源(instructor 或 timeline,D32/D35)。 */
-export type InstructorEventKind = 'acknowledge' | 'timelineManual' | 'steeringModeChanged' | 'commandRejected';
+export type InstructorEventKind = 'acknowledge' | 'timelineManual' | 'steeringModeChanged' | 'commandRejected' | 'radarControl';
 
 /** 警報管理/BNWAS/自動舵脫開事件 kind(docs/design/sensors-alerts.md 第 3.4、4 節;bnwasReset 的來源依指令來源,其餘 engine)。 */
 export type AlertEventKind =
@@ -64,6 +64,7 @@ export type AlertEventKind =
   | 'alertAcknowledged'
   | 'alertRectified'
   | 'alertEscalated'
+  | 'alertTransferred'
   | 'bnwasStage'
   | 'bnwasReset'
   | 'bnwasModeChanged'
@@ -148,10 +149,12 @@ export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'alertAcknowledged',
   'alertRectified',
   'alertEscalated',
+  'alertTransferred',
   'bnwasStage',
   'bnwasReset',
   'bnwasModeChanged',
   'autopilotTripped',
+  'radarControl',
   'tugCommand',
   'tugLineParted',
   'anchorLetGo',

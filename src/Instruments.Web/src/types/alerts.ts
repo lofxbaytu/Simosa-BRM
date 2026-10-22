@@ -14,6 +14,11 @@ export type AlertCategory = 'A' | 'B' | 'C';
 
 export const ALERT_CATEGORIES: readonly AlertCategory[] = ['A', 'B', 'C'] as const;
 
+/** 工作站(MSC.302(87) 第 6 節相關工作站與責任轉移;docs/design/sensors-alerts.md 第 3.6 節):駕駛台主站(預設)、左/右翼、機控室。 */
+export type AlertStation = 'bridge' | 'portWing' | 'stbdWing' | 'ecr';
+
+export const ALERT_STATIONS: readonly AlertStation[] = ['bridge', 'portWing', 'stbdWing', 'ecr'] as const;
+
 /** 警報狀態(MSC.302 狀態機;normal 的警報不出現在清單)。 */
 export type AlertState = 'activeUnacknowledged' | 'activeSilenced' | 'activeAcknowledged' | 'rectifiedUnacknowledged';
 
@@ -43,6 +48,10 @@ export interface AlertItem {
   count: number;
   /** 目前有聲響(activeUnacknowledged 且優先序為 emergencyAlarm/alarm/warning) */
   audible: boolean;
+  /** 負責站(相關工作站;核心本版成立時皆為 bridge;舊核心無此欄位時 undefined = bridge) */
+  station?: AlertStation;
+  /** 責任已轉移到的站(MSC.302(87) responsibility transferred;未轉移時無) */
+  transferredTo?: AlertStation;
 }
 
 /** BNWAS 模式:off(預設)、auto(自動舵啟用時作動)、on。 */

@@ -18,7 +18,8 @@ import type { AutopilotChangedDetail, AutopilotPanel } from './components/autopi
 import type { SimEvent } from './types/event.js';
 import { eventFromFrame, eventLabel } from './lib/sim-event.js';
 import { AlertSounder } from './lib/alert-sound.js';
-import { alertCounts } from './lib/alerts.js';
+import { alertCounts, parseStation } from './lib/alerts.js';
+import type { AlertStation } from './types/alerts.js';
 import { ALERT_SOUND_TOGGLE_EVENT } from './components/alert-panel.js';
 import './components/conning-bar.js';
 import './components/track-plot.js';
@@ -278,6 +279,8 @@ export class BrmApp extends LitElement {
   @state() private banner: { text: string; severity: string } | null = null;
   /** 本頁警報聲響設定(預設開;AlertSounder 存 localStorage) */
   @state() private soundOn = true;
+  /** 本操船台所在的工作站(?station=bridge|portWing|stbdWing|ecr;警報面板的確認/轉移依此;sensors-alerts.md 第 3.6 節) */
+  @state() private station: AlertStation = 'bridge';
   private readonly sounder = new AlertSounder();
   /** 上一筆核心狀態的 autopilot.enabled(偵測核心脫開自動舵:true → false) */
   private coreAutopilotEnabled: boolean | undefined;
@@ -306,6 +309,7 @@ export class BrmApp extends LitElement {
     const ship = params.get('ship');
     if (isShipId(ship)) this.demoShip = ship;
     this.mode = params.get('demo') === '1' ? 'demo' : 'live';
+    this.station = parseStation(params.get('station'));
     this.applyTheme();
     this.startSource();
     this.staleTimer = setInterval(() => {
@@ -557,7 +561,7 @@ export class BrmApp extends LitElement {
         </div>
         <div class="alert-col">
           <brm-bnwas .bnwas=${s.bnwas}></brm-bnwas>
-          <brm-alert-panel .alerts=${s.alerts ?? []} .simTime=${s.t} .soundOn=${this.soundOn} .unsupported=${!alertsSupported}></brm-alert-panel>
+          <brm-alert-panel .alerts=${s.alerts ?? []} .simTime=${s.t} .soundOn=${this.soundOn} .unsupported=${!alertsSupported} .station=${this.station}></brm-alert-panel>
         </div>
       </div>
 

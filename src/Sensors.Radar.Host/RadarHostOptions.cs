@@ -25,6 +25,8 @@ public sealed class RadarHostOptions
     /// <summary>每隔幾模擬秒列印 ARPA 與真值比對(0 = 不列印)</summary>
     public double TruthReport { get; set; }
     public bool ForceDisplay { get; set; }
+    /// <summary>把學員控制指令轉送 SimCore.Host 成為 radarControl 指令(進紀錄)</summary>
+    public bool ForwardControl { get; set; } = true;
     public bool Help { get; set; }
 
     public const string Usage = """
@@ -47,6 +49,7 @@ public sealed class RadarHostOptions
           --duration <秒>                 牆鐘時間到達後結束(煙霧測試用)
           --truth-report <秒>             每隔幾模擬秒列印 ARPA 與真值比對(教官/驗收用)
           --force-display                 無客戶端時仍產生顯示影像(效能量測)
+          --no-forward                    不把學員雷達操作轉送核心(預設轉送為 radarControl 指令,進紀錄)
           -h | --help
         """;
 
@@ -88,6 +91,7 @@ public sealed class RadarHostOptions
                 case "--duration": o.Duration = double.Parse(Next(), inv); break;
                 case "--truth-report": o.TruthReport = double.Parse(Next(), inv); break;
                 case "--force-display": o.ForceDisplay = true; break;
+                case "--no-forward": o.ForwardControl = false; break;
                 case "-h": case "--help": o.Help = true; break;
                 default: throw new ArgumentException($"未知參數:{a}\n{Usage}");
             }

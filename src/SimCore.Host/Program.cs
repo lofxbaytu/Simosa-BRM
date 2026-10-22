@@ -115,7 +115,8 @@ if (options.Validate)
     return errors == 0 ? 0 : 1;
 }
 SimulationEngine engine;
-try { engine = new SimulationEngine(ship, scenario, DynamicsFactory(options.Dynamics)); }
+// 情境未給 startTimeUtc 時以實際時鐘代入並寫回情境(state.utc、紀錄標頭、NMEA 共用同一起點;ScenarioLoadRequested 的 LoadScenario 沿用 Options.Clock)
+try { engine = new SimulationEngine(ship, scenario, DynamicsFactory(options.Dynamics), new EngineOptions { Clock = TimeProvider.System }); }
 catch (FileNotFoundException ex) when (options.Dynamics == "mmg")
 {
     Console.Error.WriteLine(ex.Message);
@@ -153,9 +154,8 @@ engine.ScenarioLoadRequested += (e, path) =>
 };
 engine.EventRaised += (e, ev) => Console.WriteLine($"[t={ev.T:F1}] 事件 {ev.Source}/{ev.Kind}{(ev.ItemId is null ? "" : $" {ev.ItemId}")}{(ev.TargetId is null ? "" : $" {ev.TargetId}")}{(ev.Message is null ? "" : $":{ev.Message}")}");
 
-var startUtc = scenario.StartTimeUtc is { } st
-    ? DateTime.Parse(st, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal)
-    : DateTime.UtcNow;
+// NMEA 起始 UTC = 引擎解析(或寫回)的開始時刻,與 state.utc 同源;Clock 已給所以不會為 null,保險起見仍保留 fallback
+var startUtc = engine.StartUtc ?? DateTime.UtcNow;
 
 Console.WriteLine($"Simosa BRM SimCore Host — {ship.Name} ({ship.Id}),裝載 {scenario.Ship.Loading},情境 {scenario.Id}");
 Console.WriteLine($"  dt = {engine.Dt} s(50 Hz)、廣播 25 Hz、快照每 {engine.Options.AutoSnapshotIntervalTicks * engine.Dt:F0} s、動力學 {engine.Dynamics.ModelName}、種子 {scenario.Seed}");

@@ -111,18 +111,23 @@
 - 升級:warning 在 activeUnacknowledged/activeSilenced 持續 `alerts.escalate_s`(預設 300 s,自最近一次成立起算)未確認 → alarm、`escalated = true`、
   回到 activeUnacknowledged(`alertEscalated {from: warning, to: alarm, reason: unacknowledged, after_s}`)。BNWAS 第 2 階段同樣以 `alertEscalated {reason: source}` 表示。
 - BNWAS 警報例外:BNWAS 重設即解除指示(直接 normal,不經 rectifiedUnacknowledged)。
-- responsibility transferred 與 Category A「只能在相關工作站確認」本版略過(任一站的 alertAcknowledge 皆可確認;記錄於第 9 節)。
+- responsibility transferred 與 Category A「只能在相關工作站確認」:見第 3.6 節(工作站);未帶 `station` 的指令視為 bridge,既有情境行為不變。
 
 ### 3.3 指令
 
 ```json
 {"type":"alertAcknowledge","args":{"id":"gyroFailure"}}
 {"type":"alertAcknowledge"}
+{"type":"alertAcknowledge","args":{"id":"shallowWater","station":"stbdWing"}}
 {"type":"alertSilence","value":"bnwas"}
 {"type":"alertSilence"}
+{"type":"alertTransfer","args":{"id":"mainEngine","station":"ecr"}}
 ```
 
-`id`(value 字串或 args.id)省略或 `"all"` = 全部;未知 id → `commandRejected {reason: "unknownAlert"}`。兩者都視為駕駛台操作(重設 BNWAS),寫入 `input` 行。
+`id`(value 字串或 args.id)省略或 `"all"` = 全部;未知 id → `commandRejected {reason: "unknownAlert"}`。`alertAcknowledge` 可帶 `args.station`
+(bridge|portWing|stbdWing|ecr,省略 = bridge;第 3.6 節:不能在該站確認 → `alertStationRequired`,未知站 → `unknownStation`;「全部」只確認該站可確認者、不拒絕)。
+`alertTransfer {id, station}` 為責任轉移(第 3.6 節;不可轉移 → `alertNotTransferable`,警報不在清單 → `unknownAlert`)。`alertSilence` 也可帶 `args.station`(不限制靜音,只決定是否視為駕駛台操作)。
+核心接受且 `station` 為駕駛台三站(省略 = bridge、兩翼)的確認/靜音視為駕駛台操作(重設 BNWAS);機控室(ecr)頁面的確認/靜音與被拒絕的指令(`alertStationRequired`/`unknownAlert`/`unknownStation`)不重設(第 4 節);三者皆寫入 `input` 行。
 
 ### 3.4 事件(紀錄 `event` 行、WebSocket `{"type":"event","event":…}`)
 
@@ -136,6 +141,9 @@
 | `alertAcknowledged` | `ackTime_s`(確認 − 最近一次成立) |
 | `alertRectified` | `state` = normal 或 rectifiedUnacknowledged |
 | `alertEscalated` | `from`、`to`、`reason`(unacknowledged/source)、`after_s` |
+| `alertTransferred` | `station`(目的站)、`from`(原負責站)、`transferredTo`(轉回原站時 null) |
+
+共同欄位另含 `station`、`transferredTo`,**只在站別被使用時**(負責站非 bridge 或已轉移)寫入;`alertAcknowledged` 在非 bridge 確認時加 `ackStation`。未用站別的既有紀錄事件內容不變。
 
 ```json
 {"kind":"alertRaised","tick":24001,"t":480.02,"source":"engine","itemId":"gyroFailure","message":"電羅經失效","phase":"emergency","visible":true,"seq":23,
@@ -160,13 +168,30 @@
 ]
 ```
 
+### 3.6 工作站與責任轉移(MSC.302(87) 第 6、7.3 節;`AlertStations`、`AlertRecord.Station/TransferredTo`)
+
+- 站別:`bridge`(駕駛台主工作站,預設)、`portWing`/`stbdWing`(兩翼)、`ecr`(機控室)。每筆警報有**負責站** `station`(本版成立時皆 bridge)與
+  **責任轉移** `transferredTo`(null = 未轉移);`state.alerts[]` 輸出 `station`、`transferredTo`(未轉移省略)。
+- 確認規則(`AlertRecord.CanAcknowledgeAt`):已轉移者只能在接收站確認;Category A(需在相關工作站以圖形資訊判斷:淺水、偏航、航向監視)只能在負責站確認;
+  Category B 未轉移時任一站(中央警報面板)皆可。未帶 `station` 的 `alertAcknowledge` = bridge → 既有情境/測試行為不變。
+- 轉移規則(`AlertCatalogue.TransferTargets`):BNWAS 不可轉移(MSC.128 要求在駕駛台);機艙類來源(engine/thruster/steering)可轉到任一站含 ecr;
+  其他(導航感測器、門檻類 Category A)只在駕駛台三站之間。轉回原負責站即解除轉移。靜音不受站別限制。
+- 快照:`AlertRecord` 的兩個欄位隨 `AlertManagerState` 序列化(舊快照無欄位 → bridge/未轉移)。雜湊:只在任一警報站別非 bridge 或已轉移時,
+  在警報區塊後追加標記 `ALRTSTNS` + 每筆(站索引、轉移站索引);未使用站別的情境雜湊不變,轉回後區塊消失(`AlertStationTests.HashOnlyChangesWhileStationsAreInUse`)。
+- 網頁:操船台 `?station=bridge|portWing|stbdWing|ecr`(預設 bridge)決定警報面板的站別(標題顯示站名);確認與靜音指令帶 `station`(bridge 省略;ecr 的確認/靜音不重設 BNWAS,第 4 節);
+  不能在本站確認者顯示「須在 ○○ 確認」而無確認鈕;每列「轉移…」選單只列核心允許的目的站(送 `alertTransfer`),已轉移者標 `→ 機控室`;
+  教官站監看標示 Category A 的負責站與已轉移的接收站(`lib/alerts.ts` `parseStation/canAcknowledgeAt/transferTargets`,與核心規則相同;`tests/alert-station.test.ts`)。
+- 教官「代為確認」不帶 station(= bridge):已轉到 ecr 的警報會被核心拒絕(`alertStationRequired`),需在 ecr 站頁面確認或先轉回駕駛台。
+
 ## 4. BNWAS(MSC.128(75))
 
 - 模式:`off`(預設)/`auto`(自動舵啟用時作動)/`on`。作動開始(off→作動、模式切換、auto 下接上自動舵)時休眠期自該步起算。
 - 階段:休眠 `dormant_s`(180–720 s,預設 720)未重設 → **1**(駕駛台視覺,警報 bnwas caution)→ `stage2_s`(15 s)→ **2**(駕駛台聲響,警報升級 alarm)
   → `stage3_s`(90 s)→ **3**(後備值班官/船長;`bnwasStage {stage: 3}`)。停止作動 → 階段 0(`reason: inactive`)。
-- 重設:`bnwasReset` 指令,或任何學員/教官經指令佇列下的駕駛台操作:`rudder`、`telegraph`、`rpm`、`thruster`、`autopilot`、`steeringMode`、`alertAcknowledge`、`alertSilence`。
-  時間表動作(`ownShip`、`autopilot` 覆寫)不是駕駛台上的人為操作,不重設;`acknowledge`(教官記錄口頭動作)也不重設。
+- 重設:`bnwasReset` 指令,或任何學員/教官經指令佇列下的駕駛台操作:`rudder`、`telegraph`、`rpm`、`thruster`、`autopilot`、`steeringMode`,以及核心**接受**且 `station` 為駕駛台三站
+  (省略 = bridge、portWing、stbdWing)的 `alertAcknowledge`、`alertSilence`(MSC.128(75) 4.1.4 的重設只能來自駕駛台上值班官可辨識的操作:機控室 `ecr` 頁面的確認/靜音、
+  被拒絕的確認都不重設、不發 `bnwasReset`、不計入 `summary.alerts.bnwas.resets`;`AlertStationTests.EcrAcknowledgeDoesNotResetBnwas`/`RejectedAcknowledgeDoesNotResetBnwas`)。
+  時間表動作(`ownShip`、`autopilot` 覆寫)不是駕駛台上的人為操作,不重設;`acknowledge`(教官記錄口頭動作)也不重設。確認引起的 `bnwasReset` 事件發在 `alertAcknowledged` 之後。
 - 事件:`bnwasStage {stage, from, reason: dormantElapsed|notReset|inactive}`(source engine)、`bnwasReset {fromStage, by: 指令名}`(source = 指令來源;
   作動中一般操作只在階段 ≥ 1 時發事件,`bnwasReset` 指令一律發;未作動(off,或 auto 而自動舵未啟用)時重設不動作、不發事件,網頁示範模式相同)、`bnwasModeChanged {from, to, fromStage, dormant_s, stage2_s, stage3_s}`。
 - 指令:
@@ -280,7 +305,7 @@ bnwas:
 
 ## 9. 偏離與限制
 
-1. responsibility transferred、Category A 只能在相關工作站確認:略(任一站可確認)。Category C 未使用。
+1. responsibility transferred 與 Category A 站別已實作(第 3.6 節);所有警報的原始負責站皆為 bridge(目錄無每警報的相關工作站欄位),翼站只能經轉移取得責任。Category C 未使用。
 2. BNWAS 第 3 階段仍為 alarm 優先序(以 `bnwasStage {stage: 3}` 區分),不使用 emergencyAlarm(BAM 的 emergency alarm 保留給人命危急,如火災)。
 3. `state.route`(XTD)以真值計算;`gpsJump/gpsOffset` 時 ECDIS 的指示 XTD 由儀器端以 `pos` 自算。
 4. ROT 與 `u/v/r` 為真值;`gpsJump` 不產生 COG/SOG 尖峰。

@@ -13,6 +13,11 @@ public sealed record OwnShipState
     [JsonPropertyName("t")] public required double T { get; init; }
     /// <summary>核心步數(50 Hz)</summary>
     [JsonPropertyName("tick")] public required long Tick { get; init; }
+    /// <summary>
+    /// UTC 時刻(ISO 8601,毫秒,Z)= 練習開始時刻 + t;開始時刻為情境 startTimeUtc,未給時為主控程序載入情境時的實際時鐘
+    /// (EngineOptions.Clock;引擎寫回情境,重播沿用紀錄標頭的情境);兩者皆無(單元測試)時省略。Python 參考實作亦輸出;不進雜湊,視景據此決定日夜。
+    /// </summary>
+    [JsonPropertyName("utc")] public string? Utc { get; init; }
     [JsonPropertyName("shipId")] public required string ShipId { get; init; }
     [JsonPropertyName("pos")] public required GeoPosition Pos { get; init; }
     /// <summary>航向(度,0–360)</summary>
@@ -142,6 +147,10 @@ public sealed record AlertStatus
     [JsonPropertyName("count")] public required int Count { get; init; }
     /// <summary>目前有聲響(activeUnacknowledged 且優先序為 emergencyAlarm/alarm/warning)</summary>
     [JsonPropertyName("audible")] public required bool Audible { get; init; }
+    /// <summary>負責站(相關工作站;bridge|portWing|stbdWing|ecr,本版成立時皆為 bridge)</summary>
+    [JsonPropertyName("station")] public string Station { get; init; } = Alerts.AlertStations.Bridge;
+    /// <summary>責任已轉移到的站(MSC.302(87) responsibility transferred;未轉移時省略)</summary>
+    [JsonPropertyName("transferredTo")] public string? TransferredTo { get; init; }
 }
 
 /// <summary>BNWAS 狀態(state.schema.json <c>bnwas</c>)。</summary>

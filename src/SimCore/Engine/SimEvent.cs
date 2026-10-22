@@ -99,6 +99,8 @@ public static class SimEventKinds
     public const string AlertRectified = "alertRectified";
     /// <summary>警報升級(data {from, to, reason: unacknowledged|source, after_s?})</summary>
     public const string AlertEscalated = "alertEscalated";
+    /// <summary>警報責任轉移(MSC.302(87) responsibility transferred;指令 alertTransfer;data {station, from, transferredTo(轉回原站時 null)};source engine、itemId = 警報 id,與其他警報事件相同)</summary>
+    public const string AlertTransferred = "alertTransferred";
     // BNWAS(MSC.128(75))
     /// <summary>BNWAS 階段變更(data {stage, from, reason: dormantElapsed|notReset|inactive})</summary>
     public const string BnwasStage = "bnwasStage";
@@ -132,6 +134,11 @@ public static class SimEventKinds
     // instructor
     public const string Acknowledge = "acknowledge";
     public const string TimelineManual = "timelineManual";
+    /// <summary>
+    /// 雷達控制操作(指令 radarControl,由雷達服務轉送學員的 range/gain/sea/rain/tune/standby/transmit/acquire/cancel/guardZone/trialManoeuvre/cpaLimits/environment;
+    /// itemId = 雷達 id x|s;data {radar, client, cmd, ok, error?, id?, value?, request};只記錄、不影響物理與雜湊;規劃書第 8.3 節第 7 類)
+    /// </summary>
+    public const string RadarControl = "radarControl";
     // 外力:拖船、錨、碰墊、繫纜(設計文件 docs/design/physics-tugs-anchors-mooring.md 第 6 節;itemId = 拖船 id / 錨側 / 碰墊 id / 纜 id)
     /// <summary>拖船命令被接受(data {id, mode, from, status, direction_deg, power_pct};source 同指令)</summary>
     public const string TugCommand = "tugCommand";
@@ -184,8 +191,14 @@ public static class CommandRejectReasons
     public const string EmergencySteering = "emergencySteering";
     /// <summary>自動舵不可用(autopilotFailure 故障中,或電羅經失效使指示航向無效)</summary>
     public const string AutopilotUnavailable = "autopilotUnavailable";
-    /// <summary>alertAcknowledge / alertSilence 的 id 不在警報目錄</summary>
+    /// <summary>alertAcknowledge / alertSilence / alertTransfer 的 id 不在警報目錄(或 alertTransfer 的警報目前不存在)</summary>
     public const string UnknownAlert = "unknownAlert";
+    /// <summary>Category A 警報(或已轉移責任的警報)只能在相關工作站確認:alertAcknowledge 的 args.station 不是該警報的負責站(MSC.302(87) 第 6 節)</summary>
+    public const string AlertStationRequired = "alertStationRequired";
+    /// <summary>alertTransfer 的警報不可轉移到該站(BNWAS 不可轉移;非機艙來源不可轉到 ecr;AlertCatalogue.TransferTargets)</summary>
+    public const string AlertNotTransferable = "alertNotTransferable";
+    /// <summary>alertAcknowledge / alertTransfer 的 station 不是 bridge|portWing|stbdWing|ecr</summary>
+    public const string UnknownStation = "unknownStation";
     // 外力指令(tugControl / anchor / mooring;設計文件 physics-tugs-anchors-mooring.md 第 6.2 節)
     /// <summary>動力學模型不支援外力(IShipDynamics.SupportsExternalForces = false)</summary>
     public const string ExternalForcesUnsupported = "externalForcesUnsupported";

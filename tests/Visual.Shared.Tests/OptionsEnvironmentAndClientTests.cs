@@ -123,8 +123,8 @@ public class EnvironmentMapperTests
         Assert.True(night < -20);
         var (noon, _) = EnvironmentMapper.SolarPosition(new DateTimeOffset(2026, 5, 5, 4, 0, 0, TimeSpan.Zero), 22.53, 120.24); // 12:00 當地
         Assert.InRange(noon, 75, 90);
-        // auto 模式以 --start-utc + 模擬秒數
-        var s = SmokeSequence.Frame(0) with { T = 3600 * 8 };
+        // auto 模式無 state.utc 時以 --start-utc + 模擬秒數(煙霧幀自帶 utc,此處清掉;有 utc 的情形見 EnvironmentUtcTests)
+        var s = SmokeSequence.Frame(0) with { T = 3600 * 8, Utc = null };
         var look = EnvironmentMapper.Build(s, null, DayNightMode.Auto, new DateTimeOffset(2026, 5, 5, 22, 30, 0, TimeSpan.Zero)); // 14:30 當地
         Assert.True(look.SunElevationDeg > 50);
         Assert.False(look.NavigationLightsOn);

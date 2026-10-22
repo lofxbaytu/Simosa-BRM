@@ -30,7 +30,9 @@ export type CommandType =
   | 'bnwasReset'
   | 'tugControl'
   | 'anchor'
-  | 'mooring';
+  | 'mooring'
+  | 'alertTransfer'
+  | 'radarControl';
 
 export const COMMAND_TYPES: readonly CommandType[] = [
   'rudder',
@@ -61,6 +63,8 @@ export const COMMAND_TYPES: readonly CommandType[] = [
   'tugControl',
   'anchor',
   'mooring',
+  'alertTransfer',
+  'radarControl',
 ] as const;
 
 /** 舵令來源:FU 隨動(舵輪)或 NFU 非隨動(舵柄按鈕),僅作提示,核心可忽略。 */
@@ -127,10 +131,16 @@ export interface AcknowledgeCommand extends SimCommand {
   args: { kind: string; itemId?: string; role?: string; note?: string } & Record<string, unknown>;
 }
 
-/** alertAcknowledge / alertSilence:args.id(或 value 字串)為警報 id;省略或 "all" = 全部(docs/design/sensors-alerts.md 第 3.3 節)。 */
+/** alertAcknowledge / alertSilence:args.id(或 value 字串)為警報 id;省略或 "all" = 全部;alertAcknowledge 可帶 args.station(省略 = bridge;docs/design/sensors-alerts.md 第 3.3、3.6 節)。 */
 export interface AlertCommand extends SimCommand {
   type: 'alertAcknowledge' | 'alertSilence';
-  args?: { id?: string } & Record<string, unknown>;
+  args?: { id?: string; station?: string } & Record<string, unknown>;
+}
+
+/** alertTransfer:責任轉移到 station(bridge|portWing|stbdWing|ecr;MSC.302(87) responsibility transferred)。 */
+export interface AlertTransferCommand extends SimCommand {
+  type: 'alertTransfer';
+  args: { id: string; station: string };
 }
 
 /** bnwasMode:value 為 off | auto | on;args.dormant_s 夾在 180–720(設計文件第 4 節)。 */

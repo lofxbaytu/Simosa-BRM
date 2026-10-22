@@ -185,7 +185,8 @@ public class ClutterAndControlTests
         Assert.Equal(6.0, ack.Value);
         Assert.Equal("a1", ack.ReqId!.Value.GetString());
         Assert.Equal(6.0, x.Controls.RangeNm);
-        Assert.Equal(75.0, x.DisplayGrid.PulseM);
+        Assert.Equal(x.Config.ArpaPulseM, x.DisplayGrid.PulseM); // 6 nm 由 ARPA 影像重取樣:格表與 status 都用 ARPA 的 45 m 脈衝(MultiClientRangeTests.StatusPulseMatchesPulseUsedForImage)
+        Assert.Equal(45.0, x.Status().PulseLengthM);
         Assert.True(x.Apply("{\"cmd\":\"range\",\"value\":0.75}").Ok);
         Assert.Equal(10.5, x.DisplayGrid.PulseM);
         Assert.False(x.Apply("{\"cmd\":\"range\",\"value\":200}").Ok);

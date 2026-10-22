@@ -58,15 +58,18 @@ SimCore.Host ──ws 8765 (state 25 Hz, event, assessment)──▶ Visual.Shar
 
 ## 4. 狀態契約與時間平滑
 
-- 狀態幀:`src/Contracts/state.schema.json`(C# 型別 `SimCore.Contracts.OwnShipState`)。視景使用:`t`、`pos`、`heading`、`cog`、`sog`、`rot`、`rudder`、`rpm`、`telegraph`、`wind`、`visibility_nm`、`flags`、`targets[]`(`pos/heading/cog/sog/rot/loa/beam/draft/shipType/lights/aisOn`;**AIS 關閉者仍畫**,視景是「眼睛看到的」)、`tugs[]`(`pos/mode/status/direction_deg/lineParted`)、`anchors[]`(`side/status/position`)、`berth`(只讀;碰墊/繫船柱來自區域檔)、`radarEnvironment`(雨區;**只在關鍵幀帶出**,插值器保留最後一次、時間倒退時清除)、`scenario.id`(查區域對照)。`truth/sensors/alerts` 可解析但視景不顯示(學員端不應看到真值)。
+- 狀態幀:`src/Contracts/state.schema.json`(C# 型別 `SimCore.Contracts.OwnShipState`)。視景使用:`t`、`utc`(選填;日夜,見下)、`pos`、`heading`、`cog`、`sog`、`rot`、`rudder`、`rpm`、`telegraph`、`wind`、`visibility_nm`、`flags`、`targets[]`(`pos/heading/cog/sog/rot/loa/beam/draft/shipType/lights/aisOn`;**AIS 關閉者仍畫**,視景是「眼睛看到的」)、`tugs[]`(`pos/mode/status/direction_deg/lineParted`)、`anchors[]`(`side/status/position`)、`berth`(`id`、`lines[]{id, status, tension_t, mbl_t, bollardId}` → 繫纜;碰墊/繫船柱位置來自區域檔)、`radarEnvironment`(雨區;**只在關鍵幀帶出**,插值器保留最後一次、時間倒退時清除)、`scenario.id`(查區域對照)。`truth/sensors/alerts` 可解析但視景不顯示(學員端不應看到真值)。
 - 事件框 `{"type":"event", "event":{"kind":…}}` 與 `{"type":"assessment"}` 只記最近事件 kind 於 HUD。
 - **插值/外推**(`StateInterpolator`):保留最近 8 幀的 (t, 到達牆鐘);速率 = Δt/Δ牆鐘(即時 1、凍結 0、timescale 10 → 10);顯示時間 = 最新 t + 速率 × (now − 到達 − 0.08 s 緩衝);落在兩幀間線性插值(航向走最短弧);超出最新幀以 COG/SOG/ROT 外推最多 0.25 s,之後凍結並標示 `Stalled`;t 倒退(重設/倒帶/重播)或前跳 > 5 s(快照還原)清空歷史。目標船以 id 配對插值,只在單側者取最新幀。
   - **成批到達**(啟動第一幀、網路停頓後 TCP 一次送達數幀、GC 卡頓):同牆鐘(間隔 ≤ 2 ms)到達的幀不含速率資訊,速率改以「有效間隔的中位數 × 間隔數」作 Δ牆鐘下限(有效間隔不到一半時沿用前值;沒有成批幀時直接用最舊/最新兩幀),避免估到 2–3 倍;顯示時間另外保證單調不減(暫停而非倒退;Reset 例外)。凍結(Δt = 0)直接判為速率 0。測試:`StateInterpolatorTests`、`StateInterpolatorBurstTests`。
+- **UTC 與日夜**:核心 `state.utc`(ISO 8601,毫秒,Z)= 練習開始 UTC + `t`;開始時刻為情境 `startTimeUtc`,未給時為主控程序載入情境的實際時鐘(`EngineOptions.Clock`;引擎寫回情境,紀錄標頭因此帶有它、重播沿用而非現在時間;不進雜湊)。`--daynight=auto` 時 `EnvironmentMapper` 優先用 `state.utc` 算太陽高度,無(舊核心、未設時鐘)或不可解析時退回 `--start-utc` + 模擬秒數,兩者皆無為白天;day/dusk/night 固定。測試:`EnvironmentUtcTests`;核心端 `StateUtcTests`(含重播一致、雜湊不變)。
+- **繫纜**(`MooringLinePresentation`,純計算;Godot `MooringLinesNode`):`berth.lines[]` 中 fast/heaving/slacking 者自導纜孔畫到區域檔泊位(`state.berth.id` 對應的 `BerthGeometry`,找不到時搜所有泊位)的繫船柱 `bollardId`(碼頭面 3 m + 0.4 m);stowed/letGo 不畫;**parted 不畫線**,在導纜孔處紅球閃爍 3 s(4 Hz)。張力比 = `tension_t / mbl_t`:< 50 % 纜繩本色、50–80 % 黃、> 80 % 紅。契約無導纜孔座標,**導纜孔為估計**:艏/艉依纜名(`head/bow/fwd*/fore*` → 艏、`stern/aft*` → 艉;情境庫慣例 HEAD/FWDSPRING/AFTSPRING/STERN;無法判斷時依繫船柱在船體座標的前後),舷側依繫船柱所在側,位置與 SimCore `ScenarioBodyPoint` 具名點相同(±0.40 Lpp、∓0.45 B),高度為上甲板(型深 − 吃水)。繫船柱找不到者不畫(HUD 顯示「繫纜 畫出/受力」)。測試:`MooringLinePresentationTests`。
 - **拖船姿態**(`TugPresentation`):`direction_deg` 為力方向(相對船艏),核心把 push 拖船放在力方向反側、pull 放在力方向一個纜長處,所以 push/pull 艏向都 = 自船艏向 + 力方向(推頂艏頂自船、纜線自艏;拖拉艏背向自船、纜線自艉);standby/free 與自船同向。測試:`TugPresentationTests`。
 
 ## 5. 區域與船模資料
 
 - 區域對照 `data/visual/scenario-areas.json`:`state.scenario.id` 的前綴(最長相符)→ `data/areas/<id>.json` 清單;`--area=` 可覆寫(逗號分隔 id 或路徑)。未列的情境只畫海面與船。
+- **泊位後備**(審查發現 utc-mooring:E13/E14/E17 的對照原本對到不含泊位的區域檔,繫纜永遠畫不出來):`state.berth` 不帶泊位檔路徑,所以 `AreaCatalogue.AreasForScenario(scenarioId, berthId)` / `WithBerthArea` 在對照表(或 `--area`)的區域檔都不含 `state.berth.id` 時,掃描 `data/areas/*.json` 的 `berths[].id` 補上泊位所在的區域(`AreaIdsWithBerth`);泊位稍後才出現在狀態中或 id 改變時 `Main.EnsureHarbour` 重建一次港口幾何,仍找不到則 HUD/備註警告「泊位 … 找不到區域檔」。對照表仍應與情境 `berth.file` 一致:`ScenarioBerthAreaTests` 逐一載入 `data/scenarios` 中有 berth 的情境,斷言對照表區域含該泊位與所有 bollard id,並斷言空對照表時後備亦能補上。煙霧模式用合成泊位 `SMOKE-BERTH`,不走後備。
 - `AreaLoader` 寬鬆讀取各區域檔變體:`land[].points`([lat, lon] 陣列;`height_m`)、`breakwaters[].polygon`(預設高 5 m;`head` → 堤頭紅燈)、`shoals[]`(水下面,鳥瞰可見)、`berths[]`(`quay` 線、`waterSide`、`fenders[].chainage_m`、`bollards[].chainage_m/setback_m` → 沿碼頭線定位;碼頭往陸側擠出 30 m、高 3 m)、`channel/fairway/holdingArea/berthSpeedZone/anchorages/speedLimitZones/lanes`(鳥瞰視角的示意線)、`leadingLights`(前/後導燈,白色發光球)、`pilotStations/harbourEntrance(s)/route`(標記)。單位全部轉成情境 ENU(m)。
 - 船模:`HullParameters.FromParticulars(particulars, loading)` 取 LOA/Lpp/B/型深/吃水/球艏/方艉、`bridge.mastTopAboveBase_m`、`bridge.eyeHeightAboveBase_m`(**兩船目前皆為 null → 估計** 型深 + 3 層 × 2.8 m + 1.7 m;FSB1 ≈ 18.1 m、FSB2 ≈ 21.2 m,取得實測眼高後填入 particulars 即自動採用)。上層建築在艉段(前壁 −0.28 LOA、後壁 −0.47 LOA)、艏樓 0.12 LOA、駕駛台眼位 x = 前壁 − 1 m、翼橋 ±B/2。目標船以 `ForTarget(loa, beam, draft, shipType)` 近似(漁船/引水船駕駛台在前段)。`ProceduralHullBuilder`:16 個剖面(低面數 8)、U 形剖面、艏拋物線收尖、艉漸縮至方艉;輸出船殼/甲板/上層建築/艏樓/桅五個網格(FSB1 約 340 三角形)。**待替換為實船模型(glTF 放 `assets/` 或 `data/visual/`)**。
 
@@ -96,7 +99,7 @@ SimCore.Host ──ws 8765 (state 25 Hz, event, assessment)──▶ Visual.Shar
 | `--data-dir` | 專案根目錄(含 data/);預設自專案路徑往上找 `Directory.Build.props` 或 `SIMOSA_BRM_ROOT` | 自動 |
 | `--area` | 區域 id 或檔案,逗號分隔 | 依 scenario-areas.json |
 | `--ship` / `--loading` | FSB1 / FSB2;full / ballast | FSB1 / full |
-| `--daynight` / `--start-utc` | `auto`(依 `--start-utc` + 模擬秒數 + 自船經緯度算太陽高度)/ `day` / `dusk` / `night`;ISO 8601 | auto(無 start-utc 時 = 白天) |
+| `--daynight` / `--start-utc` | `auto`(依 `state.utc` 與自船經緯度算太陽高度;狀態無 utc 時依 `--start-utc` + 模擬秒數)/ `day` / `dusk` / `night`;ISO 8601 | auto(皆無時 = 白天) |
 | `--fullscreen`、`--no-hud` | 旗標 | 視窗、HUD 開 |
 | `--smoke[=N]`、`--smoke-out` | 無頭煙霧模式(第 9 節) | — |
 
@@ -121,9 +124,9 @@ Godot 預設把編輯器設定、匯出範本、`user://`(紀錄、快取)寫到
 
 ## 9. 建置、測試與無頭驗證
 
-- **Visual.Shared**:在 `SimosaBRM.sln` 內,`dotnet build SimosaBRM.sln -c Release && dotnet test SimosaBRM.sln -c Release --no-build`(CI 的 .NET 工作自動涵蓋;`tests/Visual.Shared.Tests` 105 個測試:解析、插值/外推(含成批到達)、座標、拖船姿態、品質偵測與遲滯、暖機再偵測、啟動渲染器、持久化、區域幾何與三角化、船模參數與網格繞向、視角、啟動參數、環境對應、太陽位置、煙霧報告、WebSocket 連線/重連(本機 HttpListener))。
+- **Visual.Shared**:在 `SimosaBRM.sln` 內,`dotnet build SimosaBRM.sln -c Release && dotnet test SimosaBRM.sln -c Release --no-build`(CI 的 .NET 工作自動涵蓋;`tests/Visual.Shared.Tests` 135 個測試:解析、插值/外推(含成批到達)、座標、拖船姿態、繫纜呈現、state.utc 日夜、品質偵測與遲滯、暖機再偵測、啟動渲染器、持久化、區域幾何與三角化、船模參數與網格繞向、視角、啟動參數、環境對應、太陽位置、煙霧報告、WebSocket 連線/重連(本機 HttpListener))。
 - **Visual.Godot**:不在 sln(無 Godot 的 CI 不建置)。`dotnet build src/Visual.Godot/Visual.Godot.csproj`(Godot.NET.Sdk 4.5.1 自 nuget.org)→ `.godot/mono/temp/bin/Debug/SimosaBRM.Visual.Godot.dll`。Godot 從 `Debug` 載入,故 Godot 執行前用 Debug 建置(或在編輯器按 Build)。
-- **無頭煙霧驗證**:`tools/visual-headless-check.sh --godot <Godot> [--frames 200] [--quality low]`(Windows `.ps1`):dotnet build → `--headless --import` → `--headless -- --smoke=N`:載入 E05 示意區域(`kaohsiung-approach`、`kaohsiung-south-approach`)與假狀態序列(`SmokeSequence`:自船 045/8 kn、4 艘目標、拖船、雨區關鍵幀每秒一次),每幀記錄處理時間、節點數、畫出的目標數、自船位置/SOG 到 `build/visual/smoke.json`。煙霧時鐘固定每顯示幀 1/60 s(N 幀 = N/60 s 模擬時間,與主機幀距無關)。`ok`(與幀數無關;`--smoke=30` 亦可)= 有幀、每幀節點 > 0、港口網格 > 0、顯示時間單調不減且有前進、無 `ERROR` 開頭備註;模擬前進 ≥ 0.5 s 時再檢查自船位移 ≈ SOG × Δt(0.5–1.5 倍);失敗原因附在 `notes`(「ok 失敗:…」);結束碼 0/1。測試:`SmokeReportCriteriaTests`。
+- **無頭煙霧驗證**:`tools/visual-headless-check.sh --godot <Godot> [--frames 200] [--quality low]`(Windows `.ps1`):dotnet build → `--headless --import` → `--headless -- --smoke=N`:載入 E05 示意區域(`kaohsiung-approach`、`kaohsiung-south-approach`)與假狀態序列(`SmokeSequence`:自船 045/8 kn、4 艘目標、拖船、雨區關鍵幀每秒一次、每幀帶 `utc`;**t ≥ 2 s 起帶示意泊位 `SMOKE-BERTH` 與四條繫纜**(正常/黃/紅/斷纜各一;泊位幾何 `SmokeSequence.SmokeBerthArea()` 沿航跡左舷 22 m,Main 於煙霧模式併入港口幾何,船仍直線前進),每幀記錄處理時間、節點數、畫出的目標數、自船位置/SOG、受力與畫出的繫纜數(`mooringLinesInState/Drawn`)到 `build/visual/smoke.json`。煙霧時鐘固定每顯示幀 1/60 s(N 幀 = N/60 s 模擬時間,與主機幀距無關)。`ok`(與幀數無關;`--smoke=30` 亦可)= 有幀、每幀節點 > 0、港口網格 > 0、顯示時間單調不減且有前進、無 `ERROR` 開頭備註;模擬前進 ≥ 0.5 s 時再檢查自船位移 ≈ SOG × Δt(0.5–1.5 倍);最後一幀狀態有受力繫纜時必須有畫出的繫纜(本容器實測:最後幀受力 3 / 畫出 3,節點 119 → 120);失敗原因附在 `notes`(「ok 失敗:…」);結束碼 0/1。測試:`SmokeReportCriteriaTests`。
 - **本容器實跑結果(2026-10-22,Godot 4.5.1 .NET headless,無 GPU)**:200 幀、111 個節點、2 個區域 2 個網格 44 三角形、自船 340 三角形、畫出目標 2/4(其餘超出低品質 3.5 nm 繪製距離)、平均 0.15 ms、最大 12.55 ms(第一幀建立幾何),`ok=true`,結束碼 0。headless 幀時間只證明功能與無例外,**不代表內顯機幀率**。
 - **匯出**:`export_presets.cfg` 已有 Windows Desktop 與 Linux 預設(輸出到 `build/visual/export/`);本容器無匯出範本(`.cache/godot/xdg/data/godot/export_templates/4.5.1.stable.mono/` 缺 `linux_release.x86_64`),`--export-release` 失敗,**列為待辦**:取得 `Godot_v4.5.1-stable_mono_export_templates.tpz` 後放入該目錄(Windows:`.cache\godot\appdata\roaming\Godot\export_templates\4.5.1.stable.mono\`)再執行 `tools/visual-headless-check.ps1 -Export`。
 
@@ -149,8 +152,8 @@ Godot 預設把編輯器設定、匯出範本、`user://`(紀錄、快取)寫到
 1. 無實船 3D 模型:FSB1/FSB2 與所有目標船為程序化船體(第 5 節);眼高為估計值(particulars `bridge.eyeHeightAboveBase_m` 待填)。
 2. 港口為示意:區域檔為手繪概略輪廓(誤差可達數百公尺),無建物/岸上細節、無燈浮標與航標(區域檔尚無航標資料);碼頭寬度固定 30 m;ENC 取得後需改以海岸線/碼頭線資料產生。
 3. 海面為單層 Gerstner(2–3 組波)無次表面散射與船行波/舵螺槳水花;無潮汐水位變化。
-4. 天候:雨為相機周圍粒子示意(中/高品質);霧為均勻指數霧;無雲層/閃電;日夜依 `--start-utc`(狀態無時間欄位;建議之後在 state 加 `utc`)。
-5. 錨鏈為直線(非懸鏈線);拖船纜線連到自船側面近似點(契約無連接點座標);繫纜(berth.lines)未畫。
+4. 天候:雨為相機周圍粒子示意(中/高品質);霧為均勻指數霧;無雲層/閃電。日夜已改依 `state.utc`(第 4 節);情境無 `startTimeUtc` 且主控程序未給 `EngineOptions.Clock` 時核心省略 `utc`,視景退回 `--start-utc`(**待辦**:`SimCore.Host/Program.cs` 建立引擎時傳 `new EngineOptions { Clock = TimeProvider.System }`,使無 `startTimeUtc` 的情境亦以實際時鐘代入 — 一行,與既有 NMEA 起始時刻一致)。
+5. 錨鏈為直線(非懸鏈線);拖船纜線連到自船側面近似點(契約無連接點座標);繫纜已畫(第 4 節)但**導纜孔為估計**(契約 `berth.lines[]` 無導纜孔座標;若日後 state 帶 `fairlead {x, y}` 或視景讀情境檔即可改用真值),纜線為直線無懸垂、無絞機/纜樁細節。
 6. 渲染器無法執行中切換;自動模式第一次啟動用 Forward+,偵測為低時寫入 `quality.json`,下次 `auto` 啟動由腳本自動改用 Compatibility(第 6 節);本次執行期間只套用縮放/距離等設定。
 7. 匯出範本未取得,未產生可散布的 .exe(第 9 節);船上部署時由更新包(第 5.5 節)攜帶已匯出的視景程式。
 8. 內顯機實測幀率尚未進行(第 10 節步驟);headless 數據只證明功能。

@@ -6,13 +6,16 @@ using System.Threading.Channels;
 
 namespace SimosaBRM.Sensors.Radar.Net;
 
-/// <summary>收到的控制指令(由處理執行緒取出並交給對應的 <see cref="RadarUnit"/>,維持單執行緒確定性)。</summary>
-public readonly record struct RadarCommandRequest(string RadarId, Guid ClientId, string Json);
+/// <summary>
+/// 收到的控制指令(由處理執行緒取出並交給對應的 <see cref="RadarUnit"/>,維持單執行緒確定性)。
+/// <paramref name="Disconnected"/> 為客戶端離線通知(同一佇列,處理執行緒據以清理該客戶端的量程設定)。
+/// </summary>
+public readonly record struct RadarCommandRequest(string RadarId, Guid ClientId, string Json, bool Disconnected = false);
 
 /// <summary>
 /// 雷達 WebSocket 伺服器(System.Net.HttpListener,無額外套件):路徑 /radar/x 與 /radar/s。
-/// 送出:二進位影像幀(每客戶端容量 8、慢速客戶端丟最舊幀)與 JSON 文字框(status/tracks/event/ack,容量 256)。
-/// 接收:JSON 控制指令(放入 <see cref="Commands"/> 佇列)。先嘗試所有介面,失敗時退回 localhost(與 SimCore.Host 相同作法)。
+/// 送出:二進位影像幀(每客戶端容量 8、慢速客戶端丟最舊幀;依客戶端量程分送,<see cref="SendFrame"/>)與 JSON 文字框(status/tracks/event/ack,容量 256)。
+/// 接收:JSON 控制指令(放入 <see cref="Commands"/> 佇列;離線時放入離線通知)。先嘗試所有介面,失敗時退回 localhost(與 SimCore.Host 相同作法)。
 /// </summary>
 public sealed class RadarWebSocketServer : IAsyncDisposable
 {
@@ -46,6 +49,10 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
     }
 
     public int ClientCount(string radarId) => _clients.Values.Count(c => string.Equals(c.RadarId, radarId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>某台雷達目前連線的客戶端(依連線識別排序,順序確定)。</summary>
+    public List<Guid> ClientIds(string radarId)
+        => _clients.Where(kv => string.Equals(kv.Value.RadarId, radarId, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Key).OrderBy(g => g).ToList();
 
     public void Start()
     {
@@ -92,6 +99,12 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
     public void SendJson(Guid clientId, byte[] json)
     {
         if (_clients.TryGetValue(clientId, out var c)) c.Json.Writer.TryWrite(json);
+    }
+
+    /// <summary>送影像幀給單一客戶端(每客戶端量程不同時由主控程式分送)。</summary>
+    public void SendFrame(Guid clientId, byte[] frame)
+    {
+        if (_clients.TryGetValue(clientId, out var c)) c.Frames.Writer.TryWrite(frame);
     }
 
     private async Task AcceptLoopAsync()
@@ -141,6 +154,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         client.Frames.Writer.TryComplete();
         client.Json.Writer.TryComplete();
         _clients.TryRemove(id, out _);
+        Commands.Enqueue(new RadarCommandRequest(radarId, id, "", Disconnected: true));
         try
         {
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)

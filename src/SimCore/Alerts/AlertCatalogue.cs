@@ -24,7 +24,7 @@ public enum AlertCategory
 }
 
 /// <summary>
-/// 警報狀態(MSC.302(87) 第 8 節與 IEC 62923-1 狀態圖;responsibility transferred 本版略):
+/// 警報狀態(MSC.302(87) 第 8 節與 IEC 62923-1 狀態圖;responsibility transferred 以 <see cref="AlertRecord.TransferredTo"/> 表示,不另設狀態):
 /// activeUnacknowledged(閃爍 + 聲響)→ activeSilenced(靜音 silence_s 後重響)→ activeAcknowledged(恆亮)
 /// → 條件解除 → normal;未確認即解除者為 rectifiedUnacknowledged(閃爍、無聲響),確認後 normal。
 /// </summary>
@@ -51,6 +51,30 @@ public static class AlertIds
     public const string HeadingMonitor = "headingMonitor";
     /// <summary>BNWAS:第一階段 caution(視覺)、第二階段起 alarm(駕駛台聲響;第三階段另發 bnwasStage 事件)</summary>
     public const string Bnwas = "bnwas";
+}
+
+/// <summary>
+/// 工作站(MSC.302(87) 第 6 節 Category A「只能在相關工作站確認」與 responsibility transferred 的站別):
+/// 駕駛台主工作站 bridge(預設;未帶 station 的指令視為在此)、左/右翼 portWing/stbdWing、機控室 ecr。
+/// </summary>
+public static class AlertStations
+{
+    public const string Bridge = "bridge";
+    public const string PortWing = "portWing";
+    public const string StbdWing = "stbdWing";
+    public const string Ecr = "ecr";
+
+    /// <summary>所有站(固定順序;雜湊以索引表示)</summary>
+    public static readonly string[] All = { Bridge, PortWing, StbdWing, Ecr };
+    /// <summary>駕駛台工作站(主站與兩翼)</summary>
+    public static readonly string[] BridgeStations = { Bridge, PortWing, StbdWing };
+
+    public static bool IsKnown(string? station) => station is not null && Array.IndexOf(All, station) >= 0;
+    public static int IndexOf(string? station) => station is null ? -1 : Array.IndexOf(All, station);
+    /// <summary>指令未帶 station 時的站別(bridge)。</summary>
+    public static string Normalize(string? station) => string.IsNullOrEmpty(station) ? Bridge : station;
+    /// <summary>是否為駕駛台三站(省略 = bridge;ecr 與未知站為 false):只有駕駛台上的操作重設 BNWAS(MSC.128(75) 4.1.4)。</summary>
+    public static bool IsBridgeStation(string? station) => Array.IndexOf(BridgeStations, Normalize(station)) >= 0;
 }
 
 /// <summary>警報目錄(固定順序;評估順序與 NMEA 編號以此為準,改動會改變事件序列)。</summary>
@@ -82,6 +106,18 @@ public static class AlertCatalogue
 
     /// <summary>有聲響的優先序(caution 只有視覺)。</summary>
     public static bool IsAudible(AlertPriority p) => p is AlertPriority.EmergencyAlarm or AlertPriority.Alarm or AlertPriority.Warning;
+
+    /// <summary>可轉到機控室的來源設備(機艙類:主機、側推、舵機)</summary>
+    private static readonly string[] EcrSources = { "engine", "thruster", "steering" };
+
+    /// <summary>
+    /// 可轉移責任的目的站(MSC.302(87) 第 7.3 節:只有在接收站能處理時才可轉移):BNWAS 不可轉移(MSC.128 要求在駕駛台);
+    /// 機艙類來源(engine/thruster/steering)可轉到任一站含 ecr;其他(導航感測器、門檻類 Category A)只能在駕駛台三站之間轉移。
+    /// </summary>
+    public static IReadOnlyList<string> TransferTargets(AlertDefinition d)
+        => d.Id == AlertIds.Bnwas ? Array.Empty<string>() : Array.IndexOf(EcrSources, d.Source) >= 0 ? AlertStations.All : AlertStations.BridgeStations;
+
+    public static bool CanTransfer(AlertDefinition d, string station) => TransferTargets(d).Contains(station, StringComparer.Ordinal);
 }
 
 /// <summary>單一警報的可變紀錄(進快照;state.alerts[] 由此產生)。</summary>
@@ -101,8 +137,20 @@ public sealed class AlertRecord
     public long EscalateFromTick { get; set; }
     /// <summary>成立次數</summary>
     public int Count { get; set; } = 1;
+    /// <summary>原始負責站(成立時的相關工作站;本版所有警報皆為 bridge)</summary>
+    public string Station { get; set; } = AlertStations.Bridge;
+    /// <summary>責任已轉移到的站(null = 未轉移;MSC.302(87) responsibility transferred)</summary>
+    public string? TransferredTo { get; set; }
 
     [JsonIgnore] public AlertDefinition Definition => AlertCatalogue.Find(Id)!;
+    /// <summary>目前負責確認的站(轉移後為接收站)</summary>
+    [JsonIgnore] public string ResponsibleStation => TransferredTo ?? Station;
+    /// <summary>
+    /// 可否在 <paramref name="station"/> 確認:已轉移責任的警報只能在接收站確認;Category A 只能在負責站(相關工作站)確認;
+    /// Category B 未轉移時任一站(中央警報面板)皆可(MSC.302(87) 第 6 節)。
+    /// </summary>
+    public bool CanAcknowledgeAt(string station)
+        => TransferredTo is not null ? station == TransferredTo : Definition.Category != AlertCategory.A || station == Station;
     [JsonIgnore] public bool Active => State is AlertState.ActiveUnacknowledged or AlertState.ActiveSilenced or AlertState.ActiveAcknowledged;
     [JsonIgnore] public bool Audible => State == AlertState.ActiveUnacknowledged && AlertCatalogue.IsAudible(Priority);
 }

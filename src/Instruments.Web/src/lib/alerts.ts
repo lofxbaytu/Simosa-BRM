@@ -2,7 +2,8 @@
 //  - 解析:state.alerts[] / bnwas / truth / sensors / autopilot(state-parser 呼叫 applyAlertBlocks;舊狀態沒有時不記問題);
 //  - 排序與顯示:sortAlerts(優先序 → 成立時間 → 編號,與核心相同)、alertVisual(IEC 62288 的顏色/圖示概念:
 //    alarm 紅三角、warning 黃橙圓、caution 黃方;未確認閃爍、caution 不閃;靜音、已解除未確認的附加圖示);
-//  - 指令:alertAcknowledge / alertSilence / bnwasMode / bnwasReset(command.schema.json);
+//  - 指令:alertAcknowledge(可帶 station)/ alertSilence / alertTransfer / bnwasMode / bnwasReset(command.schema.json);
+//  - 工作站(docs/design/sensors-alerts.md 第 3.6 節):parseStation(?station=)、canAcknowledgeAt(Category A 與已轉移者只能在負責站確認)、transferTargets;
 //  - BNWAS 顯示(階段、倒數、等級);
 //  - 由事件流推得警報歷史與 BNWAS 階段次數(教官站);事件文字與嚴重度(sim-event.ts 呼叫);
 //  - 真值 vs 指示值比較列(教官站)。
@@ -14,11 +15,13 @@ import {
   ALERT_CATEGORIES,
   ALERT_PRIORITIES,
   ALERT_STATES,
+  ALERT_STATIONS,
   BNWAS_MODES,
   type AlertCategory,
   type AlertItem,
   type AlertPriority,
   type AlertState,
+  type AlertStation,
   type AutopilotStatus,
   type BnwasMode,
   type BnwasStage,
@@ -55,6 +58,13 @@ export const ALERT_STATE_LABEL: Readonly<Record<AlertState, string>> = {
   activeSilenced: '靜音中',
   activeAcknowledged: '已確認',
   rectifiedUnacknowledged: '已解除・未確認',
+};
+
+export const ALERT_STATION_LABEL: Readonly<Record<AlertStation, string>> = {
+  bridge: '駕駛台',
+  portWing: '左翼',
+  stbdWing: '右翼',
+  ecr: '機控室',
 };
 
 export const ALERT_SOURCE_LABEL: Readonly<Record<string, string>> = {
@@ -153,6 +163,17 @@ export function parseAlertItems(raw: readonly unknown[], issues: string[]): Aler
     if (ack !== undefined) a.acknowledgedAt_s = ack;
     const sil = finite(item['silencedUntil_s']);
     if (sil !== undefined) a.silencedUntil_s = sil;
+    // 工作站(舊核心無此欄位 → 不記問題;列舉外的值記問題並略過)
+    if (item['station'] !== undefined) {
+      const st = oneOf(item['station'], ALERT_STATIONS);
+      if (st) a.station = st;
+      else issues.push(`${path}.station`);
+    }
+    if (item['transferredTo'] !== undefined && item['transferredTo'] !== null) {
+      const st = oneOf(item['transferredTo'], ALERT_STATIONS);
+      if (st) a.transferredTo = st;
+      else issues.push(`${path}.transferredTo`);
+    }
     out.push(a);
   });
   return sortAlerts(out);
@@ -345,21 +366,59 @@ export function formatCountdown(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
+// ------------------------------------------------------------------ 工作站(MSC.302(87) 第 6、7.3 節)
+
+/** 頁面網址 ?station= → 站別;未給或不明時 bridge(未帶 station 的指令核心也視為 bridge)。 */
+export function parseStation(v: string | null | undefined): AlertStation {
+  return oneOf(v?.trim(), ALERT_STATIONS) ?? 'bridge';
+}
+
+/** 目前負責確認的站(轉移後為接收站;舊核心無 station 欄位時 bridge)。 */
+export function responsibleStation(a: Pick<AlertItem, 'station' | 'transferredTo'>): AlertStation {
+  return a.transferredTo ?? a.station ?? 'bridge';
+}
+
+/**
+ * 可否在 station 確認(與核心 AlertRecord.CanAcknowledgeAt 相同):已轉移責任者只能在接收站;Category A 只能在負責站;
+ * Category B 未轉移時任一站(中央警報面板)皆可。
+ */
+export function canAcknowledgeAt(a: Pick<AlertItem, 'category' | 'station' | 'transferredTo'>, station: AlertStation): boolean {
+  if (a.transferredTo) return station === a.transferredTo;
+  return a.category !== 'A' || station === (a.station ?? 'bridge');
+}
+
+const ECR_SOURCES: ReadonlySet<string> = new Set(['engine', 'thruster', 'steering']);
+const BRIDGE_STATIONS: readonly AlertStation[] = ['bridge', 'portWing', 'stbdWing'];
+
+/** 可轉移責任的目的站(與核心 AlertCatalogue.TransferTargets 相同):BNWAS 不可;機艙類來源可含 ecr;其他只在駕駛台三站之間。 */
+export function transferTargets(a: Pick<AlertItem, 'id' | 'source'>): readonly AlertStation[] {
+  if (a.id === 'bnwas') return [];
+  return ECR_SOURCES.has(a.source) ? ALERT_STATIONS : BRIDGE_STATIONS;
+}
+
 // ------------------------------------------------------------------ 指令
 
-function alertIdArgs(type: 'alertAcknowledge' | 'alertSilence', id?: string): SimCommand {
+function alertIdArgs(type: 'alertAcknowledge' | 'alertSilence', id?: string, station?: AlertStation): SimCommand {
   const trimmed = id?.trim();
-  return trimmed && trimmed !== 'all' ? { type, args: { id: trimmed } } : { type };
+  const args: Record<string, unknown> = {};
+  if (trimmed && trimmed !== 'all') args['id'] = trimmed;
+  if (station && station !== 'bridge') args['station'] = station;
+  return Object.keys(args).length > 0 ? { type, args } : { type };
 }
 
-/** alertAcknowledge:給 id 確認該警報;省略(或 "all")確認全部。 */
-export function alertAcknowledgeCommand(id?: string): SimCommand {
-  return alertIdArgs('alertAcknowledge', id);
+/** alertAcknowledge:給 id 確認該警報;省略(或 "all")確認全部;station 非 bridge 時帶 args.station(bridge 為核心預設,省略)。 */
+export function alertAcknowledgeCommand(id?: string, station?: AlertStation): SimCommand {
+  return alertIdArgs('alertAcknowledge', id, station);
 }
 
-/** alertSilence:靜音 30 s(期滿未確認會重響);省略 id = 全部。 */
-export function alertSilenceCommand(id?: string): SimCommand {
-  return alertIdArgs('alertSilence', id);
+/** alertTransfer:把警報責任轉移到 station(轉回原負責站即解除轉移)。 */
+export function alertTransferCommand(id: string, station: AlertStation): SimCommand {
+  return { type: 'alertTransfer', args: { id: id.trim(), station } };
+}
+
+/** alertSilence:靜音 30 s(期滿未確認會重響);省略 id = 全部;station 非 bridge 時帶 args.station(靜音不受站別限制,核心只用它決定是否視為駕駛台操作重設 BNWAS)。 */
+export function alertSilenceCommand(id?: string, station?: AlertStation): SimCommand {
+  return alertIdArgs('alertSilence', id, station);
 }
 
 /** bnwasMode:value 為模式;dormant_s 夾在 180–720 並取整數。 */
@@ -579,6 +638,18 @@ export function alertEventLabel(e: SimEvent): string | null {
     }
     case 'autopilotTripped':
       return `自動舵脫開(${d['reason'] === 'headingInvalid' ? '電羅經無效' : d['reason'] === 'autopilotFailure' ? '自動舵失效' : String(d['reason'] ?? '?')})`;
+    case 'alertTransferred': {
+      const from = oneOf(d['from'], ALERT_STATIONS);
+      const to = oneOf(d['station'], ALERT_STATIONS);
+      return `警報責任轉移:${text} ${from ? ALERT_STATION_LABEL[from] : '?'} → ${to ? ALERT_STATION_LABEL[to] : '?'}${d['transferredTo'] === null || d['transferredTo'] === undefined ? '(轉回原站)' : ''}`;
+    }
+    case 'radarControl': {
+      const radar = typeof d['radar'] === 'string' ? d['radar'].toUpperCase() : e.itemId?.toUpperCase() ?? '?';
+      const cmd = typeof d['cmd'] === 'string' ? d['cmd'] : '?';
+      const value = finite(d['value']);
+      const id = finite(d['id']);
+      return `雷達 ${radar} 操作:${cmd}${value !== undefined ? ` ${value}` : ''}${id !== undefined ? ` 目標 ${String(id).padStart(2, '0')}` : ''}${d['ok'] === false ? `(失敗${typeof d['error'] === 'string' ? `:${d['error']}` : ''})` : ''}`;
+    }
     default:
       return null;
   }
@@ -604,8 +675,10 @@ export function alertEventSeverity(e: SimEvent): 'info' | 'warning' | 'alarm' | 
     case 'alertSilenced':
     case 'alertAcknowledged':
     case 'alertRectified':
+    case 'alertTransferred':
     case 'bnwasReset':
     case 'bnwasModeChanged':
+    case 'radarControl':
       return 'info';
     default:
       return null;

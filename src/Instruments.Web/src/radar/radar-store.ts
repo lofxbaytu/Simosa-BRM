@@ -1,5 +1,6 @@
 // 雷達頁狀態中樞(不依賴 DOM,可單元測試):訂閱資料來源(真實服務或示範)、保存最新 status/tracks/事件/自船歷史、
-// 操作員顯示設定(PpiSettings)、選取目標、危險/失追確認;把影像幀轉給畫面;依顯示量程與偏心決定伺服器影像量程。
+// 操作員顯示設定(PpiSettings)、選取目標、危險/失追確認;把影像幀轉給畫面;依顯示量程與偏心決定伺服器影像量程
+// (range 指令只改本連線的影像量程,偏心由本頁以較大量程涵蓋;其他客戶端各自獨立)。
 
 import type { SpokeFrame } from './frame.js';
 import {
@@ -171,7 +172,7 @@ export class RadarStore {
     const first = this.status === null;
     this.status = st;
     this.trial = st.trial;
-    // 影像量程:不是本頁要求的值(第一次或其他客戶端改了)→ 顯示量程跟著伺服器
+    // 影像量程為本連線獨立(伺服器每客戶端一份);不是本頁要求的值(第一次連線、情境切換後沿用)→ 顯示量程跟著伺服器
     if (first || this.requestedVideoRange === null || Math.abs(st.range_nm - this.requestedVideoRange) > 1e-9) {
       this.requestedVideoRange = st.range_nm;
       this.settings.displayRangeNm = this.displayRangeForVideo(st.range_nm);

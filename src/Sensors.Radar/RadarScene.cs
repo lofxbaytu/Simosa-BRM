@@ -6,6 +6,12 @@ namespace SimosaBRM.Sensors.Radar;
 public readonly record struct SceneTarget(string Id, double X, double Y, double HeadingRad, double Loa, double Beam, double HeightM, double RcsM2);
 
 /// <summary>
+/// 本幀收到的 AIS 報告(state.targets[].ais;aisOn 且有報告者):報告位置換算為 ENU(以自船指示位置為原點的切平面;含注入的 aisError),
+/// COG/SOG/MMSI/船名供 ARPA 關聯(docs/design/radar-arpa.md 第 3.1 節)。
+/// </summary>
+public readonly record struct SceneAisReport(string TargetId, int Mmsi, string Name, double X, double Y, double CogDeg, double SogKn, double HeadingDeg);
+
+/// <summary>
 /// 一個狀態幀對雷達而言的場景:
 /// 回波幾何用真值(state.truth;無真值時用指示值):天線隨船實際轉動,目標與陸地的物理位置為真;
 /// ARPA 穩定化(相對 → 真方位、相對 → 地理位置、真向量)用指示值(電羅經航向、GNSS 位置、COG/SOG),
@@ -37,6 +43,8 @@ public sealed class RadarScene
     public IReadOnlyList<SceneTarget> Targets { get; init; } = Array.Empty<SceneTarget>();
     /// <summary>原始目標真值(主控程式比對 ARPA 誤差用;學員端不輸出)</summary>
     public IReadOnlyList<TargetState>? TruthTargets { get; init; }
+    /// <summary>AIS 報告(AIS 關閉或無報告的目標不在此;順序同 state.targets[])</summary>
+    public IReadOnlyList<SceneAisReport> AisReports { get; init; } = Array.Empty<SceneAisReport>();
     public LoadingCondition Loading { get; init; } = LoadingCondition.Full;
     public double? DraftMeanM { get; init; }
     /// <summary>情境雷達環境(state.radarEnvironment:雨區與海況;情境未給時 null)</summary>
@@ -48,10 +56,20 @@ public sealed class RadarScene
         var truthPos = s.Truth?.Pos ?? s.Pos;
         var truthHeading = s.Truth?.Heading ?? s.Heading;
         var targets = new List<SceneTarget>(s.Targets?.Count ?? 0);
+        var ais = new List<SceneAisReport>();
         if (s.Targets is { } ts)
+        {
+            SimCore.Geo.LocalTangentPlane? ltp = null;
             foreach (var t in ts)
+            {
                 targets.Add(new SceneTarget(t.Id, t.Pos.X, t.Pos.Y, Units.DegToRad(t.Heading), Math.Max(1.0, t.Loa), Math.Max(0.5, t.Beam),
                     TargetModel.HeightM(t.ShipType, t.Loa), TargetModel.RcsM2(band, t.ShipType, t.Loa, t.Beam, t.Draft)));
+                if (!t.AisOn || t.Ais is not { } a) continue;
+                ltp ??= new SimCore.Geo.LocalTangentPlane(s.Pos.Lat, s.Pos.Lon);
+                var (dx, dy) = ltp.ToLocal(a.Lat, a.Lon);
+                ais.Add(new SceneAisReport(t.Id, a.Mmsi, a.Name, s.Pos.X + dx, s.Pos.Y + dy, a.Cog, a.Sog, a.Heading));
+            }
+        }
         return new RadarScene
         {
             T = s.T,
@@ -75,6 +93,7 @@ public sealed class RadarScene
             Faults = s.Faults ?? Array.Empty<string>(),
             Targets = targets,
             TruthTargets = s.Targets,
+            AisReports = ais,
             Loading = s.Loading,
             DraftMeanM = s.Draft is { } d ? (d.Fore + d.Aft) / 2.0 : null,
             RadarEnvironment = s.RadarEnvironment,

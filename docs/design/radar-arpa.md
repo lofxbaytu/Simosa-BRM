@@ -25,7 +25,7 @@ SimCore.Host ──ws://127.0.0.1:8765(state 25 Hz)──► SimStateClient ─�
 ```
 
 - **只讀核心**:不修改 SimCore;以 ProjectReference 取得 `OwnShipState`/`TargetState`、`Encounter`(CPA/TCPA/BCR 同一定義)、`LocalTangentPlane`、`ShipParticulars`、`ScenarioLoader`(讀情境種子與起始 UTC)與 Gateway.Nmea 的 `NmeaSentence`。
-- **確定性**:天線方位由模擬時間決定(方位線全域序號 = ⌊t × rpm/60 × 2048⌋);每格雜訊/雜波/雨起伏由 SplitMix64(種子, 方位線序號, 格號)查 65536 筆種子表;偵測與追蹤以有序清單處理。同種子、同狀態序列、同指令序列 → 位元組相同的影像與相同的追蹤 JSON(`SameSeedGivesIdenticalImagesAndTracks`)。種子:`--seed` 或情境檔 `seed`(E05 = 20260505),讀不到時為情境代號 FNV-1a。雷達狀態不進核心雜湊鏈(雷達是核心狀態的純函數 + 本地操作員設定);雷達控制指令目前未寫入核心紀錄(見第 8 節限制)。
+- **確定性**:天線方位由模擬時間決定(方位線全域序號 = ⌊t × rpm/60 × 2048⌋);每格雜訊/雜波/雨起伏由 SplitMix64(種子, 方位線序號, 格號)查 65536 筆種子表;偵測與追蹤以有序清單處理。同種子、同狀態序列、同指令序列 → 位元組相同的影像與相同的追蹤 JSON(`SameSeedGivesIdenticalImagesAndTracks`)。種子:`--seed` 或情境檔 `seed`(E05 = 20260505),讀不到時為情境代號 FNV-1a。雷達內部狀態不進核心雜湊鏈(雷達是核心狀態的純函數 + 本地操作員設定);學員雷達操作由雷達服務轉送為 `radarControl` 指令寫入核心 `input` 行(第 5.1 節):無情境引擎時雜湊不變,有情境引擎時其事件序號計入雜湊(與 `acknowledge` 相同,同一 `input` 序列必得同雜湊;`ScenarioEngineHashCountsRadarControlEventSequenceDeterministically`),重播由 `input` 行重發事件、不需雷達服務(重播限制見第 9 節)。
 - **真值與指示值**:回波物理用 `state.truth`(天線隨船實際轉動、目標真實位置);ARPA 穩定化(相對→真方位、地理位置、真向量)用指示值(電羅經 heading、GNSS pos、COG/SOG)。故電羅經誤差會使北向上畫面旋轉、ARPA 向量偏差(`GyroErrorRotatesNorthUpPictureButNotHeadUp`)。`sensors.headingValid = false` 時 ARPA 停止(無法穩定化),影像只能船首向上。
 - **CCRP**:ARPA 量測以天線位置(駕駛台頂,船舯後 0.30 LOA)取得,換算到船舶參考點(船舯,與 SimCore 相同)後計算距離/方位/CPA,因此可與 `state.targets[].cpa_nm` 直接比較。
 
@@ -39,7 +39,7 @@ SimCore.Host ──ws://127.0.0.1:8765(state 25 Hz)──► SimStateClient ─�
    - 陰影扇區:預設艉向一個(X 174–186°、S 172–188°,衰減 60 dB),參數化(`RadarConfig.ShadowSectors`)。
    - 海雜波方位調制:迎風 +3 dB、背風 −3 dB。
 3. **畫到距離格**(`SpokeRenderer`,只查表):目標段 [近, 遠 + 脈衝長] 以覆蓋比例累加 σ·波束因子·R⁻⁴ 增益表;海雜波平均表(依海況:1 nm 處 X 頻 SS1 5 dB … SS6 30 dB,R⁻³ 至臨界距離 0.3 + 0.25 SS nm 後 R⁻⁷;S 頻 −10 dB);雨(S 頻 −19.5 dB);雜訊 Exp(1);僅含回波格取對數,其餘查 dB 表;STC = sea% × min(60, 40 log(3 nm/R)) dB;FTC = 減去前段 2 倍脈衝長平均的 rain% × 0.9;增益門檻 40 − 0.43 × gain dB;強度 = (dB − 門檻) × 255/30。調諧損失 20((tune − 50)/50)² dB(自動調諧為 0);`radarDegraded` −15 dB。
-4. **脈衝**:≤ 0.75 nm 短(10.5 m)、≤ 3 nm 中(45 m)、≤ 12 nm 中長(75 m)、以上長(180 m)。ARPA 處理影像固定 16 nm、2048 格(14.5 m)、中脈衝 45 m,動態範圍 80 dB(不飽和,質心有次格精度)。
+4. **脈衝**:≤ 0.75 nm 短(10.5 m)、≤ 3 nm 中(45 m)、≤ 12 nm 中長(75 m)、以上長(180 m)。ARPA 處理影像固定 16 nm、2048 格(14.5 m)、中脈衝 45 m,動態範圍 80 dB(不飽和,質心有次格精度)。由 ARPA 影像重取樣的顯示量程(預設 6、12 nm,第 4.1 節)實際以 ARPA 的 45 m 脈衝繪製,`status.pulse/pulseLength_m` 回報 medium/45(`RadarUnit.DisplayPulseFor`)。
 5. **效能**(不變):預算表(R⁻⁴、雜波、STC、陸地、雨、sin/cos)+ 每目標每線少量運算;實測單台(顯示 + ARPA、3 目標、雨、陸地、18 kn 風)每圈 ≈ 0.2 s / 2.5 s(約 8% 單核,`SingleRadarUsesLessThanOneCore`);E05 實跑兩台 + 強制顯示各約 3% 單核。無客戶端時不產生顯示影像。
 
 ### 2.1 情境雨區與海況(scenario `environment.radar` → `state.radarEnvironment`)
@@ -88,6 +88,16 @@ environment:                                     # 情境原點 23.80N 120.05E(R
 - **試操船**:`trialManoeuvre{course, speed, delay(分)}`:自船以目前速度向量航行 delay 後瞬間改為新向量,兩段相對運動各取最近點(`ArpaTracker.TrialCpa`,與暴力取樣比對);`trialCpa_nm`/`trialTcpa_min`。
 - **精度驗收**:`ArpaAccuracyTests`(對遇、右舷橫越、左舷橫越、追越、被追越):擷取後 1 分鐘趨勢 + 3 分鐘穩定追蹤,CPA 誤差 0.0006–0.0070 nm(< 0.02 nm)、TCPA < 0.2 分、航向 < 0.2°、速度 < 0.14 kn;`E05IntegrationTests` 直接接 SimCore 引擎(MMG),T2/T3 CPA 誤差 < 0.005 nm。
 
+### 3.1 AIS 融合(`ArpaTracker.AssociateAis`;IEC 62288 的雷達/AIS 關聯概念)
+
+- **輸入**:`state.targets[].ais`(`aisOn` 且有報告者;含注入的 `aisError`)→ `RadarScene.AisReports`:報告經緯度以自船指示位置為原點換成 ENU,帶 COG/SOG/MMSI/船名;順序同 `targets[]`(確定性)。
+- **關聯**(每個追蹤清單週期 1 Hz,只對 `tracking` 且有估計的目標):距離門檻 |ARPA 預測位置 − AIS 報告位置| ≤ `AisGateM`(150 m)+ `AisGateFraction`(2%)× 距離;
+  兩者 SOG ≥ `AisMinSpeedKn`(2 kn)時再檢查 |ΔCOG| ≤ `AisCourseDeg`(30°)、|ΔSOG| ≤ `AisSpeedKn`(3 kn);取門檻內最近者為候選。同一 MMSI 連續 `AisHits`(3)次 → `associated`(事件 `aisAssociated`)。
+- **保持與解除**:已關聯者以 `AisHoldGateFactor`(2×)的保持門檻維持,期間 `positionOffset_m` 顯示差異(`aisError` 中等偏移);連續 `AisMisses`(3)次失敗才解除。一筆報告最多關聯一個目標:先處理已關聯者(保持優先),再依目標順序處理其餘。
+- **不關聯**:AIS 關閉(報告不在清單)、報告偏離門檻(`aisError` 大偏移)、航向/速度不一致(報告互換而向量不同)。兩目標同向同速且報告互換時,關聯依報告位置交換(MMSI 跟著位置走)。
+- **輸出**:`tracks[].ais{mmsi, name, associated, positionOffset_m}`(無候選時省略);網頁 ARPA 表 `SRC` 欄以 IEC 62288 符號概念顯示 ○ 雷達、◬ 融合(圓內三角;PPI 同)、○△ 有 AIS 候選未關聯,目標資料面板顯示 AIS 名稱/MMSI/位置差。
+- 測試 `AisFusionTests`:正確關聯(追蹤後 2–4 s)、AIS 關閉/大偏移/速度不一致不關聯、中等偏移保持並顯示差異、報告互換。
+
 ## 4. 二進位影像幀(WebSocket binary)
 
 little-endian,標頭 40 位元組 + `spokeCount × cells` 位元組強度:
@@ -126,13 +136,27 @@ for (let j = 0; j < count; j++) {
 }
 ```
 
+### 4.1 每客戶端獨立顯示量程(`RadarUnit.SetClientRange` / `DisplayRanges`)
+
+- `range` 指令只改**發出該指令的連線**的顯示量程(`RadarUnit.ClientRanges`);其他設定(gain/sea/rain/tune/standby/transmit/guardZone/trialManoeuvre/cpaLimits/environment)為整台雷達共用。
+  未下過 `range` 的客戶端用預設量程 `Controls.RangeNm`(預設 6 nm;情境切換 `SetUnits` 沿用預設量程與每客戶端量程);無客戶端的 `Apply`(測試、工具)改預設量程。
+- **偏心**由客戶端處理:網頁依顯示量程與偏心比例以 `videoRangeFor` 向伺服器要較大的影像量程(`radar-store.syncVideoRange`),伺服器不知道偏心。
+- 每個狀態幀,主控程式把各客戶端的量程集合交給 `DisplayRanges`;**相異量程各產生一份影像**(`DisplayView`,格表依量程快取),幀標頭 `range_m` 標示量程,
+  `RadarService.Publish` 依每個客戶端的量程分送(`RadarWebSocketServer.SendFrame`);`status.range_nm` 為各連線自己的量程(`Status(client)`),`range` 的回應只送該連線的 status。
+- **重取樣 vs 繪製**(`RadarUnit.ResamplesFromArpa`):量程 ≤ ARPA 量程(16 nm)且顯示格 ≥ ARPA 格(512 格 vs 16 nm/2048 格 = 14.5 m → 6、12 nm)時,
+  影像由該條 ARPA 影像線最近格重取樣(強度 × 80/30 dB 換成顯示刻度後飽和),不另繪製;這些量程的 `status.pulse/pulseLength_m` 回報 ARPA 處理脈衝(medium、45 m)而非量程脈衝 75 m,
+  使契約值與影像的回波徑向長度一致(`StatusPulseMatchesPulseUsedForImage`:6 nm 回波 ≈ 45 m 脈衝 + 目標長度);更短的量程需要短/中脈衝解析度(ARPA 以 45 m 中脈衝、14.5 m 格處理,0.25–3 nm 會失去細節),
+  更長的量程超出 ARPA 影像,各自以該量程的脈衝與格表繪製。影像只依量程與種子決定,與連線的客戶端無關(`ImagesDoNotDependOnWhichClientsAreConnected`)。
+- 客戶端離線:伺服器把離線通知放進同一指令佇列(`RadarCommandRequest.Disconnected`),處理執行緒 `RemoveClient` 清掉其量程。
+- 效能:單台 X 頻、ARPA 2048 格 + 0.75/6/24 nm 三份影像(一份重取樣、兩份繪製)、3 目標、雨區、陸地、海雜波,每圈處理時間 < 掃描週期(`ThreeClientRangesStayUnderOneCore`;`SingleRadarUsesLessThanOneCore` 仍為單量程基準)。
+
 ## 5. JSON 訊息(radar.schema.json)
 
 連線後伺服器先送 `status`;之後 `tracks`(模擬時間 1 Hz)、`event`、`ack`(只給送指令的客戶端),設定成功後廣播新的 `status`;情境切換(`RadarService.SetUnits`,試操船與 CPA/TCPA 限值回到預設、天線位置可能隨船改變)後下一個狀態幀也對每台新雷達廣播 `status`。客戶端的試操船設定以最新收到的 `status` 或 `tracks` 為準(兩者都在無試操船時省略 `trial`)。
 
 ```json
 {"type":"status","radar":"x","band":"X","frequency_GHz":9.41,"transmitting":true,"standby":false,"failed":false,"degraded":false,"headingValid":true,
- "range_nm":6,"rangeScales":[0.125,0.25,0.5,0.75,1.5,3,6,12,24,48,96],"pulse":"medium","pulseLength_m":75,"gain":70,"sea":50,"rain":0,"tune":50,"autoTune":true,
+ "range_nm":6,"rangeScales":[0.125,0.25,0.5,0.75,1.5,3,6,12,24,48,96],"pulse":"medium","pulseLength_m":45,"gain":70,"sea":50,"rain":0,"tune":50,"autoTune":true,
  "rpm":24,"spokes":2048,"cells":512,"beamwidth_deg":1,"antennaHeight_m":25.02,"antennaFwd_m":-31.65,"antennaStbd_m":0,
  "shadowSectors":[{"from":174,"to":186,"attenuation_dB":60}],"guardZone":{"enabled":true,"inner_nm":0.3,"outer_nm":8,"from":0,"to":360,"relative":true},
  "cpaLimit_nm":1,"tcpaLimit_min":12,"arpaRange_nm":16,"maxTracks":40,"seaState":2,"rainCells":0,"landPolygons":2,"frame":{"magic":"SRAD","version":1,"headerBytes":40}}
@@ -174,6 +198,22 @@ for (let j = 0; j < count; j++) {
 
 任何指令可帶 `reqId`(原樣回傳)。錯誤:`{"type":"ack","cmd":"acquire","ok":false,"error":"追蹤目標已達上限 40"}`。
 
+### 5.1 控制指令進核心紀錄(`radarControl`;規劃書第 8.3 節第 7 類)
+
+雷達服務執行每個控制指令(`getStatus`/`getTracks` 查詢除外,不論成功與否)後,經 `RadarService.ForwardControl` 把它轉送 SimCore.Host
+(`SimStateClient.Send`:狀態訂閱的同一條 WebSocket 改為雙向,斷線期間暫存 256 筆、重連後送出;主控程式 `--no-forward` 可關閉):
+
+```json
+{"type":"radarControl","args":{"radar":"x","client":"3f2504e04f8911d39a0c0305e82c3301","cmd":"range","ok":true,"value":3,"request":{"value":3}}}
+{"type":"radarControl","args":{"radar":"x","client":"…","cmd":"acquire","ok":true,"id":4,"request":{"bearing":45.2,"range":3.1}}}
+{"type":"radarControl","args":{"radar":"s","client":"…","cmd":"acquire","ok":false,"error":"雷達未發射","request":{"bearing":10,"range":2}}}
+```
+
+核心(`SimulationEngine` case `RadarControl`)只寫 `input` 行並發事件 `radarControl`(`source` instructor、`itemId` = 雷達 id、`data` = args;與 `acknowledge` 同類):
+不影響物理;無情境引擎的情境雜湊完全不變,有情境引擎者只有事件序號計入(與 `acknowledge` 相同),重播由 `input` 行重發事件,序列一致、不需雷達服務
+(`RadarControlRecordTests`)。評估 `MetricsCollector.OnRadarControl`:`radar.controlCount`(成功的指令數)、`radar.acquisitions`(`acquire`)、`radar.rangeChanges`(`range`),
+`MetricNames` 與 Python `scenario.py METRIC_NAMES` 同步,可作容許帶指標。教官站事件流以「雷達 X 操作:range 3」顯示。
+
 ## 6. NMEA 0183 輸出(ARPA 結果)
 
 - `$RATTM,nn,距離,方位,T,速度,航向,T,CPA,TCPA,N,,狀態,,hhmmss.ss,取得方式*hh`:狀態 T 追蹤中、Q 擷取中、L 失追;取得方式 A 保護區、M 手動;擷取中/失追時速度/航向/CPA/TCPA 留空。
@@ -201,7 +241,7 @@ dotnet build/bin/Sensors.Radar.Host/Release/net8.0/SimosaBRM.Sensors.Radar.Host.
   --sim ws://127.0.0.1:8765/ --port 8766 --guard 0.3,8 --truth-report 30
 ```
 
-選項見 `--help`:`--radars x,s`、`--seed`、`--areas data/areas`/`--no-areas`、`--environment <json>`(雨區/海況)、`--rpm`、`--cells`、`--no-nmea`、`--nmea-host`、`--talker`、`--duration`、`--truth-report`(教官/驗收:每 N 模擬秒列印 ARPA 與核心真值的位置/CPA/TCPA/航向/速度誤差;結束時列印平均/最大 CPA 誤差與 CPU 使用率)、`--localhost-only`、`--force-display`。情境切換(scenario.id 改變)或時間倒退時重建雷達(新種子)並沿用操作員設定。
+選項見 `--help`:`--radars x,s`、`--seed`、`--areas data/areas`/`--no-areas`、`--environment <json>`(雨區/海況)、`--rpm`、`--cells`、`--no-nmea`、`--nmea-host`、`--talker`、`--duration`、`--truth-report`(教官/驗收:每 N 模擬秒列印 ARPA 與核心真值的位置/CPA/TCPA/航向/速度誤差;結束時列印平均/最大 CPA 誤差與 CPU 使用率)、`--localhost-only`、`--force-display`、`--no-forward`(不把學員雷達操作轉送核心,第 5.1 節)。情境切換(scenario.id 改變)或時間倒退時重建雷達(新種子)並沿用操作員設定與每客戶端量程。
 
 **E05 實跑**(2026-10-17,SimCore.Host `--scenario data/scenarios/E05_pilot_traffic.yaml --no-udp --no-nmea --port 8765`(即時 1×)+ 雷達主控 `--guard 0.3,8 --truth-report 30 --force-display`,205 s 牆鐘、5121 狀態幀):
 
@@ -221,6 +261,8 @@ dotnet build/bin/Sensors.Radar.Host/Release/net8.0/SimosaBRM.Sensors.Radar.Host.
 
 - 無旁瓣、多路徑(lobing)、閃爍(glint)、二次掃描回波、RACON/SART、目標間遮蔽;陸地為多邊形 + 高度,非 DEM。量測雜訊因此比實船小,ARPA 精度偏佳。
 - 海況由真風速推估(核心尚無浪場),情境可以 `environment.radar.seaState` 覆寫;雨區由情境 `environment.radar.rainAreas`(第 2.1 節)、環境檔或教官指令給定,皆為靜態。
-- 雷達控制指令只在雷達服務內,不進核心紀錄;重播時畫面一致(同種子、同狀態),但學員的雷達操作需另行記錄(後續:雷達服務寫 `build/records/*.radar.jsonl` 或經核心 `command` 轉送)。
+- 雷達控制指令經核心 `radarControl` 進紀錄(第 5.1 節),但重播只重發事件、不驅動雷達服務:重播時雷達畫面須由雷達服務以同種子重新訂閱重播中的核心產生,學員當時的量程/增益等設定要從 `input` 行另行重現(後續:重播模式下主控程式讀紀錄的 `radarControl` 行重放到各台雷達)。雷達操作不重設 BNWAS(MSC.128 的「可辨識操作」目前只含舵/車/警報指令)。
+- 每客戶端量程:影像份數 = 相異量程數(最多 11),效能測試以 3 份驗證;重取樣只用於 6/12 nm(其餘繪製),0.25–3 nm 的客戶端各自繪製。偏心在客戶端。
+- AIS 融合為位置/向量門檻的簡化關聯(無協方差加權、無航跡品質),`aisError` 偏移在保持門檻內時仍關聯並以 `positionOffset_m` 顯示;AIS 目標本身(未被雷達追蹤的 AIS 船)不在雷達服務輸出,網頁 PPI 的純 AIS 符號待做。
 - 本機無 Windows URL ACL 時 HttpListener 退回 localhost(與 SimCore.Host 相同);教官筆電直連需 `netsh http add urlacl url=http://*:8766/radar/ user=Everyone`。
-- 網頁 PPI(WebGL/Canvas)、EBL/VRM、平行索引線、AIS 目標融合由網頁端依本協定實作。
+- 網頁 PPI(WebGL/Canvas)、EBL/VRM、平行索引線由網頁端依本協定實作;AIS 融合符號見第 3.1 節。

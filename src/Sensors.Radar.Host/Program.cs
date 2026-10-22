@@ -115,6 +115,8 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 if (options.Duration > 0) cts.CancelAfter(TimeSpan.FromSeconds(options.Duration));
 var simStartT = double.NaN;
 var lastT = 0.0;
+var client = new SimStateClient(options.Sim);
+client.Log += m => Console.WriteLine(m);
 
 void OnState(OwnShipState s)
 {
@@ -129,6 +131,8 @@ void OnState(OwnShipState s)
         if (service is null)
         {
             service = new RadarService(units, server, nmea, t => startUtc.AddSeconds(t)) { ForceDisplay = options.ForceDisplay };
+            // 學員控制指令 → 核心 radarControl(同一條 WebSocket 送回;規劃書第 8.3 節第 7 類、radar-arpa.md 第 5.1 節)
+            if (options.ForwardControl) service.ForwardControl = cmd => client.Send(ContractJson.SerializeToUtf8Bytes(cmd));
             service.EventRaised += (u, e) => Console.WriteLine($"[{u.RadarLetter} {e.T,7:F1}s] {e.Kind}:{e.Message}");
             service.TracksPublished += OnTracks;
         }
@@ -155,15 +159,13 @@ void OnTracks(RadarUnit unit, RadarScene scene)
                           $"CPA {m.ArpaCpaNm:F3}/{m.TruthCpaNm:F3} nm(誤差 {m.CpaErrorNm:F3})  TCPA {m.ArpaTcpaMin:F1}/{m.TruthTcpaMin:F1} 分  航向誤差 {m.CourseErrorDeg:F1}° 速度誤差 {m.SpeedErrorKn:F2} kn");
 }
 
-var client = new SimStateClient(options.Sim);
-client.Log += m => Console.WriteLine(m);
-Console.WriteLine($"連線 SimCore:{options.Sim}");
+Console.WriteLine($"連線 SimCore:{options.Sim}{(options.ForwardControl ? "(學員雷達操作轉送為 radarControl 指令)" : "")}");
 try { await client.RunAsync(OnState, cts.Token); }
 catch (OperationCanceledException) { }
 
 // 結束摘要(效能與 ARPA 對真值)
 var wallS = wall.Elapsed.TotalSeconds;
-Console.WriteLine($"結束:牆鐘 {wallS:F0} s、狀態幀 {client.FramesReceived}、模擬時間 {(double.IsNaN(simStartT) ? 0 : lastT - simStartT):F0} s");
+Console.WriteLine($"結束:牆鐘 {wallS:F0} s、狀態幀 {client.FramesReceived}、模擬時間 {(double.IsNaN(simStartT) ? 0 : lastT - simStartT):F0} s、轉送控制指令 {client.CommandsSent}");
 if (service is not null)
 {
     foreach (var u in service.Units)

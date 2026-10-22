@@ -66,6 +66,8 @@ METRIC_NAMES = (  # Assessment/MetricNames.cs
     "general.duration_s", "general.distance_nm", "general.avgSog_kn", "general.maxSog_kn",
     # 警報與 BNWAS(docs/design/sensors-alerts.md 第 5 節;Python 不計算評估,只供結構檢查辨識名稱)
     "alerts.meanAckTime_s", "alerts.maxAckTime_s", "alerts.unacknowledged", "alerts.escalations", "bnwas.stage2Count", "bnwas.stage3Count",
+    # 雷達操作(規劃書第 8.3 節第 7 類;radarControl 事件,MetricsCollector.RadarMetric)
+    "radar.controlCount", "radar.acquisitions", "radar.rangeChanges",
     # 靠泊/錨泊(BerthingTracker.MetricNameList;physics-tugs-anchors-mooring.md 第 7 節)
     "berthing.maxLateralSpeed_mps", "berthing.maxLateralSpeed_kn", "berthing.maxContactSpeed_mps", "berthing.maxEnergy_kNm",
     "berthing.maxEnergyRatio", "berthing.fenderContacts", "berthing.fenderOverloads", "berthing.quayContacts",

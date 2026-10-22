@@ -21,12 +21,25 @@ public sealed class RadarStepResult
 
 /// <summary>
 /// 一台雷達(X 或 S):天線依模擬時間旋轉(24 rpm、每圈 2048 方位線),每個狀態幀補齊應掃過的方位線,
-/// 每條線產生 ARPA 處理影像(固定 16 nm)與顯示影像(依量程),ARPA 影像經叢集偵測送入追蹤器。
-/// 天線方位由模擬時間決定、亂數由種子決定 → 同種子同狀態序列得到相同影像與追蹤結果(確定性)。
+/// 每條線產生 ARPA 處理影像(固定 16 nm)與各顯示量程的影像,ARPA 影像經叢集偵測送入追蹤器。
+/// 顯示量程為每客戶端獨立(<see cref="SetClientRange"/>;radar-arpa.md 第 4.1 節):每個相異量程只產生一份影像,
+/// 顯示格不細於 ARPA 格的量程(6、12 nm)由 ARPA 影像重取樣,其餘(短量程需短脈衝、長量程超出 ARPA 量程)各自繪製。
+/// 天線方位由模擬時間決定、亂數由種子決定 → 同種子同狀態序列得到相同影像與追蹤結果(確定性;與連線的客戶端無關)。
 /// 非執行緒安全:主控程式以單一執行緒(或鎖)呼叫 Process 與 Apply。
 /// </summary>
 public sealed class RadarUnit
 {
+    /// <summary>一個顯示量程的影像狀態(格表與累積中的幀)</summary>
+    private sealed class DisplayView
+    {
+        public required double RangeNm { get; init; }
+        public required VideoGrid Grid { get; init; }
+        /// <summary>由 ARPA 影像重取樣(不另繪製)</summary>
+        public required bool Resample { get; init; }
+        public byte[]? Frame;
+        public int FrameSpokes, FrameFirst;
+    }
+
     private readonly ulong _seed;
     private readonly NoiseTables _noise;
     private readonly SceneGeometry _geo;
@@ -36,7 +49,11 @@ public sealed class RadarUnit
     private readonly BlobDetector _detector;
     private readonly byte[] _arpaLine;
     private readonly List<Detection> _detections = new();
-    private VideoGrid _display;
+    /// <summary>各量程的顯示影像狀態(鍵 = 量程 nm;未用的量程保留,換回時不必重建格表)</summary>
+    private readonly Dictionary<double, DisplayView> _displays = new();
+    private readonly List<DisplayView> _activeViews = new();
+    /// <summary>每客戶端的顯示量程(nm;未設定的客戶端用 <see cref="RadarControls.RangeNm"/>)</summary>
+    private readonly Dictionary<Guid, double> _clientRanges = new();
     private long _spokeCount = -1;
     private double _lastT = double.NaN;
     private double _nextTracksT;
@@ -49,19 +66,29 @@ public sealed class RadarUnit
     public ArpaTracker Arpa { get; }
     /// <summary>是否產生顯示影像(無客戶端時可關閉以節省 CPU;ARPA 不受影響)</summary>
     public bool DisplayEnabled { get; set; } = true;
+    /// <summary>
+    /// 本幀要產生影像的顯示量程(nm;主控程式依連線客戶端設定,null = 只用預設量程 <see cref="RadarControls.RangeNm"/>)。
+    /// 相異量程各一份影像;幀標頭 range_m 標示量程,由主控程式依客戶端量程分送。
+    /// </summary>
+    public IReadOnlyCollection<double>? DisplayRanges { get; set; }
     public RadarScene? LastScene { get; private set; }
     public bool Failed { get; private set; }
     public bool Degraded { get; private set; }
     public bool Transmitting => Controls.Transmit && !Failed;
     public long SpokeCount => _spokeCount;
     public long Scan => _spokeCount < 0 ? 0 : _spokeCount / Config.Spokes;
-    public VideoGrid DisplayGrid => _display;
+    /// <summary>預設量程的顯示格表(測試用)</summary>
+    public VideoGrid DisplayGrid => ViewFor(Controls.RangeNm).Grid;
     public VideoGrid ArpaGrid => _arpaGrid;
     public double SeaState { get; private set; }
     /// <summary>每個 ARPA 偵測(測試與診斷用)</summary>
     public event Action<Detection>? DetectionObserved;
     /// <summary>累計產生方位線數與耗時(效能量測)</summary>
     public long TotalSpokes { get; private set; }
+    /// <summary>最近一幀實際產生影像的量程數(效能診斷)</summary>
+    public int ActiveDisplayCount => _activeViews.Count;
+    /// <summary>目前有獨立量程設定的客戶端</summary>
+    public IReadOnlyDictionary<Guid, double> ClientRanges => _clientRanges;
 
     public RadarUnit(RadarConfig config, ulong seed, RadarEnvironment? environment = null)
     {
@@ -73,14 +100,53 @@ public sealed class RadarUnit
         _arpaGrid = new VideoGrid(config, config.ArpaRangeNm * Units.MetresPerNauticalMile, config.ArpaCells, config.ArpaPulseM);
         _detector = new BlobDetector(config, _arpaGrid);
         _arpaLine = new byte[config.ArpaCells];
-        _display = MakeDisplayGrid(Controls.RangeNm);
         Arpa = new ArpaTracker(config, _arpaGrid.CellM);
     }
 
     public char RadarLetter => Config.Band == RadarBand.X ? 'X' : 'S';
 
-    private VideoGrid MakeDisplayGrid(double rangeNm)
-        => new(Config, rangeNm * Units.MetresPerNauticalMile, Config.DisplayCells, RadarControls.PulseFor(rangeNm).PulseM);
+    /// <summary>
+    /// 量程是否由 ARPA 影像重取樣:量程不超過 ARPA 量程且顯示格不細於 ARPA 格(預設 512 格 vs 16 nm/2048 格 → 6、12 nm)。
+    /// 更短的量程需要短脈衝解析度、更長的量程超出 ARPA 影像,各自繪製。
+    /// </summary>
+    public bool ResamplesFromArpa(double rangeNm)
+        => rangeNm <= Config.ArpaRangeNm + 1e-9 && rangeNm * Units.MetresPerNauticalMile / Config.DisplayCells >= _arpaGrid.CellM - 1e-9;
+
+    /// <summary>
+    /// 顯示量程實際使用的脈衝:由 ARPA 影像重取樣的量程(<see cref="ResamplesFromArpa"/>,預設 6、12 nm)回波以 ARPA 處理脈衝
+    /// (<see cref="RadarConfig.ArpaPulseM"/>,中脈衝 45 m)繪製,<see cref="Status"/> 回報同一值使 pulseLength_m 與影像的回波長度一致;其餘量程依 <see cref="RadarControls.PulseFor"/>。
+    /// </summary>
+    public (PulseLength Pulse, double PulseM) DisplayPulseFor(double rangeNm)
+        => ResamplesFromArpa(rangeNm) ? (PulseLength.Medium, Config.ArpaPulseM) : RadarControls.PulseFor(rangeNm);
+
+    private DisplayView ViewFor(double rangeNm)
+    {
+        if (_displays.TryGetValue(rangeNm, out var v)) return v;
+        v = new DisplayView
+        {
+            RangeNm = rangeNm,
+            Grid = new VideoGrid(Config, rangeNm * Units.MetresPerNauticalMile, Config.DisplayCells, DisplayPulseFor(rangeNm).PulseM),
+            Resample = ResamplesFromArpa(rangeNm),
+        };
+        _displays[rangeNm] = v;
+        return v;
+    }
+
+    /// <summary>設定某客戶端的顯示量程(nm;已換成標準量程)。</summary>
+    public void SetClientRange(Guid client, double rangeNm) => _clientRanges[client] = rangeNm;
+
+    /// <summary>客戶端離線:移除其量程設定。</summary>
+    public void RemoveClient(Guid client) => _clientRanges.Remove(client);
+
+    /// <summary>客戶端的顯示量程(未設定或無客戶端時為預設量程)。</summary>
+    public double RangeFor(Guid? client) => client is { } c && _clientRanges.TryGetValue(c, out var r) ? r : Controls.RangeNm;
+
+    /// <summary>情境切換時沿用舊雷達的每客戶端量程。</summary>
+    public void CopyClientRangesFrom(RadarUnit old)
+    {
+        _clientRanges.Clear();
+        foreach (var (k, v) in old._clientRanges) _clientRanges[k] = v;
+    }
 
     public RadarStepResult Process(OwnShipState state) => Process(RadarScene.FromState(state, Config.Band));
 
@@ -135,13 +201,27 @@ public sealed class RadarUnit
         }
 
         Arpa.Maintain(scene.T, Controls.Trial);
-        result.Events.AddRange(Arpa.DrainEvents());
         if (scene.T + 1e-9 >= _nextTracksT)
         {
             result.TracksDue = true;
             _nextTracksT = Math.Max(_nextTracksT + Config.TrackIntervalS, scene.T + 0.5 * Config.TrackIntervalS);
+            // AIS 融合與追蹤清單同週期(1 Hz);報告順序同 state.targets[](確定性)
+            Arpa.AssociateAis(scene.T, scene.AisReports);
         }
+        result.Events.AddRange(Arpa.DrainEvents());
         return result;
+    }
+
+    /// <summary>本幀要產生影像的量程清單(相異、依量程排序;顯示關閉時空)。</summary>
+    private void SelectViews()
+    {
+        _activeViews.Clear();
+        if (!DisplayEnabled) return;
+        if (DisplayRanges is { Count: > 0 } ranges)
+        {
+            foreach (var r in ranges.Distinct().OrderBy(x => x)) _activeViews.Add(ViewFor(r));
+        }
+        else _activeViews.Add(ViewFor(Controls.RangeNm));
     }
 
     private void GenerateSpokes(RadarScene scene, long target, double hInd, RadarStepResult result)
@@ -150,13 +230,22 @@ public sealed class RadarUnit
         SeaState = seaState;
         _arpaGrid.UpdateClutter(seaState);
         _arpaGrid.UpdateStc(Controls.Sea);
-        var display = DisplayEnabled ? _display : null;
-        display?.UpdateClutter(seaState);
-        display?.UpdateStc(Controls.Sea);
+        SelectViews();
+        var maxRangeM = _arpaGrid.RangeM;
+        foreach (var v in _activeViews)
+        {
+            v.Frame = null;
+            if (v.Resample) continue;
+            v.Grid.UpdateClutter(seaState);
+            v.Grid.UpdateStc(Controls.Sea);
+            if (v.Grid.RangeM > maxRangeM) maxRangeM = v.Grid.RangeM;
+        }
         var lossDb = Controls.TuneLossDb + (Degraded ? Config.DegradedLossDb : 0.0);
         var rp = new ReceiverParams(Math.Pow(10.0, -lossDb / 10.0), Controls.GainThresholdDb, Math.Clamp(Controls.Rain, 0, 100) / 100.0 * 0.9);
         var rpArpa = rp with { Scale = (float)(255.0 / Config.Arpa.DynamicRangeDb) };
-        _geo.Prepare(scene, Environment, Math.Max(_arpaGrid.RangeM, display?.RangeM ?? 0));
+        // 重取樣的強度換算:ARPA 影像 0–DynamicRange dB → 顯示 0–30 dB(ReceiverParams.Scale 預設 255/30)
+        var resampleGain = (float)(Config.Arpa.DynamicRangeDb / 30.0);
+        _geo.Prepare(scene, Environment, maxRangeM);
 
         // ARPA 穩定化:以指示位置與指示航向推得天線位置(CCRP = 船舶參考點)
         var sinI = Math.Sin(hInd);
@@ -167,10 +256,7 @@ public sealed class RadarUnit
         if (!arpaActive) _detector.Reset();
 
         var count = (int)(target - _spokeCount);
-        byte[]? frame = null;
-        var frameSpokes = 0;
-        var frameFirst = 0;
-        var cells = display?.Cells ?? 0;
+        var cells = Config.DisplayCells;
         var flags = SpokeFrame.FrameFlags.Transmitting | (scene.HeadingValid ? SpokeFrame.FrameFlags.HeadingValid : 0) | (Degraded ? SpokeFrame.FrameFlags.Degraded : 0);
         for (var c = _spokeCount; c < target; c++)
         {
@@ -188,24 +274,26 @@ public sealed class RadarUnit
                     Arpa.OnDetection(d, Controls);
                 }
             }
-            if (display is not null)
+            foreach (var v in _activeViews)
             {
-                if (frame is null)
+                if (v.Frame is null)
                 {
                     var n = Math.Min(Config.BatchSpokes, (int)(target - c));
                     n = Math.Min(n, Config.Spokes - k); // 幀不跨 2047→0
-                    frame = new byte[SpokeFrame.HeaderBytes + n * cells];
-                    frameSpokes = n;
-                    frameFirst = k;
-                    SpokeFrame.WriteHeader(frame, RadarLetter, flags, (uint)(c / Config.Spokes), k, n, Config.Spokes, cells,
-                        (float)display.RangeM, (float)scene.IndHeadingDeg, (float)scene.IndCogDeg, scene.T);
+                    v.Frame = new byte[SpokeFrame.HeaderBytes + n * cells];
+                    v.FrameSpokes = n;
+                    v.FrameFirst = k;
+                    SpokeFrame.WriteHeader(v.Frame, RadarLetter, flags, (uint)(c / Config.Spokes), k, n, Config.Spokes, cells,
+                        (float)v.Grid.RangeM, (float)scene.IndHeadingDeg, (float)scene.IndCogDeg, scene.T);
                 }
-                var j = k - frameFirst;
-                _renderer.Render(display, _sg, rp, spokeBase ^ 0xA5A5A5A5A5A5A5A5UL, _noise, frame.AsSpan(SpokeFrame.HeaderBytes + j * cells, cells));
-                if (j + 1 == frameSpokes)
+                var j = k - v.FrameFirst;
+                var line = v.Frame.AsSpan(SpokeFrame.HeaderBytes + j * cells, cells);
+                if (v.Resample) ResampleLine(_arpaLine, _arpaGrid.CellM, line, v.Grid.CellM, resampleGain);
+                else _renderer.Render(v.Grid, _sg, rp, spokeBase ^ 0xA5A5A5A5A5A5A5A5UL, _noise, line);
+                if (j + 1 == v.FrameSpokes)
                 {
-                    result.Frames.Add(frame);
-                    frame = null;
+                    result.Frames.Add(v.Frame);
+                    v.Frame = null;
                 }
             }
         }
@@ -214,21 +302,37 @@ public sealed class RadarUnit
         _spokeCount = target;
     }
 
+    /// <summary>
+    /// 把 ARPA 影像線重取樣到顯示量程(最近格;顯示格 ≥ ARPA 格,不會漏掉回波),強度乘 <paramref name="gain"/> 換成顯示刻度後飽和於 255。
+    /// </summary>
+    internal static void ResampleLine(ReadOnlySpan<byte> src, double srcCellM, Span<byte> dst, double dstCellM, float gain)
+    {
+        var ratio = dstCellM / srcCellM;
+        for (var i = 0; i < dst.Length; i++)
+        {
+            var j = (int)((i + 0.5) * ratio);
+            if (j >= src.Length) { dst[i] = 0; continue; }
+            var v = src[j] * gain;
+            dst[i] = v >= 255f ? (byte)255 : (byte)(v + 0.5f);
+        }
+    }
+
     // ------------------------------------------------------------------ 控制指令
 
     /// <summary>
     /// 執行一個 JSON 控制指令(radar.schema.json <c>$defs/command</c>):
     /// range、gain、sea、rain、tune、standby、transmit、acquire、cancel、guardZone、trialManoeuvre、cpaLimits、environment、getStatus、getTracks。
     /// </summary>
-    public AckMessage Apply(string json)
+    /// <param name="client">發出指令的客戶端:range 只改該客戶端的顯示量程;null(無客戶端:測試、主控程式預設)改預設量程</param>
+    public AckMessage Apply(string json, Guid? client = null)
     {
         JsonDocument doc;
         try { doc = JsonDocument.Parse(json); }
         catch (JsonException ex) { return Ack("?", false, $"JSON 解析失敗:{ex.Message}"); }
-        using (doc) return Apply(doc.RootElement);
+        using (doc) return Apply(doc.RootElement, client);
     }
 
-    public AckMessage Apply(JsonElement root)
+    public AckMessage Apply(JsonElement root, Guid? client = null)
     {
         if (root.ValueKind != JsonValueKind.Object) return Ack("?", false, "指令須為 JSON 物件");
         var cmd = Str(root, "cmd") ?? Str(root, "type") ?? "";
@@ -243,8 +347,8 @@ public sealed class RadarUnit
                     var v = Num(root, "value") ?? throw new ArgumentException("range 需要 value(nm)");
                     if (v <= 0 || v > 96) throw new ArgumentException("量程須在 0–96 nm");
                     var snapped = RadarControls.StandardRanges.OrderBy(r => Math.Abs(Math.Log(r / v))).First();
-                    Controls.RangeNm = snapped;
-                    _display = MakeDisplayGrid(snapped);
+                    if (client is { } cl) _clientRanges[cl] = snapped;
+                    else Controls.RangeNm = snapped;
                     return Ack(cmd, true, null, reqId, value: snapped);
                 }
                 case "gain": Controls.Gain = Pct(root); return Ack(cmd, true, null, reqId, value: Controls.Gain);
@@ -350,9 +454,11 @@ public sealed class RadarUnit
 
     // ------------------------------------------------------------------ 訊息
 
-    public StatusMessage Status()
+    /// <param name="client">range_nm 與 pulse 為該客戶端的顯示量程(null = 預設量程);pulse/pulseLength_m 為影像實際使用的脈衝(<see cref="DisplayPulseFor"/>)</param>
+    public StatusMessage Status(Guid? client = null)
     {
-        var (pulse, pulseM) = RadarControls.PulseFor(Controls.RangeNm);
+        var rangeNm = RangeFor(client);
+        var (pulse, pulseM) = DisplayPulseFor(rangeNm);
         var g = Controls.Guard;
         return new StatusMessage
         {
@@ -364,7 +470,7 @@ public sealed class RadarUnit
             Failed = Failed,
             Degraded = Degraded,
             HeadingValid = LastScene?.HeadingValid ?? true,
-            RangeNm = Controls.RangeNm,
+            RangeNm = rangeNm,
             RangeScales = RadarControls.StandardRanges,
             Pulse = ContractJson.EnumName(pulse),
             PulseLengthM = pulseM,
@@ -439,6 +545,7 @@ public sealed class RadarUnit
                 Past = tr.Past.Count > 0
                     ? tr.Past.Select(p => { var (pl, po) = Geo(p.X, p.Y); return new PastPosition(RadarJson.R(p.T, 1), RadarJson.R(p.X, 1), RadarJson.R(p.Y, 1), RadarJson.R(pl, 6), RadarJson.R(po, 6)); }).ToArray()
                     : null,
+                Ais = tr.AisMmsi != 0 ? new AisTrackReport(tr.AisMmsi, tr.AisName, tr.AisAssociated, RadarJson.R(tr.AisOffsetM, 0)) : null,
             });
         }
         return new TracksMessage

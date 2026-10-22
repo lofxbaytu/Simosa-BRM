@@ -58,6 +58,27 @@ public sealed class ArpaTrack
     public bool Manoeuvring { get; internal set; }
     public List<(double T, double X, double Y)> Past { get; } = new();
     public Detection? LastDetection { get; internal set; }
+    // AIS 關聯(ArpaTracker.AssociateAis;每次追蹤清單週期更新)
+    /// <summary>候選/已關聯的 AIS MMSI(0 = 無)</summary>
+    public int AisMmsi { get; internal set; }
+    public string AisName { get; internal set; } = "";
+    /// <summary>同一 MMSI 連續通過門檻的次數</summary>
+    public int AisHits { get; internal set; }
+    /// <summary>已關聯者連續未通過保持門檻的次數</summary>
+    public int AisMisses { get; internal set; }
+    public bool AisAssociated { get; internal set; }
+    /// <summary>ARPA 預測位置與 AIS 報告位置的距離(m)</summary>
+    public double AisOffsetM { get; internal set; }
+
+    internal void ClearAis()
+    {
+        AisMmsi = 0;
+        AisName = "";
+        AisHits = 0;
+        AisMisses = 0;
+        AisAssociated = false;
+        AisOffsetM = 0;
+    }
 
     public bool HasEstimate => Kf is not null;
     /// <summary>追蹤時間(自第一次量測)</summary>
@@ -449,6 +470,91 @@ public sealed class ArpaTracker
                 _events.Add(new ArpaEvent("dangerousTarget", t, tr.Id, $"危險目標 {tr.Id:00}:CPA {s.CpaNm:F2} nm、TCPA {s.TcpaMin:F1} 分"));
             tr.Dangerous = danger;
         }
+    }
+
+    /// <summary>
+    /// AIS 融合(IEC 62288 的雷達/AIS 關聯概念;radar-arpa.md 第 3.1 節):每個追蹤清單週期(1 Hz)對每個追蹤中的目標,
+    /// 在 AIS 報告中找距離門檻內(<see cref="ArpaConfig.AisGateM"/> + 比例)且航向/速度一致的最近報告;同一 MMSI 連續 <see cref="ArpaConfig.AisHits"/> 次
+    /// 才判定關聯(associated),已關聯者以較寬的保持門檻維持、連續 <see cref="ArpaConfig.AisMisses"/> 次失敗才解除(期間 positionOffset_m 顯示差異)。
+    /// 一筆 AIS 報告最多關聯一個目標:先處理已關聯者(保持優先),再依目標順序處理其餘(確定性)。
+    /// AIS 關閉(報告不在清單)或 aisError 使報告偏離門檻時不關聯。
+    /// </summary>
+    public void AssociateAis(double t, IReadOnlyList<SceneAisReport> reports)
+    {
+        var a = _cfg.Arpa;
+        var used = new HashSet<int>();
+        // 第一輪:已關聯者保持
+        foreach (var tr in _tracks)
+        {
+            if (!tr.AisAssociated) continue;
+            if (tr.State != TrackState.Tracking || tr.Kf is null) { tr.ClearAis(); continue; }
+            var idx = FindAis(tr, t, reports, tr.AisMmsi, a.AisHoldGateFactor, used);
+            if (idx >= 0)
+            {
+                var r = reports[idx];
+                tr.AisMisses = 0;
+                tr.AisName = r.Name;
+                tr.AisOffsetM = OffsetTo(tr, t, r);
+                used.Add(r.Mmsi);
+            }
+            else if (++tr.AisMisses >= a.AisMisses) tr.ClearAis();
+        }
+        // 第二輪:候選與新關聯
+        foreach (var tr in _tracks)
+        {
+            if (tr.AisAssociated) continue;
+            if (tr.State != TrackState.Tracking || tr.Kf is null) { tr.ClearAis(); continue; }
+            var idx = FindAis(tr, t, reports, 0, 1.0, used);
+            if (idx < 0) { tr.ClearAis(); continue; }
+            var r = reports[idx];
+            used.Add(r.Mmsi);
+            tr.AisHits = r.Mmsi == tr.AisMmsi ? tr.AisHits + 1 : 1;
+            tr.AisMmsi = r.Mmsi;
+            tr.AisName = r.Name;
+            tr.AisMisses = 0;
+            tr.AisOffsetM = OffsetTo(tr, t, r);
+            if (tr.AisHits >= a.AisHits)
+            {
+                tr.AisAssociated = true;
+                _events.Add(new ArpaEvent("aisAssociated", t, tr.Id, $"目標 {tr.Id:00} 與 AIS {r.Name}({r.Mmsi})關聯"));
+            }
+        }
+    }
+
+    /// <summary>在門檻內找最近的 AIS 報告索引(mmsi ≠ 0 時只找該 MMSI);無則 −1。</summary>
+    private int FindAis(ArpaTrack tr, double t, IReadOnlyList<SceneAisReport> reports, int mmsi, double gateFactor, HashSet<int> used)
+    {
+        var a = _cfg.Arpa;
+        var (px, py) = tr.Kf!.PredictPosition(t);
+        var vx = tr.Kf.X[2];
+        var vy = tr.Kf.X[3];
+        var speedKn = Units.MpsToKn(Math.Sqrt(vx * vx + vy * vy));
+        var courseDeg = Units.NormalizeHeadingDeg(Units.RadToDeg(Math.Atan2(vx, vy)));
+        var ox = px - _own.X;
+        var oy = py - _own.Y;
+        var gate = (a.AisGateM + a.AisGateFraction * Math.Sqrt(ox * ox + oy * oy)) * gateFactor;
+        var best = -1;
+        var bestD = double.PositiveInfinity;
+        for (var i = 0; i < reports.Count; i++)
+        {
+            var r = reports[i];
+            if (mmsi != 0 ? r.Mmsi != mmsi : used.Contains(r.Mmsi)) continue;
+            var d = Math.Sqrt((r.X - px) * (r.X - px) + (r.Y - py) * (r.Y - py));
+            if (d > gate) continue;
+            if (speedKn >= a.AisMinSpeedKn && r.SogKn >= a.AisMinSpeedKn)
+            {
+                if (Math.Abs(Units.WrapDeg180(r.CogDeg - courseDeg)) > a.AisCourseDeg) continue;
+                if (Math.Abs(r.SogKn - speedKn) > a.AisSpeedKn) continue;
+            }
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    private static double OffsetTo(ArpaTrack tr, double t, in SceneAisReport r)
+    {
+        var (px, py) = tr.Kf!.PredictPosition(t);
+        return Math.Sqrt((r.X - px) * (r.X - px) + (r.Y - py) * (r.Y - py));
     }
 
     /// <summary>計算追蹤目標於時間 t 的位置、向量與 CPA/TCPA/BCR/BCT(含試操船)。</summary>

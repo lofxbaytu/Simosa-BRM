@@ -650,6 +650,16 @@ export class PpiRenderer {
       ctx.arc(sp.x, sp.y, r, 0, 2 * Math.PI);
       ctx.stroke();
       ctx.setLineDash([]);
+      if (t.ais?.associated) {
+        // IEC 62288 融合目標:雷達圓內加 AIS 三角(頂點向上)
+        const h = r * 0.75;
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - h);
+        ctx.lineTo(sp.x + h * 0.85, sp.y + h * 0.6);
+        ctx.lineTo(sp.x - h * 0.85, sp.y + h * 0.6);
+        ctx.closePath();
+        ctx.stroke();
+      }
       if (sty.kind === 'lost') {
         const d = r * 1.1;
         ctx.beginPath();

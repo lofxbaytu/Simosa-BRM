@@ -38,13 +38,15 @@
         "bnwasReset",
         "tugControl",
         "anchor",
-        "mooring"
+        "mooring",
+        "alertTransfer",
+        "radarControl"
       ]
     },
     "value": {},
     "args": {
       "type": "object",
-      "description": "targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate;setEnvironment:wind{trueSpeed,trueDir,gustiness}、current{set,drift}、waterDepth、visibility_nm、ramp_s;injectFault:{name, args};triggerTimeline:{id, force};acknowledge:{kind: verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|gyroCheck|prediction|driftCalculation|anchorDecision|notifyCompany|notifySar|lookoutReport|other(與 scenario.schema.json expectSpec.acknowledge.kind 一致), itemId?, role?, note?};endExercise:{reason?};steeringMode:{pump?: 1|2|both, direction?: port|starboard|stop(僅 nfu), heading?, rotLimit?(僅 autopilot)}(模式在 value);alertAcknowledge / alertSilence:{id?};bnwasMode:{dormant_s?, stage3_s?}(模式在 value);injectFault 感測器故障 args 見 description"
+      "description": "targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate;setEnvironment:wind{trueSpeed,trueDir,gustiness}、current{set,drift}、waterDepth、visibility_nm、ramp_s;injectFault:{name, args};triggerTimeline:{id, force};acknowledge:{kind: verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|gyroCheck|prediction|driftCalculation|anchorDecision|notifyCompany|notifySar|lookoutReport|other(與 scenario.schema.json expectSpec.acknowledge.kind 一致), itemId?, role?, note?};endExercise:{reason?};steeringMode:{pump?: 1|2|both, direction?: port|starboard|stop(僅 nfu), heading?, rotLimit?(僅 autopilot)}(模式在 value);alertAcknowledge:{id?, station?: bridge|portWing|stbdWing|ecr(省略 = bridge;Category A 與已轉移責任的警報只能在負責站確認,否則 commandRejected {reason: alertStationRequired};未知站 unknownStation;只有駕駛台三站未被拒絕的確認視為駕駛台操作重設 BNWAS,ecr 不重設)};alertSilence:{id?, station?(不限制靜音,只決定是否視為駕駛台操作重設 BNWAS;省略 = bridge)};alertTransfer:{id, station}(MSC.302(87) 責任轉移;事件 alertTransferred {station, from, transferredTo};BNWAS 不可轉移、非 engine/thruster/steering 來源不可轉 ecr → commandRejected {reason: alertNotTransferable};轉回原站即解除);radarControl:{radar: x|s, client, cmd, ok, error?, id?, value?, request{原雷達指令欄位}}(雷達服務轉送的學員雷達操作,只寫 input 行並發事件 radarControl,不影響物理;無情境引擎時雜湊不變,有情境引擎時只有事件序號計入雜湊(確定性,與 acknowledge 相同);指標 radar.controlCount/acquisitions/rangeChanges);bnwasMode:{dormant_s?, stage3_s?}(模式在 value);injectFault 感測器故障 args 見 description"
     }
   },
   "examples": [
@@ -228,6 +230,33 @@
     },
     {
       "type": "alertSilence"
+    },
+    {
+      "type": "alertAcknowledge",
+      "args": {
+        "id": "shallowWater",
+        "station": "bridge"
+      }
+    },
+    {
+      "type": "alertTransfer",
+      "args": {
+        "id": "mainEngine",
+        "station": "ecr"
+      }
+    },
+    {
+      "type": "radarControl",
+      "args": {
+        "radar": "x",
+        "client": "3f2504e04f8911d39a0c0305e82c3301",
+        "cmd": "range",
+        "ok": true,
+        "value": 3,
+        "request": {
+          "value": 3
+        }
+      }
     },
     {
       "type": "bnwasMode",

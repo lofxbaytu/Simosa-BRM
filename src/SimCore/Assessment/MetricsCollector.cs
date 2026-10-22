@@ -54,6 +54,10 @@ public sealed class MetricsState
     public int BnwasStage2 { get; set; }
     public int BnwasStage3 { get; set; }
     public int BnwasResets { get; set; }
+    // 雷達操作(規劃書第 8.3 節第 7 類;radarControl 事件:成功的控制指令數、手動擷取數、量程切換數)
+    public int RadarControls { get; set; }
+    public int RadarAcquisitions { get; set; }
+    public int RadarRangeChanges { get; set; }
 }
 
 /// <summary>每次警報成立的確認紀錄(summary.alerts.records[])。</summary>
@@ -176,6 +180,29 @@ public sealed class MetricsCollector
         };
     }
     public void OnGrounding() => State.Groundings++;
+
+    /// <summary>
+    /// 雷達操作事件(radarControl,source = instructor;data {radar, client, cmd, ok, …}):只計成功(ok)的指令;
+    /// acquire 計入 radar.acquisitions、range 計入 radar.rangeChanges;getStatus/getTracks 為查詢不計。
+    /// </summary>
+    public void OnRadarControl(SimEvent e)
+    {
+        if (e.Kind != SimEventKinds.RadarControl || e.DataBool("ok") == false) return;
+        var cmd = e.DataString("cmd");
+        if (cmd is null or "getStatus" or "getTracks") return;
+        State.RadarControls++;
+        if (cmd == "acquire") State.RadarAcquisitions++;
+        else if (cmd == "range") State.RadarRangeChanges++;
+    }
+
+    /// <summary>radar.* 指標值(<see cref="MetricNames"/>)。</summary>
+    public double? RadarMetric(string name) => name switch
+    {
+        "radar.controlCount" => State.RadarControls,
+        "radar.acquisitions" => State.RadarAcquisitions,
+        "radar.rangeChanges" => State.RadarRangeChanges,
+        _ => null,
+    };
 
     /// <summary>學員指令觀察(引擎於套用指令時呼叫)。</summary>
     public void OnAction(ObservedAction a)

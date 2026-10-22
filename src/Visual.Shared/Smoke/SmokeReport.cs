@@ -19,6 +19,10 @@ public sealed record SmokeFrame
     [JsonPropertyName("sog_kn")] public double SogKn { get; init; }
     [JsonPropertyName("extrapolating")] public bool Extrapolating { get; init; }
     [JsonPropertyName("stalled")] public bool Stalled { get; init; }
+    /// <summary>狀態中受力的繫纜數(fast/heaving/slacking;無泊位為 0)</summary>
+    [JsonPropertyName("mooringLinesInState")] public int MooringLinesInState { get; init; }
+    /// <summary>本幀畫出的繫纜數(找得到繫船柱者)</summary>
+    [JsonPropertyName("mooringLinesDrawn")] public int MooringLinesDrawn { get; init; }
 }
 
 public sealed record SmokeReport
@@ -46,7 +50,8 @@ public sealed record SmokeReport
     /// <summary>
     /// ok 判準(審查發現:原「首尾位移 > 1 m」依賴幀數與牆鐘幀距,--smoke=30 必定失敗):
     /// 有幀、每幀節點 > 0、最後幀港口網格 > 0、顯示時間單調不減且有前進(最後 simTime > 第一幀)、無以 "ERROR" 開頭的備註;
-    /// 另外當模擬前進 ≥ 0.5 s 時,自船位移必須與平均 SOG × Δt 一致(0.5–1.5 倍)以驗證姿態確有更新。
+    /// 另外當模擬前進 ≥ 0.5 s 時,自船位移必須與平均 SOG × Δt 一致(0.5–1.5 倍)以驗證姿態確有更新;
+    /// 最後一幀狀態有受力繫纜時必須有畫出的繫纜(繫船柱找得到;煙霧場景自第 SmokeSequence.BerthSegmentStartFrame 幀起帶示意泊位)。
     /// 判準失敗的原因附在 notes("ok 失敗:…")。
     /// </summary>
     public static SmokeReport Build(IReadOnlyList<SmokeFrame> frames, string quality, string view, IReadOnlyList<string> areas, bool headless, IReadOnlyList<string> notes, string? godotVersion = null, string? renderer = null, string? qualityReason = null, int harbourTriangles = 0, int ownShipTriangles = 0, IReadOnlyList<string>? qualityChanges = null)
@@ -69,6 +74,7 @@ public sealed record SmokeReport
                 var expected = frames.Average(f => f.SogKn) * Units.MetresPerNauticalMile / 3600.0 * dt;
                 if (expected > 0.5 && (dist < expected * 0.5 || dist > expected * 1.5)) failures.Add($"自船位移 {dist:F2} m 與 SOG × Δt = {expected:F2} m 不符");
             }
+            if (frames[^1].MooringLinesInState > 0 && frames[^1].MooringLinesDrawn <= 0) failures.Add($"狀態有 {frames[^1].MooringLinesInState} 條受力繫纜但未畫出(繫船柱找不到或節點未更新)");
         }
         if (notes.Any(n => n.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))) failures.Add("備註含 ERROR");
         var allNotes = failures.Count == 0 ? notes : notes.Concat(failures.Select(f => "ok 失敗:" + f)).ToList();

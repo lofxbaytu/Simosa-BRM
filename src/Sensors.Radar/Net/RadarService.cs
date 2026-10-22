@@ -19,6 +19,8 @@ public sealed class NmeaOutputOptions
 /// 雷達服務:把 SimCore 狀態幀交給各台 <see cref="RadarUnit"/>(X、S 平行處理;各台內部單執行緒),
 /// 執行佇列中的控制指令、發佈影像幀/追蹤清單/事件/回應到 WebSocket,並以 UDP 送出 TTM/TLL。
 /// 指令在狀態幀之間套用(處理執行緒),因此同一指令序列得到相同結果。
+/// 每客戶端獨立顯示量程:影像幀依標頭 range_m 分送給量程相同的客戶端;status 的 range_nm 為各客戶端自己的量程;離線時清理。
+/// 學員控制指令(查詢除外)經 <see cref="ForwardControl"/> 轉送 SimCore.Host 成為 radarControl 指令(進紀錄、不影響物理)。
 /// </summary>
 public sealed class RadarService : IDisposable
 {
@@ -40,6 +42,13 @@ public sealed class RadarService : IDisposable
     public event Action<RadarUnit, Arpa.ArpaEvent>? EventRaised;
     /// <summary>每次輸出追蹤清單後(主控程式比對真值用)</summary>
     public event Action<RadarUnit, RadarScene>? TracksPublished;
+    /// <summary>
+    /// 把學員控制指令轉送核心(SimCommand radarControl;規劃書第 8.3 節第 7 類):每個已執行的指令(getStatus/getTracks 查詢除外,不論成功與否)呼叫一次。
+    /// 主控程式接到 <see cref="SimStateClient.Send"/>;null = 不轉送。
+    /// </summary>
+    public Action<SimCommand>? ForwardControl { get; set; }
+    /// <summary>已轉送的控制指令數</summary>
+    public long ControlsForwarded { get; private set; }
 
     public RadarService(IEnumerable<RadarUnit> units, RadarWebSocketServer? server, NmeaOutputOptions? nmea, Func<double, DateTime>? utc = null)
     {
@@ -68,6 +77,7 @@ public sealed class RadarService : IDisposable
             {
                 var json = $"{{\"cmd\":\"range\",\"value\":{old.Controls.RangeNm.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}";
                 u.Apply(json);
+                u.CopyClientRangesFrom(old);
                 u.Controls.Gain = old.Controls.Gain;
                 u.Controls.Sea = old.Controls.Sea;
                 u.Controls.Rain = old.Controls.Rain;
@@ -96,7 +106,17 @@ public sealed class RadarService : IDisposable
         for (var i = 0; i < _units.Count; i++)
         {
             scenes[i] = RadarScene.FromState(state, _units[i].Config.Band);
-            _units[i].DisplayEnabled = ForceDisplay || (_server?.ClientCount(_units[i].Config.Id) ?? 0) > 0;
+            var u = _units[i];
+            var clients = _server?.ClientIds(u.Config.Id);
+            u.DisplayEnabled = ForceDisplay || clients is { Count: > 0 };
+            // 本幀要產生的量程 = 各客戶端量程(無獨立設定者用預設量程);ForceDisplay 另含預設量程
+            if (clients is { Count: > 0 })
+            {
+                var ranges = clients.Select(c => u.RangeFor(c)).ToList();
+                if (ForceDisplay) ranges.Add(u.Controls.RangeNm);
+                u.DisplayRanges = ranges;
+            }
+            else u.DisplayRanges = null;
         }
         Parallel.For(0, _units.Count, i =>
         {
@@ -112,14 +132,23 @@ public sealed class RadarService : IDisposable
     private void Publish(RadarUnit unit, RadarScene scene, RadarStepResult r)
     {
         var id = unit.Config.Id;
-        if (_server is not null)
-            foreach (var f in r.Frames) _server.PublishFrame(id, f);
+        if (_server is not null && r.Frames.Count > 0)
+        {
+            // 依客戶端量程分送(幀標頭 offset 20 為 range_m float32)
+            var clients = _server.ClientIds(id);
+            foreach (var f in r.Frames)
+            {
+                var rangeM = BitConverter.ToSingle(f, 20);
+                foreach (var c in clients)
+                    if (Math.Abs(unit.RangeFor(c) * SimCore.Contracts.Units.MetresPerNauticalMile - rangeM) < 0.5) _server.SendFrame(c, f);
+            }
+        }
         foreach (var e in r.Events)
         {
             EventRaised?.Invoke(unit, e);
             _server?.PublishJson(id, RadarJson.Utf8(unit.EventMessage(e)));
         }
-        if (_statusPending.Remove(id) | r.StatusChanged) _server?.PublishJson(id, RadarJson.Utf8(unit.Status()));
+        if (_statusPending.Remove(id) | r.StatusChanged) BroadcastStatus(unit);
         if (!r.TracksDue) return;
         _server?.PublishJson(id, RadarJson.Utf8(unit.Tracks()));
         TracksPublished?.Invoke(unit, scene);
@@ -135,6 +164,13 @@ public sealed class RadarService : IDisposable
         catch (SocketException) { /* 無接收端時忽略 */ }
     }
 
+    /// <summary>對某台雷達的每個客戶端送出各自量程的 status。</summary>
+    private void BroadcastStatus(RadarUnit unit)
+    {
+        if (_server is null) return;
+        foreach (var c in _server.ClientIds(unit.Config.Id)) _server.SendJson(c, RadarJson.Utf8(unit.Status(c)));
+    }
+
     private void DrainCommands()
     {
         if (_server is null) return;
@@ -142,16 +178,49 @@ public sealed class RadarService : IDisposable
         {
             var unit = Find(req.RadarId);
             if (unit is null) continue;
-            var ack = unit.Apply(req.Json);
+            if (req.Disconnected)
+            {
+                unit.RemoveClient(req.ClientId);
+                continue;
+            }
+            var ack = unit.Apply(req.Json, req.ClientId);
             if (ack.Cmd == "getStatus")
             {
-                _server.SendJson(req.ClientId, RadarJson.Utf8(unit.Status()));
+                _server.SendJson(req.ClientId, RadarJson.Utf8(unit.Status(req.ClientId)));
                 continue;
             }
             _server.SendJson(req.ClientId, RadarJson.Utf8(ack));
-            if (ack.Cmd == "getTracks") _server.SendJson(req.ClientId, RadarJson.Utf8(unit.Tracks()));
-            else if (ack.Ok) _server.PublishJson(unit.Config.Id, RadarJson.Utf8(unit.Status()));
+            if (ack.Cmd == "getTracks")
+            {
+                _server.SendJson(req.ClientId, RadarJson.Utf8(unit.Tracks()));
+                continue;
+            }
+            Forward(unit, req, ack);
+            if (!ack.Ok) continue;
+            // range 只影響該客戶端:只回它自己的 status;其他設定影響全部客戶端
+            if (ack.Cmd == "range") _server.SendJson(req.ClientId, RadarJson.Utf8(unit.Status(req.ClientId)));
+            else BroadcastStatus(unit);
         }
+    }
+
+    /// <summary>轉送控制指令到核心:args {radar, client, cmd, ok, error?, id?, value?, request{原指令去掉 cmd/reqId}}。</summary>
+    private void Forward(RadarUnit unit, in RadarCommandRequest req, AckMessage ack)
+    {
+        if (ForwardControl is null) return;
+        Dictionary<string, JsonElement>? request = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(req.Json);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                request = new Dictionary<string, JsonElement>();
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                    if (prop.Name is not ("cmd" or "type" or "reqId")) request[prop.Name] = prop.Value.Clone();
+            }
+        }
+        catch (JsonException) { }
+        ForwardControl(SimCommand.RadarControl(unit.Config.Id, req.ClientId.ToString("N"), ack.Cmd, ack.Ok, ack.Error, ack.Id, ack.Value, request));
+        ControlsForwarded++;
     }
 
     public void Dispose() => _udp?.Dispose();
@@ -159,16 +228,23 @@ public sealed class RadarService : IDisposable
 
 /// <summary>
 /// SimCore.Host 狀態訂閱者(ClientWebSocket,斷線自動重連):每個含 tick 的文字框解析為 <see cref="OwnShipState"/>;
-/// 事件框({"type":"event"})與評估框略過。
+/// 事件框({"type":"event"})與評估框略過。雙向:<see cref="Send"/> 把 SimCommand JSON 送回核心(雷達控制紀錄 radarControl),
+/// 斷線期間暫存(最多 256 筆,滿時丟最舊)、重連後送出。
 /// </summary>
 public sealed class SimStateClient
 {
     private readonly Uri _uri;
+    private readonly System.Threading.Channels.Channel<byte[]> _outbox =
+        System.Threading.Channels.Channel.CreateBounded<byte[]>(new System.Threading.Channels.BoundedChannelOptions(256) { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest });
     public event Action<string>? Log;
     public long FramesReceived { get; private set; }
+    public long CommandsSent { get; private set; }
     public bool Connected { get; private set; }
 
     public SimStateClient(Uri uri) => _uri = uri;
+
+    /// <summary>送出 SimCommand JSON(UTF-8)到核心;任何執行緒可呼叫,非阻塞。</summary>
+    public void Send(byte[] utf8Json) => _outbox.Writer.TryWrite(utf8Json);
 
     /// <summary>解析狀態框;不是狀態(事件/評估/其他)時回傳 null。</summary>
     public static OwnShipState? ParseState(ReadOnlySpan<byte> utf8)
@@ -194,7 +270,11 @@ public sealed class SimStateClient
                 await ws.ConnectAsync(_uri, ct).ConfigureAwait(false);
                 Connected = true;
                 Log?.Invoke($"已連線 SimCore 狀態 {_uri}");
+                using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var sendLoop = SendLoopAsync(ws, sendCts.Token);
                 var ms = new MemoryStream();
+                try
+                {
                 while (ws.State == System.Net.WebSockets.WebSocketState.Open && !ct.IsCancellationRequested)
                 {
                     var res = await ws.ReceiveAsync(buffer, ct).ConfigureAwait(false);
@@ -210,6 +290,12 @@ public sealed class SimStateClient
                     }
                     ms.SetLength(0);
                 }
+                }
+                finally
+                {
+                    sendCts.Cancel();
+                    try { await sendLoop.ConfigureAwait(false); } catch (Exception) { }
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex) when (ex is System.Net.WebSockets.WebSocketException or IOException or HttpRequestException or InvalidOperationException)
@@ -219,5 +305,21 @@ public sealed class SimStateClient
             Connected = false;
             try { await Task.Delay(1000, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
         }
+    }
+
+    private async Task SendLoopAsync(System.Net.WebSockets.ClientWebSocket ws, CancellationToken ct)
+    {
+        try
+        {
+            while (await _outbox.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
+            {
+                while (_outbox.Reader.TryRead(out var json))
+                {
+                    await ws.SendAsync(json, System.Net.WebSockets.WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
+                    CommandsSent++;
+                }
+            }
+        }
+        catch (Exception) { /* 取消或連線中斷:未送出的指令留在佇列,重連後送 */ }
     }
 }

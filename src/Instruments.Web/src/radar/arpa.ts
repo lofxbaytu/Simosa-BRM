@@ -55,6 +55,21 @@ export function sortTracks(tracks: readonly RadarTrack[], key: ArpaSortKey): Rad
 
 export type SymbolKind = 'acquiring' | 'tracking' | 'lost';
 
+/** 目標來源(IEC 62288 符號概念):雷達追蹤目標 ○、已關聯(融合)目標 ◬(圓內三角)、有 AIS 候選但未關聯 ○△。 */
+export type TargetSource = 'radar' | 'fused' | 'candidate';
+
+export interface TargetSourceSymbol {
+  source: TargetSource;
+  symbol: string;
+  label: string;
+}
+
+export function targetSource(t: Pick<RadarTrack, 'ais'>): TargetSourceSymbol {
+  if (!t.ais) return { source: 'radar', symbol: '○', label: '雷達' };
+  if (t.ais.associated) return { source: 'fused', symbol: '◬', label: `融合 ${t.ais.name}` };
+  return { source: 'candidate', symbol: '○△', label: `雷達/AIS 未關聯 ${t.ais.name}(差 ${t.ais.positionOffset_m.toFixed(0)} m)` };
+}
+
 export interface SymbolStyle {
   kind: SymbolKind;
   /** 危險目標以警報色顯示 */
