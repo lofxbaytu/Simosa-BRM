@@ -344,6 +344,14 @@ def test_forbidden_fields_cannot_reference_parameters() -> None:
         resolve_references(tree, pset)
 
 
+
+def _expected_path(p: Path) -> str:
+    """ParameterSet.load 的 path 規則:專案內 → 相對專案根目錄('/' 分隔);專案外 → 原路徑。"""
+    try:
+        return p.resolve().relative_to(paths.repo_root().resolve()).as_posix()
+    except ValueError:
+        return str(p)
+
 def test_auto_load_parameter_set_by_declared_path(tmp_path: Path) -> None:
     pset_file = tmp_path / "params" / "my-set.yaml"
     pset_file.parent.mkdir()
@@ -359,7 +367,8 @@ def test_auto_load_parameter_set_by_declared_path(tmp_path: Path) -> None:
     """), encoding="utf-8")
     sc = load_scenario(sc_file)  # 相對情境檔目錄
     assert sc["id"] == "T02" and sc["assessment"]["minCpa_nm"] == 0.75
-    assert sc["parameterSet"]["id"] == "test-set" and sc["parameterSet"]["path"] == str(pset_file.resolve())
+    # tmp_path 在專案內(pyproject --basetemp),路徑依 C# ToProjectRelative 規則轉為相對專案根目錄、'/' 分隔
+    assert sc["parameterSet"]["id"] == "test-set" and sc["parameterSet"]["path"] == _expected_path(pset_file)
     assert sc["parameterSet"]["resolved"][0]["key"] == "navigation.cpa.coastal_nm"
     # 明確給參數集時優先於宣告路徑
     sc2 = load_scenario(sc_file, parameters=ParameterSet.load(paths.repo_root() / DEFAULT_PARAMETER_SET_PATH))
@@ -397,9 +406,12 @@ def test_empty_parameter_set_declaration_is_not_default(tmp_path: Path) -> None:
 def test_loaded_parameter_set_path_is_project_relative(tmp_path: Path) -> None:
     """紀錄標頭 parameterSet.path:專案內為相對根目錄('/' 分隔);專案外保留原路徑(C# RepositoryPaths.ToProjectRelative)。"""
     assert load_scenario("E07_steering_failure")["parameterSet"]["path"] == "data/parameters/company-procedures.yaml"
-    outside = tmp_path / "ps.yaml"
-    outside.write_text(_pset_yaml(), encoding="utf-8")
-    assert ParameterSet.load(outside).path == str(outside)
+    inside = tmp_path / "ps.yaml"   # tmp_path 在專案內(build/test-tmp/pytest):相對專案根目錄
+    inside.write_text(_pset_yaml(), encoding="utf-8")
+    assert ParameterSet.load(inside).path == _expected_path(inside)
+    assert not ParameterSet.load(inside).path.startswith("/") and "\\" not in ParameterSet.load(inside).path
+    # 專案外的路徑保留原樣(只比對字串規則,不在專案外寫檔)
+    assert _expected_path(Path("/definitely/outside/ps.yaml")) == str(Path("/definitely/outside/ps.yaml"))
 
 
 # ---------------------------------------------------------------- 跨語言一致性(與 C# 紀錄標頭比對)

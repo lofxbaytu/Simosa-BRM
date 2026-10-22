@@ -36,4 +36,5 @@ cache-dir = "../../.cache/uv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 cache_dir = ".cache/pytest"
-addopts = "-ra"
+# tmp_path 等暫存檔也留在專案內(CLAUDE.md);pytest 會清空此目錄,須為專用目錄
+addopts = "-ra --basetemp=../../build/test-tmp/pytest"
