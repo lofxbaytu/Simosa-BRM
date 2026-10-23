@@ -151,13 +151,13 @@ scenario.Validate();
 var ship = LoadShip(scenario.Ship.Id);
 
 // 靜態檢查(規劃書第 9.1 節自動檢查;--validate 只檢查不執行)
-void PrintIssues(Scenario sc)
+void PrintIssues(Scenario sc, ShipParticulars sh)
 {
-    var issues = ScenarioValidator.Check(sc, ship, Path.Combine(root, "data", "scenarios", sc.Id));
+    var issues = ScenarioValidator.Check(sc, sh, Path.Combine(root, "data", "scenarios", sc.Id));
     foreach (var issue in issues) Console.WriteLine($"  情境檢查 {issue}");
     if (sc.ParameterSetInfo is { } ps) Console.WriteLine($"  參數集 {ps.Id} {ps.Version}(sha256 {ps.Sha256[..16]}…),解析 {ps.Resolved.Count} 個引用");
 }
-PrintIssues(scenario);
+PrintIssues(scenario, ship);
 if (options.Validate)
 {
     var errors = ScenarioValidator.Check(scenario, ship).Count(i => i.Severity == ScenarioIssueSeverity.Error);
@@ -183,12 +183,14 @@ if (options.Record)
     recorder = new RecordWriter(RecordPathFor(scenario.Id), engine);
     Console.WriteLine($"  紀錄:{recorder.Path}");
 }
-// 情境切換(檔案路徑或內嵌情境物件共用):載入 → 引擎重設 → 列印檢查 → 紀錄另開新檔
-void ApplyLoadedScenario(SimulationEngine e, Scenario sc, string origin)
+// 情境切換(檔案路徑或內嵌情境物件共用;交接紀錄待辦第 1 項):載入結果 → TryApplyScenarioLoad(驗證錯誤/船舶/動力學失敗 → 拒絕,
+// 引擎狀態不變、紀錄不切換,引擎發 scenarioLoadRejected 由下方訂閱者印出並轉給教官站)→ 成功才列印檢查、紀錄另開新檔
+void ApplyLoadedScenario(SimulationEngine e, ScenarioLoadResult result, string origin)
 {
-    e.LoadScenario(sc, string.Equals(sc.Ship.Id, e.Ship.Id, StringComparison.OrdinalIgnoreCase) ? null : LoadShip(sc.Ship.Id));
-    Console.WriteLine($"已載入情境 {sc.Id}({origin})");
-    PrintIssues(sc);
+    if (!e.TryApplyScenarioLoad(result, LoadShip, origin)) return;
+    var sc = e.Scenario;
+    Console.WriteLine($"已載入情境 {sc.Id}({(origin == "file" ? "檔案" : "內嵌")})");
+    PrintIssues(sc, e.Ship);
     if (recorder is { Closed: true } closed)
     {
         var footer = closed.Footer!;
@@ -199,22 +201,19 @@ void ApplyLoadedScenario(SimulationEngine e, Scenario sc, string origin)
 }
 engine.ScenarioLoadRequested += (e, path) =>
 {
-    try
-    {
-        var p = Path.IsPathRooted(path) ? path : Path.Combine(root, path);
-        ApplyLoadedScenario(e, ScenarioLoader.Load(p, parameterSet), "檔案");
-    }
-    catch (Exception ex) { Console.Error.WriteLine($"載入情境失敗:{ex.Message}"); }
+    var p = Path.IsPathRooted(path) ? path : Path.Combine(root, path);
+    if (!File.Exists(p) && !Path.HasExtension(path)) p = Path.Combine(root, "data", "scenarios", path + ".yaml"); // 允許以情境代號指定(與 --scenario 相同)
+    ApplyLoadedScenario(e, ScenarioLoader.TryLoad(p, parameterSet), "file");
 };
 // 內嵌情境(loadScenario args.scenario;規劃書第 9.1 節靠離泊預演自動組題):與 YAML 相同的載入路徑,紀錄標頭保存完整情境,可獨立重播
 engine.InlineScenarioLoadRequested += (e, element, id) =>
+    ApplyLoadedScenario(e, ScenarioLoader.TryFromJsonElement(element, parameterSet, Path.Combine(root, "data", "scenarios"), id), "inline");
+engine.ScenarioLoadRejected += (e, ev) =>
 {
-    try
-    {
-        var sc = ScenarioLoader.FromJsonElement(element, parameterSet, Path.Combine(root, "data", "scenarios"), id);
-        ApplyLoadedScenario(e, sc, "內嵌");
-    }
-    catch (Exception ex) { Console.Error.WriteLine($"載入內嵌情境失敗:{ex.Message}"); }
+    Console.Error.WriteLine($"[t={ev.T:F1}] {ev.Message}(引擎狀態不變,情境仍為 {e.Scenario.Id})");
+    if (ev.Data is { ValueKind: System.Text.Json.JsonValueKind.Object } d && d.TryGetProperty("issues", out var issues))
+        foreach (var issue in issues.EnumerateArray())
+            Console.Error.WriteLine($"  [{issue.GetProperty("severity").GetString()}] {issue.GetProperty("path").GetString()}:{issue.GetProperty("message").GetString()}");
 };
 engine.EventRaised += (e, ev) => Console.WriteLine($"[t={ev.T:F1}] 事件 {ev.Source}/{ev.Kind}{(ev.ItemId is null ? "" : $" {ev.ItemId}")}{(ev.TargetId is null ? "" : $" {ev.TargetId}")}{(ev.Message is null ? "" : $":{ev.Message}")}");
 
@@ -283,6 +282,8 @@ engine.EventRaised += (e, ev) =>
     if (ev.Kind == SimEventKinds.ExerciseEnded && e.LatestSummary is { } summary)
         ws.PublishEvent(ContractJson.SerializeToUtf8Bytes(new { type = "assessment", final = summary.Final, summary }));
 };
+// 情境載入被拒(不進紀錄與雜湊的帶外事件):以同樣的事件框送教官站,教官站據此把載入標為失敗並顯示問題清單
+engine.ScenarioLoadRejected += (_, ev) => ws?.PublishEvent(ContractJson.SerializeToUtf8Bytes(new { type = "event", @event = ev }));
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };

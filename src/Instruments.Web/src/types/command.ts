@@ -32,7 +32,8 @@ export type CommandType =
   | 'anchor'
   | 'mooring'
   | 'alertTransfer'
-  | 'radarControl';
+  | 'radarControl'
+  | 'sessionInfo';
 
 export const COMMAND_TYPES: readonly CommandType[] = [
   'rudder',
@@ -65,7 +66,21 @@ export const COMMAND_TYPES: readonly CommandType[] = [
   'mooring',
   'alertTransfer',
   'radarControl',
+  'sessionInfo',
 ] as const;
+
+/**
+ * sessionInfo:練習開始前的參與者與休息時間確認(規劃書第 5.5 節;教官站送出、核心寫入紀錄標頭 participants /
+ * restHoursConfirmation / course)。args 形狀見 lib/session-info.ts SessionInfo;不影響物理與雜湊(與 acknowledge 相同只寫 input 行)。
+ */
+export interface SessionInfoCommand extends SimCommand {
+  type: 'sessionInfo';
+  args: {
+    participants: Array<{ name: string; role: string; rank?: string; certificateNo?: string }>;
+    restHoursConfirmation: { confirmedBy: string; confirmedAtUtc: string; compliant: boolean; note?: string };
+    course?: { id?: string; title?: string; instructor?: string };
+  } & Record<string, unknown>;
+}
 
 /** 舵令來源:FU 隨動(舵輪)或 NFU 非隨動(舵柄按鈕),僅作提示,核心可忽略。 */
 export type SteeringMode = 'FU' | 'NFU';

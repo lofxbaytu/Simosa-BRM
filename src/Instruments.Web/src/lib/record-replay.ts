@@ -16,6 +16,7 @@ import type { BrmMarker } from './brm-markers.js';
 import { isValidCommand } from './command.js';
 import { parseState } from './state-parser.js';
 import { isSessionRecord } from './session-record.js';
+import { parseSessionInfo, type SessionInfo } from './session-info.js';
 import { parseSimEvent } from './sim-event.js';
 import type { TrackPoint } from './track-history.js';
 import { BrmMarkerStore } from './brm-markers.js';
@@ -39,6 +40,8 @@ export interface ReplayHeader {
   scenario?: unknown;
   /** header.parameterSet(version 2;無參數集時省略) */
   parameterSet?: RecordParameterSet;
+  /** 參與者與休息時間確認:教官站紀錄 sessionInfo,或核心紀錄 header 的 participants / restHoursConfirmation / course(規劃書第 5.5 節) */
+  sessionInfo?: SessionInfo;
 }
 
 export interface ReplayInput {
@@ -202,6 +205,9 @@ export function parseJsonLines(text: string): ReplayData {
         }
         const ps = parseRecordParameterSet(obj['parameterSet']);
         if (ps) h.parameterSet = ps;
+        // 核心把 sessionInfo 指令的 args 攤平寫在標頭(packaging-sync.md 建議欄位);也接受整包 sessionInfo 物件
+        const si = parseSessionInfo(isRecord(obj['sessionInfo']) ? obj['sessionInfo'] : { participants: obj['participants'], restHoursConfirmation: obj['restHoursConfirmation'], course: obj['course'] });
+        if (si) h.sessionInfo = si;
         data.header = h;
         break;
       }
@@ -301,6 +307,8 @@ export function parseSessionJson(text: string): ReplayData {
     h.scenario = sc;
   }
   h.dynamics = `教官站紀錄(${obj.mode === 'simple' ? '簡化教官模式' : '教官站'},來源 ${obj.source})`;
+  const si = parseSessionInfo(obj.sessionInfo);
+  if (si) h.sessionInfo = si;
   data.header = h;
   let prev: OwnShipState | undefined;
   obj.states.forEach((raw, i) => {

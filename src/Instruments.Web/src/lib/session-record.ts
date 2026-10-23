@@ -10,6 +10,7 @@ import type { BrmMarker } from './brm-markers.js';
 import type { DebriefSummary } from './debrief.js';
 import type { OperationEvent } from './operation-log.js';
 import type { ScenarioSummary } from './scenario.js';
+import type { SessionInfo } from './session-info.js';
 
 export const SESSION_RECORD_FORMAT = 'simosa-brm-instructor-record';
 
@@ -25,8 +26,8 @@ export interface CommandLogEntry {
 
 export interface SessionRecord {
   format: typeof SESSION_RECORD_FORMAT;
-  /** 1:第一版;2:新增 events(核心事件)與 coreSummary(核心 summary) */
-  version: 1 | 2;
+  /** 1:第一版;2:新增 events(核心事件)與 coreSummary(核心 summary);3:新增 sessionInfo(參與者與休息時間確認) */
+  version: 1 | 2 | 3;
   /** 匯出時刻(每次下載或按「講評報告」都不同;不可作為練習識別) */
   createdUtc: string;
   /**
@@ -50,6 +51,8 @@ export interface SessionRecord {
   events?: SimEvent[];
   /** 核心 summary(版本 2;Python 伺服器/離線時為 null)。存原始物件(summary.raw),讀回時再解析 */
   coreSummary?: Record<string, unknown> | null;
+  /** 參與者與休息時間確認(版本 3;教官站送出 sessionInfo 指令時的 args;未送出為 null) */
+  sessionInfo?: SessionInfo | null;
 }
 
 /** 以固定間隔抽樣狀態(預設 1 Hz;2 小時約 7,200 筆),並保留事件所需的完整序列給講評累計器(由呼叫者另外餵)。 */
@@ -92,12 +95,14 @@ export interface SessionRecordInput {
   coreSummary?: AssessmentSummary | null;
   /** 練習開始時刻(ISO;見 SessionRecord.startedUtc) */
   startedUtc?: string;
+  /** 參與者與休息時間確認(sessionInfo 指令的 args;未送出時省略或 null) */
+  sessionInfo?: SessionInfo | null;
 }
 
 export function buildSessionRecord(input: SessionRecordInput, now = new Date()): SessionRecord {
   return {
     format: SESSION_RECORD_FORMAT,
-    version: 2,
+    version: 3,
     createdUtc: now.toISOString(),
     ...(input.startedUtc ? { startedUtc: input.startedUtc } : {}),
     mode: input.mode,
@@ -112,6 +117,7 @@ export function buildSessionRecord(input: SessionRecordInput, now = new Date()):
     summary: input.summary,
     events: [...(input.events ?? [])],
     coreSummary: input.coreSummary ? input.coreSummary.raw : null,
+    sessionInfo: input.sessionInfo ? structuredClone(input.sessionInfo) : null,
   };
 }
 

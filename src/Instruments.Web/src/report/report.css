@@ -746,3 +746,53 @@ table.anchors-tbl td {
   font-size: 13px;
   color: var(--ob-text);
 }
+
+/* 教官與證書分頁(?tab=admin):到期旗標、教官編輯區塊 */
+.instructor-edit {
+  border: 1px solid var(--ob-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 6px 0;
+  min-width: 0;
+}
+.instructor-edit legend {
+  font-size: 13px;
+  font-weight: 600;
+}
+.instructor-edit .ok {
+  color: var(--ob-ok);
+  font-weight: normal;
+}
+.instructor-edit .warn {
+  color: var(--ob-warning);
+  font-weight: normal;
+}
+.tracks-edit td {
+  vertical-align: top;
+}
+.tracks-edit .align-btn {
+  margin-top: 2px;
+}
+.flag-cell {
+  white-space: nowrap;
+  font-weight: 600;
+}
+.flag-cell.expired,
+.flag.expired {
+  color: var(--rp-alarm, #b00020);
+}
+.flag-cell.soon,
+.flag.soon {
+  color: var(--rp-warn, #b35c00);
+}
+.flag-cell.upcoming,
+.flag.upcoming {
+  color: var(--ob-caution, #8a6d00);
+}
+tr.flag-expired td.flag-cell {
+  background: rgba(176, 0, 32, 0.08);
+}
+.admin-doc table.tbl.tracks tr.soon td.next-due,
+.admin-doc table.tbl.tracks tr.upcoming td.next-due {
+  font-weight: 600;
+}

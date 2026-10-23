@@ -82,6 +82,13 @@ public static class SimEventKinds
     public const string SteeringModeChanged = "steeringModeChanged";
     /// <summary>指令被拒絕、狀態不變(source 同指令來源):data {command, reason, args};目前只有 emergency 模式下的自動舵啟用(D35)</summary>
     public const string CommandRejected = "commandRejected";
+    /// <summary>
+    /// loadScenario(檔案或 args.scenario 內嵌)載入/驗證失敗,引擎狀態不變(不重設、不切換情境、紀錄不切換;source 同指令來源):
+    /// message 為前幾條問題,data {scenarioId, origin: file|inline|command, issueCount, issues[]{path, message, severity}}。
+    /// 由 <see cref="SimulationEngine.ScenarioLoadRejected"/> 另行發出而非 <see cref="SimulationEngine.EventRaised"/>:不計事件序號、不進雜湊、不寫紀錄
+    /// (紀錄器本就不寫 loadScenario input 行,重播不需也無法重現檔案載入失敗),只供主控程序轉給教官站。
+    /// </summary>
+    public const string ScenarioLoadRejected = "scenarioLoadRejected";
     // engine
     public const string Grounding = "grounding";
     /// <summary>自動舵因故障/航向無效自動脫開(data {reason: autopilotFailure|headingInvalid, fault});模式回 fu、舵停在原處</summary>

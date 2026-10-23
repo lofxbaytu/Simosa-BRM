@@ -8,6 +8,7 @@ import type { BrmMarker } from '../lib/brm-markers.js';
 import { summarize, type DebriefSummary } from '../lib/debrief.js';
 import type { ReplayData } from '../lib/record-replay.js';
 import { eventLabel, eventSeverity, SOURCE_LABEL, type EventSeverity } from '../lib/sim-event.js';
+import type { SessionInfo } from '../lib/session-info.js';
 import { getShipConfig, isShipId } from '../lib/ship-config.js';
 import { ANCHORS, allElements, criterion, type BehaviouralAnchors } from './anchors.js';
 import { computeAgreement, ratingOf, summarizeForm, type AgreementResult, type FormSummary, type MarkerForm } from './marker-form.js';
@@ -80,6 +81,42 @@ export function emptyReportMeta(): ReportMeta {
     debrief: { reaction: '', selfReview: '', advocacyInquiry: '', sopTransfer: '', summaryActions: '' },
     remarks: '',
   };
+}
+
+/** 教官站 sessionInfo 職務 → 報告參與者角色(PARTICIPANT_ROLES;instructor 對應帶領者)。 */
+export function participantRoleFromSession(role: string): string {
+  return role === 'instructor' ? 'leader' : role;
+}
+
+/**
+ * 由紀錄標頭的參與者與休息時間確認(教官站 sessionInfo)帶入報告人工欄位:只在報告尚無參與者時填入;
+ * 學員 ID 以姓名(或證書號對應名冊 certificateExpiry 無法比對,故只比姓名)對應名冊;課程 id/標題/教官填到空白的班次/課程/教官欄。
+ * 回傳是否有變更。
+ */
+export function applySessionInfoToMeta(meta: ReportMeta, info: SessionInfo | undefined, trainees: ReadonlyArray<{ id: string; name: string; rank: string }> = []): boolean {
+  if (!info) return false;
+  let changed = false;
+  if (meta.participants.length === 0 && info.participants.length > 0) {
+    for (const p of info.participants) {
+      const t = trainees.find((x) => x.name && x.name === p.name);
+      meta.participants.push({ traineeId: t?.id ?? '', name: p.name, rank: p.rank ?? t?.rank ?? '', role: participantRoleFromSession(p.role) });
+    }
+    changed = true;
+  }
+  const c = info.course;
+  if (c?.instructor && !meta.instructor) {
+    meta.instructor = c.instructor;
+    changed = true;
+  }
+  if (c?.id && !meta.sessionId) {
+    meta.sessionId = c.id;
+    changed = true;
+  }
+  if (c?.title && meta.courseName === emptyReportMeta().courseName) {
+    meta.courseName = c.title;
+    changed = true;
+  }
+  return changed;
 }
 
 // ------------------------------------------------------------------ 紀錄識別
@@ -552,6 +589,8 @@ export interface DebriefReport {
   anchorsStatus: string;
   debrief: Array<{ id: DebriefSectionId; title: string; hint: string; text: string }>;
   parameters: ParameterSection;
+  /** 紀錄標頭的參與者與休息時間確認(教官站 sessionInfo;規劃書第 5.5 節);紀錄沒有時 null */
+  sessionInfo: SessionInfo | null;
   generatedUtc: string;
 }
 
@@ -618,6 +657,7 @@ export function buildDebriefReport(input: BuildReportInput): DebriefReport {
     anchorsStatus: anchors.statusLabel,
     debrief: DEBRIEF_SECTIONS.map((s) => ({ id: s.id, title: s.title, hint: s.hint, text: meta.debrief[s.id] ?? '' })),
     parameters: buildParameterSection(data),
+    sessionInfo: data.header.sessionInfo ?? null,
     generatedUtc: (input.now ?? new Date()).toISOString(),
   };
 }

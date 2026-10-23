@@ -76,6 +76,12 @@ export class RunControlPanel extends LitElement {
   /** 練習已結束(state.scenario.ended) */
   @property({ type: Boolean }) ended = false;
 
+  /**
+   * 休息時間確認狀態(規劃書第 5.5 節):false = 教官站尚未送出 sessionInfo 的休息時間確認 → 顯示警示但不阻擋
+   * (是否照常開始由訓練負責人決策);null = 不顯示(單獨使用面板時)。
+   */
+  @property({ attribute: false }) restHoursConfirmed: boolean | null = null;
+
   @state() private confirmReset = false;
   @state() private confirmEnd = false;
   private confirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -171,6 +177,7 @@ export class RunControlPanel extends LitElement {
             </div>`
           : html`<div class="hint">尚無快照;核心每 10 s 也會自動快照(還原時回到該 tick 之前最近一份)</div>`}
         ${this.confirmReset ? html`<div class="hint bad">重設會回到情境初始狀態並清除航跡與操作紀錄</div>` : nothing}
+        ${this.restHoursConfirmed === false ? html`<div class="hint bad rest-warning" title="規劃書第 5.5 節:帶領者應於練習前對照船上工時/休息時間紀錄核對並確認">尚未送出休息時間確認(STCW A-VIII/1):不阻擋練習,是否照常開始由訓練負責人決策</div>` : nothing}
       </div>
     `;
   }

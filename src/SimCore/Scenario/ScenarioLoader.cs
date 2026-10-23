@@ -57,6 +57,52 @@ public static class ScenarioLoader
         return scenario.Validate();
     }
 
+    /// <summary>
+    /// 與 <see cref="Load"/> 相同的檔案載入,但不丟例外、把全部問題收成清單(主控程序 loadScenario 指令用;規劃書第 9.1 節自動檢查):
+    /// 讀檔/YAML/參數集/泊位參照的例外成為單一 error 項(path "scenario"),解析成功後以 <see cref="Scenario.LoadIssues"/> 列出全部結構 error。
+    /// </summary>
+    public static ScenarioLoadResult TryLoad(string path, ParameterSet? parameters = null)
+        => Gate(() =>
+        {
+            var yaml = File.ReadAllText(path);
+            var scenario = FromYaml(yaml, parameters, Path.GetDirectoryName(Path.GetFullPath(path)));
+            if (string.IsNullOrWhiteSpace(scenario.Id)) scenario.Id = Path.GetFileNameWithoutExtension(path);
+            return scenario;
+        }, Path.GetFileNameWithoutExtension(path), path);
+
+    /// <summary>與 <see cref="FromJsonElement"/> 相同的內嵌情境載入,但不丟例外、把全部問題收成清單(語意同 <see cref="TryLoad"/>)。</summary>
+    public static ScenarioLoadResult TryFromJsonElement(System.Text.Json.JsonElement element, ParameterSet? parameters = null, string? baseDirectory = null, string? defaultId = null)
+        => Gate(() =>
+        {
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object) throw new InvalidDataException("內嵌情境須為物件");
+            if (JsonNode.Parse(element.GetRawText()) is not JsonObject root) throw new InvalidDataException("內嵌情境須為物件");
+            baseDirectory ??= RepositoryPaths.TryFindRoot() is { } rootDir ? Path.Combine(rootDir, "data", "scenarios") : null;
+            var scenario = FromNode(root, parameters, baseDirectory);
+            if (string.IsNullOrWhiteSpace(scenario.Id)) scenario.Id = string.IsNullOrWhiteSpace(defaultId) ? "inline" : defaultId!.Trim();
+            return scenario;
+        }, string.IsNullOrWhiteSpace(defaultId) ? InlineIdOf(element) ?? "inline" : defaultId!.Trim(), null);
+
+    /// <summary>內嵌情境物件自帶的 id(非物件或無 id 時 null;拒絕回報用)。</summary>
+    private static string? InlineIdOf(System.Text.Json.JsonElement element)
+        => element.ValueKind == System.Text.Json.JsonValueKind.Object && element.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(id.GetString()) ? id.GetString() : null;
+
+    /// <summary>
+    /// 載入閘門:解析(未 Validate)→ <see cref="Scenario.LoadIssues"/>;任何例外(檔案不存在、YAML/JSON 格式、參數集、泊位/岸壁參照、船舶 id 不明)
+    /// 都成為單一 error 項而不外拋。成功時情境已通過 Validate 的全部檢查(含補齊原點)。
+    /// </summary>
+    private static ScenarioLoadResult Gate(Func<Scenario> parse, string? fallbackId, string? path)
+    {
+        Scenario scenario;
+        try { scenario = parse(); }
+        catch (Exception ex)
+        {
+            return ScenarioLoadResult.Failure(fallbackId, path, new[] { new ScenarioIssue(ScenarioIssueSeverity.Error, "scenario", ex.Message) });
+        }
+        var issues = scenario.LoadIssues();
+        return issues.Count == 0 ? ScenarioLoadResult.Success(scenario, path) : ScenarioLoadResult.Failure(scenario.Id, path, issues);
+    }
+
     /// <summary>通用節點樹(已是 JSON 物件)→ 參數替換 → <see cref="Scenario"/>(未呼叫 Validate);YAML 與內嵌物件共用。</summary>
     public static Scenario FromNode(JsonObject root, ParameterSet? parameters = null, string? baseDirectory = null)
     {
@@ -92,4 +138,35 @@ public static class ScenarioLoader
 
     /// <summary>情境 → YAML(經 JSON;鍵名與 schema 相同,供紀錄/匯出)。</summary>
     public static string ToYaml(Scenario scenario) => YamlJson.JsonToYaml(scenario.ToJson());
+}
+
+/// <summary>
+/// 情境載入結果(<see cref="ScenarioLoader.TryLoad"/> / <see cref="ScenarioLoader.TryFromJsonElement"/>):成功時 <see cref="Scenario"/> 非 null 且已 Validate;
+/// 失敗時 <see cref="Issues"/> 為載入例外或結構檢查的全部 error 項,<see cref="ScenarioId"/> 為能辨認的情境 id(檔名、內嵌物件的 id 或 args.id;皆無時 null)。
+/// 主控程序以 <see cref="Engine.SimulationEngine.TryApplyScenarioLoad"/> 套用:失敗時引擎狀態不變並發 <c>scenarioLoadRejected</c> 事件回報教官站。
+/// </summary>
+public sealed class ScenarioLoadResult
+{
+    private ScenarioLoadResult(Scenario? scenario, string? scenarioId, string? path, IReadOnlyList<ScenarioIssue> issues)
+    {
+        Scenario = scenario;
+        ScenarioId = scenarioId;
+        Path = path;
+        Issues = issues;
+    }
+
+    public Scenario? Scenario { get; }
+    public string? ScenarioId { get; }
+    /// <summary>檔案載入時的路徑(內嵌情境為 null;拒絕訊息用)</summary>
+    public string? Path { get; }
+    public IReadOnlyList<ScenarioIssue> Issues { get; }
+    public bool Ok => Scenario is not null && Issues.Count == 0;
+
+    public static ScenarioLoadResult Success(Scenario scenario, string? path = null) => new(scenario, scenario.Id, path, Array.Empty<ScenarioIssue>());
+    public static ScenarioLoadResult Failure(string? scenarioId, string? path, IEnumerable<ScenarioIssue> issues)
+    {
+        var list = issues.ToList();
+        if (list.Count == 0) list.Add(new ScenarioIssue(ScenarioIssueSeverity.Error, "scenario", "情境載入失敗(未說明原因)"));
+        return new ScenarioLoadResult(null, scenarioId, path, list);
+    }
 }

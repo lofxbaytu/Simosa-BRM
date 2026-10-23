@@ -57,7 +57,7 @@ const ASSESSMENT_KINDS: ReadonlySet<string> = new Set([
   'bandWarn',
   'bandFail',
 ]);
-const INSTRUCTOR_KINDS: ReadonlySet<string> = new Set(['acknowledge', 'timelineManual', 'steeringModeChanged', 'commandRejected']);
+const INSTRUCTOR_KINDS: ReadonlySet<string> = new Set(['acknowledge', 'timelineManual', 'steeringModeChanged', 'commandRejected', 'scenarioLoadRejected']);
 
 /** 由 kind 推得預設來源(舊 TrafficEvent 紀錄沒有 source 欄位)。 */
 export function defaultSourceFor(kind: string): SimEventSource {
@@ -182,6 +182,43 @@ export const REJECT_REASON_LABEL: Readonly<Record<string, string>> = {
   alertNotTransferable: '此警報不可轉移到該站',
   ...EXTERNAL_REJECT_REASON_LABEL,
 };
+
+/** scenarioLoadRejected 事件的問題項(C# ScenarioIssue:path、message、severity error|warning)。 */
+export interface ScenarioLoadIssue {
+  path: string;
+  message: string;
+  severity: 'error' | 'warning';
+}
+
+/** 情境載入被拒的可讀內容(教官站情境面板/靠離泊預演面板顯示;由 scenarioLoadRejected 事件或 Python ack ok=false 得到)。 */
+export interface ScenarioLoadRejection {
+  /** 情境 id(檔名、內嵌物件 id 或 args.id;核心辨認不出時 '') */
+  scenarioId: string;
+  /** file | inline | command(指令本身不完整)| ack(Python 參考伺服器的 ack 回覆) */
+  origin: string;
+  /** 核心給的摘要訊息 */
+  message: string;
+  issues: ScenarioLoadIssue[];
+  /** 模擬時間(s) */
+  t: number;
+}
+
+/** 由 scenarioLoadRejected 事件取出拒絕內容(其他事件回 null;data.issues 缺或格式不對時為空清單,仍保留 message)。 */
+export function scenarioLoadRejection(e: SimEvent): ScenarioLoadRejection | null {
+  if (e.kind !== 'scenarioLoadRejected') return null;
+  const id = ds(e, 'scenarioId') || e.itemId || '';
+  const raw = d(e, 'issues');
+  const issues: ScenarioLoadIssue[] = [];
+  if (Array.isArray(raw)) {
+    for (const it of raw) {
+      if (!isRecord(it)) continue;
+      const message = typeof it['message'] === 'string' ? it['message'] : '';
+      if (!message) continue;
+      issues.push({ path: typeof it['path'] === 'string' ? it['path'] : '', message, severity: it['severity'] === 'warning' ? 'warning' : 'error' });
+    }
+  }
+  return { scenarioId: id, origin: ds(e, 'origin') || 'command', message: e.message ?? `情境 ${id || '(未知)'} 載入被拒`, issues, t: e.t };
+}
 
 /** commandRejected 的指令名稱顯示文字(外力指令中文化;其他保留原字串)。 */
 export const COMMAND_NAME_LABEL: Readonly<Record<string, string>> = {
@@ -378,6 +415,10 @@ export function eventLabel(e: SimEvent): string {
       return `手動觸發${item}${d(e, 'ok') === false ? ' — 核心拒絕' : ''}${e.message ? ` ${e.message}` : ''}`;
     case 'steeringModeChanged':
       return `操舵模式 ${STEERING_MODE_LABEL[ds(e, 'from')] ?? ds(e, 'from') ?? '?'} → ${STEERING_MODE_LABEL[ds(e, 'to')] ?? ds(e, 'to') ?? '?'}${ds(e, 'pump') ? `(泵 ${ds(e, 'pump')})` : ''}`;
+    case 'scenarioLoadRejected': {
+      const n = d(e, 'issueCount');
+      return e.message ?? `情境 ${ds(e, 'scenarioId') || e.itemId || '(未知)'} 載入被拒${typeof n === 'number' ? `(${n} 項問題)` : ''}`;
+    }
     case 'commandRejected': {
       const cmd = ds(e, 'command');
       const args = d(e, 'args');

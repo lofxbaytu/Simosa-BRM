@@ -72,6 +72,13 @@ public sealed class SimulationEngine
     private readonly RampSet _ramps = new();
     private readonly List<PhaseSpan> _phaseHistory = new();
     private long _seq;
+    /// <summary>loadScenario 指令處理中的結果追蹤:主控程序在事件處理者內呼叫 LoadScenario(已載入)或 RejectScenarioLoad(已拒絕);兩者皆未發生視為拒絕</summary>
+    private ScenarioLoadOutcome _scenarioLoadOutcome = ScenarioLoadOutcome.None;
+    private string _scenarioLoadSource = SimEventSources.Instructor;
+    /// <summary>LoadScenario 預先建立(確認可建立)的動力學模型,Initialize 直接取用而不再呼叫工廠</summary>
+    private IShipDynamics? _pendingDynamics;
+
+    private enum ScenarioLoadOutcome { None, Pending, Loaded, Rejected }
     private long _assessmentSeq;
     private bool _hashScenarioEngine;
     private List<string> _phaseNames = new();
@@ -198,6 +205,12 @@ public sealed class SimulationEngine
     /// </summary>
     public event Action<SimulationEngine, System.Text.Json.JsonElement, string?>? InlineScenarioLoadRequested;
     /// <summary>
+    /// loadScenario 載入/驗證失敗、引擎狀態不變(主控程序呼叫 <see cref="RejectScenarioLoad"/> 或 <see cref="TryApplyScenarioLoad"/> 失敗時;
+    /// 事件 kind <see cref="SimEventKinds.ScenarioLoadRejected"/>)。不走 <see cref="EventRaised"/>:不計事件序號、不進雜湊、紀錄器不寫
+    /// (紀錄器本就不寫 loadScenario input 行,重播無法重現檔案載入失敗),只供主控程序印出並以 WebSocket 事件框轉給教官站。
+    /// </summary>
+    public event Action<SimulationEngine, SimEvent>? ScenarioLoadRejected;
+    /// <summary>
     /// 即將以 <see cref="LoadScenario"/> 換成新情境(參數:新情境),在狀態重設前發出:紀錄器據此關閉目前紀錄(footer 為舊情境的最終 tick 與雜湊),
     /// 主控程序再為新情境開新檔(每份紀錄只有一個 header 情境,重播不需處理情境切換)。Reset 不發此事件(reset 為可重播的 input)。
     /// </summary>
@@ -232,17 +245,84 @@ public sealed class SimulationEngine
     /// <summary>依目前情境重設為初始狀態(tick 0、雜湊歸零、亂數重建)。</summary>
     public void Reset() => Initialize();
 
-    /// <summary>載入新情境(船舶 particulars 由呼叫端提供;船舶不同時需給新的 particulars)。</summary>
+    /// <summary>
+    /// 載入新情境(船舶 particulars 由呼叫端提供;船舶不同時需給新的 particulars)。
+    /// 情境驗證、船舶比對與動力學模型建立(係數檔)都在改動任何狀態之前完成:任一失敗即丟例外而引擎狀態完全不變(不重設、不切換情境、
+    /// 不發 <see cref="ScenarioLoading"/>,紀錄不關閉)。主控程序請改用 <see cref="TryApplyScenarioLoad"/>(失敗時發 scenarioLoadRejected 回報教官站)。
+    /// </summary>
     public void LoadScenario(Scenario.Scenario scenario, ShipParticulars? ship = null)
     {
-        Scenario = scenario.Validate();
-        if (ship is not null) Ship = ship;
-        if (!string.Equals(Ship.Id, scenario.Ship.Id, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"情境需要船舶 {scenario.Ship.Id},目前為 {Ship.Id};請一併提供 particulars");
+        scenario.Validate();
+        var nextShip = ship ?? Ship;
+        if (!string.Equals(nextShip.Id, scenario.Ship.Id, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"情境需要船舶 {scenario.Ship.Id},目前為 {nextShip.Id};請一併提供 particulars");
+        var dynamics = _dynamicsFactory(nextShip, scenario.Ship.Loading);   // 係數檔不存在等錯誤在此丟出,狀態尚未改動
+        Scenario = scenario;
+        Ship = nextShip;
+        _pendingDynamics = dynamics;
         ScenarioLoading?.Invoke(this, scenario);
         _rescoreScenario = null;
         _rescoreTargets = null;
         Initialize();
+        if (_scenarioLoadOutcome == ScenarioLoadOutcome.Pending) _scenarioLoadOutcome = ScenarioLoadOutcome.Loaded;
+    }
+
+    /// <summary>
+    /// 主控程序的情境套用流程(<see cref="ScenarioLoadRequested"/> / <see cref="InlineScenarioLoadRequested"/> 處理者共用;可單元測試):
+    /// 載入結果有問題 → <see cref="RejectScenarioLoad"/>、回傳 false、引擎狀態不變;船舶不同時以 <paramref name="shipLoader"/> 取 particulars
+    /// (取得失敗同樣拒絕);最後 <see cref="LoadScenario"/>(其例外亦轉為拒絕)。成功回傳 true,之後主控程序列印檢查並為紀錄另開新檔。
+    /// </summary>
+    /// <param name="origin">載入來源(file | inline;事件 data.origin 與訊息用)</param>
+    public bool TryApplyScenarioLoad(ScenarioLoadResult result, Func<string, ShipParticulars> shipLoader, string origin)
+    {
+        if (!result.Ok)
+        {
+            RejectScenarioLoad(result.ScenarioId, result.Issues, origin, result.Path);
+            return false;
+        }
+        var sc = result.Scenario!;
+        ShipParticulars? ship = null;
+        if (!string.Equals(sc.Ship.Id, Ship.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            try { ship = shipLoader(sc.Ship.Id); }
+            catch (Exception ex)
+            {
+                RejectScenarioLoad(sc.Id, new[] { new ScenarioIssue(ScenarioIssueSeverity.Error, "ship.id", $"無法載入船舶 {sc.Ship.Id} 的 particulars:{ex.Message}") }, origin, result.Path);
+                return false;
+            }
+        }
+        try { LoadScenario(sc, ship); }
+        catch (Exception ex)
+        {
+            RejectScenarioLoad(sc.Id, new[] { new ScenarioIssue(ScenarioIssueSeverity.Error, "scenario", ex.Message) }, origin, result.Path);
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>問題訊息取前幾條(事件 message 用)。</summary>
+    public const int RejectedIssuesInMessage = 3;
+
+    /// <summary>
+    /// 回報情境載入失敗(引擎狀態不變):發 <see cref="SimEventKinds.ScenarioLoadRejected"/> 事件給 <see cref="ScenarioLoadRejected"/> 訂閱者
+    /// (source 為指令來源;在 loadScenario 指令處理之外呼叫時為 instructor)。message 為「情境 id:前 N 條問題(共 M 項)」,
+    /// data {scenarioId, origin, path, issueCount, issues[]{path, message, severity}}。
+    /// </summary>
+    public void RejectScenarioLoad(string? scenarioId, IReadOnlyList<ScenarioIssue> issues, string origin, string? path = null)
+    {
+        var source = _scenarioLoadOutcome == ScenarioLoadOutcome.Pending ? _scenarioLoadSource : SimEventSources.Instructor;
+        if (_scenarioLoadOutcome == ScenarioLoadOutcome.Pending) _scenarioLoadOutcome = ScenarioLoadOutcome.Rejected;
+        var head = string.Join(";", issues.Take(RejectedIssuesInMessage).Select(i => $"{i.Path}:{i.Message}"));
+        var message = $"情境 {scenarioId ?? "(未知)"} 載入被拒:{head}{(issues.Count > RejectedIssuesInMessage ? $"(共 {issues.Count} 項)" : "")}";
+        var ev = NewEvent(SimEventKinds.ScenarioLoadRejected, source, scenarioId, null, message, new
+        {
+            scenarioId,
+            origin,
+            path,
+            issueCount = issues.Count,
+            issues = issues.Select(i => new { path = i.Path, message = i.Message, severity = ContractJson.EnumName(i.Severity) }).ToList(),
+        }) with { Seq = -1, Phase = Phase };
+        ScenarioLoadRejected?.Invoke(this, ev);
     }
 
     /// <summary>
@@ -265,7 +345,8 @@ public sealed class SimulationEngine
     {
         var sc = Scenario;
         Loading = sc.Ship.Loading;
-        Dynamics = _dynamicsFactory(Ship, Loading);
+        Dynamics = _pendingDynamics ?? _dynamicsFactory(Ship, Loading);
+        _pendingDynamics = null;
         _projection = new LocalTangentPlane(sc.Origin!.Lat, sc.Origin.Lon);
         StartUtc = ResolveStartUtc(sc);
 
@@ -697,16 +778,39 @@ public sealed class SimulationEngine
                 break;
 
             case SimCommandType.LoadScenario:
-                if (cmd.Arg("scenario") is { ValueKind: System.Text.Json.JsonValueKind.Object } inline)
+            {
+                // 引擎不讀檔:由主控程序在事件處理者內載入並呼叫 LoadScenario(成功)或 RejectScenarioLoad(失敗);
+                // 處理者回來後兩者皆未發生(無訂閱者、或處理者吞掉例外未回報)也視為拒絕,教官站才不會停在「已載入」。
+                // 拒絕時引擎狀態不變;紀錄器不寫 loadScenario input 行(RecordWriter.OnCommand),拒絕事件也不進序號/雜湊,重播不受影響
+                var argsId = cmd.Arg("id") is { ValueKind: System.Text.Json.JsonValueKind.String } idEl ? idEl.GetString() : null;
+                var requestedId = argsId;   // 拒絕回報用的情境名稱(args.id、內嵌物件自帶 id 或路徑);處理者仍只收 args.id
+                _scenarioLoadOutcome = ScenarioLoadOutcome.Pending;
+                _scenarioLoadSource = source;
+                try
                 {
-                    // 內嵌情境(靠離泊預演自動組題):args.id 為紀錄用名稱;value/args.path 忽略
-                    var inlineId = cmd.Arg("id") is { ValueKind: System.Text.Json.JsonValueKind.String } idEl ? idEl.GetString() : null;
-                    InlineScenarioLoadRequested?.Invoke(this, inline, inlineId);
+                    string? requestedPath = null;
+                    if (cmd.Arg("scenario") is { ValueKind: System.Text.Json.JsonValueKind.Object } inline)
+                    {
+                        // 內嵌情境(靠離泊預演自動組題):args.id 為紀錄用名稱;value/args.path 忽略
+                        if (requestedId is null && inline.TryGetProperty("id", out var scId) && scId.ValueKind == System.Text.Json.JsonValueKind.String) requestedId = scId.GetString();
+                        InlineScenarioLoadRequested?.Invoke(this, inline, argsId);
+                    }
+                    else if ((cmd.ValueAsString() ?? (cmd.Arg("path") is { ValueKind: System.Text.Json.JsonValueKind.String } p ? p.GetString() : null)) is { } path)
+                    {
+                        requestedPath = path;
+                        requestedId ??= path;
+                        ScenarioLoadRequested?.Invoke(this, path);
+                    }
+                    else if (cmd.Arg("scenario") is { } notObject && notObject.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                        RejectScenarioLoad(requestedId, new[] { new ScenarioIssue(ScenarioIssueSeverity.Error, "args.scenario", "內嵌情境須為物件") }, "command");
+                    else
+                        RejectScenarioLoad(requestedId, new[] { new ScenarioIssue(ScenarioIssueSeverity.Error, "loadScenario", "缺少情境路徑(value / args.path)或內嵌情境物件(args.scenario)") }, "command");
+                    if (_scenarioLoadOutcome == ScenarioLoadOutcome.Pending)
+                        RejectScenarioLoad(requestedId, new[] { new ScenarioIssue(ScenarioIssueSeverity.Error, "loadScenario", "主控程序未處理情境載入(無載入處理者,或處理者未回報結果)") }, "command", requestedPath);
                 }
-                else if (cmd.ValueAsString() is { } path) ScenarioLoadRequested?.Invoke(this, path);
-                else if (cmd.Arg("path") is { } p && p.ValueKind == System.Text.Json.JsonValueKind.String)
-                    ScenarioLoadRequested?.Invoke(this, p.GetString()!);
+                finally { _scenarioLoadOutcome = ScenarioLoadOutcome.None; }
                 break;
+            }
 
             case SimCommandType.SetEnvironment:
                 ApplyEnvironment(cmd, source, itemId);

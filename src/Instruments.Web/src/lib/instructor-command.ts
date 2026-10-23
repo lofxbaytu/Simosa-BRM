@@ -3,10 +3,48 @@
 // 各欄位同時相容兩個核心:C# SimCore.Host(src/SimCore/README.md 第 3 節)與 Python 參考伺服器
 // (src/Tools.Calibration/simosa_brm/server.py);核心尚未支援的欄位仍照送,由 UI 標示「核心未實作」。
 
-import type { SimCommand } from '../types/command.js';
+import type { SessionInfoCommand, SimCommand } from '../types/command.js';
 import { ACKNOWLEDGE_KINDS, type AcknowledgeKind } from '../types/event.js';
 import type { LoadingCondition } from '../types/state.js';
 import { clamp, normalizeHeading } from './angles.js';
+import { isSessionRole, type SessionInfo } from './session-info.js';
+
+// ------------------------------------------------------------------ 參與者與休息時間確認(規劃書第 5.5 節)
+
+/**
+ * sessionInfo:練習開始前送出參與者清單與休息時間確認,核心依同一契約寫入紀錄標頭(participants / restHoursConfirmation / course)。
+ * 契約:{ "type": "sessionInfo", "args": { participants: [{ name, role, rank?, certificateNo? }],
+ *   restHoursConfirmation: { confirmedBy, confirmedAtUtc(ISO-8601), compliant, note? }, course?: { id?, title?, instructor? } } }。
+ * 參與者姓名與職務、確認人與確認時刻為必填(缺少時丟 RangeError;畫面先以 validateSessionInfoDraft 提示);
+ * 選填欄位空白時不放進 args。
+ */
+export function sessionInfoCommand(info: SessionInfo): SessionInfoCommand {
+  const rest = info.restHoursConfirmation;
+  if (!rest || !rest.confirmedBy.trim() || !rest.confirmedAtUtc.trim()) throw new RangeError('休息時間確認需有確認人與確認時刻');
+  if (Number.isNaN(new Date(rest.confirmedAtUtc).getTime())) throw new RangeError('confirmedAtUtc 不是 ISO-8601 時刻');
+  const participants = info.participants.map((p, i) => {
+    const name = p.name.trim();
+    const role = p.role.trim();
+    if (!name) throw new RangeError(`參與者 ${i + 1} 未填姓名`);
+    if (!isSessionRole(role)) throw new RangeError(`參與者 ${i + 1} 職務 ${role || '(空白)'} 不在列舉內`);
+    const out: SessionInfoCommand['args']['participants'][number] = { name, role };
+    if (p.rank?.trim()) out.rank = p.rank.trim();
+    if (p.certificateNo?.trim()) out.certificateNo = p.certificateNo.trim();
+    return out;
+  });
+  if (participants.length === 0) throw new RangeError('至少一位參與者');
+  const confirmation: SessionInfoCommand['args']['restHoursConfirmation'] = { confirmedBy: rest.confirmedBy.trim(), confirmedAtUtc: new Date(rest.confirmedAtUtc).toISOString(), compliant: rest.compliant === true };
+  if (rest.note?.trim()) confirmation.note = rest.note.trim();
+  const args: SessionInfoCommand['args'] = { participants, restHoursConfirmation: confirmation };
+  if (info.course) {
+    const course: NonNullable<SessionInfoCommand['args']['course']> = {};
+    if (info.course.id?.trim()) course.id = info.course.id.trim();
+    if (info.course.title?.trim()) course.title = info.course.title.trim();
+    if (info.course.instructor?.trim()) course.instructor = info.course.instructor.trim();
+    if (Object.keys(course).length > 0) args.course = course;
+  }
+  return { type: 'sessionInfo', args };
+}
 
 // ------------------------------------------------------------------ 情境
 

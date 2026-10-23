@@ -8,7 +8,7 @@ import { tileStyles } from '../shared.js';
 import { instructorStyles } from './instructor-shared.js';
 import { environmentSummary, extensionSummary, initialSummary, loadingLabel, type ScenarioSummary } from '../../lib/scenario.js';
 import { PLAYED_BY_LABEL } from '../../lib/timeline.js';
-import { ROLE_LABEL } from '../../lib/sim-event.js';
+import { ROLE_LABEL, type ScenarioLoadRejection } from '../../lib/sim-event.js';
 
 export type ScenarioLoadEvent = CustomEvent<ScenarioSummary>;
 
@@ -77,6 +77,26 @@ export class ScenarioPanel extends LitElement {
         color: var(--ob-accent);
         margin-right: 6px;
       }
+      .rejected {
+        font-size: 11px;
+        color: var(--ob-alarm);
+        border: 1px solid var(--ob-alarm);
+        border-radius: 3px;
+        padding: 4px 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .rejected .title {
+        font-weight: 600;
+      }
+      .rejected ul {
+        margin: 0;
+        padding-left: 16px;
+      }
+      .rejected .muted {
+        color: var(--ob-text-muted);
+      }
     `,
   ];
 
@@ -84,6 +104,10 @@ export class ScenarioPanel extends LitElement {
   /** 目前核心載入中的情境 id(顯示用) */
   @property({ type: String }) activeId = '';
   @property({ type: Boolean }) compact = false;
+  /** 核心拒絕上一次載入的原因(scenarioLoadRejected 事件 / Python ack ok=false);null = 無 */
+  @property({ attribute: false }) rejection: ScenarioLoadRejection | null = null;
+  /** 已送 loadScenario、等待核心結果:載入鈕停用並顯示載入中 */
+  @property({ type: Boolean }) busy = false;
 
   @state() private selectedId = '';
 
@@ -139,12 +163,27 @@ export class ScenarioPanel extends LitElement {
               ${sel.issues.length > 0 ? html`<div class="issues">${sel.issues.join('; ')}</div>` : nothing}
             </div>`
           : nothing}
+        ${this.rejection ? renderRejection(this.rejection) : nothing}
         <div class="btn-row">
-          <button class="primary load" ?disabled=${!sel} @click=${this.load}>載入${sel ? ` ${sel.id}` : ''}</button>
+          <button class="primary load" ?disabled=${!sel || this.busy} @click=${this.load}>${this.busy ? '載入中…' : `載入${sel ? ` ${sel.id}` : ''}`}</button>
         </div>
       </div>
     `;
   }
+}
+
+/** 核心拒絕載入的說明區塊(情境面板與靠離泊預演面板共用):摘要訊息與問題清單(path:message),核心狀態不變。 */
+export function renderRejection(r: ScenarioLoadRejection) {
+  return html`<div class="rejected" role="alert">
+    <div class="title">核心拒絕載入${r.scenarioId ? ` ${r.scenarioId}` : ''}(狀態不變,仍為原情境)</div>
+    <div>${r.message}</div>
+    ${r.issues.length > 0
+      ? html`<ul>
+          ${r.issues.map((i) => html`<li>${i.severity === 'warning' ? '[警告] ' : ''}${i.path ? `${i.path}:` : ''}${i.message}</li>`)}
+        </ul>`
+      : nothing}
+    <div class="muted">修正後重新載入;${r.origin === 'ack' ? 'Python 參考伺服器 ack' : r.origin === 'file' ? '情境檔' : r.origin === 'inline' ? '內嵌情境' : '指令'} · t=${r.t.toFixed(0)} s</div>
+  </div>`;
 }
 
 declare global {

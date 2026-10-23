@@ -34,11 +34,12 @@ import { OperationLogDeriver, type OperationEvent } from './lib/operation-log.js
 import { DebriefAccumulator, type DebriefSummary } from './lib/debrief.js';
 import { BRM_CATEGORIES, BrmMarkerStore, type BrmMarker } from './lib/brm-markers.js';
 import { StateSampler, buildSessionRecord, type CommandLogEntry } from './lib/session-record.js';
+import type { SessionInfo } from './lib/session-info.js';
 import { saveHandoff } from './report/report-store.js';
 import { downloadText, fileStamp } from './lib/download.js';
 import { formatHeading, formatKnots, formatMeters, formatRot, formatRudder, formatSimTime } from './lib/format.js';
 import type { SimEvent } from './types/event.js';
-import { EventStore, eventFromFrame, eventLabel, voiceScriptData } from './lib/sim-event.js';
+import { EventStore, eventFromFrame, eventLabel, scenarioLoadRejection, voiceScriptData, type ScenarioLoadRejection } from './lib/sim-event.js';
 import { assessmentFromFrame, type AssessmentSummary } from './lib/assessment.js';
 import { VoiceScriptPlayer, voiceLine, voiceRecordLabel } from './lib/voice-script.js';
 import { eventMarks, overlayFromScenario, overlayHasContent, type PlotOverlay } from './lib/plot-overlay.js';
@@ -55,6 +56,7 @@ import type { ReplayView } from './components/instructor/replay-view.js';
 import './components/conning-bar.js';
 import './components/track-plot.js';
 import './components/instructor/scenario-panel.js';
+import './components/instructor/session-info-panel.js';
 import './components/instructor/berthing-rehearsal-panel.js';
 import './components/instructor/run-control-panel.js';
 import './components/instructor/environment-panel.js';
@@ -77,6 +79,8 @@ import { requiredCountdowns } from './components/instructor/timeline-panel.js';
 export type PageMode = 'full' | 'simple' | 'replay';
 export type SourceMode = 'live' | 'demo';
 type SimplePhase = 'select' | 'briefing' | 'running' | 'ended';
+/** loadScenario 送出後等待核心結果的上限(ms);逾時只解除載入鈕的停用,不改變情境顯示 */
+const LOAD_PENDING_TIMEOUT_MS = 8000;
 
 const STALE_MS = 2000;
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -335,6 +339,20 @@ export class InstructorApp extends LitElement {
       }
       .simple .stage.briefing {
         grid-template-rows: auto minmax(0, 1fr) auto;
+        /* 簡報文字左、參與者與休息時間確認右(規劃書第 5.5 節:練習啟動畫面要求確認) */
+        grid-template-columns: minmax(0, 1fr) minmax(340px, 460px);
+      }
+      .simple .stage.briefing h2,
+      .simple .stage.briefing .actions {
+        grid-column: 1 / -1;
+      }
+      .simple .stage.briefing brm-session-info-panel {
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .simple .rest-warning {
+        color: var(--ob-warning);
+        font-weight: 600;
       }
       .simple .stage.running {
         grid-template-rows: auto minmax(0, 1fr) auto;
@@ -422,6 +440,10 @@ export class InstructorApp extends LitElement {
   @state() private simpleSelectTab: 'list' | 'rehearsal' = 'list';
   /** 目前載入的靠離泊預演組題結果(以 loadScenario args.scenario 送核心;簡報頁可下載 YAML);載入檔案情境時為 null */
   @state() private rehearsal: BerthingRehearsalResult | null = null;
+  /** 最近一次情境載入被核心拒絕的原因(scenarioLoadRejected 事件或 Python ack ok=false;下一次載入嘗試時清除),情境面板/靠離泊預演面板顯示 */
+  @state() private scenarioRejection: ScenarioLoadRejection | null = null;
+  /** 已送 loadScenario、尚未收到核心結果(拒絕事件、ack、或帶新情境 id 的狀態幀):載入鈕顯示載入中 */
+  @state() private loadPending = false;
   @state() private debriefSummary: DebriefSummary | null = null;
   @state() private confirmEnd = false;
   @state() private events: readonly SimEvent[] = [];
@@ -430,6 +452,8 @@ export class InstructorApp extends LitElement {
   @state() private coreSummary: AssessmentSummary | null = null;
   @state() private lastVoice: string = '';
   @state() private voicePlaying = false;
+  /** 最近送出的參與者與休息時間確認(sessionInfo 指令 args;寫入教官站紀錄;規劃書第 5.5 節) */
+  @state() private sessionInfo: SessionInfo | null = null;
 
   @query('brm-replay-view') private replayView?: ReplayView;
 
@@ -453,6 +477,9 @@ export class InstructorApp extends LitElement {
   private staleTimer: ReturnType<typeof setInterval> | null = null;
   private commandSeq = 0;
   private confirmEndTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 載入嘗試前的教官站狀態(被拒時還原:情境、組題結果、簡化模式階段)與目標情境 id(狀態幀帶到即視為成功) */
+  private pendingLoad: { targetId: string; previous: ScenarioSummary | null; previousRehearsal: BerthingRehearsalResult | null; previousPhase: SimplePhase } | null = null;
+  private loadTimer: ReturnType<typeof setTimeout> | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -487,6 +514,8 @@ export class InstructorApp extends LitElement {
     this.addEventListener('event-seek', this.onEventSeek as EventListener);
     this.addEventListener('voice-play', this.onVoicePlay as EventListener);
     this.addEventListener('exercise-ended', this.onExerciseEnded);
+    this.addEventListener('session-info-submitted', this.onSessionInfo as EventListener);
+    this.addEventListener('session-info-cleared', this.onSessionInfoCleared);
     this.voiceUnsub = this.voice.onPlaying((p) => (this.voicePlaying = p));
     window.addEventListener('keydown', this.onKeyDown);
   }
@@ -496,6 +525,7 @@ export class InstructorApp extends LitElement {
     this.stopSource();
     if (this.staleTimer) clearInterval(this.staleTimer);
     if (this.confirmEndTimer) clearTimeout(this.confirmEndTimer);
+    if (this.loadTimer) clearTimeout(this.loadTimer);
     this.removeEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.removeEventListener('sim-reset', this.onReset);
     this.removeEventListener('scenario-load', this.onScenarioLoad as EventListener);
@@ -508,6 +538,8 @@ export class InstructorApp extends LitElement {
     this.removeEventListener('event-seek', this.onEventSeek as EventListener);
     this.removeEventListener('voice-play', this.onVoicePlay as EventListener);
     this.removeEventListener('exercise-ended', this.onExerciseEnded);
+    this.removeEventListener('session-info-submitted', this.onSessionInfo as EventListener);
+    this.removeEventListener('session-info-cleared', this.onSessionInfoCleared);
     if (this.assessmentTimer) clearTimeout(this.assessmentTimer);
     this.voiceUnsub?.();
     this.voice.stop();
@@ -566,6 +598,7 @@ export class InstructorApp extends LitElement {
     this.hasReceived = true;
     this.shipState = state;
     this.issues = issues;
+    if (this.pendingLoad && state.scenario?.id === this.pendingLoad.targetId) this.finishLoad(); // 核心已換成要求的情境:載入成功
     this.history.push(state.pos.x, state.pos.y, state.t);
     const recording = this.pageMode !== 'simple' || this.simplePhase === 'running';
     if (recording) {
@@ -602,6 +635,11 @@ export class InstructorApp extends LitElement {
     if (typeof msg['tick'] === 'number') ack.tick = msg['tick'];
     entry.ack = ack;
     this.commandLog = [...this.commandLog];
+    // Python 參考伺服器:loadScenario 以 ack ok=false + detail 回報載入失敗(狀態不變);C# 核心改以 scenarioLoadRejected 事件
+    if (entry.command.type === 'loadScenario') {
+      if (ack.ok) this.finishLoad();
+      else this.onScenarioLoadRejected({ scenarioId: this.pendingLoad?.targetId ?? '', origin: 'ack', message: ack.detail ?? '核心拒絕載入情境', issues: [], t: this.shipState.t });
+    }
   }
 
   /**
@@ -629,6 +667,7 @@ export class InstructorApp extends LitElement {
     if (this.alarms.apply(ev)) this.alarmTargets = this.alarms.snapshot();
     if (ev.kind === 'steeringModeChanged') this.recordSteeringEvent(ev);
     else if (ev.kind === 'commandRejected') this.markRejected(ev);
+    else if (ev.kind === 'scenarioLoadRejected') this.onScenarioLoadRejected(scenarioLoadRejection(ev)!);
     const v = voiceScriptData(ev);
     if (v) {
       this.lastVoice = voiceLine(v);
@@ -677,6 +716,15 @@ export class InstructorApp extends LitElement {
 
   private onExerciseEnded = (): void => {
     this.requestAssessment();
+  };
+
+  /** 參與者與休息時間確認已送出(面板已送 sessionInfo 指令;指令本身經 onCommand 進教官指令紀錄):保存到教官站紀錄。 */
+  private onSessionInfo = (ev: CustomEvent<SessionInfo>): void => {
+    this.sessionInfo = ev.detail;
+  };
+
+  private onSessionInfoCleared = (): void => {
+    this.sessionInfo = null;
   };
 
   private onVoicePlay = (ev: CustomEvent<SimEvent>): void => {
@@ -784,15 +832,13 @@ export class InstructorApp extends LitElement {
   }
 
   private onScenarioLoad = (ev: CustomEvent<ScenarioSummary>): void => {
-    this.rehearsal = null;
-    this.loadScenarioSummary(ev.detail, loadScenarioCommand(ev.detail.id, ev.detail.path));
+    this.loadScenarioSummary(ev.detail, loadScenarioCommand(ev.detail.id, ev.detail.path), null);
   };
 
   /** 靠離泊預演組題(簡化教官模式):以 loadScenario args.scenario 送內嵌情境物件,其餘流程與載入檔案情境相同。 */
   private onRehearsalCompose = (ev: CustomEvent<BerthingRehearsalResult>): void => {
     const r = ev.detail;
-    this.rehearsal = r;
-    this.loadScenarioSummary(r.summary, loadScenarioInlineCommand(r.id, r.scenario));
+    this.loadScenarioSummary(r.summary, loadScenarioInlineCommand(r.id, r.scenario), r);
   };
 
   private downloadRehearsalYaml(): void {
@@ -800,12 +846,23 @@ export class InstructorApp extends LitElement {
     if (r) downloadText(`${r.id}.yaml`, r.yaml, 'application/yaml');
   }
 
-  private loadScenarioSummary(s: ScenarioSummary, cmd: SimCommand): void {
+  /**
+   * 送 loadScenario 並樂觀地切到新情境;核心結果以三種方式回來:scenarioLoadRejected 事件 / Python ack(ok 或 ok=false)/ 狀態幀帶新情境 id。
+   * 被拒時 onScenarioLoadRejected 還原載入前的情境、組題結果與簡化模式階段,並顯示問題清單(不得停在「已載入」)。
+   */
+  private loadScenarioSummary(s: ScenarioSummary, cmd: SimCommand, rehearsal: BerthingRehearsalResult | null): void {
+    this.pendingLoad = { targetId: s.id, previous: this.activeScenario, previousRehearsal: this.rehearsal, previousPhase: this.simplePhase };
+    this.scenarioRejection = null;
+    this.loadPending = true;
+    if (this.loadTimer) clearTimeout(this.loadTimer);
+    this.loadTimer = setTimeout(() => this.finishLoad(), LOAD_PENDING_TIMEOUT_MS); // 核心無回應(例如舊版核心):不讓載入鈕永遠停用
+    this.rehearsal = rehearsal;
     this.activeScenario = s;
     this.restartExercise();
     if (this.sourceMode === 'demo') {
       this.startSource(s);
       this.send(cmd, { ok: true, detail: '示範模式:以情境的船、初始狀態與環境重建示範運動學' });
+      this.finishLoad();
     } else {
       this.send(cmd);
     }
@@ -819,6 +876,37 @@ export class InstructorApp extends LitElement {
       this.simplePhase = 'briefing';
     }
   };
+
+  /** 載入有結果(成功或逾時):結束載入中狀態。 */
+  private finishLoad(): void {
+    this.pendingLoad = null;
+    this.loadPending = false;
+    if (this.loadTimer) {
+      clearTimeout(this.loadTimer);
+      this.loadTimer = null;
+    }
+  }
+
+  /**
+   * 核心拒絕載入情境(scenarioLoadRejected 事件;或 Python ack ok=false):核心狀態不變,教官站也還原到載入前
+   * (情境、組題結果、簡化模式階段回「選擇練習」),把對應的 loadScenario 指令標為核心拒絕,並在面板顯示原因與問題清單。
+   */
+  private onScenarioLoadRejected(rej: ScenarioLoadRejection): void {
+    const entry = [...this.commandLog].reverse().find((e) => e.command.type === 'loadScenario' && (!e.ack || e.ack.ok));
+    if (entry && !entry.ack) {
+      entry.ack = { ok: false, detail: rej.message, tick: this.shipState.tick };
+      this.commandLog = [...this.commandLog];
+    }
+    const pending = this.pendingLoad;
+    if (pending) {
+      this.activeScenario = pending.previous;
+      this.rehearsal = pending.previousRehearsal;
+      if (this.pageMode === 'simple' && this.simplePhase === 'briefing') this.simplePhase = pending.previousPhase === 'briefing' ? 'select' : pending.previousPhase;
+      if (!rej.scenarioId) rej = { ...rej, scenarioId: pending.targetId };
+    }
+    this.scenarioRejection = rej;
+    this.finishLoad();
+  }
 
   private onSnapshotTaken = (ev: CustomEvent<SnapshotEntry>): void => {
     this.snapshots = [...this.snapshots.slice(-19), ev.detail];
@@ -901,6 +989,7 @@ export class InstructorApp extends LitElement {
       events: this.eventStore.all(),
       coreSummary: this.coreSummary,
       startedUtc: this.exerciseStartedUtc,
+      sessionInfo: this.sessionInfo,
     });
     return JSON.stringify(record);
   }
@@ -986,6 +1075,7 @@ export class InstructorApp extends LitElement {
               ${s.scenario?.hardFailed ? html`<span class="alarm">硬性失敗</span>` : nothing}
               ${s.scenario?.ended ? html`<span class="caution">練習已結束</span>` : nothing}
               ${this.parameterSetWarning() ? html`<span class="warn-badge param-warning" title=${this.parameterSetWarning()}>參數集不一致</span>` : nothing}
+              ${this.pageMode === 'full' && !this.sessionInfo?.restHoursConfirmation ? html`<span class="warn-badge rest-warning" title="規劃書第 5.5 節:練習前應確認已對照船上工時/休息時間紀錄核對(不阻擋;訓練負責人決策)">休息時間未確認</span>` : nothing}
               ${this.issues.length > 0 ? html`<span class="warning" title=${this.issues.join(', ')}>資料可疑 ${this.issues.length}</span>` : nothing}
               ${alerts.unacknowledged > 0 ? html`<span class="${alerts.highestUnacknowledged === 'warning' || alerts.highestUnacknowledged === 'caution' ? 'warn-badge' : 'alarm'} alert-badge" title="駕駛台警報需確認">警報未確認 ${alerts.unacknowledged}</span>` : nothing}
               ${s.bnwas && s.bnwas.stage >= 1 ? html`<span class="${s.bnwas.stage >= 2 ? 'alarm' : 'caution'} bnwas-badge">BNWAS 第 ${s.bnwas.stage} 階段</span>` : nothing}
@@ -1033,7 +1123,7 @@ export class InstructorApp extends LitElement {
         <brm-conning-bar .state=${s} .config=${cfg} .issues=${this.issues} .noData=${!this.hasReceived}></brm-conning-bar>
         <div class="body">
           <div class="col left">
-            <brm-scenario-panel .scenarios=${this.scenarios} .activeId=${this.activeScenario?.id ?? ''}></brm-scenario-panel>
+            <brm-scenario-panel .scenarios=${this.scenarios} .activeId=${this.activeScenario?.id ?? ''} .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-scenario-panel>
             <brm-timeline-panel
               .timeline=${this.activeScenario?.timeline ?? []}
               .events=${this.events}
@@ -1042,11 +1132,12 @@ export class InstructorApp extends LitElement {
               .simTime=${s.t}
               .unsupported=${this.engineUnsupported}
             ></brm-timeline-panel>
-            <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale}></brm-run-control>
+            <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale} .restHoursConfirmed=${!!this.sessionInfo?.restHoursConfirmation}></brm-run-control>
           </div>
           <div class="col center">
             <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${overlay} .targets=${s.targets} .alarmTargets=${this.alarmTargets} target-table></brm-track-plot>
             <div class="bottom">
+              <brm-session-info-panel .simUtc=${s.utc ?? ''} .submitted=${this.sessionInfo}></brm-session-info-panel>
               ${s.tugs ? html`<brm-tug-panel .tugs=${s.tugs} .defs=${overlay?.tugDefs ?? this.activeScenario?.tugs ?? []} .epoch=${this.exerciseEpoch}></brm-tug-panel>` : nothing}
               ${s.anchors && anchorsFirst ? html`<brm-anchor-panel .anchors=${s.anchors}></brm-anchor-panel>` : nothing}
               ${s.berth ? html`<brm-mooring-panel .berth=${s.berth} .geometry=${moor.geometry ?? null} .lineDefs=${moor.lines}></brm-mooring-panel>` : nothing}
@@ -1089,8 +1180,8 @@ export class InstructorApp extends LitElement {
               </div>
             </div>
             ${this.simpleSelectTab === 'list'
-              ? html`<brm-scenario-panel .scenarios=${this.scenarios} .activeId=${sc?.id ?? ''}></brm-scenario-panel>`
-              : html`<brm-berthing-rehearsal-panel></brm-berthing-rehearsal-panel>`}
+              ? html`<brm-scenario-panel .scenarios=${this.scenarios} .activeId=${sc?.id ?? ''} .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-scenario-panel>`
+              : html`<brm-berthing-rehearsal-panel .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-berthing-rehearsal-panel>`}
           </div>
         </div>`;
       case 'briefing':
@@ -1103,8 +1194,12 @@ export class InstructorApp extends LitElement {
                     ${sc.briefingDoc.attachments.length > 0 ? html`<div>附件:${sc.briefingDoc.attachments.map((a) => a.title).join('、')}</div>` : nothing}
                   </div>`
                 : nothing}</div>
+            <brm-session-info-panel compact .simUtc=${s.utc ?? ''} .submitted=${this.sessionInfo}></brm-session-info-panel>
             <div class="actions">
               <button class="primary start" @click=${this.simpleStart}>開始練習</button>
+              ${this.sessionInfo?.restHoursConfirmation
+                ? html`<span class="sum-note rest-ok">休息時間已由 ${this.sessionInfo.restHoursConfirmation.confirmedBy} 確認(${this.sessionInfo.restHoursConfirmation.compliant ? '符合' : '不符合'})</span>`
+                : html`<span class="sum-note rest-warning" title="規劃書第 5.5 節:不阻擋,是否照常開始由訓練負責人決策">尚未送出休息時間確認(STCW A-VIII/1);可照常開始,由訓練負責人決策</span>`}
               <button @click=${this.simpleNew}>返回</button>
               ${this.rehearsal ? html`<button class="download-yaml" @click=${this.downloadRehearsalYaml}>下載情境 YAML</button>` : nothing}
               <span class="sum-note">${this.rehearsal ? '靠離泊預演組題已以內嵌情境送核心並凍結' : '核心已載入情境並凍結'};按「開始練習」恢復執行</span>

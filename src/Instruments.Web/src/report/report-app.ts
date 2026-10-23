@@ -1,7 +1,9 @@
 // 講評報告頁 <brm-report-app>(report.html;規劃書第 8.2、8.4、9.1、9.2 節):
 //  - 講評報告:開啟核心 JSON Lines 紀錄或教官站紀錄(教官站「講評報告」按鈕經 IndexedDB 交接),填練習資訊、參與者與第 8.4 節講評五段;
 //  - 行為標記評估表:十五要素 1–5 分、錨定描述、觀察證據(可帶入 BRM 快速標記)、SIRE 2.0 缺失分類、雙評一致率;
-//  - 個人訓練紀錄與課程班次紀錄:名冊、班次、練習出席,列印每位學員一份;班次匯出 CSV/JSON。
+//  - 個人訓練紀錄與課程班次紀錄:名冊、班次、練習出席,列印每位學員一份;班次匯出 CSV/JSON;
+//  - 教官與證書(?tab=admin):教官資格紀錄(A-I/6、評估者校準)、學員證書效期雙軌追蹤、複訓排程(admin-records.ts;
+//    IndexedDB admin 存放區,JSON 匯入/匯出跨機搬移)。
 // 列印:瀏覽器「列印 → 另存為 PDF」(A4,@media print 只印 .sheet);資料只在本機 IndexedDB 與匯出檔,不連網。
 // 使用 light DOM(createRenderRoot 回傳 this),讓 report.css 的列印樣式直接套用整頁。
 
@@ -12,11 +14,38 @@ import { downloadText, fileStamp } from '../lib/download.js';
 import { formatSimTime } from '../lib/format.js';
 import { parseReplay, type ReplayData } from '../lib/record-replay.js';
 import { applyTheme, isTheme } from '../lib/theme.js';
+import {
+  ADMIN_RECORDS_FORMAT,
+  addYears,
+  alignWithStatutory,
+  buildRefresherSchedule,
+  dualTrackRows,
+  emptyAdminRecords,
+  emptyInstructor,
+  emptyTrack,
+  exportAdminRecords,
+  EXPIRY_FLAG_LABEL,
+  instructorRows,
+  instructorsToCsv,
+  normalizeAdminRecords,
+  parseDate,
+  refresherDueFrom,
+  scheduleToCsv,
+  scheduleToJson,
+  syncTracksWithRoster,
+  todayIso,
+  tracksToCsv,
+  unalignFromStatutory,
+  validateAdminRecords,
+  type AdminRecords,
+  type CertificateTrack,
+  type InstructorQualification,
+} from './admin-records.js';
 import { ANCHORS, allElements, type DeficiencyType, type HumanFactor } from './anchors.js';
-import { buildDebriefReport, emptyReportMeta, PARTICIPANT_ROLES, recordKey, stcwText, type DebriefReport, type Participant, type ReportMeta } from './debrief-report.js';
+import { applySessionInfoToMeta, buildDebriefReport, emptyReportMeta, PARTICIPANT_ROLES, recordKey, stcwText, type DebriefReport, type Participant, type ReportMeta } from './debrief-report.js';
 import { attachMarker, computeAgreement, createMarkerForm, elementsForMarker, exportForms, importForms, isFormComplete, parseSimTimeInput, ratingOf, summarizeForm, validateMarkerForm, type ElementRating, type FormIssue, type MarkerForm } from './marker-form.js';
-import { HANDOFF_KEY, LAST_RECORD_KEY, openReportStore, takeHandoff, WORKSPACE_KEY, type KvStore } from './report-store.js';
-import { renderAgreement, renderFormDoc, renderIndividualDoc, renderReportDoc, renderSessionDoc, tStr } from './report-views.js';
+import { ADMIN_KEY, ADMIN_STORE, HANDOFF_KEY, LAST_RECORD_KEY, openReportStore, takeHandoff, WORKSPACE_KEY, type KvStore } from './report-store.js';
+import { renderAdminDoc, renderAgreement, renderFormDoc, renderIndividualDoc, renderReportDoc, renderSessionDoc, tStr } from './report-views.js';
 import {
   buildIndividualRecords,
   COURSE_SESSION_FORMAT,
@@ -38,9 +67,13 @@ import {
   type Trainee,
 } from './training-record.js';
 
-export type ReportTab = 'report' | 'form' | 'individual' | 'session';
+export type ReportTab = 'report' | 'form' | 'individual' | 'session' | 'admin';
 
-const TAB_LABEL: Record<ReportTab, string> = { report: '講評報告', form: '行為標記評估表', individual: '個人訓練紀錄', session: '課程班次紀錄' };
+const TAB_LABEL: Record<ReportTab, string> = { report: '講評報告', form: '行為標記評估表', individual: '個人訓練紀錄', session: '課程班次紀錄', admin: '教官與證書' };
+
+export function isReportTab(v: unknown): v is ReportTab {
+  return typeof v === 'string' && Object.hasOwn(TAB_LABEL, v);
+}
 
 export interface ReportWorkspace {
   version: 1;
@@ -125,11 +158,16 @@ export class ReportApp extends LitElement {
   @state() persistent = true;
   @state() individualTrainee = '';
   @state() ready = false;
+  /** 教官資格紀錄與證書效期追蹤(IndexedDB admin 存放區;與報告工作資料分開保存) */
+  @state() admin: AdminRecords = emptyAdminRecords();
+  /** 到期狀態的計算日(預設今天;可改以模擬未來日期檢視) */
+  @state() asOf = todayIso();
   /** 最近一次開啟檔案(可多選)時無法處理的檔案與原因 */
   fileErrors: string[] = [];
 
   private store: KvStore | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private adminSaveTimer: ReturnType<typeof setTimeout> | null = null;
   private pageStyle: HTMLStyleElement | null = null;
 
   protected override createRenderRoot(): HTMLElement {
@@ -143,13 +181,14 @@ export class ReportApp extends LitElement {
     const theme = params.get('theme');
     applyTheme(isTheme(theme) ? theme : 'day', false);
     const tab = params.get('tab');
-    if (tab === 'form' || tab === 'individual' || tab === 'session' || tab === 'report') this.tab = tab;
+    if (isReportTab(tab)) this.tab = tab;
     void this.init(params.get('from') === 'instructor');
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    if (this.adminSaveTimer) clearTimeout(this.adminSaveTimer);
     this.pageStyle?.remove();
     this.pageStyle = null;
   }
@@ -160,6 +199,9 @@ export class ReportApp extends LitElement {
       this.store = await openReportStore();
       this.persistent = this.store.persistent;
       this.ws = restoreWorkspace(await this.store.get(WORKSPACE_KEY));
+      const adminRaw = await this.store.get(ADMIN_KEY, ADMIN_STORE);
+      const adminRes = adminRaw === undefined ? null : normalizeAdminRecords(adminRaw);
+      if (adminRes?.admin) this.admin = adminRes.admin;
       const handoff = fromInstructor ? await takeHandoff(this.store) : undefined;
       if (handoff) {
         this.loadRecordText(handoff.text, `教官站紀錄(${handoff.savedUtc})`);
@@ -213,6 +255,8 @@ export class ReportApp extends LitElement {
       m.courseVersion = s.courseVersion;
       m.sessionId = s.sessionId;
       m.instructor = s.instructors[0] ?? '';
+      // 教官站於練習前登錄的參與者與課程(紀錄標頭 sessionInfo)帶入新報告的參與者/教官/班次欄(規劃書第 5.5 節)
+      applySessionInfoToMeta(m, this.data?.header.sessionInfo, s.trainees);
       this.ws.metas[k] = m;
     }
     return m;
@@ -322,7 +366,76 @@ export class ReportApp extends LitElement {
       } else this.say(res.error ?? '匯入失敗', 'error');
       return;
     }
+    if (fmt === ADMIN_RECORDS_FORMAT) {
+      const res = normalizeAdminRecords(obj);
+      if (res.admin) {
+        this.admin = res.admin;
+        this.say(`已匯入教官與證書紀錄:教官 ${res.admin.instructors.length}、學員 ${res.admin.tracks.length}(取代本機既有資料)`);
+        this.touchAdmin();
+      } else this.say(res.error ?? '匯入失敗', 'error');
+      return;
+    }
     this.loadRecordText(text, name);
+  }
+
+  // ------------------------------------------------------------ 教官與證書(admin 存放區)
+  private touchAdmin(): void {
+    this.admin = { ...this.admin };
+    if (this.adminSaveTimer) clearTimeout(this.adminSaveTimer);
+    this.adminSaveTimer = setTimeout(() => void this.saveAdminNow(), 300);
+  }
+
+  async saveAdminNow(): Promise<void> {
+    if (this.adminSaveTimer) clearTimeout(this.adminSaveTimer);
+    this.adminSaveTimer = null;
+    try {
+      await this.store?.set(ADMIN_KEY, JSON.parse(JSON.stringify(this.admin)), ADMIN_STORE);
+    } catch (err) {
+      this.say(`教官與證書紀錄儲存失敗:${String(err)}`, 'error');
+    }
+  }
+
+  /** 由學員名冊同步追蹤清單(新增缺少的學員、更新姓名/職級、補法定到期日)。 */
+  syncAdminWithRoster(): number {
+    const added = syncTracksWithRoster(this.admin, this.ws.session.trainees);
+    this.say(`已由名冊同步:新增 ${added} 位學員(共 ${this.admin.tracks.length} 位)`);
+    this.touchAdmin();
+    return added;
+  }
+
+  addInstructor(): InstructorQualification {
+    const id = `I${String(this.admin.instructors.length + 1).padStart(3, '0')}`;
+    const i = emptyInstructor(this.admin.instructors.some((x) => x.id === id) ? `${id}-${Date.now().toString(36)}` : id);
+    this.admin.instructors.push(i);
+    this.touchAdmin();
+    return i;
+  }
+
+  addTrack(): CertificateTrack {
+    const id = `T${String(this.admin.tracks.length + 1).padStart(3, '0')}`;
+    const t = emptyTrack(this.admin.tracks.some((x) => x.traineeId === id) ? `${id}-${Date.now().toString(36)}` : id);
+    this.admin.tracks.push(t);
+    this.touchAdmin();
+    return t;
+  }
+
+  /** 法定證書到期日改動時同步回名冊的 certificateExpiry(個人訓練紀錄列印用同一日期)。 */
+  private setStatutoryExpiry(t: CertificateTrack, v: string): void {
+    t.statutoryExpiry = parseDate(v) === null ? '' : v;
+    if (t.alignedWithStatutory) alignWithStatutory(t);
+    const trainee = this.ws.session.trainees.find((x) => x.id === t.traineeId);
+    if (trainee) {
+      if (t.statutoryExpiry) trainee.certificateExpiry = t.statutoryExpiry;
+      else delete trainee.certificateExpiry;
+      this.touch();
+    }
+    this.touchAdmin();
+  }
+
+  private setLastCompleted(t: CertificateTrack, v: string): void {
+    t.lastCompletedDate = parseDate(v) === null ? '' : v;
+    if (!t.alignedWithStatutory) t.refresherDue = t.lastCompletedDate ? refresherDueFrom(t.lastCompletedDate, this.admin.refresherIntervalYears) : '';
+    this.touchAdmin();
   }
 
   mergeRoster(roster: Roster): void {
@@ -425,7 +538,7 @@ export class ReportApp extends LitElement {
   private printDoc(): void {
     const old = document.title;
     const r = this.report;
-    const base = this.tab === 'report' ? `講評報告-${r?.reportNo ?? ''}` : this.tab === 'form' ? `行為標記評估表-${this.activeForm?.trainee.name ?? ''}` : this.tab === 'individual' ? `個人訓練紀錄-${this.ws.session.sessionId}` : `課程班次紀錄-${this.ws.session.sessionId}`;
+    const base = this.tab === 'report' ? `講評報告-${r?.reportNo ?? ''}` : this.tab === 'form' ? `行為標記評估表-${this.activeForm?.trainee.name ?? ''}` : this.tab === 'individual' ? `個人訓練紀錄-${this.ws.session.sessionId}` : this.tab === 'admin' ? `教官資格與證書效期-${this.asOf}` : `課程班次紀錄-${this.ws.session.sessionId}`;
     document.title = base.replace(/[\\/:*?"<>|]/g, '_');
     try {
       window.print();
@@ -482,6 +595,8 @@ export class ReportApp extends LitElement {
         return this.renderIndividualTab();
       case 'session':
         return this.renderSessionTab();
+      case 'admin':
+        return this.renderAdminTab();
     }
   }
 
@@ -889,6 +1004,127 @@ export class ReportApp extends LitElement {
       </section>
       <section class="rp-preview">${renderSessionDoc(s)}</section>
     `;
+  }
+
+  // ---------------------------------------------- 教官與證書分頁(?tab=admin)
+  private renderAdminTab(): TemplateResult {
+    const a = this.admin;
+    const today = this.asOf;
+    const issues = validateAdminRecords(a);
+    const schedule = buildRefresherSchedule(a, today);
+    const stamp = fileStamp();
+    return html`
+      <section class="rp-editor screen-only admin-editor">
+        <h2>教官與證書</h2>
+        <p class="hint">教官資格紀錄(STCW A-I/6、評估者校準;R10)、學員法定證書與公司 BRM 複訓到期雙軌追蹤、複訓排程(R9;規劃書第 8.0 節每 5 年與換證同步)。資料存於本機瀏覽器 IndexedDB(admin 存放區),可匯出 JSON 搬到另一台教官筆電;不連網。</p>
+        <div class="fields">
+          <label>狀態計算日 <input class="f-asof" type="date" .value=${today} @change=${(e: Event) => (this.asOf = parseDate(val(e)) === null ? todayIso() : val(e))} /></label>
+          <label>複訓週期(年) <input class="f-interval" type="number" min="1" max="10" step="1" .value=${String(a.refresherIntervalYears)} @change=${(e: Event) => {
+            const n = Number(val(e));
+            a.refresherIntervalYears = Number.isFinite(n) && n > 0 ? Math.round(n) : 5;
+            for (const t of a.tracks) if (!t.alignedWithStatutory && t.lastCompletedDate) t.refresherDue = refresherDueFrom(t.lastCompletedDate, a.refresherIntervalYears);
+            this.touchAdmin();
+          }} /></label>
+        </div>
+        ${issues.length ? html`<ul class="warn admin-issues">${issues.map((i) => html`<li>${i}</li>`)}</ul>` : nothing}
+        <div class="row-actions">
+          <button class="rp-btn export-admin" @click=${() => downloadText(`brm-admin-records-${stamp}.json`, exportAdminRecords(a, today))}>匯出 JSON(跨機搬移)</button>
+          <label class="rp-btn file-btn">匯入 JSON<input type="file" accept=".json,application/json" @change=${this.onFileInput} /></label>
+          <button class="rp-btn export-instructors-csv" @click=${() => downloadText(`brm-instructors-${stamp}.csv`, instructorsToCsv(a), 'text/csv')}>教官資格 CSV</button>
+          <button class="rp-btn export-tracks-csv" @click=${() => downloadText(`brm-certificates-${stamp}.csv`, tracksToCsv(a, today), 'text/csv')}>證書效期 CSV</button>
+        </div>
+
+        <h3>(a)教官資格紀錄</h3>
+        ${a.instructors.length === 0 ? html`<p class="hint">尚無教官;按「新增教官」。</p>` : nothing}
+        ${instructorRows(a, today).map((r) => this.renderInstructorEditor(r.instructor, r.calibrated, r.flag))}
+        <div class="row-actions"><button class="rp-btn add-instructor" @click=${() => this.addInstructor()}>新增教官</button></div>
+
+        <h3>(b)學員證書效期雙軌追蹤</h3>
+        <p class="hint">法定證書到期日與名冊的「法定 BRM 證書到期」同步;公司複訓到期 = 上次完成 + ${a.refresherIntervalYears} 年,按「對齊換證」改為與法定到期日同步。清單依最近到期日排序,90/180 天內到期者標示。</p>
+        <table class="edit-tbl tracks-edit">
+          <thead><tr><th>學員 ID</th><th>姓名</th><th>職級</th><th>STCW 證書類別</th><th>證書號</th><th>法定到期</th><th>上次完成</th><th>公司複訓到期</th><th>狀態</th><th></th></tr></thead>
+          <tbody>${dualTrackRows(a, today).map((r) => {
+            const t = r.track;
+            return html`<tr class="flag-${r.flag}">
+              <td><input class="tr-id" .value=${t.traineeId} @change=${(e: Event) => ((t.traineeId = val(e).trim() || t.traineeId), this.touchAdmin())} /></td>
+              <td><input class="tr-name" .value=${t.name} @change=${(e: Event) => ((t.name = val(e)), this.touchAdmin())} /></td>
+              <td><input class="tr-rank" .value=${t.rank} @change=${(e: Event) => ((t.rank = val(e)), this.touchAdmin())} /></td>
+              <td><input class="tr-type" .value=${t.statutoryType} placeholder="例:領導統御與駕駛臺資源管理" @change=${(e: Event) => ((t.statutoryType = val(e)), this.touchAdmin())} /></td>
+              <td><input class="tr-no" .value=${t.statutoryNo} @change=${(e: Event) => ((t.statutoryNo = val(e)), this.touchAdmin())} /></td>
+              <td><input class="tr-statutory" type="date" .value=${t.statutoryExpiry} @change=${(e: Event) => this.setStatutoryExpiry(t, val(e))} /></td>
+              <td><input class="tr-last" type="date" .value=${t.lastCompletedDate} @change=${(e: Event) => this.setLastCompleted(t, val(e))} /></td>
+              <td>
+                <input class="tr-due" type="date" .value=${t.refresherDue} ?disabled=${t.alignedWithStatutory} @change=${(e: Event) => ((t.refresherDue = parseDate(val(e)) === null ? '' : val(e)), this.touchAdmin())} />
+                <button class="rp-btn small align-btn" title=${t.alignedWithStatutory ? '解除與換證同步,回到上次完成 + 週期' : '公司複訓到期日改為與法定證書換證同步'} @click=${() => {
+                  if (t.alignedWithStatutory) unalignFromStatutory(t, a.refresherIntervalYears);
+                  else alignWithStatutory(t);
+                  this.touchAdmin();
+                }}>${t.alignedWithStatutory ? '已對齊換證' : '對齊換證'}</button>
+              </td>
+              <td class="flag-cell ${r.flag}" title=${`法定:${EXPIRY_FLAG_LABEL[r.statutoryFlag]};公司:${EXPIRY_FLAG_LABEL[r.companyFlag]}`}>${EXPIRY_FLAG_LABEL[r.flag]}${r.nextDue ? html`<div class="hint">${r.nextDue}</div>` : nothing}</td>
+              <td><button class="rp-btn small" @click=${() => (a.tracks.splice(a.tracks.indexOf(t), 1), this.touchAdmin())}>刪除</button></td>
+            </tr>`;
+          })}</tbody>
+        </table>
+        <div class="row-actions">
+          <button class="rp-btn add-track" @click=${() => this.addTrack()}>新增學員</button>
+          <button class="rp-btn sync-roster" ?disabled=${this.ws.session.trainees.length === 0} @click=${() => this.syncAdminWithRoster()}>由名冊同步(${this.ws.session.trainees.length} 位)</button>
+        </div>
+
+        <h3>(c)複訓排程(季度)</h3>
+        <p class="hint">由到期日自動產生(到期前 90 天為建議完成日;已逾期者排本季);可匯出給訓練負責人排入航次/訪船計畫。</p>
+        <div class="row-actions">
+          <button class="rp-btn export-schedule-csv" ?disabled=${schedule.length === 0} @click=${() => downloadText(`brm-refresher-schedule-${stamp}.csv`, scheduleToCsv(schedule), 'text/csv')}>排程 CSV</button>
+          <button class="rp-btn export-schedule-json" ?disabled=${schedule.length === 0} @click=${() => downloadText(`brm-refresher-schedule-${stamp}.json`, scheduleToJson(schedule, today))}>排程 JSON</button>
+          <span class="hint">${schedule.reduce((n, q) => n + q.items.length, 0)} 項 / ${schedule.length} 季</span>
+        </div>
+      </section>
+      <section class="rp-preview">${renderAdminDoc(a, today, schedule)}</section>
+    `;
+  }
+
+  private renderInstructorEditor(i: InstructorQualification, calibrated: boolean, flag: string): TemplateResult {
+    const a = this.admin;
+    return html`<fieldset class="instructor-edit flag-${flag}">
+      <legend>${i.name || '(未填姓名)'} <span class="hint mono">${i.id}</span> ${calibrated ? html`<span class="ok">已校準</span>` : html`<span class="warn">未校準/未達 80%</span>`}</legend>
+      <div class="fields">
+        <label>姓名 <input class="in-name" .value=${i.name} @change=${(e: Event) => ((i.name = val(e)), this.touchAdmin())} /></label>
+        <label>A-I/6 訓練師課程 <input class="in-trainer" .value=${i.trainerCourse} placeholder="例:IMO 示範課程 6.09/6.10" @change=${(e: Event) => ((i.trainerCourse = val(e)), this.touchAdmin())} /></label>
+        <label>訓練師資格日期 <input class="in-trainer-date" type="date" .value=${i.trainerDate} @change=${(e: Event) => ((i.trainerDate = parseDate(val(e)) === null ? '' : val(e)), this.touchAdmin())} /></label>
+        <label>評估者課程(A-I/6 第 7–8 段) <input class="in-assessor" .value=${i.assessorCourse} @change=${(e: Event) => ((i.assessorCourse = val(e)), this.touchAdmin())} /></label>
+        <label>評估者資格日期 <input class="in-assessor-date" type="date" .value=${i.assessorDate} @change=${(e: Event) => ((i.assessorDate = parseDate(val(e)) === null ? '' : val(e)), this.touchAdmin())} /></label>
+        <label>資格到期日 <input class="in-expiry" type="date" .value=${i.expiryDate} @change=${(e: Event) => ((i.expiryDate = parseDate(val(e)) === null ? '' : val(e)), this.touchAdmin())} /></label>
+      </div>
+      <label class="block">該型模擬器實務經驗(監督下評估、雙評次數等)<input class="in-exp" .value=${i.simulatorExperience} @change=${(e: Event) => ((i.simulatorExperience = val(e)), this.touchAdmin())} /></label>
+      <label class="block">備註<input class="in-note" .value=${i.note} @change=${(e: Event) => ((i.note = val(e)), this.touchAdmin())} /></label>
+      <table class="edit-tbl calibration-edit">
+        <thead><tr><th>校準日期</th><th>基準錄影</th><th>一致率 %</th><th>備註</th><th></th></tr></thead>
+        <tbody>${i.calibrations.map(
+          (c, ci) => html`<tr>
+            <td><input class="cal-date" type="date" .value=${c.date} @change=${(e: Event) => ((c.date = parseDate(val(e)) === null ? '' : val(e)), this.touchAdmin())} /></td>
+            <td><input class="cal-video" .value=${c.referenceVideo} placeholder="例:E20 基準錄影 1/3" @change=${(e: Event) => ((c.referenceVideo = val(e)), this.touchAdmin())} /></td>
+            <td><input class="cal-rate" type="number" min="0" max="100" step="1" .value=${c.agreementRate === null ? '' : String(Math.round(c.agreementRate * 100))} @change=${(e: Event) => {
+              const v = val(e).trim();
+              const n = Number(v);
+              c.agreementRate = v === '' || !Number.isFinite(n) ? null : Math.min(1, Math.max(0, n / 100));
+              this.touchAdmin();
+            }} /></td>
+            <td><input class="cal-note" .value=${c.note ?? ''} @change=${(e: Event) => {
+              const v = val(e);
+              if (v.trim()) c.note = v;
+              else delete c.note;
+              this.touchAdmin();
+            }} /></td>
+            <td><button class="rp-btn small" @click=${() => (i.calibrations.splice(ci, 1), this.touchAdmin())}>刪除</button></td>
+          </tr>`,
+        )}</tbody>
+      </table>
+      <div class="row-actions">
+        <button class="rp-btn small add-calibration" @click=${() => (i.calibrations.push({ date: this.asOf, referenceVideo: '', agreementRate: null }), this.touchAdmin())}>新增校準紀錄</button>
+        <button class="rp-btn small danger" @click=${() => (a.instructors.splice(a.instructors.indexOf(i), 1), this.touchAdmin())}>刪除教官</button>
+        ${i.trainerDate ? html`<span class="hint">資格 5 年參考到期:${addYears(i.trainerDate, 5)}</span>` : nothing}
+      </div>
+    </fieldset>`;
   }
 
   /** 觀察的時刻顯示(測試用)。 */

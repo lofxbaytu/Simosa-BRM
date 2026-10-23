@@ -1,4 +1,5 @@
-// 教官站紀錄(SessionRecord)版本 2:核心事件與核心 summary 往返(buildSessionRecord → parseReplay),舊版本 1 紀錄仍可讀。
+// 教官站紀錄(SessionRecord)版本 3(2 加 sessionInfo;本檔驗 2 的核心事件與核心 summary 往返,buildSessionRecord → parseReplay),舊版本 1 紀錄仍可讀。
+// sessionInfo 的往返在 session-info.test.ts。
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +39,7 @@ describe('SessionRecord v2', () => {
       },
       new Date(Date.UTC(2026, 9, 17)),
     );
-    expect(record.version).toBe(2);
+    expect(record.version).toBe(3);
     expect(record.coreSummary).toBe(summaryRaw);
     expect(record.events).toHaveLength(2);
     const json = JSON.stringify(record);

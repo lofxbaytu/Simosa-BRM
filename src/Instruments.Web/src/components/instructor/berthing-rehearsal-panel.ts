@@ -22,6 +22,8 @@ import {
 import { downloadText } from '../../lib/download.js';
 import { SHIP_IDS, type LoadingCondition, type ShipId } from '../../types/state.js';
 import { loadingLabel } from '../../lib/scenario.js';
+import type { ScenarioLoadRejection } from '../../lib/sim-event.js';
+import { renderRejection } from './scenario-panel.js';
 
 export type RehearsalComposeEvent = CustomEvent<BerthingRehearsalResult>;
 
@@ -87,6 +89,26 @@ export class BerthingRehearsalPanel extends LitElement {
         color: var(--ob-warning);
         font-size: 12px;
       }
+      .rejected {
+        font-size: 11px;
+        color: var(--ob-alarm);
+        border: 1px solid var(--ob-alarm);
+        border-radius: 3px;
+        padding: 4px 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .rejected .title {
+        font-weight: 600;
+      }
+      .rejected ul {
+        margin: 0;
+        padding-left: 16px;
+      }
+      .rejected .muted {
+        color: var(--ob-text-muted);
+      }
       .preview .warning {
         color: var(--ob-warning);
       }
@@ -114,6 +136,10 @@ export class BerthingRehearsalPanel extends LitElement {
   ];
 
   @property({ type: Boolean }) compact = false;
+  /** 核心拒絕上一次「組題並載入」的原因(網頁自我驗證通過但核心的結構檢查/參數/泊位參照失敗時);null = 無 */
+  @property({ attribute: false }) rejection: ScenarioLoadRejection | null = null;
+  /** 已送 loadScenario、等待核心結果:載入鈕停用並顯示載入中 */
+  @property({ type: Boolean }) busy = false;
 
   @state() private input: BerthingRehearsalInput = defaultRehearsalInput();
   @state() private windShiftOn = false;
@@ -254,6 +280,7 @@ export class BerthingRehearsalPanel extends LitElement {
           </fieldset>
         </div>
         ${this.error ? html`<div class="error">${this.error}</div>` : nothing}
+        ${this.rejection ? renderRejection(this.rejection) : nothing}
         ${this.result
           ? html`<div class="preview">
               <div class="ok">已組題 ${this.result.id} · 自我驗證通過 · 時間表 ${this.result.summary.stats.timelineItems} 項 · 評估規則 ${this.result.summary.stats.assessmentRules} 條 · 參數引用 ${this.result.summary.stats.paramRefs} 個</div>
@@ -265,7 +292,7 @@ export class BerthingRehearsalPanel extends LitElement {
         <div class="btn-row">
           <button class="preview-btn" @click=${() => this.compose()}>預覽</button>
           <button class="download" @click=${this.download}>下載 YAML</button>
-          <button class="primary load" @click=${this.composeAndLoad}>組題並載入</button>
+          <button class="primary load" ?disabled=${this.busy} @click=${this.composeAndLoad}>${this.busy ? '載入中…' : '組題並載入'}</button>
         </div>
       </div>
     `;

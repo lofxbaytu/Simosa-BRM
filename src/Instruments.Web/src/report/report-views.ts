@@ -5,6 +5,19 @@ import { html, nothing, type TemplateResult } from 'lit';
 import { BAND_STATE_LABEL, HARD_FAIL_RULE_LABEL, REQUIRED_STATE_LABEL, type AssessmentSummary } from '../lib/assessment.js';
 import { formatSimTime } from '../lib/format.js';
 import { ACK_KIND_LABEL } from '../lib/sim-event.js';
+import { sessionRoleLabel, type RestHoursConfirmation } from '../lib/session-info.js';
+import {
+  CALIBRATION_TARGET,
+  dualTrackRows,
+  EXPIRY_FLAG_LABEL,
+  instructorRows,
+  REFRESHER_LEAD_DAYS,
+  SCHEDULE_KIND_LABEL,
+  validateAdminRecords,
+  type AdminRecords,
+  type ExpiryFlag,
+  type ScheduleQuarter,
+} from './admin-records.js';
 import { ANCHORS, allElements, scaleLabel, type BehaviouralAnchors } from './anchors.js';
 import { DATA_QUALITY_LABEL, participantRoleLabel, stcwMapping, stcwText, type BehaviouralResult, type DebriefReport, type ManoeuvreRow } from './debrief-report.js';
 import { summarizeForm, validateMarkerForm, type AgreementResult, type MarkerForm } from './marker-form.js';
@@ -93,6 +106,7 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
             <thead><tr><th>姓名</th><th>職級</th><th>角色</th><th>學員 ID</th></tr></thead>
             <tbody>${m.participants.map((p) => html`<tr><td>${p.name}</td><td>${p.rank}</td><td>${participantRoleLabel(p.role)}</td><td>${p.traineeId || '—'}</td></tr>`)}</tbody>
           </table>`}
+      ${renderSessionInfo(r)}
     </section>
 
     <section class="sec" data-sec="summary">
@@ -154,6 +168,34 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
     ${signatures(['教官', '評估員', '日期'])}
     <footer class="doc-foot">產生時間 ${localDateTime(r.generatedUtc)} · 紀錄鍵 ${r.exercise.recordKey.slice(0, 24)} · Simosa BRM 操船模擬器(訓練模擬器,非航行設備)</footer>
   </article>`;
+}
+
+export function restHoursText(rest: RestHoursConfirmation | undefined): string {
+  if (!rest) return '未確認';
+  return `${rest.confirmedBy || '—'} · ${localDateTime(rest.confirmedAtUtc)} · ${rest.compliant ? '符合' : '不符合'}${rest.note ? ` · ${rest.note}` : ''}`;
+}
+
+/** 紀錄標頭的參與者登錄與休息時間確認(教官站 sessionInfo;規劃書第 5.5 節)。 */
+function renderSessionInfo(r: DebriefReport): TemplateResult {
+  const si = r.sessionInfo;
+  const rest = si?.restHoursConfirmation;
+  return html`<h3>休息時間確認(STCW A-VIII/1、MLC 2006 規則 2.3)</h3>
+    ${rest
+      ? html`<dl class="kv rest-hours">
+          <dt>確認人</dt><dd>${rest.confirmedBy || '—'}</dd>
+          <dt>確認時刻</dt><dd>${localDateTime(rest.confirmedAtUtc)}(${rest.confirmedAtUtc})</dd>
+          <dt>符合規定</dt><dd class=${rest.compliant ? '' : 'warn'}>${rest.compliant ? '是:已對照船上工時/休息時間紀錄核對,符合 STCW A-VIII/1 與公司規定' : '否(由訓練負責人決策照常執行)'}</dd>
+          <dt>備註</dt><dd>${rest.note || '—'}</dd>
+        </dl>`
+      : html`<p class="muted rest-hours">紀錄沒有休息時間確認(教官站未於練習前送出 sessionInfo);請於紙本補註核對情形。</p>`}
+    ${si && si.participants.length > 0
+      ? html`<h3>教官站登錄之參與者(紀錄標頭)</h3>
+          <table class="tbl session-participants">
+            <thead><tr><th>姓名</th><th>職務</th><th>職級</th><th>證書號</th></tr></thead>
+            <tbody>${si.participants.map((p) => html`<tr><td>${p.name}</td><td>${sessionRoleLabel(p.role)}</td><td>${p.rank ?? ''}</td><td class="mono">${p.certificateNo ?? '—'}</td></tr>`)}</tbody>
+          </table>
+          ${si.course ? html`<p class="muted small">課程:${[si.course.id, si.course.title, si.course.instructor ? `教官 ${si.course.instructor}` : ''].filter(Boolean).join(' · ')}</p>` : nothing}`
+      : nothing}`;
 }
 
 function renderSummary(s: AssessmentSummary): TemplateResult {
@@ -397,12 +439,12 @@ export function renderIndividualDoc(rec: IndividualTrainingRecord): TemplateResu
     ${rec.results.length === 0
       ? html`<p class="muted">本期尚無練習</p>`
       : html`<table class="tbl results">
-          <thead><tr><th>練習</th><th>日期</th><th class="num">時數</th><th>出席 / 完成</th><th>自動評分(輔助)</th><th class="num">行為標記平均 / 最低</th><th>評估員判定</th><th>備註</th><th>報告編號</th></tr></thead>
+          <thead><tr><th>練習</th><th>日期</th><th class="num">時數</th><th>出席 / 完成</th><th>角色</th><th>自動評分(輔助)</th><th class="num">行為標記平均 / 最低</th><th>評估員判定</th><th>備註</th><th>休息時間確認</th><th>報告編號</th></tr></thead>
           <tbody>${rec.results.map(
-            (r) => html`<tr><td>${r.exerciseNo}<div class="muted small break-any">${r.scenarioId}</div></td><td class="nw">${r.date}</td><td class="num">${r.hours}</td><td class="nw">${r.attended ? '是' : '否'} / ${r.completed ? '是' : '否'}</td><td class="nw">${autoScoreText(r)}</td><td class="num">${markerText(r)}</td><td class="nw verdict">${r.verdict ? VERDICT_LABEL[r.verdict] : '—'}</td><td class="remark">${r.remark ?? ''}</td><td class="mono small">${r.reportNo}</td></tr>`,
+            (r) => html`<tr><td>${r.exerciseNo}<div class="muted small break-any">${r.scenarioId}</div></td><td class="nw">${r.date}</td><td class="num">${r.hours}</td><td class="nw">${r.attended ? '是' : '否'} / ${r.completed ? '是' : '否'}</td><td class="nw role">${r.role ? participantRoleLabel(r.role) : '—'}</td><td class="nw">${autoScoreText(r)}</td><td class="num">${markerText(r)}</td><td class="nw verdict">${r.verdict ? VERDICT_LABEL[r.verdict] : '—'}</td><td class="remark">${r.remark ?? ''}</td><td class="small rest-hours ${r.restHoursConfirmation && !r.restHoursConfirmation.compliant ? 'warn' : ''}">${r.attended ? restHoursText(r.restHoursConfirmation) : '—'}</td><td class="mono small">${r.reportNo}</td></tr>`,
           )}</tbody>
         </table>`}
-    <p class="muted">「評估員判定」為評估員對該學員的通過/未通過判定與備註(R9;補訓與複查流程待 D20);「自動評分」為團隊層級且僅作輔助(規劃書第 8.3、8.4 節)。「評估表未完成」表示主要評估員的評估表未評滿十五項或 2 分以下缺時間戳與觀察描述,不計入行為標記分數。</p>
+    <p class="muted">「評估員判定」為評估員對該學員的通過/未通過判定與備註(R9;補訓與複查流程待 D20);「自動評分」為團隊層級且僅作輔助(規劃書第 8.3、8.4 節)。「評估表未完成」表示主要評估員的評估表未評滿十五項或 2 分以下缺時間戳與觀察描述,不計入行為標記分數。「角色」與「休息時間確認」(確認人 · 時刻 · 是否符合 STCW A-VIII/1 與公司規定)由講評紀錄帶入(規劃書第 5.5 節);訓練時數供轉錄至船上工時/休息時間紀錄。</p>
     ${rec.evaluation ? html`<h2>課後評估</h2><p class="pre">${rec.evaluation}</p>` : nothing}
     ${signatures(['學員', '授課教官', '訓練負責人'])}
     <footer class="doc-foot">${INTERNAL_TRAINING_STATEMENT}</footer>
@@ -469,6 +511,97 @@ export function renderSessionDoc(session: CourseSession): TemplateResult {
     <h2>課後評估</h2>
     ${session.evaluation ? html`<p class="pre">${session.evaluation}</p>` : html`<div class="write-lines"></div>`}
     ${signatures(['授課教官', '訓練負責人', '日期'])}
+    <footer class="doc-foot">${INTERNAL_TRAINING_STATEMENT}</footer>
+  </article>`;
+}
+
+// ------------------------------------------------------------------ 教官資格紀錄與證書效期(?tab=admin)
+
+function flagCell(flag: ExpiryFlag, days: number | null): TemplateResult {
+  const cls = flag === 'expired' ? 'flag expired' : flag === 'soon' ? 'flag soon' : flag === 'upcoming' ? 'flag upcoming' : 'flag';
+  return html`<span class=${cls}>${EXPIRY_FLAG_LABEL[flag]}${days !== null && flag !== 'none' ? `(${days >= 0 ? `${days} 天` : `逾 ${-days} 天`})` : ''}</span>`;
+}
+
+function rateText(rate: number | null | undefined): string {
+  return rate === null || rate === undefined ? '—' : `${Math.round(rate * 100)}%`;
+}
+
+/**
+ * 教官資格紀錄、學員證書效期雙軌追蹤與複訓排程(列印版;規劃書 R9/R10、第 8.0 節複訓、第 8.3 節評估者校準、第 14 章評估列)。
+ * today 為計算到期狀態的日期(YYYY-MM-DD)。
+ */
+export function renderAdminDoc(admin: AdminRecords, today: string, schedule: readonly ScheduleQuarter[]): TemplateResult {
+  const issues = validateAdminRecords(admin);
+  const instructors = instructorRows(admin, today);
+  const tracks = dualTrackRows(admin, today);
+  const counts = { expired: tracks.filter((r) => r.flag === 'expired').length, soon: tracks.filter((r) => r.flag === 'soon').length, upcoming: tracks.filter((r) => r.flag === 'upcoming').length };
+  return html`<article class="sheet admin-doc" data-doc="admin">
+    ${sheetHeader('中塑海運內部訓練', '教官資格紀錄與證書效期追蹤 Instructor Qualifications & Certificate Tracking', `複訓週期 ${admin.refresherIntervalYears} 年 · 狀態計算日 ${today}`, `學員 ${admin.tracks.length} · 教官 ${admin.instructors.length}`)}
+    ${issues.length > 0 ? html`<ul class="warn screen-only">${issues.map((i) => html`<li>${i}</li>`)}</ul>` : nothing}
+    <section class="sec" data-sec="instructors">
+      <h2>一、教官資格紀錄(STCW A-I/6;R10、D18)</h2>
+      ${instructors.length === 0
+        ? html`<p class="muted">尚無教官</p>`
+        : html`<table class="tbl instructors">
+            <thead><tr><th>姓名</th><th>A-I/6 訓練師資格<div class="muted small">課程 / 日期</div></th><th>評估者資格(A-I/6 第 7–8 段)<div class="muted small">課程 / 日期</div></th><th>該型模擬器實務經驗</th><th>最近校準<div class="muted small">日期 · 基準錄影 · 一致率</div></th><th>資格到期日</th></tr></thead>
+            <tbody>${instructors.map(
+              (r) => html`<tr class=${r.flag === 'expired' ? 'sev-alarm' : r.flag === 'soon' ? 'sev-warning' : ''}>
+                <td>${r.instructor.name || r.instructor.id}<div class="muted small mono">${r.instructor.id}</div></td>
+                <td>${r.instructor.trainerCourse || '—'}<div class="nw small">${r.instructor.trainerDate || '—'}</div></td>
+                <td>${r.instructor.assessorCourse || '—'}<div class="nw small">${r.instructor.assessorDate || '—'}</div></td>
+                <td class="small">${r.instructor.simulatorExperience || '—'}</td>
+                <td class="small">${r.latestCalibration ? html`${r.latestCalibration.date} · ${r.latestCalibration.referenceVideo || '—'} · <b class=${r.calibrated ? '' : 'warn'}>${rateText(r.latestCalibration.agreementRate)}</b>${r.calibrated ? '(可獨立評分)' : `(未達 ${Math.round(CALIBRATION_TARGET * 100)}%,需補做校準)`}${r.recalibrationDue ? html`<div class="warn">逾一年,需再校準</div>` : nothing}` : html`<span class="warn">尚未校準</span>`}</td>
+                <td class="nw">${r.instructor.expiryDate || '—'}<div class="small">${flagCell(r.flag, r.expiryDays)}</div></td>
+              </tr>`,
+            )}</tbody>
+          </table>
+          ${instructors.some((r) => r.instructor.calibrations.length > 0)
+            ? html`<h3>評估者校準紀錄(第 8.3 節:3 段基準錄影;≥${Math.round(CALIBRATION_TARGET * 100)}% 要素在 ±1 分內)</h3>
+                <table class="tbl calibrations">
+                  <thead><tr><th>教官</th><th>日期</th><th>基準錄影</th><th class="num">一致率</th><th>結果</th><th>備註</th></tr></thead>
+                  <tbody>${instructors.flatMap((r) =>
+                    [...r.instructor.calibrations]
+                      .sort((a, b) => a.date.localeCompare(b.date))
+                      .map((c) => html`<tr><td>${r.instructor.name || r.instructor.id}</td><td class="nw">${c.date || '—'}</td><td>${c.referenceVideo || '—'}</td><td class="num">${rateText(c.agreementRate)}</td><td class="nw">${c.agreementRate === null ? '—' : c.agreementRate >= CALIBRATION_TARGET ? '達成' : '未達成'}</td><td class="small">${c.note ?? ''}</td></tr>`),
+                  )}</tbody>
+                </table>`
+            : nothing}`}
+    </section>
+    <section class="sec" data-sec="tracks">
+      <h2>二、學員證書效期雙軌追蹤(R9:法定證書與公司 BRM 複訓)</h2>
+      <p class="muted">公司複訓到期日 = 上次完成日 + ${admin.refresherIntervalYears} 年(規劃書第 8.0 節、D19);「對齊」= 與法定證書換證同步。已逾期 ${counts.expired}、90 天內 ${counts.soon}、180 天內 ${counts.upcoming}。</p>
+      ${tracks.length === 0
+        ? html`<p class="muted">尚無學員(可由名冊同步)</p>`
+        : html`<table class="tbl tracks">
+            <thead><tr><th>學員</th><th>職級</th><th>法定證書<div class="muted small">類別 · 號碼</div></th><th>法定到期</th><th>上次完成</th><th>公司複訓到期</th><th>最近到期</th><th>備註</th></tr></thead>
+            <tbody>${tracks.map(
+              (r) => html`<tr class="${r.flag === 'expired' ? 'sev-alarm' : r.flag === 'soon' ? 'sev-warning' : ''} ${r.flag}">
+                <td>${r.track.name || r.track.traineeId}<div class="muted small mono">${r.track.traineeId}</div></td>
+                <td>${r.track.rank}</td>
+                <td class="small">${r.track.statutoryType || '—'}<div class="mono">${r.track.statutoryNo || '—'}</div></td>
+                <td class="nw">${r.track.statutoryExpiry || '—'}<div class="small">${flagCell(r.statutoryFlag, r.statutoryDays)}</div></td>
+                <td class="nw">${r.track.lastCompletedDate || '—'}</td>
+                <td class="nw">${r.track.refresherDue || '—'}${r.track.alignedWithStatutory ? html`<div class="muted small">已對齊換證</div>` : nothing}<div class="small">${flagCell(r.companyFlag, r.companyDays)}</div></td>
+                <td class="nw next-due">${r.nextDue || '—'}<div class="muted small">${r.nextDueKind === 'statutory' ? '法定' : r.nextDueKind === 'company' ? '公司複訓' : r.nextDueKind === 'both' ? '同步' : ''}</div></td>
+                <td class="small">${r.track.note}</td>
+              </tr>`,
+            )}</tbody>
+          </table>`}
+    </section>
+    <section class="sec" data-sec="schedule">
+      <h2>三、複訓排程建議(季度)</h2>
+      <p class="muted">建議完成日 = 到期日前 ${REFRESHER_LEAD_DAYS} 天(到期前一年內在船時排入;已逾期者排入本季);實際排程依航次與訪船時間由訓練負責人決定。</p>
+      ${schedule.length === 0
+        ? html`<p class="muted">尚無到期日可排程</p>`
+        : schedule.map(
+            (q) => html`<h3>${q.quarter}</h3>
+              <table class="tbl schedule">
+                <thead><tr><th>建議完成</th><th>到期日</th><th>項目</th><th>學員</th><th>職級</th></tr></thead>
+                <tbody>${q.items.map((it) => html`<tr class=${it.overdue ? 'sev-alarm' : ''}><td class="nw">${it.plannedDate}</td><td class="nw">${it.dueDate}${it.overdue ? '(已逾期)' : ''}</td><td>${SCHEDULE_KIND_LABEL[it.kind]}</td><td>${it.name || it.traineeId}<span class="muted small"> ${it.traineeId}</span></td><td>${it.rank}</td></tr>`)}</tbody>
+              </table>`,
+          )}
+    </section>
+    ${signatures(['訓練負責人', '日期'])}
     <footer class="doc-foot">${INTERNAL_TRAINING_STATEMENT}</footer>
   </article>`;
 }

@@ -466,6 +466,7 @@ public sealed record TrafficEvent : SimEvent { }   // Source 固定 "traffic";Tr
 | instructor | `timelineManual` | `triggerTimeline` 指令收到(成功與否皆記,`data.ok`) |
 | instructor / timeline | `steeringModeChanged` | 操舵模式或泵變更(指令 `steeringMode`、`autopilot` 啟用/解除、`rudder` 把 autopilot/nfu 切回 fu;D32);`data: {from, to, pump}` |
 | instructor / timeline | `commandRejected` *(D35)* | 指令被拒絕、狀態不變;`data: {command, reason, args}`;目前只有 `reason: emergencySteering`(emergency 模式下 `autopilot {enabled: true}` / `steeringMode autopilot`,需先 `steeringMode fu`);時間表 `autopilot` 動作被拒時不發 `autopilotOverride` |
+| instructor | `scenarioLoadRejected` | `loadScenario`(檔案或 `args.scenario` 內嵌)載入/驗證失敗、引擎狀態不變(不重設、不切換情境、紀錄不切換):主控程序以 `ScenarioLoader.TryLoad` / `TryFromJsonElement` 收集全部問題(讀檔/YAML/參數集/泊位參照例外成單一項,`Scenario.LoadIssues` 列出全部結構 error)再 `SimulationEngine.TryApplyScenarioLoad`;`itemId` = 情境 id;`message` 為前 3 條問題;`data: {scenarioId, origin: file|inline|command, path?, issueCount, issues[]{path, message, severity}}`。**帶外事件**:由 `SimulationEngine.ScenarioLoadRejected` 發出而非 `EventRaised`,`seq` = −1、不進雜湊、紀錄器不寫(紀錄器本就不寫 `loadScenario` input 行,重播無法重現檔案載入失敗),只以 WebSocket `{"type":"event"}` 框送教官站(教官站把 `loadScenario` 指令標為核心拒絕、還原載入前的情境並列出問題);無載入處理者或處理者未回報時引擎也自行發出。Python 參考伺服器同義:ack `ok=false`、狀態不變 |
 
 ### 3.3 執行時序(每步)
 

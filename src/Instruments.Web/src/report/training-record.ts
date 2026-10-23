@@ -7,6 +7,7 @@
 // 資料只在瀏覽器(IndexedDB)與匯出檔;不連網、不經核心。
 
 import { csvEscape, csvSafeText } from '../lib/brm-markers.js';
+import { parseRestHoursConfirmation, type RestHoursConfirmation } from '../lib/session-info.js';
 import { exerciseNoFromScenario, formsOfRecord, localDate, type DebriefReport } from './debrief-report.js';
 import { isFormComplete, summarizeForm, validateMarkerForm, type MarkerForm } from './marker-form.js';
 
@@ -100,6 +101,10 @@ export interface SessionExercise {
   attended: string[];
   completed: string[];
   results: Record<string, TraineeResult>;
+  /** 各出席學員在該練習的角色(報告參與者角色;學員 ID → 角色 id) */
+  roles?: Record<string, string>;
+  /** 休息時間確認(由講評紀錄標頭帶入;規劃書第 5.5 節;紀錄沒有時省略) */
+  restHoursConfirmation?: RestHoursConfirmation;
 }
 
 export interface CourseSession {
@@ -236,7 +241,12 @@ export function normalizeCourseSession(obj: unknown): { session: CourseSession |
           results[singleLine(id)] = tr;
         }
       }
+      const roles: Record<string, string> = {};
+      if (isRecord(e['roles'])) for (const [id, r] of Object.entries(e['roles'])) if (typeof r === 'string' && r) roles[singleLine(id)] = singleLine(r);
+      const rest = parseRestHoursConfirmation(e['restHoursConfirmation']);
       return {
+        ...(Object.keys(roles).length > 0 ? { roles } : {}),
+        ...(rest ? { restHoursConfirmation: rest } : {}),
         exerciseNo: line(e['exerciseNo']),
         scenarioId: line(e['scenarioId']),
         date: line(e['date']),
@@ -345,6 +355,11 @@ export function upsertExerciseFromReport(session: CourseSession, report: Debrief
     completed,
     results,
   };
+  // 參與者角色與休息時間確認(由講評紀錄帶入個人訓練紀錄;R9、第 5.5 節)
+  const roles: Record<string, string> = {};
+  for (const p of report.meta.participants) if (p.traineeId && attended.includes(p.traineeId) && p.role) roles[p.traineeId] = p.role;
+  if (Object.keys(roles).length > 0) ex.roles = roles;
+  if (report.sessionInfo?.restHoursConfirmation) ex.restHoursConfirmation = { ...report.sessionInfo.restHoursConfirmation };
   const i = old ? session.exercises.indexOf(old) : -1;
   if (old && i >= 0) {
     // 保留人工修改的時數與設備配置(評估員判定/備註已在上面帶入)
@@ -382,7 +397,7 @@ export interface IndividualTrainingRecord {
   completedExercises: string[];
   instructors: string[];
   assessors: string[];
-  results: Array<{ exerciseNo: string; scenarioId: string; date: string; hours: number; attended: boolean; completed: boolean; reportNo: string } & TraineeResult>;
+  results: Array<{ exerciseNo: string; scenarioId: string; date: string; hours: number; attended: boolean; completed: boolean; reportNo: string; role?: string; restHoursConfirmation?: RestHoursConfirmation } & TraineeResult>;
   evaluation: string;
 }
 
@@ -399,6 +414,8 @@ export function buildIndividualRecord(session: CourseSession, trainee: Trainee):
     attended: e.attended.includes(trainee.id),
     completed: e.completed.includes(trainee.id),
     reportNo: e.reportNo,
+    ...(e.roles?.[trainee.id] ? { role: e.roles[trainee.id] } : {}),
+    ...(e.restHoursConfirmation ? { restHoursConfirmation: e.restHoursConfirmation } : {}),
     ...(e.results[trainee.id] ?? {}),
   }));
   const attendedEx = session.exercises.filter((e) => e.attended.includes(trainee.id));
@@ -469,6 +486,11 @@ export const SESSION_CSV_COLUMNS = [
   'remark',
   'reportNo',
   'individualRecordNo',
+  'participantRole',
+  'restHoursConfirmedBy',
+  'restHoursConfirmedAtUtc',
+  'restHoursCompliant',
+  'restHoursNote',
   'evaluation',
 ] as const;
 
@@ -491,11 +513,12 @@ export function sessionToCsv(session: CourseSession): string {
   for (const t of session.trainees) {
     const tcols = [txt(t.id), txt(t.name), txt(t.rank)];
     if (session.exercises.length === 0) {
-      rows.push([...common, ...tcols, '', '', '', '', '', '', txt(session.equipment), '', '', '', '', '', '', '', '', '', '', '', txt(individualRecordNo(session, t)), txt(session.evaluation)]);
+      rows.push([...common, ...tcols, '', '', '', '', '', '', txt(session.equipment), '', '', '', '', '', '', '', '', '', '', '', txt(individualRecordNo(session, t)), '', '', '', '', '', txt(session.evaluation)]);
       continue;
     }
     for (const e of session.exercises) {
       const r = e.results[t.id] ?? {};
+      const rest = e.restHoursConfirmation;
       rows.push([
         ...common,
         ...tcols,
@@ -518,6 +541,11 @@ export function sessionToCsv(session: CourseSession): string {
         txt(r.remark ?? ''),
         txt(e.reportNo),
         txt(individualRecordNo(session, t)),
+        txt(e.roles?.[t.id] ?? ''),
+        txt(rest?.confirmedBy ?? ''),
+        txt(rest?.confirmedAtUtc ?? ''),
+        rest ? yn(rest.compliant) : '',
+        txt(rest?.note ?? ''),
         txt(session.evaluation),
       ]);
     }

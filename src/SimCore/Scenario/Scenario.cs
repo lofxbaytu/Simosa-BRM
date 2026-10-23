@@ -60,8 +60,29 @@ public sealed class Scenario
     /// <summary>是否有時間表/航線/區域/評估規則(決定雜湊鏈是否追加情境引擎位元組;無者雜湊與舊版一致)。</summary>
     [JsonIgnore] public bool HasScenarioEngine => Timeline.Count > 0 || Route is not null || Zones.Count > 0 || Assessment.HasRules;
 
-    /// <summary>檢查必要欄位並補齊原點;回傳自身以便串接。</summary>
+    /// <summary>檢查必要欄位並補齊原點,再以 <see cref="StructuralIssues"/> 的第一個 error 項丟出例外;回傳自身以便串接。</summary>
     public Scenario Validate()
+    {
+        ValidateRequired();
+        var firstError = StructuralIssues().FirstOrDefault(i => i.Severity == ScenarioIssueSeverity.Error);
+        if (firstError is not null) throw new InvalidDataException($"{firstError.Path}:{firstError.Message}");
+        return this;
+    }
+
+    /// <summary>
+    /// 載入前檢查並列出全部問題(主控程序 loadScenario 拒絕時回報教官站用;<see cref="ScenarioLoader.TryLoad"/>):
+    /// 必要欄位(<see cref="Validate"/> 的前半段)任一缺失即只回該項(path 為 "scenario"),通過後列出 <see cref="StructuralIssues"/> 的全部 error 項。
+    /// 空清單 = 可載入(且已補齊原點,與 Validate 相同);不丟例外。
+    /// </summary>
+    public IReadOnlyList<ScenarioIssue> LoadIssues()
+    {
+        try { ValidateRequired(); }
+        catch (InvalidDataException ex) { return new[] { new ScenarioIssue(ScenarioIssueSeverity.Error, "scenario", ex.Message) }; }
+        return StructuralIssues().Where(i => i.Severity == ScenarioIssueSeverity.Error).ToList();
+    }
+
+    /// <summary>必要欄位檢查並補齊原點(id、ship.id、initial.position/origin、水深、能見度、目標船定義);缺失即丟 <see cref="InvalidDataException"/>。</summary>
+    private void ValidateRequired()
     {
         if (string.IsNullOrWhiteSpace(Id)) throw new InvalidDataException("情境缺少 id");
         if (string.IsNullOrWhiteSpace(Ship.Id)) throw new InvalidDataException("情境缺少 ship.id");
@@ -77,9 +98,6 @@ public sealed class Scenario
         if (Environment.WaterDepth <= 0) throw new InvalidDataException("environment.waterDepth 必須為正");
         if (Environment.VisibilityNm is { } vis && vis <= 0) throw new InvalidDataException("environment.visibility_nm 必須為正");
         ValidateTargets();
-        var firstError = StructuralIssues().FirstOrDefault(i => i.Severity == ScenarioIssueSeverity.Error);
-        if (firstError is not null) throw new InvalidDataException($"{firstError.Path}:{firstError.Message}");
-        return this;
     }
 
     /// <summary>
