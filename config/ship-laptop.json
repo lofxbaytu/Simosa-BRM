@@ -1,0 +1,63 @@
+{
+  "$comment": "船上筆電啟動設定範例(tools/launch/start-ship-laptop.ps1|.sh 讀取;規劃書第 5.4–5.5 節)。安裝時複製到 <安裝根目錄>/config/ship-laptop.json 並改 shipId/deviceId/IP。路徑相對安裝根目錄;不含金鑰。",
+  "shipId": "FSB1",
+  "deviceId": "FSB1-LT01",
+  "network": {
+    "$comment": "兩機直連的乙太網路埠固定私有 IP(不用 DHCP;第 5.4 節);FSB2 用 192.168.77.12,教官筆電 192.168.77.21",
+    "directLinkIp": "192.168.77.11",
+    "instructorIp": "192.168.77.21",
+    "subnetMask": "255.255.255.0",
+    "adapterName": "直連-教官筆電"
+  },
+  "ports": {
+    "stateWs": 8765,
+    "radarWs": 8766,
+    "web": 8080,
+    "sync": 7300,
+    "stateMulticast": "239.255.70.1:7001",
+    "nmeaUdp": 10110,
+    "nmeaMulticast": "239.192.0.1:60001",
+    "radarNmeaX": 10111,
+    "radarNmeaS": 10112
+  },
+  "simcore": {
+    "$comment": "預設練習;簡化教官模式在教官站網頁以 loadScenario 切換。record=true 時紀錄寫到 build/records/(紀錄包來源)",
+    "scenario": "data/scenarios/E05_pilot_traffic.yaml",
+    "ship": "FSB1",
+    "loading": "full",
+    "dynamics": "mmg",
+    "record": true,
+    "timescale": 1,
+    "parameters": "data/parameters/company-procedures.yaml"
+  },
+  "radar": {
+    "enabled": true,
+    "radars": "x,s",
+    "areas": "data/areas"
+  },
+  "web": {
+    "$comment": "靜態網頁(app/web)由 app/web-server/simosa-web 提供;openPages 於 Windows 以預設瀏覽器(或 WebView2 殼)開啟",
+    "enabled": true,
+    "bind": "0.0.0.0",
+    "openPages": [
+      "index.html?station=bridge",
+      "instructor.html?mode=simple",
+      "radar.html?radar=x"
+    ]
+  },
+  "visual": {
+    "$comment": "views:每顯示器一個視景程序(docs/design/visual-client.md 第 7 節)。exe 不存在時退回 Godot 編輯器 --path src/Visual.Godot(需 godotEditor)",
+    "enabled": true,
+    "quality": "auto",
+    "exe": "app/visual/SimosaBRM.Visual.exe",
+    "godotEditor": ".cache/godot/4.5.1/Godot_v4.5.1-stable_mono_win64.exe",
+    "views": [
+      { "view": "bridge", "monitor": 1, "fullscreen": true }
+    ]
+  },
+  "sync": {
+    "$comment": "simosa-pkg serve(直連同步服務;listen/port 以 config/packaging.json 為準)",
+    "enabled": true
+  },
+  "logs": "build/logs"
+}

@@ -177,7 +177,26 @@
         "cpaLimit_nm": { "type": "number" },
         "tcpaLimit_min": { "type": "number" },
         "trial": { "$ref": "#/$defs/trial" },
-        "targets": { "type": "array", "items": { "$ref": "#/$defs/track" } }
+        "targets": { "type": "array", "items": { "$ref": "#/$defs/track" } },
+        "aisTargets": { "type": "array", "items": { "$ref": "#/$defs/aisTarget" }, "description": "純 AIS 目標(本週期有 AIS 報告、未被追蹤中的 ARPA 目標關聯者;無則省略):PPI 以 AIS 三角符號顯示、可點選擷取(以其方位/距離送 acquire)" }
+      }
+    },
+    "aisTarget": {
+      "type": "object",
+      "description": "純 AIS 目標(IEC 62288 AIS 目標符號 △;docs/design/radar-arpa.md 第 3.2 節):位置/向量為 AIS 報告值(含注入的 aisError),CPA/TCPA 以自船指示 COG/SOG 計算",
+      "required": ["mmsi", "name", "x", "y", "lat", "lon", "range_nm", "bearing_deg", "relBearing_deg", "cog_deg", "sog_kn", "heading_deg", "cpa_nm", "tcpa_min", "dangerous"],
+      "properties": {
+        "mmsi": { "type": "integer" },
+        "name": { "type": "string" },
+        "x": { "type": "number" }, "y": { "type": "number" },
+        "lat": { "type": "number" }, "lon": { "type": "number" },
+        "range_nm": { "type": "number" },
+        "bearing_deg": { "type": "number", "description": "真方位" },
+        "relBearing_deg": { "type": "number" },
+        "cog_deg": { "type": "number" }, "sog_kn": { "type": "number" }, "heading_deg": { "type": "number" },
+        "cpa_nm": { "type": "number" }, "tcpa_min": { "type": "number" },
+        "dangerous": { "type": "boolean", "description": "CPA < cpaLimit_nm 且 0 ≤ TCPA ≤ tcpaLimit_min" },
+        "candidateTrackId": { "type": "integer", "description": "有 ARPA 目標以此 MMSI 為候選(未關聯)時其編號;省略 = 無候選" }
       }
     },
     "eventMessage": {

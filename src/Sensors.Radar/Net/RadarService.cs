@@ -49,6 +49,8 @@ public sealed class RadarService : IDisposable
     public Action<SimCommand>? ForwardControl { get; set; }
     /// <summary>已轉送的控制指令數</summary>
     public long ControlsForwarded { get; private set; }
+    /// <summary>重播接收端套用的指令數(不轉送核心)</summary>
+    public long ControlsReplayed { get; private set; }
 
     public RadarService(IEnumerable<RadarUnit> units, RadarWebSocketServer? server, NmeaOutputOptions? nmea, Func<double, DateTime>? utc = null)
     {
@@ -184,6 +186,16 @@ public sealed class RadarService : IDisposable
                 continue;
             }
             var ack = unit.Apply(req.Json, req.ClientId);
+            if (req.Replayed)
+            {
+                // 重播(radar-arpa.md 第 5.2 節):套用學員當時的操作但不轉送核心;查詢不處理;量程套到該雷達所有顯示客戶端並重發 status
+                ControlsReplayed++;
+                if (!ack.Ok || ack.Cmd is "getStatus" or "getTracks") continue;
+                if (ack.Cmd == "range" && ack.Value is { } nm)
+                    foreach (var c in _server.ClientIds(unit.Config.Id)) unit.SetClientRange(c, nm);
+                BroadcastStatus(unit);
+                continue;
+            }
             if (ack.Cmd == "getStatus")
             {
                 _server.SendJson(req.ClientId, RadarJson.Utf8(unit.Status(req.ClientId)));

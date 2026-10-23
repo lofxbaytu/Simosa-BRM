@@ -16,7 +16,7 @@ import { ACK_KIND_LABEL, ROLE_LABEL } from '../../lib/sim-event.js';
 import type { RequiredCountdown } from './timeline-panel.js';
 import { ALERT_PRIORITY_LABEL, ALERT_TEXT } from '../../lib/alerts.js';
 import type { AlertPriority } from '../../types/alerts.js';
-import type { SummaryAlerts } from '../../lib/assessment.js';
+import type { SummaryAlerts, SummaryRadar } from '../../lib/assessment.js';
 
 function fix(v: number | undefined, digits = 1, unit = ''): string {
   if (v === undefined) return '--';
@@ -259,6 +259,7 @@ export class DebriefSummaryView extends LitElement {
             </tbody></table>`
         : nothing}
       ${c.alerts ? this.renderAlerts(c.alerts) : nothing}
+      ${c.radar ? this.renderRadar(c.radar) : nothing}
       <div class="section"><span>總覽</span></div>
       <table aria-label="核心講評摘要">
         <tbody>
@@ -321,6 +322,17 @@ export class DebriefSummaryView extends LitElement {
               [prLabel(r.priority), r.escalated ? '已升級' : '', r.silences > 0 ? `靜音 ${r.silences}` : '', r.rectifiedAt_s !== undefined ? `解除 ${shortTime(r.rectifiedAt_s)}` : ''].filter(Boolean).join(' · '),
             ),
           )}
+        </tbody>
+      </table>`;
+  }
+
+  /** 雷達操作(summary.radar;規劃書第 8.3 節第 7 類):控制指令、手動擷取、量程切換,依 X/S 分列。 */
+  private renderRadar(r: SummaryRadar) {
+    const per = Object.entries(r.byRadar).map(([k, c]) => `${k.toUpperCase()}:${c.controlCount} 次(擷取 ${c.acquisitions}、量程 ${c.rangeChanges})`).join(' · ');
+    return html`<div class="section"><span>雷達操作</span></div>
+      <table aria-label="雷達操作">
+        <tbody>
+          ${this.row('雷達控制指令', `${r.controlCount} 次`, `手動擷取 ${r.acquisitions} · 量程切換 ${r.rangeChanges}`, r.acquisitions === 0 ? 'over' : '', per)}
         </tbody>
       </table>`;
   }

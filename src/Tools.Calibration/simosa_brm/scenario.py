@@ -760,6 +760,17 @@ def load_scenario(ref: str | os.PathLike[str], parameters: ParameterSet | None =
     return sc
 
 
+def load_scenario_inline(raw: dict[str, Any], default_id: str = "", parameters: ParameterSet | None = None) -> dict[str, Any]:
+    """內嵌情境物件(loadScenario 指令的 ``args.scenario``,結構與 YAML 相同;規劃書第 9.1 節靠離泊預演自動組題):
+    與 ``load_scenario`` 同一條「節點樹 → 參數替換 → 正規化」路徑(C# ScenarioLoader.FromJsonElement),base_directory 為
+    ``data/scenarios``(泊位檔 ``data/areas/…`` 相對專案根目錄);id 空白時以 ``default_id`` 代入,皆無時 ``inline``。
+    輸入不被修改(先深拷貝);回傳 dict 無 ``path``。"""
+    if not isinstance(raw, dict):
+        raise ValueError("內嵌情境須為物件")
+    tree = copy.deepcopy(raw)
+    return scenario_from_tree(tree, default_id=(default_id or "").strip() or "inline", parameters=parameters, base_directory=scenarios_dir())
+
+
 def scenario_from_tree(raw: dict[str, Any], default_id: str = "", parameters: ParameterSet | None = None,
                        base_directory: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """節點樹 → 參數替換(就地)→ 正規化情境;``base_directory`` 供自動尋找 assessment.parameterSet(C# ScenarioLoader.FromYaml)。"""

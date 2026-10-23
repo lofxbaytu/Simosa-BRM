@@ -15,7 +15,7 @@ import {
   type PpiView,
   type Vrm,
 } from './geometry.js';
-import { rangeAtLeast, type OwnShipReport, type RadarTrack } from './protocol.js';
+import { rangeAtLeast, type AisTarget, type OwnShipReport, type RadarTrack } from './protocol.js';
 import type { VectorMode } from './arpa.js';
 
 const KN = 1852 / 3600;
@@ -130,6 +130,22 @@ export function extrapolateTrack(t: RadarTrack, tTracks: number, tNow: number): 
   const dt = Number.isFinite(tNow) ? Math.min(3, Math.max(0, tNow - tTracks)) : 0;
   const v = t.speed_kn * KN;
   return { x: t.x + v * Math.sin(t.course_deg * RAD) * dt, y: t.y + v * Math.cos(t.course_deg * RAD) * dt };
+}
+
+/** 純 AIS 目標位置外推(自報告時刻以 COG/SOG 推到現在;最多 3 s,與 ARPA 目標相同) */
+export function extrapolateAis(a: AisTarget, tTracks: number, tNow: number): Point {
+  const dt = Number.isFinite(tNow) ? Math.min(3, Math.max(0, tNow - tTracks)) : 0;
+  const v = a.sog_kn * KN;
+  return { x: a.x + v * Math.sin(a.cog_deg * RAD) * dt, y: a.y + v * Math.cos(a.cog_deg * RAD) * dt };
+}
+
+/** 純 AIS 目標符號的畫面位置(id = MMSI;PPI 繪圖與點選判定共用,不依賴繪圖快取) */
+export function aisScreenPoints(view: PpiView, list: readonly AisTarget[], own: { x: number; y: number }, tTracks: number, tNow: number): Array<{ id: number; x: number; y: number }> {
+  return list.map((a) => {
+    const p = extrapolateAis(a, tTracks, tNow);
+    const sp = enuToScreen(view, p.x - own.x, p.y - own.y);
+    return { id: a.mmsi, x: sp.x, y: sp.y };
+  });
 }
 
 export interface ViewInput {

@@ -58,6 +58,16 @@ public sealed class MetricsState
     public int RadarControls { get; set; }
     public int RadarAcquisitions { get; set; }
     public int RadarRangeChanges { get; set; }
+    /// <summary>依雷達 id(x、s)分列的雷達操作計數(summary.radar.byRadar;進快照)</summary>
+    public Dictionary<string, RadarCountsState> RadarByRadar { get; set; } = new();
+}
+
+/// <summary>單一雷達的操作計數(MetricsState.RadarByRadar;可序列化進快照)。</summary>
+public sealed class RadarCountsState
+{
+    public int Controls { get; set; }
+    public int Acquisitions { get; set; }
+    public int RangeChanges { get; set; }
 }
 
 /// <summary>每次警報成立的確認紀錄(summary.alerts.records[])。</summary>
@@ -193,6 +203,25 @@ public sealed class MetricsCollector
         State.RadarControls++;
         if (cmd == "acquire") State.RadarAcquisitions++;
         else if (cmd == "range") State.RadarRangeChanges++;
+        var radar = (e.DataString("radar") ?? e.ItemId ?? "?").ToLowerInvariant();
+        if (!State.RadarByRadar.TryGetValue(radar, out var per)) State.RadarByRadar[radar] = per = new RadarCountsState();
+        per.Controls++;
+        if (cmd == "acquire") per.Acquisitions++;
+        else if (cmd == "range") per.RangeChanges++;
+    }
+
+    /// <summary>summary.radar(有雷達操作時;否則 null,舊紀錄 summary 不變)。byRadar 依雷達 id 排序(確定性)。</summary>
+    public SummaryRadar? RadarSummary()
+    {
+        if (State.RadarControls == 0 && State.RadarByRadar.Count == 0) return null;
+        return new SummaryRadar
+        {
+            ControlCount = State.RadarControls,
+            Acquisitions = State.RadarAcquisitions,
+            RangeChanges = State.RadarRangeChanges,
+            ByRadar = State.RadarByRadar.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .ToDictionary(kv => kv.Key, kv => new SummaryRadarCounts { ControlCount = kv.Value.Controls, Acquisitions = kv.Value.Acquisitions, RangeChanges = kv.Value.RangeChanges }),
+        };
     }
 
     /// <summary>radar.* 指標值(<see cref="MetricNames"/>)。</summary>

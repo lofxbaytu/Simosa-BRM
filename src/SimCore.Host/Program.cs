@@ -57,9 +57,59 @@ if (options.Replay is { } replayPath)
     // 依紀錄標頭的模型名稱選擇動力學(紀錄用暫代模型時不會因預設 MMG 而雜湊不一致)
     var recordedDynamics = RecordReader.Read(full).Header.Dynamics;
     var replayFactory = DynamicsFactory(recordedDynamics.StartsWith("mmg", StringComparison.OrdinalIgnoreCase) ? "mmg" : "placeholder");
+    // 雷達重播(radar-arpa.md 第 5.2 節):雷達服務已連線時,紀錄的 radarControl 行在相同 tick 重放到雷達服務的重播接收端,
+    // 並以狀態 WebSocket(唯讀)推送重播中的狀態幀、依 --timescale 即時步調,雷達畫面因此重現學員當時的量程/擷取;無連線則略過並記 note
+    RadarReplayClient? radarReplay = null;
+    var replayNotes = new List<string>();
+    if (options.RadarReplayUrl is { } radarUrl)
+    {
+        var rc = new RadarReplayClient(radarUrl);
+        if (await rc.TryConnectAsync(TimeSpan.FromSeconds(1.5)))
+        {
+            radarReplay = rc;
+            Console.WriteLine($"  雷達服務已連線:{rc.Uri}(radarControl 行將重放;狀態推送 ws://0.0.0.0:{options.Port},步調 ×{options.TimeScale ?? 1:F1})");
+        }
+        else
+        {
+            await rc.DisposeAsync();
+            replayNotes.Add($"雷達服務未連線({rc.Uri}):radarControl 行未重放(以 --no-radar 關閉嘗試)");
+        }
+    }
+    WebSocketStateServer? replayWs = null;
+    var pace = options.TimeScale ?? 1.0;
+    var wallStart = System.Diagnostics.Stopwatch.StartNew();
+    Action<SimulationEngine>? onStep = null;
+    if (radarReplay is not null)
+    {
+        onStep = e =>
+        {
+            // 即時步調:牆鐘 = 模擬時間 / 倍率(雷達服務依狀態幀時間轉動天線)
+            var ahead = e.Time / Math.Max(0.1, pace) - wallStart.Elapsed.TotalSeconds;
+            if (ahead > 0.002) Thread.Sleep(TimeSpan.FromSeconds(Math.Min(ahead, 0.5)));
+        };
+    }
+    void ConfigureReplay(SimulationEngine e)
+    {
+        if (radarReplay is null) return;
+        if (options.EnableWebSocket)
+        {
+            replayWs = new WebSocketStateServer(e, options.Port) { ReadOnly = true };
+            replayWs.Log += msg => Console.WriteLine($"  [ws] {msg}");
+            replayWs.Start();
+            e.Broadcast += (_, st) => replayWs.Publish(ContractJson.SerializeToUtf8Bytes(st));
+        }
+        e.CommandApplied += (eng, cmd, _) => { if (cmd.Type == SimCommandType.RadarControl) radarReplay.Send(cmd, eng.Time); };
+    }
     // --rescore:影子評估以目前的試俥目標檔(data/ships/<ID>/trial_targets.json)重新比較;另給 --parameters 時同時以新參數集重新評分
     // (未給 --parameters 時沿用紀錄標頭的參數值,只換目標值)
-    var result = Replayer.Replay(full, LoadShip, replayFactory, rescore: options.Rescore ? parameterSet : null, rescoreTargets: options.Rescore);
+    var result = Replayer.Replay(full, LoadShip, replayFactory, configure: ConfigureReplay, onStep: onStep, rescore: options.Rescore ? parameterSet : null, rescoreTargets: options.Rescore);
+    if (radarReplay is not null)
+    {
+        await radarReplay.FlushAsync(TimeSpan.FromSeconds(3));
+        Console.WriteLine($"  雷達重播:送出 {radarReplay.Sent} 則 radarControl(雷達服務接受 {radarReplay.AcksOk}、拒絕 {radarReplay.AcksFailed}){(replayWs is not null ? $";狀態客戶端 {replayWs.ClientCount}" : "")}");
+        await radarReplay.DisposeAsync();
+    }
+    if (replayWs is not null) await replayWs.DisposeAsync();
     Console.WriteLine($"  完整性雜湊:{(result.IntegrityOk ? "一致" : "不一致或缺少 footer")}");
     Console.WriteLine($"  動力學模型:紀錄 {result.DynamicsRecorded} / 目前 {result.DynamicsUsed}");
     Console.WriteLine($"  重播指令數:{result.InputsReplayed},最終 tick {result.FinalTick}");
@@ -69,7 +119,7 @@ if (options.Replay is { } replayPath)
     if (result.SummaryMatches is { } sm) Console.WriteLine($"  評估摘要:{(sm ? "與紀錄一致" : "與紀錄不一致")}");
     if (result.ManoeuvreTargetsSource is { } mts)
         Console.WriteLine($"  試俥目標值:{(mts == "header" ? "紀錄標頭" : mts == "file" ? "目前檔案" : "無")}{(options.Rescore ? "(重新評分改用目前檔案)" : "")}");
-    foreach (var note in result.Notes) Console.WriteLine($"  警告:{note}");
+    foreach (var note in result.Notes.Concat(replayNotes)) Console.WriteLine($"  警告:{note}");
     if (options.Rescore && result.Summary is { } rs)
     {
         // 重新評分:物理、交通、時間表與雜湊仍依紀錄的原情境重播(雜湊與事件序列必須一致),只有評估模組以新參數集重算
@@ -133,24 +183,38 @@ if (options.Record)
     recorder = new RecordWriter(RecordPathFor(scenario.Id), engine);
     Console.WriteLine($"  紀錄:{recorder.Path}");
 }
+// 情境切換(檔案路徑或內嵌情境物件共用):載入 → 引擎重設 → 列印檢查 → 紀錄另開新檔
+void ApplyLoadedScenario(SimulationEngine e, Scenario sc, string origin)
+{
+    e.LoadScenario(sc, string.Equals(sc.Ship.Id, e.Ship.Id, StringComparison.OrdinalIgnoreCase) ? null : LoadShip(sc.Ship.Id));
+    Console.WriteLine($"已載入情境 {sc.Id}({origin})");
+    PrintIssues(sc);
+    if (recorder is { Closed: true } closed)
+    {
+        var footer = closed.Footer!;
+        Console.WriteLine($"紀錄已關閉(情境切換):{closed.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…)");
+        recorder = new RecordWriter(RecordPathFor(sc.Id), e);
+        Console.WriteLine($"  紀錄(新情境):{recorder.Path}");
+    }
+}
 engine.ScenarioLoadRequested += (e, path) =>
 {
     try
     {
         var p = Path.IsPathRooted(path) ? path : Path.Combine(root, path);
-        var sc = ScenarioLoader.Load(p, parameterSet);
-        e.LoadScenario(sc, string.Equals(sc.Ship.Id, e.Ship.Id, StringComparison.OrdinalIgnoreCase) ? null : LoadShip(sc.Ship.Id));
-        Console.WriteLine($"已載入情境 {sc.Id}");
-        PrintIssues(sc);
-        if (recorder is { Closed: true } closed)
-        {
-            var footer = closed.Footer!;
-            Console.WriteLine($"紀錄已關閉(情境切換):{closed.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…)");
-            recorder = new RecordWriter(RecordPathFor(sc.Id), e);
-            Console.WriteLine($"  紀錄(新情境):{recorder.Path}");
-        }
+        ApplyLoadedScenario(e, ScenarioLoader.Load(p, parameterSet), "檔案");
     }
     catch (Exception ex) { Console.Error.WriteLine($"載入情境失敗:{ex.Message}"); }
+};
+// 內嵌情境(loadScenario args.scenario;規劃書第 9.1 節靠離泊預演自動組題):與 YAML 相同的載入路徑,紀錄標頭保存完整情境,可獨立重播
+engine.InlineScenarioLoadRequested += (e, element, id) =>
+{
+    try
+    {
+        var sc = ScenarioLoader.FromJsonElement(element, parameterSet, Path.Combine(root, "data", "scenarios"), id);
+        ApplyLoadedScenario(e, sc, "內嵌");
+    }
+    catch (Exception ex) { Console.Error.WriteLine($"載入內嵌情境失敗:{ex.Message}"); }
 };
 engine.EventRaised += (e, ev) => Console.WriteLine($"[t={ev.T:F1}] 事件 {ev.Source}/{ev.Kind}{(ev.ItemId is null ? "" : $" {ev.ItemId}")}{(ev.TargetId is null ? "" : $" {ev.TargetId}")}{(ev.Message is null ? "" : $":{ev.Message}")}");
 

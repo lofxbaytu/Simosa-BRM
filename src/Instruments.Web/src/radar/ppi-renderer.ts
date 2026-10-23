@@ -26,9 +26,9 @@ import {
   type Point,
   type PpiView,
 } from './geometry.js';
-import { formatRange, ringInterval, type RadarStatus, type RadarTrack, type TrialSetting } from './protocol.js';
-import { symbolStyle, vectorEnu } from './arpa.js';
-import { extrapolateTrack, type OwnNow, type PpiSettings } from './ppi-model.js';
+import { formatRange, ringInterval, type AisTarget, type RadarStatus, type RadarTrack, type TrialSetting } from './protocol.js';
+import { symbolStyle, vectorEnu, velocityEnu } from './arpa.js';
+import { aisScreenPoints, extrapolateTrack, type OwnNow, type PpiSettings } from './ppi-model.js';
 
 const RAD = Math.PI / 180;
 const KN = 1852 / 3600;
@@ -50,6 +50,8 @@ interface Palette {
   vrm: string;
   pi: string;
   arpa: string;
+  /** 純 AIS 目標符號(IEC 62288 建議與雷達目標區別的顏色) */
+  ais: string;
   danger: string;
   own: string;
   guard: string;
@@ -72,6 +74,7 @@ const PALETTES: Record<PpiTheme, Palette> = {
     vrm: '#56d4ff',
     pi: '#c9a6ff',
     arpa: '#7cf0a4',
+    ais: '#67c7ff',
     danger: '#ff4d4d',
     own: '#ffffff',
     guard: 'rgba(255,170,60,0.75)',
@@ -92,6 +95,7 @@ const PALETTES: Record<PpiTheme, Palette> = {
     vrm: '#4cc3ee',
     pi: '#b393ee',
     arpa: '#6ad893',
+    ais: '#58b8f0',
     danger: '#ff4d4d',
     own: '#eef2f5',
     guard: 'rgba(240,160,50,0.7)',
@@ -112,6 +116,7 @@ const PALETTES: Record<PpiTheme, Palette> = {
     vrm: '#2f7fa0',
     pi: '#6f5a99',
     arpa: '#3f8f5e',
+    ais: '#2f6f9a',
     danger: '#e03c3c',
     own: '#9aa3aa',
     guard: 'rgba(160,110,40,0.7)',
@@ -130,6 +135,9 @@ export interface PpiDrawInput {
   own: OwnNow;
   status: RadarStatus | null;
   tracks: readonly RadarTrack[];
+  /** 純 AIS 目標(tracks.aisTargets;IEC 62288 三角符號,可點選擷取;省略 = 無) */
+  aisTargets?: readonly AisTarget[];
+  selectedAisMmsi?: number | null;
   tracksT: number;
   tNow: number;
   ownHistory: ReadonlyArray<{ t: number; x: number; y: number }>;
@@ -144,6 +152,13 @@ export interface PpiDrawInput {
 }
 
 export interface TargetScreenPoint {
+  id: number;
+  x: number;
+  y: number;
+}
+
+/** 純 AIS 目標符號的畫面位置(點選判定;id = MMSI) */
+export interface AisScreenPoint {
   id: number;
   x: number;
   y: number;
@@ -190,6 +205,7 @@ export class PpiRenderer {
   private pal: Palette = PALETTES.dusk;
   /** 最近一次重繪的目標畫面位置(點選用) */
   targetPoints: TargetScreenPoint[] = [];
+  aisPoints: AisScreenPoint[] = [];
   /** 效能統計 */
   stats = { draws: 0, lastDrawMs: 0, avgDrawMs: 0, frames: 0 };
 
@@ -340,6 +356,7 @@ export class PpiRenderer {
     this.drawOwnShip(ctx, inp);
     this.drawPi(ctx, inp);
     this.drawEblVrm(ctx, inp);
+    this.drawAisTargets(ctx, inp);
     this.drawTargets(ctx, inp);
     if (inp.cursor) this.drawCursor(ctx, inp.cursor, dpr);
     ctx.restore();
@@ -693,6 +710,74 @@ export class PpiRenderer {
     }
     ctx.restore();
     this.targetPoints = pts;
+  }
+
+  /**
+   * 純 AIS 目標(IEC 62288 AIS 目標符號):等腰三角形頂點指向 COG(畫面定向),向量線依 vectorMin(真運動時用 COG/SOG;相對運動時用相對向量),
+   * 船名標在右上;危險者以警報色;選取者外加方框。位置自報告時刻以 COG/SOG 外推到現在(與 ARPA 目標相同)。
+   */
+  private drawAisTargets(ctx: CanvasRenderingContext2D, inp: PpiDrawInput): void {
+    const pts: AisScreenPoint[] = [];
+    const list = inp.aisTargets ?? [];
+    if (list.length === 0) {
+      this.aisPoints = pts;
+      return;
+    }
+    const view = inp.view;
+    const p = this.pal;
+    const dpr = inp.dpr;
+    const h = 9 * dpr;
+    const screen = aisScreenPoints(view, list, inp.own, inp.tracksT, inp.tNow);
+    ctx.save();
+    ctx.font = `${11 * dpr}px "Segoe UI", "Microsoft JhengHei", sans-serif`;
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i]!;
+      const v = velocityEnu(a.cog_deg, a.sog_kn);
+      const sp = screen[i]!;
+      pts.push(sp);
+      const col = a.dangerous ? p.danger : p.ais;
+      ctx.strokeStyle = col;
+      ctx.fillStyle = col;
+      ctx.lineWidth = (a.dangerous ? 2.2 : 1.5) * dpr;
+      // 三角形頂點指向 COG:畫面上的方向 = COG − 畫面旋轉
+      const ang = (a.cog_deg - view.rotationDeg) * RAD;
+      const ux = Math.sin(ang);
+      const uy = -Math.cos(ang);
+      const px = -uy;
+      const py = ux;
+      ctx.beginPath();
+      ctx.moveTo(sp.x + ux * h, sp.y + uy * h);
+      ctx.lineTo(sp.x - ux * h * 0.7 + px * h * 0.75, sp.y - uy * h * 0.7 + py * h * 0.75);
+      ctx.lineTo(sp.x - ux * h * 0.7 - px * h * 0.75, sp.y - uy * h * 0.7 - py * h * 0.75);
+      ctx.closePath();
+      ctx.stroke();
+      // 向量線
+      let ve: { dE: number; dN: number } | null = null;
+      if (inp.settings.vectorMode === 'true') ve = { dE: v.vE * inp.settings.vectorMin * 60, dN: v.vN * inp.settings.vectorMin * 60 };
+      else {
+        const o = velocityEnu(inp.own.cog, inp.own.sog);
+        ve = { dE: (v.vE - o.vE) * inp.settings.vectorMin * 60, dN: (v.vN - o.vN) * inp.settings.vectorMin * 60 };
+      }
+      const e = enuToScreen(view, ve.dE, ve.dN, sp);
+      const len = Math.hypot(e.x - sp.x, e.y - sp.y);
+      if (len > h) {
+        const lx = (e.x - sp.x) / len;
+        const ly = (e.y - sp.y) / len;
+        ctx.beginPath();
+        ctx.moveTo(sp.x + lx * h, sp.y + ly * h);
+        ctx.lineTo(e.x, e.y);
+        ctx.stroke();
+      }
+      if (a.mmsi === (inp.selectedAisMmsi ?? null)) {
+        const q = h + 5 * dpr;
+        ctx.lineWidth = 1.2 * dpr;
+        ctx.strokeRect(sp.x - q, sp.y - q, 2 * q, 2 * q);
+      }
+      ctx.fillText(a.name || String(a.mmsi), sp.x + h + 3 * dpr, sp.y - h);
+    }
+    ctx.restore();
+    this.aisPoints = pts;
   }
 
   private drawCursor(ctx: CanvasRenderingContext2D, c: Point, dpr: number): void {

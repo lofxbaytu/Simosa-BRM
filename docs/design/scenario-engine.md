@@ -663,6 +663,7 @@ distToWp = |B − P|;brgToWp = atan2(B − P)
 | `getAssessment` | — | **查詢**:主控程序直接以 `LatestSummary` 回覆該客戶端 `{"type":"assessment", …}`;不進引擎佇列 | 否 |
 | `setEnvironment` *(擴充)* | `args` 加 `visibility_nm`、`ramp_s` | 第 3.5 節 | 是 |
 | `injectFault` *(擴充)* | `value: string` 或 `args: {name, args}` | 向後相容 | 是 |
+| `loadScenario` *(擴充,靠離泊預演)* | `args: {scenario: {完整情境物件}, id?}`(或既有 `value`/`args.path` 路徑) | 內嵌情境:C# `ScenarioLoader.FromJsonElement`(與 YAML 同一條「節點樹 → 參數替換 → JSON → Scenario」路徑;`berth.file` 相對專案根目錄)、Python `load_scenario_inline`;情境自帶 id 優先於 `args.id`,皆無時 `inline`;紀錄標頭保存完整情境,可獨立重播(`InlineScenarioTests`)。規劃書第 9.1 節「靠離泊預演模式自動組題」由網頁組出物件後以此送核心 | 否(情境切換另開紀錄) |
 | `steeringMode` *(v0.3,D32)* | `value: fu\|nfu\|autopilot\|emergency`;`args: {pump?: 1\|2\|both, direction?: port\|starboard\|stop(nfu), heading?, rotLimit?(autopilot)}` | 操舵模式選擇(規劃書第 7.2 節);模式/泵變更發 `steeringModeChanged`,並以 `steeringModeChange` 動作餵必要事件與故障應變;進出 nfu 時舵令先同步到目前舵角、不明 `direction` 視同 stop、`autopilot` 帶 `heading` 時觀察 `autopilotHeading`、emergency 模式下 `autopilot` 被拒(`commandRejected`;D35) | 是 |
 
 WebSocket 新增推送框(與 state 框同通道,以 `type` 區分;`ws-client.ts` 已把非 state 物件交給 `onMessage`):
@@ -703,6 +704,7 @@ WebSocket 新增推送框(與 state 框同通道,以 `type` 區分;`ws-client.ts
 | W10 | 必要事件倒數 | `timeline-panel.ts` | `faultInjected` 後依 `assessment.required` 顯示倒數(within_s),達成/逾時由事件更新 |
 | W11 | 學員站(conning) | `src/components/*` | 顯示 `state.route`(XTD/下一航點,第 7.2 節 MSC.252 最低資訊)與 `visibility_nm`;`visible: true` 的 `message`/`voiceScript` 事件以橫幅顯示(可選) |
 | W12 | 測試 | `tests/*.test.ts` | 第 7.2 節 |
+| W13 | 靠離泊預演自動組題(規劃書第 8.0、9.1 節;R13) | `lib/berthing-rehearsal.ts` *(新)*、`components/instructor/berthing-rehearsal-panel.ts` *(新)*、`instructor-app.ts`、`lib/instructor-command.ts` | 簡化教官模式「選擇練習」加分頁「靠離泊預演」:表單(船/裝載、泊位 — 由建置時匯入的 `data/areas/*.json` `berths[]` 列出並顯示碼頭線走向與水側、靠泊/離泊、靠泊舷、預定時刻 UTC、潮高 + 基底水深、潮流、預報風/陣風、能見度、拖船數 0–2 與拖力、引水人在船、選填風變化)→ **TypeScript 範本函式** `composeBerthingRehearsal`(選用理由:船上離線、不加執行時相依、幾何計算與型別檢查;未用 Handlebars 範本檔)組出情境物件:靠泊 = 泊位中心沿艏向後退 0.75 nm、離碼頭線 0.28 nm 起、艏向與碼頭線平行、DSAH 3 kn;離泊 = 船體靠在碰墊上、4 纜 `initial: fast`(繫船柱依艏艉里程自泊位定義挑選);拖船在船體水側艏/艉帶纜推頂待命;時間表(MPX/簡報語音、拖船就位、潮窗提示、可選風變化、首次碰墊接觸、教官 allFast / 離開泊位區結束、擱淺);評估引用參數集 `berthing.approachSpeed_mps/approachSpeedFail_mps/allFastPositionTolerance_m`、`navigation.ukc.minimum_m`、港區速限、`assessment.passMark`,硬性失敗擱淺/碼頭硬接觸/斷纜,必要事件 MPX 檢查表與拖船令確認;簡報文字自動生成。以 `parseScenario` 自我驗證(issues 須空)後以 `loadScenario args.scenario` 送核心(`loadScenarioInlineCommand`),簡報頁可「下載情境 YAML」。固定範例 `data/scenarios/templates/examples/berthing-rehearsal-{berthing,unberthing}.yaml` 由 vitest 同步(`SIMOSA_UPDATE_EXAMPLES=1`),C# `BerthingRehearsalFixtureTests` 以 `--validate` 等價檢查無錯誤並以 MMG 實跑 300 s 紀錄/重播一致,Python 也載入檢查。泊位基底水深為示意預設(泊位檔無水深欄位;表單可改)。**初始 UKC** 以與核心相同的**最大吃水**(`ship-config.ts` `maxDraft` = max(艏、艉、平均) = `ShipParticulars.MaxDraft_m`;FSB1 壓載平均 3.72 m 但艉 5.41 m)計算並寫進簡報/潮窗提示(「最大吃水 x m,UKC 約 y m」);UKC ≤ 0 列入 `summary.issues`(面板顯示錯誤、不可「組題並載入」——核心 `ScenarioValidator` 同判準為 error,但 Host `ApplyLoadedScenario` 只印主控台、不拒絕載入,載入後 t=0 即 `grounding` → hardFail → exerciseEnded),0 < UKC < 公司下限 1.0 m(`navigation.ukc.minimum_m`,網頁離線以常數提醒)列入 `warnings`(面板以警告色顯示,仍可載入) |
 
 ## 7. 測試計畫
 

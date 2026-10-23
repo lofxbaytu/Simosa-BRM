@@ -8,6 +8,7 @@ import { encodeSpokeFrame, parseSpokeFrame, FLAG_HEADING_VALID, FLAG_TRANSMITTIN
 import {
   nearestRange,
   STANDARD_RANGES_NM,
+  type AisTarget,
   type GuardZone,
   type RadarAck,
   type RadarCommand,
@@ -491,6 +492,40 @@ export class DemoRadarSource implements RadarSource {
       targets,
     };
     if (this.trial) msg.trial = { ...this.trial };
+    // 純 AIS 目標:有 AIS 的示範船,尚未被追蹤中的目標關聯者(與 Sensors.Radar 相同規則)
+    const associated = new Set(targets.filter((t) => t.ais?.associated).map((t) => t.ais!.mmsi));
+    const aisTargets: AisTarget[] = [];
+    DEMO_SHIPS.forEach((sh, i) => {
+      if (!sh.ais || associated.has(sh.ais.mmsi)) return;
+      const p = this.shipAt(i, this.t);
+      const dE = p.x - own.x;
+      const dN = p.y - own.y;
+      const vt = velocityEnu(sh.course, sh.speed);
+      const vo = velocityEnu(own.cog, own.sog);
+      const cpa = computeCpa(dE, dN, vt.vE - vo.vE, vt.vN - vo.vN);
+      const brg = (Math.atan2(dE, dN) / RAD + 360) % 360;
+      const candidate = targets.find((t) => t.ais?.mmsi === sh.ais!.mmsi && !t.ais!.associated);
+      const a: AisTarget = {
+        mmsi: sh.ais.mmsi,
+        name: sh.name,
+        x: p.x,
+        y: p.y,
+        lat: 22.5 + p.y / 111120,
+        lon: 120.2 + p.x / (111120 * Math.cos(22.5 * RAD)),
+        range_nm: Math.hypot(dE, dN) / NM,
+        bearing_deg: brg,
+        relBearing_deg: (brg - own.heading + 360) % 360,
+        cog_deg: sh.course,
+        sog_kn: sh.speed,
+        heading_deg: sh.course,
+        cpa_nm: cpa.cpaNm,
+        tcpa_min: cpa.tcpaMin,
+        dangerous: isDangerous(cpa.cpaNm, cpa.tcpaMin, this.cpaLimit, this.tcpaLimit),
+      };
+      if (candidate) a.candidateTrackId = candidate.id;
+      aisTargets.push(a);
+    });
+    if (aisTargets.length > 0) msg.aisTargets = aisTargets;
     this.emit(msg);
   }
 

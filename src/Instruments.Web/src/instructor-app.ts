@@ -27,7 +27,8 @@ import { TrackHistory } from './lib/track-history.js';
 import { THEMES, applyTheme, isTheme, readTheme, type Theme } from './lib/theme.js';
 import { COMMAND_EVENT, tileStyles, type CommandEvent } from './components/shared.js';
 import { briefingText, loadScenarioList, loadingLabel, type ScenarioSummary } from './lib/scenario.js';
-import { endExerciseCommand, getAssessmentCommand, loadScenarioCommand } from './lib/instructor-command.js';
+import { endExerciseCommand, getAssessmentCommand, loadScenarioCommand, loadScenarioInlineCommand } from './lib/instructor-command.js';
+import type { BerthingRehearsalResult } from './lib/berthing-rehearsal.js';
 import { simpleCommand } from './lib/command.js';
 import { OperationLogDeriver, type OperationEvent } from './lib/operation-log.js';
 import { DebriefAccumulator, type DebriefSummary } from './lib/debrief.js';
@@ -54,6 +55,7 @@ import type { ReplayView } from './components/instructor/replay-view.js';
 import './components/conning-bar.js';
 import './components/track-plot.js';
 import './components/instructor/scenario-panel.js';
+import './components/instructor/berthing-rehearsal-panel.js';
 import './components/instructor/run-control-panel.js';
 import './components/instructor/environment-panel.js';
 import './components/instructor/fault-panel.js';
@@ -416,6 +418,10 @@ export class InstructorApp extends LitElement {
   @state() private snapshots: SnapshotEntry[] = [];
   @state() private timeScale = 1;
   @state() private simplePhase: SimplePhase = 'select';
+  /** 簡化教官模式選擇階段的分頁:情境清單或靠離泊預演組題(規劃書第 9.1 節) */
+  @state() private simpleSelectTab: 'list' | 'rehearsal' = 'list';
+  /** 目前載入的靠離泊預演組題結果(以 loadScenario args.scenario 送核心;簡報頁可下載 YAML);載入檔案情境時為 null */
+  @state() private rehearsal: BerthingRehearsalResult | null = null;
   @state() private debriefSummary: DebriefSummary | null = null;
   @state() private confirmEnd = false;
   @state() private events: readonly SimEvent[] = [];
@@ -472,6 +478,7 @@ export class InstructorApp extends LitElement {
     this.addEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.addEventListener('sim-reset', this.onReset);
     this.addEventListener('scenario-load', this.onScenarioLoad as EventListener);
+    this.addEventListener('rehearsal-compose', this.onRehearsalCompose as EventListener);
     this.addEventListener('snapshot-taken', this.onSnapshotTaken as EventListener);
     this.addEventListener('time-scale-changed', this.onTimeScale as EventListener);
     this.addEventListener('brm-mark', this.onBrmMark as EventListener);
@@ -492,6 +499,7 @@ export class InstructorApp extends LitElement {
     this.removeEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.removeEventListener('sim-reset', this.onReset);
     this.removeEventListener('scenario-load', this.onScenarioLoad as EventListener);
+    this.removeEventListener('rehearsal-compose', this.onRehearsalCompose as EventListener);
     this.removeEventListener('snapshot-taken', this.onSnapshotTaken as EventListener);
     this.removeEventListener('time-scale-changed', this.onTimeScale as EventListener);
     this.removeEventListener('brm-mark', this.onBrmMark as EventListener);
@@ -776,14 +784,30 @@ export class InstructorApp extends LitElement {
   }
 
   private onScenarioLoad = (ev: CustomEvent<ScenarioSummary>): void => {
-    const s = ev.detail;
+    this.rehearsal = null;
+    this.loadScenarioSummary(ev.detail, loadScenarioCommand(ev.detail.id, ev.detail.path));
+  };
+
+  /** 靠離泊預演組題(簡化教官模式):以 loadScenario args.scenario 送內嵌情境物件,其餘流程與載入檔案情境相同。 */
+  private onRehearsalCompose = (ev: CustomEvent<BerthingRehearsalResult>): void => {
+    const r = ev.detail;
+    this.rehearsal = r;
+    this.loadScenarioSummary(r.summary, loadScenarioInlineCommand(r.id, r.scenario));
+  };
+
+  private downloadRehearsalYaml(): void {
+    const r = this.rehearsal;
+    if (r) downloadText(`${r.id}.yaml`, r.yaml, 'application/yaml');
+  }
+
+  private loadScenarioSummary(s: ScenarioSummary, cmd: SimCommand): void {
     this.activeScenario = s;
     this.restartExercise();
     if (this.sourceMode === 'demo') {
       this.startSource(s);
-      this.send(loadScenarioCommand(s.id, s.path), { ok: true, detail: '示範模式:以情境的船、初始狀態與環境重建示範運動學' });
+      this.send(cmd, { ok: true, detail: '示範模式:以情境的船、初始狀態與環境重建示範運動學' });
     } else {
-      this.send(loadScenarioCommand(s.id, s.path));
+      this.send(cmd);
     }
     if (this.pageMode === 'simple') {
       // 簡報期間先凍結,按「開始練習」才恢復
@@ -1057,10 +1081,16 @@ export class InstructorApp extends LitElement {
           <div class="stage select">
             <div class="panel">
               <h2>選擇練習</h2>
-              <div class="sum-note">選擇情境後按「載入」進入簡報;練習中以 BRM 標記鈕記錄觀察,結束後顯示自動講評摘要並可下載紀錄。</div>
+              <div class="sum-note">${this.simpleSelectTab === 'list' ? '選擇情境後按「載入」進入簡報' : '輸入當次航次的泊位、潮汐、預報風與拖船數,按「組題並載入」進入簡報'};練習中以 BRM 標記鈕記錄觀察,結束後顯示自動講評摘要並可下載紀錄。</div>
               <div class="sum-note">${this.hasReceived ? `核心:${cfg.name},模擬時間 ${formatSimTime(s.t)}` : '等待核心資料(未連線時可切換示範模式)'}</div>
+              <div class="seg select-tab" role="tablist" aria-label="練習來源">
+                <button role="tab" class=${this.simpleSelectTab === 'list' ? 'active' : ''} aria-selected=${this.simpleSelectTab === 'list'} @click=${() => (this.simpleSelectTab = 'list')}>情境清單</button>
+                <button role="tab" class=${this.simpleSelectTab === 'rehearsal' ? 'active' : ''} aria-selected=${this.simpleSelectTab === 'rehearsal'} @click=${() => (this.simpleSelectTab = 'rehearsal')}>靠離泊預演</button>
+              </div>
             </div>
-            <brm-scenario-panel .scenarios=${this.scenarios} .activeId=${sc?.id ?? ''}></brm-scenario-panel>
+            ${this.simpleSelectTab === 'list'
+              ? html`<brm-scenario-panel .scenarios=${this.scenarios} .activeId=${sc?.id ?? ''}></brm-scenario-panel>`
+              : html`<brm-berthing-rehearsal-panel></brm-berthing-rehearsal-panel>`}
           </div>
         </div>`;
       case 'briefing':
@@ -1076,7 +1106,8 @@ export class InstructorApp extends LitElement {
             <div class="actions">
               <button class="primary start" @click=${this.simpleStart}>開始練習</button>
               <button @click=${this.simpleNew}>返回</button>
-              <span class="sum-note">核心已載入情境並凍結;按「開始練習」恢復執行</span>
+              ${this.rehearsal ? html`<button class="download-yaml" @click=${this.downloadRehearsalYaml}>下載情境 YAML</button>` : nothing}
+              <span class="sum-note">${this.rehearsal ? '靠離泊預演組題已以內嵌情境送核心並凍結' : '核心已載入情境並凍結'};按「開始練習」恢復執行</span>
             </div>
           </div>
         </div>`;

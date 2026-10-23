@@ -3,7 +3,8 @@
 - 以 50 Hz 固定步長積分,每 40 ms(25 Hz)廣播一次 state JSON(state.schema.json)。
 - 接收 command JSON(command.schema.json):rudder / telegraph / rpm / thruster / autopilot / freeze / resume /
   reset / setEnvironment / timeScale / snapshot / restore / injectFault / clearFault / loadScenario;各命令語意見
-  README「WebSocket 服務命令支援」。
+  README「WebSocket 服務命令支援」。loadScenario 另接受 args.scenario(完整內嵌情境物件,結構同 YAML;靠離泊預演自動組題)
+  + args.id(紀錄用名稱),與檔案載入同一條解析路徑(參數引用、berth.file 參照照常解析;目標船/時間表/評估仍依既有規則不模擬)。
 - 每筆命令回 {"type": "ack", "command": ..., "ok": bool, "detail": ..., "tick": ...};未支援或失敗者回 ok=false
   並在 detail 說明,模型狀態不變。情境引擎指令 triggerTimeline / acknowledge / getAssessment / endExercise 固定回 ok=false
   (Python 參考實作不模擬時間表與評估;情境引擎設計第 2.3 節);警報/BNWAS 指令 alertAcknowledge / alertSilence / bnwasMode /
@@ -49,7 +50,7 @@ from .mmg import (
     make_ship,
     normalize_pump,
 )
-from .scenario import apply_scenario, load_scenario, ship_from_scenario
+from .scenario import apply_scenario, load_scenario, load_scenario_inline, ship_from_scenario
 
 BROADCAST_DT = 0.04
 
@@ -137,7 +138,13 @@ class SimServer:
     def load_scenario(self, ref: str) -> dict[str, Any]:
         """載入情境(代號或路徑):依 ship.id/loading 建新模型、套初始狀態/環境/種子與時間倍率;tick 歸零、快照清空。
         任何錯誤都在換掉模型前拋出,原模型不受影響。"""
-        sc = load_scenario(ref)
+        return self._install_scenario(load_scenario(ref))
+
+    def load_scenario_inline(self, raw: dict[str, Any], default_id: str = "") -> dict[str, Any]:
+        """載入內嵌情境物件(loadScenario args.scenario;與 C# 相同的載入路徑,見 scenario.load_scenario_inline)。"""
+        return self._install_scenario(load_scenario_inline(raw, default_id=default_id))
+
+    def _install_scenario(self, sc: dict[str, Any]) -> dict[str, Any]:
         ship = ship_from_scenario(sc, dt=self.ship.dt)
         self.ship = ship
         self.scenario = sc
@@ -290,8 +297,23 @@ class SimServer:
                 for cand in (v, args.get("path"), args.get("id")):
                     if isinstance(cand, str) and cand.strip() and cand.strip() not in refs:
                         refs.append(cand.strip())
-                if not refs:
-                    ok, detail = False, "缺少情境代號或路徑(value 或 args.path / args.id)"
+                inline = args.get("scenario")
+                if inline is not None:
+                    # 內嵌情境物件(靠離泊預演自動組題):有此欄位時忽略 value/args.path;args.id 為紀錄用名稱(情境自帶 id 優先)
+                    if not isinstance(inline, dict):
+                        ok, detail = False, "args.scenario 須為情境物件"
+                    else:
+                        try:
+                            sc = self.load_scenario_inline(inline, default_id=str(args.get("id") or ""))
+                        except (ValueError, KeyError, TypeError, FileNotFoundError) as exc:
+                            ok, detail = False, f"內嵌情境載入失敗:{exc}"
+                        else:
+                            ps = sc.get("parameterSet")
+                            detail = (f"已載入內嵌情境 {sc['id']}" + (f"({sc['name']})" if sc.get("name") else "")
+                                      + f":{sc['ship']['id']}/{sc['ship']['loading']},時間倍率 {self.time_scale:g}"
+                                      + (f";參數集 {ps['id']} {ps['version']}({len(ps['resolved'])} 處引用)" if ps else ""))
+                elif not refs:
+                    ok, detail = False, "缺少情境代號或路徑(value 或 args.path / args.id),或 args.scenario 內嵌情境物件"
                 else:
                     sc = None
                     errors: list[str] = []

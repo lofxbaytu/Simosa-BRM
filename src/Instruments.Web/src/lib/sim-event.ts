@@ -177,6 +177,9 @@ export const REJECT_REASON_LABEL: Readonly<Record<string, string>> = {
   emergencySteering: '應急操舵中不可自動舵',
   autopilotUnavailable: '自動舵不可用(電羅經或自動舵失效)',
   unknownAlert: '未知的警報 id',
+  alertStationRequired: '此警報只能在負責站確認(Category A 或已轉移責任)',
+  unknownStation: '未知的工作站',
+  alertNotTransferable: '此警報不可轉移到該站',
   ...EXTERNAL_REJECT_REASON_LABEL,
 };
 

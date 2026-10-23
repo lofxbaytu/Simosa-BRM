@@ -31,6 +31,8 @@ public sealed record AssessmentSummary
     [JsonPropertyName("berthing")] public SummaryBerthing? Berthing { get; init; }
     /// <summary>錨泊指標(情境有 anchors 區段或錨曾被使用時輸出,否則 null 省略)</summary>
     [JsonPropertyName("anchoring")] public SummaryAnchoring? Anchoring { get; init; }
+    /// <summary>雷達操作指標(規劃書第 8.3 節第 7 類;radarControl 事件:有雷達操作時輸出,否則 null 省略,舊紀錄 summary 不變)</summary>
+    [JsonPropertyName("radar")] public SummaryRadar? Radar { get; init; }
     [JsonPropertyName("events")] public required SummaryEvents Events { get; init; }
     [JsonPropertyName("assessment")] public required SummaryAssessment Assessment { get; init; }
 
@@ -160,6 +162,23 @@ public sealed record SummaryBnwas
     [JsonPropertyName("stage2")] public required int Stage2 { get; init; }
     [JsonPropertyName("stage3")] public required int Stage3 { get; init; }
     [JsonPropertyName("resets")] public required int Resets { get; init; }
+}
+
+/// <summary>雷達操作指標(summary.radar;radar-arpa.md 第 5.1 節):成功的控制指令數、手動擷取數、量程切換數,另依雷達(x/s)分列。</summary>
+public sealed record SummaryRadar
+{
+    [JsonPropertyName("controlCount")] public required int ControlCount { get; init; }
+    [JsonPropertyName("acquisitions")] public required int Acquisitions { get; init; }
+    [JsonPropertyName("rangeChanges")] public required int RangeChanges { get; init; }
+    /// <summary>依雷達 id(x、s)分列;只列出有操作的雷達</summary>
+    [JsonPropertyName("byRadar")] public required Dictionary<string, SummaryRadarCounts> ByRadar { get; init; }
+}
+
+public sealed record SummaryRadarCounts
+{
+    [JsonPropertyName("controlCount")] public required int ControlCount { get; init; }
+    [JsonPropertyName("acquisitions")] public required int Acquisitions { get; init; }
+    [JsonPropertyName("rangeChanges")] public required int RangeChanges { get; init; }
 }
 
 public sealed record SummaryEvents

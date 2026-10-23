@@ -97,14 +97,37 @@ export class RadarTargetData extends StoreElement {
   override render() {
     const s = this.store;
     const t = s.tracks?.targets.find((x) => x.id === s.selectedId);
-    if (!t) {
-      return html`<div class="panel">
-        <h3>TARGET <span class="zh">目標資料</span></h3>
-        <div class="muted">點選 PPI 或目標表上的目標以顯示資料</div>
-      </div>`;
-    }
     const item = (label: string, value: string, cls = '') =>
       html`<span class="label">${label}</span><span class="value ${cls}">${value}</span><span></span>`;
+    if (!t) {
+      const a = s.selectedAisMmsi !== null ? s.aisTargets.find((x) => x.mmsi === s.selectedAisMmsi) : undefined;
+      if (a) {
+        // 純 AIS 目標(未被雷達追蹤):AIS 報告值與 CPA/TCPA;「擷取」以其方位/距離送 acquire,之後由 ARPA 以回波追蹤並經 AIS 融合關聯
+        const danger = a.dangerous;
+        return html`<div class="panel ais-target">
+          <h3>
+            <span>AIS ${a.name || a.mmsi} <span class="zh">純 AIS 目標(未追蹤)</span></span>
+            <span class=${danger ? 'danger' : 'zh'}>${danger ? '危險' : a.candidateTrackId !== undefined ? `候選 ${String(a.candidateTrackId).padStart(2, '0')}` : '△'}</span>
+          </h3>
+          <div class="grid2" style="grid-template-columns:auto 1fr auto auto 1fr auto">
+            ${item('MMSI', String(a.mmsi))} ${item('船名', a.name || '--')}
+            ${item('BRG 方位', `${formatBearing(a.bearing_deg)} T`)} ${item('RNG 距離', `${formatRangeNm(a.range_nm)} NM`)}
+            ${item('COG', `${formatBearing(a.cog_deg)} T`)} ${item('SOG', `${fmt(a.sog_kn)} kn`)}
+            ${item('HDG', `${formatBearing(a.heading_deg)} T`)} ${item('相對方位', formatBearing(a.relBearing_deg))}
+            ${item('CPA', `${fmt(a.cpa_nm, 2)} NM`, danger ? 'danger' : '')} ${item('TCPA', `${formatTcpa(a.tcpa_min)} min`, danger ? 'danger' : '')}
+          </div>
+          <div class="row">
+            <button class="acquire-ais" @click=${() => s.acquireAis(a.mmsi)}>擷取此目標(ARPA)</button>
+            <button @click=${() => s.selectAis(null)}>取消選取</button>
+            <span class="muted">${a.lat.toFixed(5)}, ${a.lon.toFixed(5)}</span>
+          </div>
+        </div>`;
+      }
+      return html`<div class="panel">
+        <h3>TARGET <span class="zh">目標資料</span></h3>
+        <div class="muted">點選 PPI 或目標表上的目標以顯示資料${s.aisTargets.length > 0 ? `;純 AIS 目標 ${s.aisTargets.length}(△ 符號,點選後可擷取)` : ''}</div>
+      </div>`;
+    }
     const danger = t.state === 'tracking' && t.dangerous;
     return html`<div class="panel">
       <h3>

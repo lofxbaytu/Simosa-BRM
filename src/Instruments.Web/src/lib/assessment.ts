@@ -368,6 +368,15 @@ export interface SummaryAlerts {
   bnwas: { stage1?: number; stage2?: number; stage3?: number; resets?: number };
 }
 
+/** 雷達操作指標(summary.radar;規劃書第 8.3 節第 7 類;C# SummaryRadar):有雷達操作時核心才輸出。 */
+export interface SummaryRadar {
+  controlCount: number;
+  acquisitions: number;
+  rangeChanges: number;
+  /** 依雷達 id(x、s)分列 */
+  byRadar: Record<string, { controlCount: number; acquisitions: number; rangeChanges: number }>;
+}
+
 export interface SummaryHardFail {
   id: string;
   rule?: string;
@@ -449,6 +458,8 @@ export interface AssessmentSummary {
   assessment: SummaryAssessment;
   /** 警報確認與 BNWAS 階段次數(舊核心/示範沒有時 null) */
   alerts: SummaryAlerts | null;
+  /** 雷達操作指標(無雷達操作或舊核心時 null) */
+  radar: SummaryRadar | null;
   /** 原始物件(供未列欄位的顯示與匯出) */
   raw: Record<string, unknown>;
 }
@@ -593,6 +604,7 @@ export function parseAssessmentSummary(raw: unknown): AssessmentSummary | null {
     events: { byKind },
     assessment,
     alerts: parseSummaryAlerts(raw['alerts']),
+    radar: parseSummaryRadar(raw['radar']),
     raw,
   };
   if (typeof ukc['limitSource'] === 'string') summary.ukc.limitSource = ukc['limitSource'];
@@ -619,6 +631,18 @@ export function parseSummaryAlerts(v: unknown): SummaryAlerts | null {
     }),
     bnwas: pickNums(bn, ['stage1', 'stage2', 'stage3', 'resets']),
   };
+}
+
+/** summary.radar → SummaryRadar;不是物件回傳 null;byRadar 只收數值欄位。 */
+export function parseSummaryRadar(v: unknown): SummaryRadar | null {
+  if (!isRecord(v)) return null;
+  const byRadar: SummaryRadar['byRadar'] = {};
+  if (isRecord(v['byRadar']))
+    for (const [k, c] of Object.entries(v['byRadar'])) {
+      if (!isRecord(c)) continue;
+      byRadar[k] = { controlCount: num(c['controlCount']) ?? 0, acquisitions: num(c['acquisitions']) ?? 0, rangeChanges: num(c['rangeChanges']) ?? 0 };
+    }
+  return { controlCount: num(v['controlCount']) ?? 0, acquisitions: num(v['acquisitions']) ?? 0, rangeChanges: num(v['rangeChanges']) ?? 0, byRadar };
 }
 
 /** WebSocket 回覆框 {"type":"assessment","final":bool,"summary":{…}} → summary(含 final 旗標);非評估框回傳 null。 */

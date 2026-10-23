@@ -7,16 +7,24 @@
 //    第 3 階段 30 s 後由示範「自動重設」以形成循環;駕駛台操作與 bnwasReset 會重設。
 
 import type { SimEvent, SimEventSource } from '../types/event.js';
-import type { AlertItem, AlertState, BnwasMode, BnwasStage, BnwasStatus, SensorStatus, TruthState } from '../types/alerts.js';
+import type { AlertItem, AlertState, AlertStation, BnwasMode, BnwasStage, BnwasStatus, SensorStatus, TruthState } from '../types/alerts.js';
 import { BNWAS_MODES } from '../types/alerts.js';
 import type { OwnShipState } from '../types/state.js';
-import { ALERT_CATALOGUE, BNWAS_DORMANT_MAX_S, BNWAS_DORMANT_MIN_S, defaultAudible, sortAlerts, type AlertCatalogueEntry } from '../lib/alerts.js';
+import { ALERT_CATALOGUE, BNWAS_DORMANT_MAX_S, BNWAS_DORMANT_MIN_S, canAcknowledgeAt, defaultAudible, responsibleStation, sortAlerts, transferTargets, type AlertCatalogueEntry } from '../lib/alerts.js';
 import { clamp, degToRad, headingDifference, normalizeHeading } from '../lib/angles.js';
 
 export type DemoEmit = (kind: string, source: SimEventSource, extra?: Partial<SimEvent>) => void;
 
-/** 會重設 BNWAS 的駕駛台操作(sensors-alerts.md 第 4 節) */
-export const BNWAS_RESET_COMMANDS: ReadonlySet<string> = new Set(['rudder', 'telegraph', 'rpm', 'thruster', 'autopilot', 'steeringMode', 'alertAcknowledge', 'alertSilence']);
+/**
+ * 會重設 BNWAS 的駕駛台操作(sensors-alerts.md 第 4 節)。警報確認/靜音另在 DemoSim 依站別處理(與核心 AlertBridgeOperation 相同:
+ * 只有駕駛台三站且未被拒絕的 alertAcknowledge / alertSilence 才重設;ecr 與被拒絕者不重設)。
+ */
+export const BNWAS_RESET_COMMANDS: ReadonlySet<string> = new Set(['rudder', 'telegraph', 'rpm', 'thruster', 'autopilot', 'steeringMode']);
+/** 駕駛台三站(與核心 AlertStations.IsBridgeStation 相同) */
+export const BRIDGE_STATIONS: ReadonlySet<AlertStation> = new Set<AlertStation>(['bridge', 'portWing', 'stbdWing']);
+
+/** 警報指令結果(與核心 AlertManager 的負值結果對應:commandRejected reason) */
+export type AlertCommandResult = 'ok' | 'unknownAlert' | 'alertStationRequired' | 'alertNotTransferable';
 
 /** 示範假警報:航向監視(warning)於此時段成立 */
 export const DEMO_FAKE_ALERT = { id: 'headingMonitor', from_s: 4, to_s: 150, text: '航向監視:電羅經與磁羅經差異(示範假警報)' } as const;
@@ -193,6 +201,9 @@ export class DemoSensors {
 
 interface DemoAlert extends AlertItem {
   entry: AlertCatalogueEntry;
+  /** 負責站(本版皆 bridge;與核心相同)與責任轉移(alertTransfer) */
+  station: AlertStation;
+  transferredTo?: AlertStation;
 }
 
 export class DemoAlerts {
@@ -210,12 +221,19 @@ export class DemoAlerts {
 
   private view(a: DemoAlert): AlertItem {
     const { entry: _e, ...rest } = a;
-    return { ...rest, audible: defaultAudible(a.priority, a.state) };
+    const item: AlertItem = { ...rest, audible: defaultAudible(a.priority, a.state) };
+    if (a.transferredTo === undefined) delete item.transferredTo;
+    return item;
   }
 
   private data(a: DemoAlert, extra: Record<string, unknown> = {}): Record<string, unknown> {
     const d: Record<string, unknown> = { id: a.id, priority: a.priority, category: a.category, source: a.source, state: a.state, count: a.count, raisedAt_s: a.raisedAt_s, ...extra };
     if (a.silencedUntil_s !== undefined && a.state === 'activeSilenced') d['silencedUntil_s'] = a.silencedUntil_s;
+    // 與核心相同:非 bridge 負責或已轉移時才寫 station/transferredTo(事件自帶者 — alertTransferred 的 station = 目的站 — 不覆寫)
+    if (a.station !== 'bridge' || a.transferredTo !== undefined) {
+      if (!('station' in extra)) d['station'] = a.station;
+      if (!('transferredTo' in extra)) d['transferredTo'] = a.transferredTo ?? null;
+    }
     return d;
   }
 
@@ -236,7 +254,7 @@ export class DemoAlerts {
       const a = this.items.get(entry.id);
       if (cond) {
         if (!a) {
-          const item: DemoAlert = { entry, id: entry.id, number: entry.number, priority: entry.id === 'bnwas' ? (bnwasPriority ?? 'caution') : entry.priority, category: entry.category, source: entry.source, state: 'activeUnacknowledged', text: texts.get(entry.id) ?? entry.text, raisedAt_s: t2, escalated: false, count: 1, audible: false };
+          const item: DemoAlert = { entry, id: entry.id, number: entry.number, priority: entry.id === 'bnwas' ? (bnwasPriority ?? 'caution') : entry.priority, category: entry.category, source: entry.source, state: 'activeUnacknowledged', text: texts.get(entry.id) ?? entry.text, raisedAt_s: t2, escalated: false, count: 1, audible: false, station: 'bridge' };
           this.items.set(entry.id, item);
           this.fire('alertRaised', item, { repeat: false });
         } else if (a.state === 'rectifiedUnacknowledged') {
@@ -277,23 +295,48 @@ export class DemoAlerts {
     }
   }
 
-  /** alertAcknowledge:回傳 false 表示未知 id。caution 不需確認(略過)。 */
-  acknowledge(id: string | undefined, t: number): boolean {
+  /**
+   * alertAcknowledge(與核心 AlertManager.Acknowledge 相同的站別規則;sensors-alerts.md 第 3.6 節):id 省略 = 在 station 可確認者全部(不可者略過);
+   * 指定 id 而不能在該站確認(Category A 非負責站、已轉移責任者非接收站)且仍需確認 → alertStationRequired;未知 id → unknownAlert。
+   * caution 不需確認(略過)。非 bridge 確認時事件附 ackStation。
+   */
+  acknowledge(id: string | undefined, t: number, station: AlertStation = 'bridge'): AlertCommandResult {
     const targets = this.targets(id);
-    if (targets === null) return false;
+    if (targets === null) return 'unknownAlert';
+    const all = !id || id === 'all';
+    const extra: Record<string, unknown> = station === 'bridge' ? {} : { ackStation: station };
     for (const a of targets) {
+      if (!canAcknowledgeAt(a, station)) {
+        if (all) continue;
+        return a.state === 'activeUnacknowledged' || a.state === 'activeSilenced' || a.state === 'rectifiedUnacknowledged' ? 'alertStationRequired' : 'ok';
+      }
       if (a.priority === 'caution') continue;
       if (a.state === 'rectifiedUnacknowledged') {
         this.items.delete(a.id);
-        this.fire('alertAcknowledged', a, { ackTime_s: r2(t - a.raisedAt_s) }, 'normal');
+        this.fire('alertAcknowledged', a, { ackTime_s: r2(t - a.raisedAt_s), ...extra }, 'normal');
       } else if (a.state === 'activeUnacknowledged' || a.state === 'activeSilenced') {
         a.state = 'activeAcknowledged';
         a.acknowledgedAt_s = r2(t);
         delete a.silencedUntil_s;
-        this.fire('alertAcknowledged', a, { ackTime_s: r2(t - a.raisedAt_s) });
+        this.fire('alertAcknowledged', a, { ackTime_s: r2(t - a.raisedAt_s), ...extra });
       }
     }
-    return true;
+    return 'ok';
+  }
+
+  /**
+   * alertTransfer(MSC.302(87) 責任轉移;與核心 AlertManager.Transfer 相同):只允許 transferTargets 列出的站(BNWAS 不可;機艙類來源可含 ecr),
+   * 轉回原負責站即解除;事件 alertTransferred {station, from, transferredTo}。警報不在目前清單 → unknownAlert。
+   */
+  transfer(id: string | undefined, station: AlertStation, _t: number): AlertCommandResult {
+    const a = id ? this.items.get(id) : undefined;
+    if (!a) return 'unknownAlert';
+    if (!transferTargets(a).includes(station)) return 'alertNotTransferable';
+    const from = responsibleStation(a);
+    if (station === a.station) delete a.transferredTo;
+    else a.transferredTo = station;
+    this.fire('alertTransferred', a, { station, from, transferredTo: a.transferredTo ?? null });
+    return 'ok';
   }
 
   /** alertSilence:未確認且有聲響者靜音 30 s;回傳 false 表示未知 id。 */
@@ -307,6 +350,16 @@ export class DemoAlerts {
       this.fire('alertSilenced', a, { silencedUntil_s: a.silencedUntil_s });
     }
     return true;
+  }
+
+  /** id 在警報目錄中(核心 AlertCatalogue.Find;未知 → 指令拒 unknownAlert)。 */
+  isKnown(id: string): boolean {
+    return ALERT_CATALOGUE.some((e) => e.id === id);
+  }
+
+  /** id 在目前警報清單中(核心 AlertManager.Find;alertTransfer 不在清單 → unknownAlert)。 */
+  isActive(id: string | undefined): boolean {
+    return id !== undefined && this.items.has(id);
   }
 
   private targets(id: string | undefined): DemoAlert[] | null {

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    simosa-web:船上/教官筆電的靜態網頁伺服(app/web:儀器頁、教官站、雷達 PPI、講評報告;規劃書第 5.2 節 Instruments、第 5.5 節離線運作)。
+    只依賴 .NET 8 基礎執行階段(TcpListener + 手寫 HTTP/1.1 GET/HEAD),不需 ASP.NET Core 執行階段、不需 Windows URL ACL(netsh urlacl)、不需 Node。
+    不在 SimosaBRM.sln 內:由 tools/build-release.* 單獨 publish 到發行版 app/web-server/;開發時 tools/launch/start-ship-laptop.* 會自動建置。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SimosaBRM.Launch.StaticWeb</RootNamespace>
+    <AssemblyName>simosa-web</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+</Project>

@@ -1,4 +1,4 @@
-# 建置輸出與快取(全部留在專案資料夾內,不寫到 C:\)
+# 建置輸出與快取(全部留在專案資料夾內,不寫到 C:\);發行版 build/release/<版本>/ 與開發用金鑰 build/release/dev-keys/ 亦在此(不進版控)
 build/
 .cache/
 **/bin/

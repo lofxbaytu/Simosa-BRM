@@ -1,0 +1,50 @@
+{
+  "$comment": "教官筆電(訪船船長)啟動設定範例(tools/launch/start-instructor-laptop.ps1 讀取;規劃書第 5.4 節)。直連時 ship 指向船上筆電;離船單機備課時把 standalone 設為 true 以本機 SimCore 執行。",
+  "network": {
+    "directLinkIp": "192.168.77.21",
+    "subnetMask": "255.255.255.0",
+    "adapterName": "直連-船上筆電",
+    "$comment": "直連期間 Wi-Fi 與藍牙停用、不啟用連線共用或 VPN(第 5.4 節);啟動腳本檢查無線介面:Windows start-instructor-laptop.ps1 -CheckWifi(Wi-Fi 開啟即拒絕),Linux start-instructor-laptop.sh --check-wifi(nmcli/iw;無工具時只提示)"
+  },
+  "ships": {
+    "FSB1": "192.168.77.11",
+    "FSB2": "192.168.77.12"
+  },
+  "ship": "FSB1",
+  "ports": {
+    "stateWs": 8765,
+    "radarWs": 8766,
+    "web": 8080,
+    "sync": 7300
+  },
+  "web": {
+    "$comment": "教官站網頁由教官筆電自己的 simosa-web 提供(app/web),但 ws 參數指向船上筆電;雷達鏡像頁同樣指向船上雷達服務",
+    "enabled": true,
+    "bind": "127.0.0.1",
+    "openPages": [
+      "instructor.html?ws=ws://{ship}:{stateWs}",
+      "radar.html?radar=x&ws=ws://{ship}:{radarWs}",
+      "report.html"
+    ]
+  },
+  "standalone": {
+    "$comment": "離船備課:本機啟動 SimCore.Host 與雷達(與 ship-laptop.json 的 simcore/radar 區段相同格式)",
+    "enabled": false,
+    "scenario": "data/scenarios/E01_baseline.yaml",
+    "ship": "FSB1",
+    "loading": "full",
+    "record": false
+  },
+  "visual": {
+    "enabled": false,
+    "quality": "high",
+    "exe": "app/visual/SimosaBRM.Visual.exe",
+    "views": [ { "view": "overview", "monitor": 0, "fullscreen": false } ]
+  },
+  "sync": {
+    "$comment": "simosa-pkg sync 需硬體金鑰憑證指紋(--cert);啟動腳本只顯示指令,不自動同步(第 5.5 節:同步前須先完成受影響情境驗證)",
+    "certThumbprint": "",
+    "store": "store"
+  },
+  "logs": "build/logs"
+}

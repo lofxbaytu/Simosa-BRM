@@ -182,6 +182,12 @@
   不能在本站確認者顯示「須在 ○○ 確認」而無確認鈕;每列「轉移…」選單只列核心允許的目的站(送 `alertTransfer`),已轉移者標 `→ 機控室`;
   教官站監看標示 Category A 的負責站與已轉移的接收站(`lib/alerts.ts` `parseStation/canAcknowledgeAt/transferTargets`,與核心規則相同;`tests/alert-station.test.ts`)。
 - 教官「代為確認」不帶 station(= bridge):已轉到 ecr 的警報會被核心拒絕(`alertStationRequired`),需在 ecr 站頁面確認或先轉回駕駛台。
+- **示範模式**(`src/demo/demo-alerts.ts`、`demo-sim.ts`)與核心同規則:`alertAcknowledge/alertTransfer` 的 `args.station` 省略 = bridge、列舉外 → `commandRejected {reason: unknownStation}`;
+  拒絕順序與核心 `AlertManager` 相同:**先查 id 再查站**(`alertAcknowledge` 未知 id(不在警報目錄)→ `unknownAlert`;`alertTransfer` 警報不在目前清單 → `unknownAlert`;之後才檢查站別),
+  未知 id + 未知站回 `unknownAlert`;指定 id 而不能在該站確認(Category A 非負責站、已轉移者非接收站)且仍需確認 → `alertStationRequired`;id 省略時只確認可在該站確認者(不拒絕);
+  `alertSilence` **不驗證站別**(與核心 `SimulationEngine.AlertSilence` 相同:只有未知 id 拒絕 `unknownAlert`;`args.station` 只決定是否視為駕駛台操作,列舉外的站視為非駕駛台操作、仍靜音、不重設 BNWAS);
+  只有駕駛台三站且未被拒絕的確認/靜音重設 BNWAS(事件順序同核心:先 `alertAcknowledged`/`alertSilenced` 再 `bnwasReset`;ecr 不重設);`alertTransfer` 依
+  `transferTargets`(BNWAS 不可、gyro 等來源不可轉 ecr)發 `alertTransferred {station, from, transferredTo}`,`state.alerts[]` 輸出 `station/transferredTo`。測試 `tests/demo-alert-station.test.ts`。
 
 ## 4. BNWAS(MSC.128(75))
 

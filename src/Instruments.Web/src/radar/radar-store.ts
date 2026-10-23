@@ -10,6 +10,7 @@ import {
   type RadarCommand,
   type RadarMessage,
   type RadarStatus,
+  type AisTarget,
   type RadarTracks,
   type TrialSetting,
 } from './protocol.js';
@@ -63,6 +64,8 @@ export class RadarStore {
   log: LogEntry[] = [];
   settings: PpiSettings = defaultSettings();
   selectedId: number | null = null;
+  /** 選取的純 AIS 目標(MMSI;與 selectedId 互斥:選其一清另一) */
+  selectedAisMmsi: number | null = null;
   readonly acknowledged = new Set<string>();
   tm: TmAnchor | null = null;
   ownHistory: { t: number; x: number; y: number }[] = [];
@@ -156,6 +159,7 @@ export class RadarStore {
         while (this.ownHistory.length > 0 && this.ownHistory[0]!.t < m.t - OWN_HISTORY_S) this.ownHistory.shift();
         pruneAcknowledged(m.targets, this.acknowledged);
         if (this.selectedId !== null && !m.targets.some((t) => t.id === this.selectedId)) this.selectedId = null;
+        if (this.selectedAisMmsi !== null && !(m.aisTargets ?? []).some((a) => a.mmsi === this.selectedAisMmsi)) this.selectedAisMmsi = null;
         break;
       case 'event':
         this.pushLog({ ...m.event });
@@ -251,8 +255,34 @@ export class RadarStore {
     this.send({ cmd: 'range', value: want });
   }
 
+  /** 目前的純 AIS 目標清單(tracks.aisTargets;無則空) */
+  get aisTargets(): readonly AisTarget[] {
+    return this.tracks?.aisTargets ?? [];
+  }
+
+  /** 選取純 AIS 目標(清除 ARPA 目標選取);null 取消。 */
+  selectAis(mmsi: number | null): void {
+    this.selectedAisMmsi = mmsi;
+    if (mmsi !== null) this.selectedId = null;
+    this.notify();
+  }
+
+  /**
+   * 擷取純 AIS 目標:以其 AIS 報告的方位/距離送 acquire(航向無效時改相對方位;與 PPI 點選擷取相同指令),
+   * ARPA 之後以回波建立追蹤並經 AIS 融合關聯。回傳 reqId(未送出 null)。
+   */
+  acquireAis(mmsi: number): string | null {
+    const a = this.aisTargets.find((x) => x.mmsi === mmsi);
+    if (!a) return null;
+    const bearing = Math.round(a.bearing_deg * 10) / 10;
+    const range = Math.round(a.range_nm * 1000) / 1000;
+    if (this.headingValid) return this.send({ cmd: 'acquire', bearing, range });
+    return this.send({ cmd: 'acquire', bearing: Math.round(a.relBearing_deg * 10) / 10, range, relative: true });
+  }
+
   select(id: number | null): void {
     this.selectedId = id;
+    if (id !== null) this.selectedAisMmsi = null;
     this.notify();
   }
 

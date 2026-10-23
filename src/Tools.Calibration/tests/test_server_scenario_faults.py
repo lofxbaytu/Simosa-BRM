@@ -360,3 +360,72 @@ def test_local_tangent_plane_round_trip() -> None:
     assert lat == pytest.approx(23.81, abs=1e-12) and lon == pytest.approx(120.06, abs=1e-12)
     assert ltp.m_per_deg_lat == pytest.approx(110_700.0, rel=0.01)  # 子午圈,緯度 23.8°
     assert ltp.m_per_deg_lon == pytest.approx(111_320.0 * 0.9149, rel=0.01)
+
+
+# ---------------------------------------------------------------- loadScenario 內嵌情境(args.scenario)
+
+
+def test_load_scenario_inline_object_matches_file_load() -> None:
+    """args.scenario 為完整情境物件(與 YAML 結構相同):走同一條解析路徑,正規化結果與檔案載入相同(除 path)、狀態雜湊相同。"""
+    from simosa_brm.parameters import yaml_to_tree
+
+    e13 = scenarios_dir() / "E13_tug_berthing_mailiao.yaml"
+    raw = yaml_to_tree(e13.read_text(encoding="utf-8"))
+    assert isinstance(raw, dict)
+    by_file = _server()
+    assert by_file.apply_command({"type": "loadScenario", "value": "E13_tug_berthing_mailiao"})["ok"]
+    inline = _server()
+    ack = inline.apply_command({"type": "loadScenario", "args": {"id": "rehearsal-test", "scenario": raw}})
+    assert ack["ok"], ack
+    assert "內嵌情境 E13_tug_berthing_mailiao" in ack["detail"] and ack["tick"] == 0
+    a = dict(by_file.scenario)
+    b = dict(inline.scenario)
+    assert a.pop("path").endswith("E13_tug_berthing_mailiao.yaml") and "path" not in b
+    assert a == b  # 參數引用、泊位檔內嵌、預設值補齊皆相同
+    assert raw.get("assessment", {}).get("parameterSet") == "data/parameters/company-procedures.yaml"  # 輸入未被就地修改
+    assert isinstance(raw["timeline"][2]["when"]["atLeast"], str) and raw["timeline"][2]["when"]["atLeast"].startswith("${params:")
+    for srv in (by_file, inline):
+        assert srv.apply_command({"type": "tugControl", "args": {"id": "TG1", "mode": "push", "direction_deg": 270, "power_pct": 40}})["ok"]
+        srv.ship.run(30.0)
+    assert by_file.ship.state_hash() == inline.ship.state_hash()
+    assert inline.state_json()["scenario"]["id"] == "E13_tug_berthing_mailiao"
+
+
+def test_load_scenario_inline_default_id_and_errors() -> None:
+    from simosa_brm.parameters import yaml_to_tree
+
+    raw = yaml_to_tree((scenarios_dir() / "E01_baseline.yaml").read_text(encoding="utf-8"))
+    raw.pop("id")
+    srv = _server()
+    ack = srv.apply_command({"type": "loadScenario", "value": "ignored/path.yaml", "args": {"id": "berthing-rehearsal-1", "scenario": raw}})
+    assert ack["ok"], ack
+    assert srv.scenario["id"] == "berthing-rehearsal-1"
+    srv2 = _server()
+    assert srv2.apply_command({"type": "loadScenario", "args": {"scenario": raw}})["ok"] and srv2.scenario["id"] == "inline"
+    # 非物件 / 缺必要欄位:ok=false,原模型不變
+    srv3 = _server()
+    old = srv3.ship
+    assert srv3.apply_command({"type": "loadScenario", "args": {"scenario": [1, 2]}})["ok"] is False
+    bad = dict(raw)
+    bad.pop("initial")
+    ack = srv3.apply_command({"type": "loadScenario", "args": {"scenario": bad}})
+    assert ack["ok"] is False and "內嵌情境載入失敗" in ack["detail"]
+    assert srv3.ship is old and srv3.scenario is None
+
+
+def test_berthing_rehearsal_examples_load_in_python() -> None:
+    """靠離泊預演固定範例(data/scenarios/templates/examples;網頁組題輸出)以 Python 載入:參數引用解析、泊位檔內嵌、結構檢查通過。"""
+    from simosa_brm.paths import repo_root
+
+    for name, sid in (("berthing-rehearsal-berthing", "BR_berthing_MLO-OIL-3_20261113-0100"),
+                      ("berthing-rehearsal-unberthing", "BR_unberthing_MLO-SOB-1_20261114-0600")):
+        path = repo_root() / "data" / "scenarios" / "templates" / "examples" / f"{name}.yaml"
+        assert path.is_file(), path
+        sc = load_scenario(path)
+        assert sc["id"] == sid
+        assert sc["parameterSet"] and any(r["key"] == "berthing.approachSpeed_mps" for r in sc["parameterSet"]["resolved"])
+        assert sc["external"]["berth"] is not None and len(sc["external"]["berth"]["lines"]) == 4
+        srv = _server()
+        assert srv.apply_command({"type": "loadScenario", "value": str(path)})["ok"]
+        srv.ship.run(5.0)
+        assert srv.ship.state_json()["tick"] == 250

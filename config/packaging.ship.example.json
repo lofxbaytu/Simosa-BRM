@@ -1,0 +1,11 @@
+{
+  "$comment": "船上筆電 config/packaging.json 範例(simosa-pkg;docs/design/packaging-sync.md 第 6.1 節)。安裝時複製為 config/packaging.json;FSB2 改 shipId/deviceId/listen。",
+  "role": "ship",
+  "shipId": "FSB1",
+  "deviceId": "FSB1-LT01",
+  "listen": "192.168.77.11",
+  "port": 7300,
+  "maxVisitIntervals": 2,
+  "visitMergeHours": 12,
+  "recordsDir": "build/records"
+}

@@ -137,4 +137,45 @@ public class RadarControlRecordTests
         var py = File.ReadAllText(Path.Combine(TestData.Root, "src", "Tools.Calibration", "simosa_brm", "scenario.py"));
         foreach (var n in new[] { "radar.controlCount", "radar.acquisitions", "radar.rangeChanges" }) Assert.Contains($"\"{n}\"", py);
     }
+
+    /// <summary>summary.radar {controlCount, acquisitions, rangeChanges, byRadar{x,s}}:無雷達操作時省略(舊紀錄 summary 不變);快照還原後計數一致。</summary>
+    [Fact]
+    public void SummaryRadarBlockPerRadarAndOmittedWithoutOperations()
+    {
+        var e = TestData.MinimalEngine("assessment:\n  hardFail: [ { id: c, rule: collision } ]", seed: 11);
+        e.Run(50);
+        Assert.Null(e.Assessment!.BuildSummary(e.Tick, final: false).Radar);
+        Assert.DoesNotContain("\"radar\"", e.Assessment.BuildSummary(e.Tick, final: false).ToJson());
+        e.Enqueue(Range(3));
+        e.Enqueue(Acquire(1));
+        e.Enqueue(SimCommand.RadarControl("s", "c2", "acquire", true, id: 1, request: new { bearing = 10.0, range = 2.0 }));
+        e.Enqueue(SimCommand.RadarControl("s", "c2", "range", true, value: 12, request: new { value = 12 }));
+        e.Enqueue(SimCommand.RadarControl("S", "c2", "gain", true, value: 50));
+        e.Enqueue(SimCommand.RadarControl("s", "c2", "acquire", false, error: "x"));
+        e.ProcessPendingCommands();
+        e.Enqueue(SimCommand.Snapshot());
+        e.ProcessPendingCommands();
+        e.Run(50);
+        var r = e.Assessment.BuildSummary(e.Tick, final: false).Radar;
+        Assert.NotNull(r);
+        Assert.Equal(5, r!.ControlCount);
+        Assert.Equal(2, r.Acquisitions);
+        Assert.Equal(2, r.RangeChanges);
+        Assert.Equal(new[] { "s", "x" }, r.ByRadar.Keys.ToArray());
+        Assert.Equal((2, 1, 1), (r.ByRadar["x"].ControlCount, r.ByRadar["x"].Acquisitions, r.ByRadar["x"].RangeChanges));
+        Assert.Equal((3, 1, 1), (r.ByRadar["s"].ControlCount, r.ByRadar["s"].Acquisitions, r.ByRadar["s"].RangeChanges));
+        var json = e.Assessment.BuildSummary(e.Tick, final: false).ToJson();
+        Assert.Contains("\"radar\":{\"controlCount\":5,\"acquisitions\":2,\"rangeChanges\":2,\"byRadar\":{\"s\":", json);
+        // 倒帶到快照(所有操作已計入)後再推進:計數不變;繼續操作後計入
+        e.Enqueue(SimCommand.Restore());
+        e.ProcessPendingCommands();
+        e.Run(50);
+        Assert.Equal(5, e.Assessment.BuildSummary(e.Tick, final: false).Radar!.ControlCount);
+        e.Enqueue(Acquire(2));
+        e.ProcessPendingCommands();
+        e.Run(50);
+        var r2 = e.Assessment.BuildSummary(e.Tick, final: false).Radar!;
+        Assert.Equal(6, r2.ControlCount);
+        Assert.Equal(3, r2.ByRadar["x"].ControlCount);
+    }
 }

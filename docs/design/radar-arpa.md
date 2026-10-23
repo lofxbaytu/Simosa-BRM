@@ -98,6 +98,17 @@ environment:                                     # 情境原點 23.80N 120.05E(R
 - **輸出**:`tracks[].ais{mmsi, name, associated, positionOffset_m}`(無候選時省略);網頁 ARPA 表 `SRC` 欄以 IEC 62288 符號概念顯示 ○ 雷達、◬ 融合(圓內三角;PPI 同)、○△ 有 AIS 候選未關聯,目標資料面板顯示 AIS 名稱/MMSI/位置差。
 - 測試 `AisFusionTests`:正確關聯(追蹤後 2–4 s)、AIS 關閉/大偏移/速度不一致不關聯、中等偏移保持並顯示差異、報告互換。
 
+### 3.2 純 AIS 目標(`tracks.aisTargets[]`;IEC 62288 AIS 目標符號 △)
+
+- **定義**:本追蹤清單週期有 AIS 報告、且 MMSI 未被任何**追蹤中且已關聯**的 ARPA 目標使用者(`RadarUnit.Tracks()`;候選中未關聯者仍列出並附 `candidateTrackId`)。
+  AIS 關閉的目標不會出現(報告不在清單);`aisError` 偏移如實反映在位置。無報告時欄位省略(舊客戶端不受影響)。
+- **欄位**(`radar.schema.json $defs/aisTarget`):`mmsi, name, x, y, lat, lon, range_nm, bearing_deg, relBearing_deg, cog_deg, sog_kn, heading_deg, cpa_nm, tcpa_min, dangerous, candidateTrackId?`;
+  CPA/TCPA 以自船指示 COG/SOG 與報告 COG/SOG 計算(`Encounter.Compute`,與 ARPA 的危險判定同門檻)。
+- **網頁**(`radar/ppi-renderer.ts drawAisTargets`、`ppi-model.ts aisScreenPoints`):等腰三角形頂點指向 COG(畫面定向)、向量線依向量模式/時間、船名標籤,危險者警報色;
+  位置自報告時刻以 COG/SOG 外推(≤ 3 s,與 ARPA 相同)。點選:選取工具點符號 → 目標資料面板顯示 AIS 資料與「擷取此目標(ARPA)」鈕;擷取工具點符號 →
+  `RadarStore.acquireAis`:以 AIS 報告的方位/距離送 `acquire`(航向無效時相對方位),ARPA 之後以回波建立追蹤、經第 3.1 節關聯成為融合目標,該 MMSI 離開純 AIS 清單。
+  示範模式(`demo-radar.ts`)依同一規則產生 T1/T2 的純 AIS 目標。測試:`AisOnlyAndReplayTests.AisTargetsListUnassociatedReportsOnly`、網頁 `radar-ais-targets.test.ts`。
+
 ## 4. 二進位影像幀(WebSocket binary)
 
 little-endian,標頭 40 位元組 + `spokeCount × cells` 位元組強度:
@@ -255,14 +266,33 @@ dotnet build/bin/Sensors.Radar.Host/Release/net8.0/SimosaBRM.Sensors.Radar.Host.
 | T1(貨櫃船,t ≈ 130 s 起依 COLREG 右轉) | 0.158 nm(轉向中,航向誤差約 4°) | 0.185 nm |
 | 處理 CPU(含顯示影像) | 6.5 s / 205 s ≈ 3.2% 單核 | 3.0% 單核 |
 
+### 5.2 重播時重放學員雷達操作(`/radar/replay`;主控程序 `--replay --radar`)
+
+主控程序 `--replay` 時(預設 `--radar ws://localhost:8766/`;雷達服務退回只聽 localhost 時 127.0.0.1 不匹配 HttpListener 前綴,故用 localhost,`--no-radar` 關閉)先嘗試連線雷達服務的**重播接收端** `ws://…:8766/radar/replay`(1.5 s 逾時):
+
+- **已連線**:重播引擎(`Replayer.Replay` 的 `configure/onStep`)在 `CommandApplied` 的相同 tick 把每筆 `radarControl` input 行送成
+  `{"type":"radarControlReplay","radar":"x","client":"<紀錄的 client>","t":123.4,"request":{"cmd":"range","value":3}}`(`SimCore.Host/RadarReplayClient.cs`;request = 紀錄的 `args.request` 加回 `cmd`);
+  同時以 `--port` 的狀態 WebSocket(`WebSocketStateServer.ReadOnly`:客戶端送來的指令一律忽略,避免改變重播)推送重播中的狀態幀,並依 `--timescale`
+  以牆鐘步調推進(`onStep` 睡眠),雷達服務訂閱該狀態即可用同種子重現影像,學員當時的量程/增益/擷取/保護區/試操船隨 `radarControl` 行重現。
+  結束時列印送出/接受/拒絕的筆數。
+- **雷達服務端**(`RadarWebSocketServer.EnqueueReplay` → `RadarCommandRequest.Replayed`):訊息驗證後以紀錄的 `client`(Guid "N";其他字串以 FNV-1a 固定 Guid)
+  排入同一指令佇列,`RadarService.DrainCommands` 套用但**不轉送核心**(避免重播中再寫入 input 行)、不回 ack 給顯示客戶端;`range` 同時套到該雷達所有連線中的
+  顯示客戶端(PPI 跟著學員當時的量程)並重發 status;查詢(`getStatus/getTracks`)不處理。每則訊息回 `{"type":"replayAck","ok":…}`。即時操作與重播可並存
+  (顯示客戶端自己的指令仍轉送)。
+- **未連線**:略過並在重播結果印出 note「雷達服務未連線(…):radarControl 行未重放」,重播不受影響(不步調、不開狀態 WebSocket)。
+- 測試:`AisOnlyAndReplayTests.ReplayEndpointAppliesControlsWithoutForwarding`(量程套到顯示客戶端、擷取建立追蹤、不轉送、格式錯誤拒絕)、`ReplayClientIdParsesGuidOrHashesDeterministically`。
+  前者的場景推進由測試執行緒受控(餵送執行緒在鎖內推進、送擷取前暫停並以下一幀的 t 算真值,`Arpa.Tracks` 在鎖內讀取),且顯示客戶端的 `ack` 由送出佇列非同步送達、`ForwardControl` 在 ack 排入之後才呼叫,
+  所以「已轉送」以等待轉送發生斷言而非收到 ack 即斷言(原寫法依牆鐘餵狀態、CPU 負載高時不穩定)。
+- 指標 `summary.radar {controlCount, acquisitions, rangeChanges, byRadar{x,s}}`(有雷達操作時輸出;`MetricsCollector.RadarSummary`;講評摘要「雷達操作」列)。
+
 非操船目標全程(追蹤中 423 筆比對)CPA 誤差 ≤ 0.003 nm;T1 轉向期間 ARPA 向量落後(雙模型偵測後航向誤差約 4–5°、CPA 誤差最大 0.25 nm),此為 ARPA 對操船目標的正常限制(BRM 訓練重點)。另有 1 次 0.30 nm 處近距海雜波被保護區擷取後 3 圈內擷取失敗(保護區內緣宜 ≥ 0.3 nm 或加大海雜波抑制)。`E05IntegrationTests` 以 SimCore 引擎離線重現同一情境(250 s),T2/T3 CPA 誤差 < 0.005 nm。
 
 ## 9. 限制與後續
 
 - 無旁瓣、多路徑(lobing)、閃爍(glint)、二次掃描回波、RACON/SART、目標間遮蔽;陸地為多邊形 + 高度,非 DEM。量測雜訊因此比實船小,ARPA 精度偏佳。
 - 海況由真風速推估(核心尚無浪場),情境可以 `environment.radar.seaState` 覆寫;雨區由情境 `environment.radar.rainAreas`(第 2.1 節)、環境檔或教官指令給定,皆為靜態。
-- 雷達控制指令經核心 `radarControl` 進紀錄(第 5.1 節),但重播只重發事件、不驅動雷達服務:重播時雷達畫面須由雷達服務以同種子重新訂閱重播中的核心產生,學員當時的量程/增益等設定要從 `input` 行另行重現(後續:重播模式下主控程式讀紀錄的 `radarControl` 行重放到各台雷達)。雷達操作不重設 BNWAS(MSC.128 的「可辨識操作」目前只含舵/車/警報指令)。
+- 雷達控制指令經核心 `radarControl` 進紀錄(第 5.1 節);重播時主控程序 `--replay --radar` 經 `/radar/replay` 重放到雷達服務(第 5.2 節),雷達服務須先啟動並訂閱重播中的主控程序狀態(`--port`),重播以 `--timescale` 的牆鐘步調進行(長紀錄可加大倍率)。雷達操作不重設 BNWAS(MSC.128 的「可辨識操作」目前只含舵/車/警報指令)。
 - 每客戶端量程:影像份數 = 相異量程數(最多 11),效能測試以 3 份驗證;重取樣只用於 6/12 nm(其餘繪製),0.25–3 nm 的客戶端各自繪製。偏心在客戶端。
-- AIS 融合為位置/向量門檻的簡化關聯(無協方差加權、無航跡品質),`aisError` 偏移在保持門檻內時仍關聯並以 `positionOffset_m` 顯示;AIS 目標本身(未被雷達追蹤的 AIS 船)不在雷達服務輸出,網頁 PPI 的純 AIS 符號待做。
+- AIS 融合為位置/向量門檻的簡化關聯(無協方差加權、無航跡品質),`aisError` 偏移在保持門檻內時仍關聯並以 `positionOffset_m` 顯示;純 AIS 目標(第 3.2 節)只有報告值與 CPA/TCPA,無 AIS 航跡品質/睡眠目標(sleeping)區分、不發危險目標事件(只標 `dangerous`)。
 - 本機無 Windows URL ACL 時 HttpListener 退回 localhost(與 SimCore.Host 相同);教官筆電直連需 `netsh http add urlacl url=http://*:8766/radar/ user=Everyone`。
 - 網頁 PPI(WebGL/Canvas)、EBL/VRM、平行索引線由網頁端依本協定實作;AIS 融合符號見第 3.1 節。

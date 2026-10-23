@@ -40,7 +40,8 @@ data/
   ships/FSB1, FSB2/           particulars.json(交船文件)、trial_targets.json(試俥/海報目標)、coefficients.*.json(識別結果)
   scenarios/                  情境 YAML
 docs/                         規劃書與研究資料
-tools/                        Windows 設定腳本
+tools/                        Windows 設定腳本、發行組裝(build-release.*)、啟動腳本(launch/)、simosa-pkg 包裝
+config/                       安裝設定範例(不含金鑰)
 ```
 
 ## 執行
@@ -65,6 +66,17 @@ pnpm install
 pnpm dev            # http://localhost:5173/  (?demo=1 為示範模式;預設連 ws://localhost:8765)
 pnpm build && pnpm test
 ```
+
+## 建置發行版與安裝
+
+```powershell
+.\tools\build-release.ps1 -Version 2026.11.1      # Windows(win-x64);Linux/容器:tools/build-release.sh --version 2026.11.1
+```
+建置全部(sln Release、網頁)、`dotnet publish`(framework-dependent)到 `build\release\<版本>\`:`app\{simcore,radar,web,web-server,launch,visual}`、`tools\updater`(simosa-pkg)、`data\`(不含 `ships\*\confidential`)、`contracts\`、`docs\`、`config\` 範例、`manifest.json`(每檔 SHA-256、git 版次、元件版本)與簽章軟體更新包 `packages\*.sbupd`(開發金鑰,僅供測試);Godot 視景在有匯出範本時匯出,否則記入清單註記。啟動腳本 `tools\launch\start-ship-laptop.ps1`、`start-instructor-laptop.ps1`、`stop-all.ps1`(與 `.sh` 版)依 `config\ship-laptop.json`、`config\instructor-laptop.json` 啟動核心、雷達、網頁、視景與直連同步服務(啟動前檢查埠占用;`stop-all -KeepSync`/`--keep-sync` 於推送軟體更新包時保留同步服務);啟動腳本測試:`tools/launch/tests/launch-tests.sh`、`pwsh -File tools/launch/tests/launch-common.tests.ps1`。
+
+- 安裝與啟動(船上筆電、教官筆電、更新包與紀錄回傳、故障排除):[docs/ops/安裝與啟動.md](docs/ops/安裝與啟動.md)
+- 需求追溯表(R1–R14、第 14 章驗收表 → 模組/測試/狀態、需實機項目):[docs/驗收/需求追溯表.md](docs/驗收/需求追溯表.md)
+- 更新包、紀錄包與直連同步設計:[docs/design/packaging-sync.md](docs/design/packaging-sync.md)
 
 ## 持續整合
 

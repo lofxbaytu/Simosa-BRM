@@ -192,6 +192,12 @@ public sealed class SimulationEngine
     /// <summary>loadScenario 指令(引擎本身不讀檔,由主控程序載入後呼叫 <see cref="LoadScenario"/>)</summary>
     public event Action<SimulationEngine, string>? ScenarioLoadRequested;
     /// <summary>
+    /// loadScenario 指令帶內嵌情境(<c>args.scenario</c> 完整情境物件,<c>args.id</c> 為紀錄用名稱;規劃書第 9.1 節靠離泊預演自動組題):
+    /// 參數為(引擎、情境物件、id 或 null);由主控程序以 <c>ScenarioLoader.FromJsonElement</c> 解析後呼叫 <see cref="LoadScenario"/>。
+    /// 有 <c>args.scenario</c> 時只發此事件(value/args.path 忽略)。
+    /// </summary>
+    public event Action<SimulationEngine, System.Text.Json.JsonElement, string?>? InlineScenarioLoadRequested;
+    /// <summary>
     /// 即將以 <see cref="LoadScenario"/> 換成新情境(參數:新情境),在狀態重設前發出:紀錄器據此關閉目前紀錄(footer 為舊情境的最終 tick 與雜湊),
     /// 主控程序再為新情境開新檔(每份紀錄只有一個 header 情境,重播不需處理情境切換)。Reset 不發此事件(reset 為可重播的 input)。
     /// </summary>
@@ -691,7 +697,13 @@ public sealed class SimulationEngine
                 break;
 
             case SimCommandType.LoadScenario:
-                if (cmd.ValueAsString() is { } path) ScenarioLoadRequested?.Invoke(this, path);
+                if (cmd.Arg("scenario") is { ValueKind: System.Text.Json.JsonValueKind.Object } inline)
+                {
+                    // 內嵌情境(靠離泊預演自動組題):args.id 為紀錄用名稱;value/args.path 忽略
+                    var inlineId = cmd.Arg("id") is { ValueKind: System.Text.Json.JsonValueKind.String } idEl ? idEl.GetString() : null;
+                    InlineScenarioLoadRequested?.Invoke(this, inline, inlineId);
+                }
+                else if (cmd.ValueAsString() is { } path) ScenarioLoadRequested?.Invoke(this, path);
                 else if (cmd.Arg("path") is { } p && p.ValueKind == System.Text.Json.JsonValueKind.String)
                     ScenarioLoadRequested?.Invoke(this, p.GetString()!);
                 break;

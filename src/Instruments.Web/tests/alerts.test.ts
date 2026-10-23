@@ -387,7 +387,7 @@ describe('示範模式的警報與 BNWAS 循環', () => {
     run(sim, 0.1);
     out = sim.output();
     expect(out.alerts!.map((a) => a.id)).toEqual(['headingMonitor']);
-    expect(kinds(sim)).toEqual(['bnwasReset', 'alertAcknowledged', 'alertRectified']);
+    expect(kinds(sim)).toEqual(['alertAcknowledged', 'bnwasReset', 'alertRectified']); // 與核心相同順序:先確認事件、再視為駕駛台操作重設 BNWAS
     sim.apply({ type: 'alertAcknowledge', value: 'nope' });
     expect(sim.takeEvents().find((e) => e.kind === 'commandRejected')!.data).toMatchObject({ reason: 'unknownAlert', command: 'alertAcknowledge' });
   });

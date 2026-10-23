@@ -72,6 +72,8 @@ public sealed class RadarUnit
     /// </summary>
     public IReadOnlyCollection<double>? DisplayRanges { get; set; }
     public RadarScene? LastScene { get; private set; }
+    /// <summary>最近一次追蹤清單週期的 AIS 報告(純 AIS 目標輸出用)</summary>
+    private IReadOnlyList<SceneAisReport> _lastAisReports = Array.Empty<SceneAisReport>();
     public bool Failed { get; private set; }
     public bool Degraded { get; private set; }
     public bool Transmitting => Controls.Transmit && !Failed;
@@ -207,6 +209,7 @@ public sealed class RadarUnit
             _nextTracksT = Math.Max(_nextTracksT + Config.TrackIntervalS, scene.T + 0.5 * Config.TrackIntervalS);
             // AIS 融合與追蹤清單同週期(1 Hz);報告順序同 state.targets[](確定性)
             Arpa.AssociateAis(scene.T, scene.AisReports);
+            _lastAisReports = scene.AisReports;
         }
         result.Events.AddRange(Arpa.DrainEvents());
         return result;
@@ -548,6 +551,43 @@ public sealed class RadarUnit
                 Ais = tr.AisMmsi != 0 ? new AisTrackReport(tr.AisMmsi, tr.AisName, tr.AisAssociated, RadarJson.R(tr.AisOffsetM, 0)) : null,
             });
         }
+        // 純 AIS 目標:報告的 MMSI 未被任何追蹤中(已關聯)的 ARPA 目標使用;候選中(未關聯)者仍列出並附候選目標編號
+        List<AisTargetReport>? aisTargets = null;
+        if (_lastAisReports.Count > 0)
+        {
+            var associated = new HashSet<int>(Arpa.Tracks.Where(x => x.AisAssociated && x.State == TrackState.Tracking).Select(x => x.AisMmsi));
+            var ownVe = Units.KnToMps(own.SogKn) * Math.Sin(Units.DegToRad(own.CogDeg));
+            var ownVn = Units.KnToMps(own.SogKn) * Math.Cos(Units.DegToRad(own.CogDeg));
+            foreach (var r in _lastAisReports)
+            {
+                if (associated.Contains(r.Mmsi)) continue;
+                var ve = Units.KnToMps(r.SogKn) * Math.Sin(Units.DegToRad(r.CogDeg));
+                var vn = Units.KnToMps(r.SogKn) * Math.Cos(Units.DegToRad(r.CogDeg));
+                var g = SimCore.Traffic.Encounter.Compute(own.X, own.Y, ownVe, ownVn, Units.DegToRad(own.HeadingDeg), r.X, r.Y, ve, vn);
+                var (lat, lon) = Geo(r.X, r.Y);
+                var candidate = Arpa.Tracks.FirstOrDefault(x => x.AisMmsi == r.Mmsi && !x.AisAssociated);
+                aisTargets ??= new List<AisTargetReport>();
+                aisTargets.Add(new AisTargetReport
+                {
+                    Mmsi = r.Mmsi,
+                    Name = r.Name,
+                    X = RadarJson.R(r.X, 1),
+                    Y = RadarJson.R(r.Y, 1),
+                    Lat = RadarJson.R(lat, 6),
+                    Lon = RadarJson.R(lon, 6),
+                    RangeNm = RadarJson.R(g.RangeNm, 3),
+                    BearingDeg = RadarJson.R(Units.RadToDeg(g.BearingRad), 1),
+                    RelBearingDeg = RadarJson.R(Units.RadToDeg(g.RelBearingRad), 1),
+                    CogDeg = RadarJson.R(r.CogDeg, 1),
+                    SogKn = RadarJson.R(r.SogKn, 2),
+                    HeadingDeg = RadarJson.R(r.HeadingDeg, 1),
+                    CpaNm = RadarJson.R(g.CpaNm, 3),
+                    TcpaMin = RadarJson.R(g.TcpaMin, 2),
+                    Dangerous = g.CpaNm < Arpa.CpaLimitNm && g.TcpaMin >= 0 && g.TcpaMin <= Arpa.TcpaLimitMin,
+                    CandidateTrackId = candidate?.Id,
+                });
+            }
+        }
         return new TracksMessage
         {
             Radar = Config.Id,
@@ -560,6 +600,7 @@ public sealed class RadarUnit
             TcpaLimitMin = Arpa.TcpaLimitMin,
             Trial = Controls.Trial is { } trial ? new TrialReport(trial.CourseDeg, trial.SpeedKn, trial.DelayMin) : null,
             Targets = list,
+            AisTargets = aisTargets,
         };
     }
 

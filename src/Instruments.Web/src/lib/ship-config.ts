@@ -3,7 +3,7 @@
 
 import fsb1 from '@data/ships/FSB1/particulars.json';
 import fsb2 from '@data/ships/FSB2/particulars.json';
-import { SHIP_IDS, type ShipId, type TelegraphPosition } from '../types/state.js';
+import { SHIP_IDS, type LoadingCondition, type ShipId, type TelegraphPosition } from '../types/state.js';
 
 /** 車鐘位置對應的轉速與(滿載)參考速度;倒車速度無資料時以同轉速的前進速度打折估計。 */
 export interface TelegraphStep {
@@ -40,6 +40,11 @@ export interface ShipDisplayConfig {
   /** 滿載平均吃水 (m) */
   draftLoaded_m: number;
   draftBallast_m: number;
+  /**
+   * 各裝載狀態的最大吃水 (m) = max(艏、艉、平均),與核心 ShipParticulars.MaxDraft_m 相同(核心的 UKC/擱淺判定用此值,不是平均吃水;
+   * 壓載艉傾時差距可達 1–2 m)。intermediate 依核心 GetLoading 以 full/ballast 各分量平均後再取最大。
+   */
+  draftMax_m: Readonly<Record<LoadingCondition, number>>;
   /** 錨具(particulars anchors;錨鏈孔位置顯示錨鏈、示範模式的錨;無資料時省略) */
   anchors?: ShipAnchorConfig;
 }
@@ -150,6 +155,32 @@ function anchorsFrom(p: Particulars): ShipAnchorConfig | undefined {
   };
 }
 
+type DraftTriple = { draftFore_m?: number | null | undefined; draftAft_m?: number | null | undefined; draftMean_m?: number | null | undefined };
+
+/** 最大吃水(與核心 ShipParticulars.MaxDraft_m 相同:max(艏、艉、平均),缺值視為 0)。 */
+function maxDraftOf(d: DraftTriple): number {
+  return Math.max(d.draftFore_m ?? 0, d.draftAft_m ?? 0, d.draftMean_m ?? 0);
+}
+
+/** 各裝載狀態的最大吃水;intermediate 無資料時依核心 GetLoading 以 full 與 ballast 各分量平均估計。 */
+function maxDraftsFrom(p: Particulars): Record<LoadingCondition, number> {
+  const lc = p.loadingConditions as Record<string, DraftTriple | undefined>;
+  const full = lc['full'] ?? {};
+  const ballast = lc['ballast'] ?? {};
+  const avg = (a: number | null | undefined, b: number | null | undefined): number | undefined => (a == null || b == null ? (a ?? b ?? undefined) : (a + b) / 2);
+  const intermediate: DraftTriple = lc['intermediate'] ?? {
+    draftFore_m: avg(full.draftFore_m, ballast.draftFore_m),
+    draftAft_m: avg(full.draftAft_m, ballast.draftAft_m),
+    draftMean_m: avg(full.draftMean_m, ballast.draftMean_m),
+  };
+  return { full: maxDraftOf(full), ballast: maxDraftOf(ballast), intermediate: maxDraftOf(intermediate) };
+}
+
+/** 裝載狀態的最大吃水 (m;核心擱淺/UKC 判定所用)。 */
+export function maxDraft(cfg: ShipDisplayConfig, loading: LoadingCondition): number {
+  return cfg.draftMax_m[loading];
+}
+
 function fromParticulars(p: Particulars): ShipDisplayConfig {
   const rudderMax = p.rudder.maxAngle_deg;
   const normalMax = (p.rudder as { normalMaxAngle_deg?: number }).normalMaxAngle_deg ?? rudderMax;
@@ -170,6 +201,7 @@ function fromParticulars(p: Particulars): ShipDisplayConfig {
     thrusterIneffectiveAbove_kn: bt.notEffectiveAbove_kn ?? 5,
     draftLoaded_m: p.loadingConditions.full.draftMean_m,
     draftBallast_m: p.loadingConditions.ballast.draftMean_m,
+    draftMax_m: maxDraftsFrom(p),
   };
   const anchors = anchorsFrom(p);
   if (anchors) cfg.anchors = anchors;

@@ -6,7 +6,7 @@ import { LitElement, css, html } from 'lit';
 import { customElement, property, query } from 'lit/decorators.js';
 import { PpiRenderer, type PpiTheme } from './ppi-renderer.js';
 import type { RadarStore } from './radar-store.js';
-import { computeView, effectiveMotion, hitTestTarget, updateTmAnchor } from './ppi-model.js';
+import { aisScreenPoints, computeView, effectiveMotion, hitTestTarget, updateTmAnchor } from './ppi-model.js';
 import {
   clampOffcentre,
   eblVrmFromScreen,
@@ -217,6 +217,8 @@ export class RadarPpi extends LitElement {
       own: s.ownNow(),
       status: s.status,
       tracks: tr?.targets ?? [],
+      aisTargets: tr?.aisTargets ?? [],
+      selectedAisMmsi: s.selectedAisMmsi,
       tracksT: tr?.t ?? 0,
       tNow: s.simTime,
       ownHistory: s.ownHistory,
@@ -270,6 +272,18 @@ export class RadarPpi extends LitElement {
     this.clickAt(p.x, p.y);
   };
 
+  /** AIS 符號點選容差(px):一般 14 px;畫面極小(尚未佈局)時依半徑縮小,避免整個圓盤都算命中 */
+  private aisHitTolerance(view: PpiView): number {
+    return Math.min(14 * this.dpr, view.radiusPx * 0.05);
+  }
+
+  /** 純 AIS 目標符號的畫面位置(點選判定;與繪圖同一函數,不依賴繪圖快取) */
+  private aisPoints(view: PpiView): Array<{ id: number; x: number; y: number }> {
+    const s = this.store;
+    if (!s || s.aisTargets.length === 0) return [];
+    return aisScreenPoints(view, s.aisTargets, s.ownNow(), s.tracks?.t ?? 0, s.simTime);
+  }
+
   /** 依游標工具處理畫面點選(畫布裝置像素座標)。 */
   clickAt(x: number, y: number): void {
     const s = this.store;
@@ -280,11 +294,20 @@ export class RadarPpi extends LitElement {
     const st = s.settings;
     switch (st.tool) {
       case 'select': {
+        // ARPA 目標優先;其次純 AIS 目標符號(目標資料面板顯示 AIS 資料與「擷取」鈕)
         const id = hitTestTarget(this.renderer?.targetPoints ?? [], x, y, 14 * this.dpr);
-        s.select(id);
+        if (id !== null) s.select(id);
+        else {
+          const mmsi = hitTestTarget(this.aisPoints(view), x, y, this.aisHitTolerance(view));
+          if (mmsi !== null) s.selectAis(mmsi);
+          else s.select(null);
+        }
         break;
       }
       case 'acquire': {
+        // 點在純 AIS 目標符號上:以其 AIS 報告的方位/距離擷取(RadarStore.acquireAis);否則以點選位置擷取
+        const mmsi = hitTestTarget(this.aisPoints(view), x, y, this.aisHitTolerance(view));
+        if (mmsi !== null && s.acquireAis(mmsi) !== null) break;
         const pol = screenToPolar(view, x, y);
         if (s.headingValid) s.send({ cmd: 'acquire', bearing: pol.bearing, range: pol.range });
         else s.send({ cmd: 'acquire', bearing: pol.bearing, range: pol.range, relative: true });

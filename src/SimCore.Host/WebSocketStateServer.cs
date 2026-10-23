@@ -32,6 +32,9 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     public int Port { get; }
     public int ClientCount => _clients.Count;
     public long CommandsReceived;
+    /// <summary>唯讀(重播模式):客戶端送來的指令不進引擎(只記錄並忽略;getAssessment 仍回覆),避免雷達服務/教官站的指令改變重播結果</summary>
+    public bool ReadOnly { get; set; }
+    public long CommandsIgnored;
     public event Action<string>? Log;
 
     public WebSocketStateServer(SimulationEngine engine, int port)
@@ -191,6 +194,11 @@ public sealed class WebSocketStateServer : IAsyncDisposable
                         // 查詢:直接以 LatestSummary 回覆該客戶端(不進引擎佇列、不寫 input 行)
                         var summary = _engine.LatestSummary;
                         c.Events.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(new { type = "assessment", final = summary?.Final ?? false, summary }));
+                        continue;
+                    }
+                    if (ReadOnly)
+                    {
+                        if (Interlocked.Increment(ref CommandsIgnored) == 1) Log?.Invoke($"重播模式:忽略客戶端指令 {cmd.Type}(之後不再提示)");
                         continue;
                     }
                     _engine.Enqueue(cmd);

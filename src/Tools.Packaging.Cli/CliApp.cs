@@ -5,6 +5,7 @@ using SimosaBRM.Packaging.Common;
 using SimosaBRM.Packaging.Crypto;
 using SimosaBRM.Packaging.Impact;
 using SimosaBRM.Packaging.Records;
+using SimosaBRM.Packaging.Release;
 using SimosaBRM.Packaging.Sync;
 using SimosaBRM.Packaging.Transfer;
 using SimosaBRM.Packaging.Updates;
@@ -61,6 +62,10 @@ public sealed class CliApp
           store backup --to <加密外接碟目錄> [--store]
           store report --ship <船舶ID> --out <檔.sbbak> (--key | --cert) [--store]
           store list [--store]
+        發行版(tools/build-release.*;規劃書第 5.4–5.5 節)
+          release manifest --dir <發行目錄> --version <版本> [--git <版次>] [--branch <分支>] [--runtime win-x64|linux-x64]
+                           [--component <名稱>=<版本>[=<相對路徑>[=<狀態>]]]... [--note <註記>]...
+          release verify --dir <發行目錄>
         直連同步與隨身碟備援
           serve [--root] [--listen <直連 IP>] [--port 7300]                            (船上筆電)
           sync --ship <IP|船舶ID> (--key | --cert) [--push <檔.sbupd>]... [--store] [--port 7300]
@@ -103,6 +108,7 @@ public sealed class CliApp
                 "sync" => Sync(a),
                 "export" => Export(a),
                 "import" => Import(a),
+                "release" => ReleaseCmd(a),
                 _ => throw new CliUsageException($"未知的指令:{cmd}"),
             };
         }
@@ -533,6 +539,46 @@ public sealed class CliApp
                     _out.WriteLine($"版次 {ship}:{v.Version}(參數集 {v.ParameterSet?.Version},更新於 {v.UpdatedUtc:yyyy-MM-dd},經 {v.Via})");
                 return 0;
             default: throw new CliUsageException($"未知的 store 子指令:{sub}");
+        }
+    }
+
+    // ── 發行版清單 ────────────────────────────────────────
+
+    private int ReleaseCmd(CliArgs a)
+    {
+        var sub = a.Pos(0, "子指令(manifest|verify)");
+        var dir = a.Require("dir");
+        switch (sub)
+        {
+            case "manifest":
+            {
+                var components = new Dictionary<string, ReleaseComponent>(StringComparer.Ordinal);
+                foreach (var spec in a.All("component"))
+                {
+                    // <名稱>=<版本>[=<相對路徑>[=<狀態>]]
+                    var parts = spec.Split('=', 4);
+                    if (parts.Length < 2 || parts[0].Length == 0 || parts[1].Length == 0) throw new CliUsageException($"--component 格式為 <名稱>=<版本>[=<相對路徑>[=<狀態>]]:{spec}");
+                    components[parts[0]] = new ReleaseComponent { Version = parts[1], Path = parts.Length > 2 && parts[2].Length > 0 ? parts[2] : null, Status = parts.Length > 3 ? parts[3] : null };
+                }
+                var m = ReleaseManifestBuilder.Build(dir, a.Require("version"), a.Get("git"), a.Get("branch"), a.Get("runtime"), components, a.All("note"));
+                var path = ReleaseManifestBuilder.Save(m, dir);
+                _out.WriteLine($"已寫入發行清單 {path}");
+                _out.WriteLine($"  版本 {m.Version}{(m.GitRevision is { } g ? $",git {KeyFiles.Short(g)}" : "")},{m.FileCount} 個檔案,{m.TotalSize / 1024.0 / 1024.0:F1} MiB,{m.Components.Count} 個元件");
+                foreach (var n in m.Notes) _out.WriteLine($"  註記:{n}");
+                return 0;
+            }
+            case "verify":
+            {
+                var v = ReleaseManifestBuilder.Verify(dir);
+                if (v.Manifest is { } m)
+                    _out.WriteLine($"發行清單:版本 {m.Version}{(m.GitRevision is { } g ? $",git {KeyFiles.Short(g)}" : "")},{m.Runtime ?? "(未標示執行階段)"},建置於 {m.BuiltUtc:yyyy-MM-dd HH:mm}Z,{m.FileCount} 個檔案");
+                foreach (var w in v.Warnings) _err.WriteLine($"警告:{w}");
+                foreach (var e in v.Errors) _err.WriteLine($"  - {e}");
+                (v.Ok ? _out : _err).WriteLine(v.Ok ? $"核對通過({v.Checked} 個檔案)" : $"核對失敗({v.Errors.Count} 個問題)");
+                return v.Ok ? 0 : 1;
+            }
+            default:
+                throw new CliUsageException($"未知的 release 子指令:{sub}");
         }
     }
 

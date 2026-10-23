@@ -10,9 +10,17 @@ import { clamp, normalizeHeading } from './angles.js';
 
 // ------------------------------------------------------------------ 情境
 
-/** loadScenario:C# 核心讀 value(路徑)或 args.path;args.id 供紀錄與 Python 伺服器(尚未實作)辨識。 */
+/** loadScenario:C# 核心讀 value(路徑)或 args.path;args.id 供紀錄與 Python 伺服器辨識(兩核心皆支援)。 */
 export function loadScenarioCommand(id: string, path: string): SimCommand {
   return { type: 'loadScenario', value: path, args: { id, path } };
+}
+
+/**
+ * loadScenario 內嵌情境(規劃書第 9.1 節靠離泊預演自動組題):args.scenario 為完整情境物件(與 YAML 結構相同),
+ * 兩核心以與檔案相同的載入路徑解析(參數引用、berth.file 參照照常);args.id 為紀錄用名稱(情境自帶 id 優先)。不送 value/path。
+ */
+export function loadScenarioInlineCommand(id: string, scenario: Record<string, unknown>): SimCommand {
+  return { type: 'loadScenario', args: { id, scenario } };
 }
 
 // ------------------------------------------------------------------ 快照/還原

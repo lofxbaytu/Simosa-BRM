@@ -489,6 +489,7 @@ public sealed class AssessmentEngine
             Manoeuvres = Manoeuvres.Enabled ? Clone(Manoeuvres.Summary().ToList()) : null,
             Berthing = Berthing.BerthingSummary() is { } bs ? Clone(bs) : null,
             Anchoring = Berthing.AnchoringSummary(time) is { } an ? Clone(an) : null,
+            Radar = Metrics.RadarSummary(),
             Events = new SummaryEvents { Total = byKind.Values.Sum(), ByKind = byKind },
             Assessment = new SummaryAssessment
             {

@@ -309,8 +309,8 @@ export function parseScenarioMap(files: Record<string, string>): ScenarioSummary
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-/** 建置時匯入的泊位檔(data/areas/*.json;情境 berth.file 以檔名對應,船上離線可用)。 */
-const AREA_FILES = import.meta.glob('@data/areas/*.json', { import: 'default', eager: true }) as Record<string, unknown>;
+/** 建置時匯入的泊位檔(data/areas/*.json;情境 berth.file 以檔名對應,船上離線可用;靠離泊預演組題的泊位清單也由此取得)。 */
+export const AREA_FILES = import.meta.glob('@data/areas/*.json', { import: 'default', eager: true }) as Record<string, unknown>;
 
 /** 建置時匯入的全部情境(data/scenarios/*.yaml);沒有情境檔時為空陣列。 */
 const SCENARIO_FILES = import.meta.glob('@data/scenarios/*.{yaml,yml}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;

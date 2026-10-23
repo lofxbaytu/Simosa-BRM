@@ -84,6 +84,32 @@ public sealed record TrackReport
     [JsonPropertyName("ais")] public AisTrackReport? Ais { get; init; }
 }
 
+/// <summary>
+/// 純 AIS 目標(tracks 訊息 aisTargets[];radar.schema.json aisTarget):本週期有 AIS 報告、未被任何追蹤中的 ARPA 目標關聯者
+/// (IEC 62288 AIS 目標符號 △;PPI 以三角形顯示、可點選擷取)。位置/向量為 AIS 報告值(含注入的 aisError);CPA/TCPA 以自船指示 COG/SOG 計算。
+/// </summary>
+public sealed record AisTargetReport
+{
+    [JsonPropertyName("mmsi")] public required int Mmsi { get; init; }
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("x")] public required double X { get; init; }
+    [JsonPropertyName("y")] public required double Y { get; init; }
+    [JsonPropertyName("lat")] public required double Lat { get; init; }
+    [JsonPropertyName("lon")] public required double Lon { get; init; }
+    [JsonPropertyName("range_nm")] public required double RangeNm { get; init; }
+    [JsonPropertyName("bearing_deg")] public required double BearingDeg { get; init; }
+    [JsonPropertyName("relBearing_deg")] public required double RelBearingDeg { get; init; }
+    [JsonPropertyName("cog_deg")] public required double CogDeg { get; init; }
+    [JsonPropertyName("sog_kn")] public required double SogKn { get; init; }
+    [JsonPropertyName("heading_deg")] public required double HeadingDeg { get; init; }
+    [JsonPropertyName("cpa_nm")] public required double CpaNm { get; init; }
+    [JsonPropertyName("tcpa_min")] public required double TcpaMin { get; init; }
+    /// <summary>CPA < cpaLimit 且 0 ≤ TCPA ≤ tcpaLimit(與 ARPA 相同規則)</summary>
+    [JsonPropertyName("dangerous")] public required bool Dangerous { get; init; }
+    /// <summary>有 ARPA 目標以此 MMSI 為候選(未關聯)時其編號;純 AIS 無候選時省略</summary>
+    [JsonPropertyName("candidateTrackId")] public int? CandidateTrackId { get; init; }
+}
+
 public sealed record TrialReport(
     [property: JsonPropertyName("course")] double Course,
     [property: JsonPropertyName("speed")] double Speed,
@@ -102,6 +128,8 @@ public sealed record TracksMessage
     [JsonPropertyName("tcpaLimit_min")] public required double TcpaLimitMin { get; init; }
     [JsonPropertyName("trial")] public TrialReport? Trial { get; init; }
     [JsonPropertyName("targets")] public required IReadOnlyList<TrackReport> Targets { get; init; }
+    /// <summary>純 AIS 目標(未被追蹤中的 ARPA 目標關聯;無則省略)</summary>
+    [JsonPropertyName("aisTargets")] public IReadOnlyList<AisTargetReport>? AisTargets { get; init; }
 }
 
 public sealed record ShadowSectorReport(

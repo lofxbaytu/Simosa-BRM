@@ -114,6 +114,27 @@ export interface RadarTrack {
   ais?: TrackAis;
 }
 
+/** 純 AIS 目標(tracks.aisTargets[];radar.schema.json aisTarget):有 AIS 報告、未被追蹤中的 ARPA 目標關聯者;PPI 以三角符號顯示、可點選擷取。 */
+export interface AisTarget {
+  mmsi: number;
+  name: string;
+  x: number;
+  y: number;
+  lat: number;
+  lon: number;
+  range_nm: number;
+  bearing_deg: number;
+  relBearing_deg: number;
+  cog_deg: number;
+  sog_kn: number;
+  heading_deg: number;
+  cpa_nm: number;
+  tcpa_min: number;
+  dangerous: boolean;
+  /** 有 ARPA 目標以此 MMSI 為候選(未關聯)時其編號 */
+  candidateTrackId?: number;
+}
+
 export interface OwnShipReport {
   x: number;
   y: number;
@@ -135,6 +156,8 @@ export interface RadarTracks {
   tcpaLimit_min: number;
   trial?: TrialSetting;
   targets: RadarTrack[];
+  /** 純 AIS 目標(無則省略/空) */
+  aisTargets?: AisTarget[];
 }
 
 export const RADAR_EVENT_KINDS = [
@@ -329,6 +352,35 @@ export function parseTrack(o: Obj): RadarTrack | null {
   return tr;
 }
 
+export function parseAisTarget(o: Obj): AisTarget | null {
+  const mmsi = num(o['mmsi']);
+  const x = num(o['x']);
+  const y = num(o['y']);
+  const range = num(o['range_nm']);
+  const brg = num(o['bearing_deg']);
+  if (mmsi === undefined || x === undefined || y === undefined || range === undefined || brg === undefined) return null;
+  const a: AisTarget = {
+    mmsi,
+    name: str(o['name']),
+    x,
+    y,
+    lat: num(o['lat']) ?? 0,
+    lon: num(o['lon']) ?? 0,
+    range_nm: range,
+    bearing_deg: brg,
+    relBearing_deg: num(o['relBearing_deg']) ?? 0,
+    cog_deg: num(o['cog_deg']) ?? 0,
+    sog_kn: num(o['sog_kn']) ?? 0,
+    heading_deg: num(o['heading_deg']) ?? num(o['cog_deg']) ?? 0,
+    cpa_nm: num(o['cpa_nm']) ?? 0,
+    tcpa_min: num(o['tcpa_min']) ?? 0,
+    dangerous: bool(o['dangerous']),
+  };
+  const cand = num(o['candidateTrackId']);
+  if (cand !== undefined) a.candidateTrackId = cand;
+  return a;
+}
+
 export function parseTracks(o: Obj): RadarTracks | null {
   const own = o['ownShip'];
   const t = num(o['t']);
@@ -357,6 +409,12 @@ export function parseTracks(o: Obj): RadarTracks | null {
   };
   const trial = parseTrial(o['trial']);
   if (trial) tracks.trial = trial;
+  if (Array.isArray(o['aisTargets'])) {
+    tracks.aisTargets = (o['aisTargets'] as unknown[]).filter(isObj).flatMap((x) => {
+      const a = parseAisTarget(x);
+      return a ? [a] : [];
+    });
+  }
   return tracks;
 }
 

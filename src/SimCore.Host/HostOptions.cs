@@ -32,6 +32,8 @@ public sealed class HostOptions
     public bool Rescore { get; set; }
     /// <summary>紀錄檔路徑(--record 可帶路徑;未給時 build/records/&lt;yyyyMMdd-HHmmss&gt;-&lt;scenario&gt;.jsonl)</summary>
     public string? RecordPath { get; set; }
+    /// <summary>重播時把紀錄的 radarControl 行重放到雷達服務的重播接收端(根 URL;null = 不嘗試;預設 ws://127.0.0.1:8766/)</summary>
+    public string? RadarReplayUrl { get; set; } = "ws://localhost:8766/";
     public bool Help { get; set; }
 
     public const string Usage = """
@@ -45,6 +47,9 @@ public sealed class HostOptions
           --validate                  只做情境靜態檢查(列出 error/warning)後結束
           --rescore                   與 --replay 併用:以目前的試俥目標檔與 --parameters 的參數集(未給則沿用紀錄標頭參數值)重新評分
                                       (雜湊與事件序列不變,只重算 summary;未加 --rescore 時優先使用紀錄標頭的目標值)
+          --radar ws://localhost:8766/ 與 --replay 併用:雷達服務已連線時依紀錄 radarControl 行的時刻把學員雷達操作重放到雷達服務
+                                      (ws://…/radar/replay;同時以 --port 推送狀態、依 --timescale 即時步調讓雷達畫面重現;無連線則略過並記 note)
+          --no-radar                  重播時不嘗試連線雷達服務
           --port 8765                 WebSocket 埠(ws://0.0.0.0:8765)
           --timescale 1               初始時間倍率(0.1–10)
           --duration <秒>             模擬時間到達後自動結束(煙霧測試用)
@@ -76,6 +81,8 @@ public sealed class HostOptions
                 case "--validate": o.Validate = true; break;
                 case "--rescore": o.Rescore = true; break;
                 case "--replay": o.Replay = Next(); break;
+                case "--radar": o.RadarReplayUrl = Next(); break;
+                case "--no-radar": o.RadarReplayUrl = null; break;
                 case "--port": o.Port = int.Parse(Next()); break;
                 case "--timescale": o.TimeScale = double.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--duration": o.Duration = double.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;

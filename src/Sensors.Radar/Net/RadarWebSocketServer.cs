@@ -10,7 +10,9 @@ namespace SimosaBRM.Sensors.Radar.Net;
 /// 收到的控制指令(由處理執行緒取出並交給對應的 <see cref="RadarUnit"/>,維持單執行緒確定性)。
 /// <paramref name="Disconnected"/> 為客戶端離線通知(同一佇列,處理執行緒據以清理該客戶端的量程設定)。
 /// </summary>
-public readonly record struct RadarCommandRequest(string RadarId, Guid ClientId, string Json, bool Disconnected = false);
+/// <para><paramref name="Replayed"/>:主控程序重播紀錄時經 /radar/replay 重放的學員操作(radar-arpa.md 第 5.2 節):套用到雷達但不轉送核心(避免重播中再寫入 input 行),
+/// 量程同時套到該雷達所有連線中的顯示客戶端(讓 PPI 跟著學員當時的量程)。</para>
+public readonly record struct RadarCommandRequest(string RadarId, Guid ClientId, string Json, bool Disconnected = false, bool Replayed = false);
 
 /// <summary>
 /// 雷達 WebSocket 伺服器(System.Net.HttpListener,無額外套件):路徑 /radar/x 與 /radar/s。
@@ -49,6 +51,48 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
     }
 
     public int ClientCount(string radarId) => _clients.Values.Count(c => string.Equals(c.RadarId, radarId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>重播接收端路徑(/radar/replay;主控程序 --replay 連線後送 {"type":"radarControlReplay", …})</summary>
+    public const string ReplayId = "replay";
+    /// <summary>經重播接收端收到並排入佇列的指令數</summary>
+    public long ReplayedCommands;
+
+    /// <summary>
+    /// 重播訊息 → 指令佇列:{"type":"radarControlReplay","radar":"x","client":"<32 hex>","t":123.4,"request":{"cmd":"range","value":3}}。
+    /// client 為紀錄的雷達客戶端識別(Guid "N" 格式;無法解析時以字串雜湊產生固定 Guid),request 為原指令物件(radarControl.args.request 加回 cmd)。
+    /// 回傳 false = 格式不符(略過)。
+    /// </summary>
+    public bool EnqueueReplay(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("type", out var type) || type.GetString() != "radarControlReplay") return false;
+            if (!root.TryGetProperty("radar", out var radarEl) || radarEl.GetString() is not { } radar || !_radars.Contains(radar.ToLowerInvariant())) return false;
+            if (!root.TryGetProperty("request", out var req) || req.ValueKind != System.Text.Json.JsonValueKind.Object) return false;
+            if (!req.TryGetProperty("cmd", out _)) return false;
+            var clientText = root.TryGetProperty("client", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.String ? c.GetString() ?? "" : "";
+            Commands.Enqueue(new RadarCommandRequest(radar.ToLowerInvariant(), ReplayClientId(clientText), req.GetRawText(), Replayed: true));
+            Interlocked.Increment(ref ReplayedCommands);
+            return true;
+        }
+        catch (System.Text.Json.JsonException) { return false; }
+    }
+
+    /// <summary>紀錄的 client 字串 → Guid(radarControl.args.client 為 Guid "N" 格式;其他字串以 FNV-1a 產生固定 Guid)。</summary>
+    public static Guid ReplayClientId(string client)
+    {
+        if (Guid.TryParseExact(client, "N", out var g)) return g;
+        var h1 = 14695981039346656037UL;
+        var h2 = 1099511628211UL;
+        foreach (var ch in client) { h1 ^= ch; h1 *= 1099511628211UL; h2 ^= ch; h2 *= 14695981039346656037UL; }
+        var bytes = new byte[16];
+        BitConverter.GetBytes(h1).CopyTo(bytes, 0);
+        BitConverter.GetBytes(h2).CopyTo(bytes, 8);
+        return new Guid(bytes);
+    }
 
     /// <summary>某台雷達目前連線的客戶端(依連線識別排序,順序確定)。</summary>
     public List<Guid> ClientIds(string radarId)
@@ -118,10 +162,11 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
             catch (ObjectDisposedException) { break; }
             var path = ctx.Request.Url?.AbsolutePath.TrimEnd('/') ?? "";
             var id = path.StartsWith("/radar/", StringComparison.OrdinalIgnoreCase) ? path["/radar/".Length..].ToLowerInvariant() : "";
-            if (!_radars.Contains(id) || !ctx.Request.IsWebSocketRequest)
+            var known = _radars.Contains(id) || id == ReplayId;
+            if (!known || !ctx.Request.IsWebSocketRequest)
             {
-                var body = Encoding.UTF8.GetBytes($"Simosa BRM radar endpoint. WebSocket paths: {string.Join(", ", _radars.Select(r => "/radar/" + r))}\n");
-                ctx.Response.StatusCode = _radars.Contains(id) ? 200 : 404;
+                var body = Encoding.UTF8.GetBytes($"Simosa BRM radar endpoint. WebSocket paths: {string.Join(", ", _radars.Select(r => "/radar/" + r))}, /radar/{ReplayId}\n");
+                ctx.Response.StatusCode = known ? 200 : 404;
                 ctx.Response.ContentType = "text/plain; charset=utf-8";
                 ctx.Response.ContentLength64 = body.Length;
                 try { await ctx.Response.OutputStream.WriteAsync(body).ConfigureAwait(false); } catch (Exception) { }
@@ -145,16 +190,17 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         }
         var id = Guid.NewGuid();
         var client = new Client { Socket = socket, RadarId = radarId };
+        var replay = radarId == ReplayId;
         _clients[id] = client;
-        Log?.Invoke($"雷達 {radarId.ToUpperInvariant()} 客戶端連線 {ctx.Request.RemoteEndPoint}(共 {ClientCount(radarId)})");
-        ClientConnected?.Invoke(radarId, id);
+        Log?.Invoke(replay ? $"重播接收端連線 {ctx.Request.RemoteEndPoint}(主控程序 --replay)" : $"雷達 {radarId.ToUpperInvariant()} 客戶端連線 {ctx.Request.RemoteEndPoint}(共 {ClientCount(radarId)})");
+        if (!replay) ClientConnected?.Invoke(radarId, id);
         var sender = SendLoopAsync(client);
         var receiver = ReceiveLoopAsync(client, id);
         await Task.WhenAny(sender, receiver).ConfigureAwait(false);
         client.Frames.Writer.TryComplete();
         client.Json.Writer.TryComplete();
         _clients.TryRemove(id, out _);
-        Commands.Enqueue(new RadarCommandRequest(radarId, id, "", Disconnected: true));
+        if (!replay) Commands.Enqueue(new RadarCommandRequest(radarId, id, "", Disconnected: true));
         try
         {
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
@@ -162,7 +208,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         }
         catch (Exception) { }
         socket.Dispose();
-        Log?.Invoke($"雷達 {radarId.ToUpperInvariant()} 客戶端離線(共 {ClientCount(radarId)})");
+        Log?.Invoke(replay ? "重播接收端離線" : $"雷達 {radarId.ToUpperInvariant()} 客戶端離線(共 {ClientCount(radarId)})");
     }
 
     private async Task SendLoopAsync(Client c)
@@ -200,7 +246,16 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
                 message.Write(buffer, 0, result.Count);
                 if (!result.EndOfMessage) continue;
                 if (result.MessageType == WebSocketMessageType.Text && message.Length < 1 << 20)
-                    Commands.Enqueue(new RadarCommandRequest(c.RadarId, id, Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length)));
+                {
+                    var text = Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);
+                    if (c.RadarId == ReplayId)
+                    {
+                        // 重播接收端:每則訊息回 {"type":"replayAck","ok":…}(主控程序只計數,不等待)
+                        var ok = EnqueueReplay(text);
+                        c.Json.Writer.TryWrite(Encoding.UTF8.GetBytes(ok ? "{\"type\":\"replayAck\",\"ok\":true}" : "{\"type\":\"replayAck\",\"ok\":false,\"error\":\"格式不符或未知雷達\"}"));
+                    }
+                    else Commands.Enqueue(new RadarCommandRequest(c.RadarId, id, text));
+                }
                 message.SetLength(0);
             }
         }

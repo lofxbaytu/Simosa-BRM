@@ -1,0 +1,284 @@
+# 靠泊預演 麥寮油碼頭 3 號泊位 2026-11-13 01:00 UTC
+# 由簡化教官模式「靠離泊預演」自動組題(規劃書第 8.0 節、第 9.1 節;src/Instruments.Web/src/lib/berthing-rehearsal.ts);泊位與碰墊為示意值。
+id: BR_berthing_MLO-OIL-3_20261113-0100
+name: 靠泊預演 麥寮油碼頭 3 號泊位 2026-11-13 01:00 UTC
+description: 左舷靠麥寮油碼頭 3 號泊位(當次航次預演:潮高 1.2 m、風 020°/16 kn、拖船 2 艘、引水人在船);由簡化教官模式靠離泊預演表單自動組題。
+seed: 611130100
+startTimeUtc: 2026-11-13T00:40:00Z
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin:
+  lat: 23.8082
+  lon: 120.168
+initial:
+  position:
+    x: -1208.15
+    y: -636.23
+  heading: 85
+  speed: 3
+  telegraph: DSAH
+  rudder: 0
+environment:
+  wind:
+    trueSpeed: 16
+    trueDir: 20
+    gustiness: 0.3
+  current:
+    set: 250
+    drift: 0.3
+  waterDepth: 15.2
+  visibility_nm: 5
+tugs:
+  - id: TG1
+    name: 麥寮1號
+    bollardPull_t: 40
+    attach: fwdStbd
+    lineLength_m: 30
+    modes:
+      - push
+      - pull
+    modeChange_s: 30
+    initial:
+      mode: standby
+      direction_deg: 270
+      power_pct: 0
+  - id: TG2
+    name: 麥寮2號
+    bollardPull_t: 40
+    attach: aftStbd
+    lineLength_m: 30
+    modes:
+      - push
+      - pull
+    modeChange_s: 30
+    initial:
+      mode: standby
+      direction_deg: 270
+      power_pct: 0
+berth:
+  file: data/areas/mailiao-berth.json
+  id: MLO-OIL-3
+  lines:
+    - id: HEAD
+      fairlead: fwdPort
+      bollard: B7
+      mbl_t: 50
+      length_m: 150
+      initial: stowed
+    - id: FWDSPRING
+      fairlead: fwdPort
+      bollard: B4
+      mbl_t: 50
+      length_m: 150
+      initial: stowed
+    - id: AFTSPRING
+      fairlead: aftPort
+      bollard: B3
+      mbl_t: 50
+      length_m: 150
+      initial: stowed
+    - id: STERN
+      fairlead: aftPort
+      bollard: B1
+      mbl_t: 50
+      length_m: 150
+      initial: stowed
+briefing:
+  text: |-
+    FS BITUMEN NO.1(FSB1)滿載,左舷靠麥寮油碼頭 3 號泊位(示意)(碼頭線 085°、長 260 m、碰墊 12 個、繫船柱 7 個;泊位為示意值)。
+    預定靠泊時刻 2026-11-13 01:00 UTC;潮高 1.2 m、水深 15.2 m(最大吃水 5.71 m,UKC 約 9.49 m);潮流 250°/0.3 kn。
+    預報風 020° 16 kn(陣風 0.3);能見度 5 nm。
+    拖船 2 艘(麥寮1號、麥寮2號,各 40 t)在右舷艏艉帶纜推頂(推 ↔ 拉換位約 30 s)。
+    引水人在船(由帶領者扮演):請完成 MPX(靠泊計畫、拖船位置與用法、繫纜順序、應變),並以檢查表確認。
+    靠泊接近速度依公司程序(參數集 berthing.approachSpeed_mps);繫纜順序艏纜 → 艏倒纜 → 艉倒纜 → 艉纜(繫船柱 B7/B4/B3/B1);繫妥後由教官按「繫纜完成」結束。
+  roles:
+    - role: pilot
+      playedBy: leader
+      required: true
+    - role: master
+      playedBy: leader
+    - role: officer
+      required: true
+    - role: tug
+      playedBy: voiceScript
+    - role: mooring
+      playedBy: leader
+  minParticipants: 2
+  duration_s: 2400
+zones:
+  - id: harbourSpeed
+    name: 麥寮港區速限區(示意)
+    type: speedLimit
+    speedLimit_kn: "${params:port.mailiao.innerSpeedLimit_kn}"
+    polygon:
+      - x: -762.34
+        y: -6.47
+      - x: 1010.99
+        y: 148.68
+      - x: 1094.66
+        y: -807.67
+      - x: -678.67
+        y: -962.81
+  - id: berthArea
+    name: 泊位區(示意;船舯離碼頭 110 m 內)
+    type: reporting
+    polygon:
+      - x: -60.64
+        y: 4.73
+      - x: 318.01
+        y: 37.86
+      - x: 328.47
+        y: -81.68
+      - x: -50.18
+        y: -114.81
+timeline:
+  - id: pilotMpx
+    name: 引水人 MPX(船長/引水人資訊交換)
+    when:
+      type: time
+      atLeast: 5
+    actions:
+      - voiceScript:
+          role: pilot
+          channel: bridge
+          text: 船長,我們左舷靠麥寮油碼頭 3 號泊位。兩艘拖船在右舷艏艉帶纜推頂,接近時拉住控速。風 020° 16 節,靠攏時速度要慢。
+          lang: zh-TW
+      - message:
+          to: instructor
+          text: 觀察:MPX(靠泊計畫、拖船、繫纜順序、應變)、橫向接近速度、碰墊接觸能量
+          severity: info
+  - id: tugsInPosition
+    name: 拖船就位
+    when:
+      type: time
+      atLeast: 60
+    actions:
+      - voiceScript:
+          role: tug
+          channel: vhfPort
+          text: 麥寮1號、麥寮2號報告:已在右舷艏艉帶纜就位,聽候指揮。
+          lang: zh-TW
+      - message:
+          to: instructor
+          text: 拖船就位:觀察拖船令是否清楚、拖船是否複誦確認(必要事件 tugOrderConfirm)
+          severity: info
+  - id: tideWindow
+    name: 潮窗提示
+    when:
+      type: time
+      atLeast: 120
+    actions:
+      - message:
+          to: all
+          text: 潮窗:預定靠泊 2026-11-13 01:00 UTC,潮高 1.2 m(基底水深 14 m → 水深 15.2 m,最大吃水 5.71 m,UKC 約 9.49 m);潮流 250°/0.3 kn
+          severity: info
+  - id: firstContact
+    name: 首次碰墊接觸
+    when:
+      type: event
+      kind: fenderContact
+    actions:
+      - message:
+          to: instructor
+          text: 首次碰墊接觸:見 summary.berthing.contacts(接近速度、能量比)
+          severity: info
+  - id: allFast
+    name: 繫纜完成(教官)
+    manual: true
+    actions:
+      - message:
+          to: all
+          text: 全部纜繩已繫妥,靠泊完成。
+          severity: info
+      - endExercise:
+          reason: 靠泊完成
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when:
+      type: event
+      kind: grounding
+    actions:
+      - endExercise:
+          reason: 擱淺
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail:
+    - id: grounding
+      rule: grounding
+    - id: quayContact
+      rule: event
+      kind: quayContact
+    - id: mooringLineParted
+      rule: event
+      kind: mooringLineParted
+  bands:
+    - id: approachSpeed
+      metric: berthing.maxLateralSpeed_mps
+      warn: "${params:berthing.approachSpeed_mps}"
+      fail: "${params:berthing.approachSpeedFail_mps}"
+      penalty: 10
+      failPenalty: 25
+    - id: berthPosition
+      metric: berthing.allFastPositionError_m
+      warn: "${params:berthing.allFastPositionTolerance_m}"
+      fail: 2x
+      penalty: 10
+      failPenalty: 20
+    - id: contactEnergy
+      metric: berthing.maxEnergyRatio
+      warn: 0.8
+      fail: 1
+      penalty: 10
+      failPenalty: 25
+    - id: fenderOverload
+      metric: berthing.fenderOverloads
+      warn: 0
+      fail: 1
+      penalty: 10
+      failPenalty: 20
+    - id: lineTension
+      metric: berthing.maxLineTensionRatio
+      warn: 0.55
+      fail: 0.8
+      penalty: 5
+      failPenalty: 15
+    - id: ukcMin
+      metric: ukc.min_m
+      warn: "${params:navigation.ukc.minimum_m}"
+      fail: 0.5
+      direction: below
+      penalty: 10
+      failPenalty: 25
+    - id: speed
+      metric: manoeuvring.timeOverSpeedLimit_s
+      warn: 0
+      fail: 60
+      penalty: 5
+      failPenalty: 10
+  required:
+    - id: mpx
+      after:
+        event: timelineTriggered
+        itemId: pilotMpx
+      expect:
+        acknowledge:
+          kind: checklist
+      within_s: 300
+      penalty: 10
+    - id: tugOrderConfirm
+      after:
+        event: tugCommand
+      expect:
+        any:
+          - acknowledge:
+              kind: verbal
+          - acknowledge:
+              kind: report
+      within_s: 60
+      penalty: 5
+  scoring:
+    start: 100
+    passMark: "${params:assessment.passMark}"

@@ -1,0 +1,230 @@
+# 離泊預演 麥寮小型油品碼頭 1 號泊位 2026-11-14 06:00 UTC
+# 由簡化教官模式「靠離泊預演」自動組題(規劃書第 8.0 節、第 9.1 節;src/Instruments.Web/src/lib/berthing-rehearsal.ts);泊位與碰墊為示意值。
+id: BR_unberthing_MLO-SOB-1_20261114-0600
+name: 離泊預演 麥寮小型油品碼頭 1 號泊位 2026-11-14 06:00 UTC
+description: 自麥寮小型油品碼頭 1 號泊位離泊(當次航次預演:潮高 0.8 m、風 270°/18 kn、拖船 0 艘);由簡化教官模式靠離泊預演表單自動組題。
+seed: 611140600
+startTimeUtc: 2026-11-14T06:00:00Z
+timeScale: 1
+ship:
+  id: FSB1
+  loading: ballast
+origin:
+  lat: 23.79
+  lon: 120.185
+initial:
+  position:
+    x: -9.75
+    y: 75
+  heading: 0
+  speed: 0
+  telegraph: STOP
+  rudder: 0
+environment:
+  wind:
+    trueSpeed: 18
+    trueDir: 270
+    gustiness: 0.2
+  current:
+    set: 180
+    drift: 0.2
+  waterDepth: 11.8
+  visibility_nm: 5
+berth:
+  file: data/areas/mailiao-small-oil-berth.json
+  id: MLO-SOB-1
+  lines:
+    - id: HEAD
+      fairlead: fwdStbd
+      bollard: P6
+      mbl_t: 50
+      length_m: 150
+      initial: fast
+    - id: FWDSPRING
+      fairlead: fwdStbd
+      bollard: P4
+      mbl_t: 50
+      length_m: 150
+      initial: fast
+    - id: AFTSPRING
+      fairlead: aftStbd
+      bollard: P3
+      mbl_t: 50
+      length_m: 150
+      initial: fast
+    - id: STERN
+      fairlead: aftStbd
+      bollard: P1
+      mbl_t: 50
+      length_m: 150
+      initial: fast
+  departedDistance_m: 20
+briefing:
+  text: |-
+    FS BITUMEN NO.1(FSB1)壓載,右舷靠泊中,準備離開麥寮小型油品碼頭 1 號泊位(示意)(碼頭線 000°、長 150 m、碰墊 9 個、繫船柱 6 個;泊位為示意值)。
+    預定離泊時刻 2026-11-14 06:00 UTC;潮高 0.8 m、水深 11.8 m(最大吃水 5.41 m,UKC 約 6.39 m);潮流 180°/0.2 kn。
+    預報風 270° 18 kn(陣風 0.2),5 分鐘後轉 030° 25 kn;能見度 5 nm。
+    無拖船可用:以俥舵與側推操船。
+    無引水人:船長自行操船,請完成操船計畫簡報並以檢查表確認。
+    解纜順序先單綁再解;船舯離碼頭超過 110 m(離開泊位區)即結束。
+  roles:
+    - role: master
+      playedBy: leader
+    - role: officer
+      required: true
+    - role: mooring
+      playedBy: leader
+  minParticipants: 2
+  duration_s: 2400
+zones:
+  - id: harbourSpeed
+    name: 麥寮港區速限區(示意)
+    type: speedLimit
+    speedLimit_kn: "${params:port.mailiao.innerSpeedLimit_kn}"
+    polygon:
+      - x: 60
+        y: -784
+      - x: 60
+        y: 934
+      - x: -900
+        y: 934
+      - x: -900
+        y: -784
+  - id: berthArea
+    name: 泊位區(示意;船舯離碼頭 110 m 內)
+    type: reporting
+    polygon:
+      - x: 10
+        y: -84
+      - x: 10
+        y: 234
+      - x: -110
+        y: 234
+      - x: -110
+        y: -84
+timeline:
+  - id: pilotMpx
+    name: 靠離泊計畫簡報
+    when:
+      type: time
+      atLeast: 5
+    actions:
+      - message:
+          to: all
+          text: 離泊前:請完成操船計畫簡報(解纜順序、開艏/開艉、側推與俥舵、應變)。
+          severity: info
+      - message:
+          to: instructor
+          text: 觀察:簡報(離泊計畫、解纜順序、拖船、應變)、離泊時艉擺碰墊、再碰回速度
+          severity: info
+  - id: tideWindow
+    name: 潮窗提示
+    when:
+      type: time
+      atLeast: 120
+    actions:
+      - message:
+          to: all
+          text: 潮窗:預定離泊 2026-11-14 06:00 UTC,潮高 0.8 m(基底水深 11 m → 水深 11.8 m,最大吃水 5.41 m,UKC 約 6.39 m);潮流 180°/0.2 kn
+          severity: info
+  - id: windShift
+    name: 預報風變化
+    phase: degraded
+    when:
+      type: time
+      atLeast: 300
+    actions:
+      - setEnvironment:
+          wind:
+            trueSpeed: 25
+            trueDir: 30
+            gustiness: 0.2
+          ramp_s: 120
+      - message:
+          to: all
+          text: 風向轉 030°、25 kn(120 s 內漸變)。
+          severity: warning
+  - id: clearOfBerth
+    name: 離開泊位區
+    when:
+      type: zone
+      id: berthArea
+      inside: false
+    actions:
+      - message:
+          to: all
+          text: 已離開泊位區,離泊完成。
+          severity: info
+      - endExercise:
+          reason: 離泊完成
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when:
+      type: event
+      kind: grounding
+    actions:
+      - endExercise:
+          reason: 擱淺
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  hardFail:
+    - id: grounding
+      rule: grounding
+    - id: quayContact
+      rule: event
+      kind: quayContact
+    - id: mooringLineParted
+      rule: event
+      kind: mooringLineParted
+  bands:
+    - id: reContactSpeed
+      metric: berthing.maxReContactSpeed_mps
+      warn: "${params:berthing.approachSpeed_mps}"
+      fail: "${params:berthing.approachSpeedFail_mps}"
+      penalty: 10
+      failPenalty: 25
+    - id: contactEnergy
+      metric: berthing.maxEnergyRatio
+      warn: 0.8
+      fail: 1
+      penalty: 10
+      failPenalty: 25
+    - id: fenderOverload
+      metric: berthing.fenderOverloads
+      warn: 0
+      fail: 1
+      penalty: 10
+      failPenalty: 20
+    - id: lineTension
+      metric: berthing.maxLineTensionRatio
+      warn: 0.55
+      fail: 0.8
+      penalty: 5
+      failPenalty: 15
+    - id: ukcMin
+      metric: ukc.min_m
+      warn: "${params:navigation.ukc.minimum_m}"
+      fail: 0.5
+      direction: below
+      penalty: 10
+      failPenalty: 25
+    - id: speed
+      metric: manoeuvring.timeOverSpeedLimit_s
+      warn: 0
+      fail: 60
+      penalty: 5
+      failPenalty: 10
+  required:
+    - id: mpx
+      after:
+        event: timelineTriggered
+        itemId: pilotMpx
+      expect:
+        acknowledge:
+          kind: checklist
+      within_s: 300
+      penalty: 10
+  scoring:
+    start: 100
+    passMark: "${params:assessment.passMark}"

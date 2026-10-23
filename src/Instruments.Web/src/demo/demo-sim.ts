@@ -25,7 +25,8 @@ import type { TargetState } from '../types/target.js';
 import { STEERING_MODES, STEERING_PUMPS, TELEGRAPH_POSITIONS, type OwnShipState, type ShipId, type SteeringModeValue, type SteeringPump, type SteeringStatus, type TelegraphPosition } from '../types/state.js';
 import { DEMO_TUGS, DemoExternal, demoBerth, type DemoBerthOptions, type DemoTugDef } from './demo-external.js';
 import type { BerthGeometry } from '../lib/external-forces.js';
-import { BNWAS_RESET_COMMANDS, DemoAlerts, DemoBnwas, DemoSensors, demoAlertConditions, demoLatLon, type DemoEmit } from './demo-alerts.js';
+import { BNWAS_RESET_COMMANDS, BRIDGE_STATIONS, DemoAlerts, DemoBnwas, DemoSensors, demoAlertConditions, demoLatLon, type DemoEmit } from './demo-alerts.js';
+import { ALERT_STATIONS, type AlertStation } from '../types/alerts.js';
 
 export const DEMO_DT = 0.02; // 50 Hz
 
@@ -445,6 +446,13 @@ export class DemoSim {
     this.emit('commandRejected', 'instructor', { data: { command, reason: 'autopilotUnavailable', args: { ...args } } });
   }
 
+  /** 警報指令的站(args.station;省略 = bridge;列舉外回傳 null = 未知站) */
+  private alertStation(cmd: SimCommand): AlertStation | null {
+    const v = cmd.args?.['station'];
+    if (v === undefined || v === null) return 'bridge';
+    return typeof v === 'string' && (ALERT_STATIONS as readonly string[]).includes(v) ? (v as AlertStation) : null;
+  }
+
   private alertTargetId(cmd: SimCommand): string | undefined {
     if (typeof cmd.value === 'string' && cmd.value) return cmd.value;
     const id = cmd.args?.['id'];
@@ -637,11 +645,54 @@ export class DemoSim {
         }
         break;
       }
-      case 'alertAcknowledge':
-      case 'alertSilence': {
+      case 'alertAcknowledge': {
+        // 站別規則與核心一致(sensors-alerts.md 第 3.6 節;核心 AlertManager.Acknowledge 先查 id 再查站):args.station 省略 = bridge;
+        // 未知 id → unknownAlert、未知站 → unknownStation;Category A / 已轉移者只能在負責站確認;
+        // 只有駕駛台三站且未被拒絕的確認才視為駕駛台操作重設 BNWAS(ecr 不重設;核心順序:先確認事件、再 bnwasReset)
         const id = this.alertTargetId(cmd);
-        const ok = cmd.type === 'alertAcknowledge' ? this.alerts.acknowledge(id, s.t) : this.alerts.silence(id, s.t);
-        if (!ok) this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: 'unknownAlert', id } });
+        const station = this.alertStation(cmd);
+        if (id !== undefined && id !== 'all' && !this.alerts.isKnown(id)) {
+          this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: 'unknownAlert', id } });
+          break;
+        }
+        if (station === null) {
+          this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: 'unknownStation', id, station: cmd.args?.['station'] } });
+          break;
+        }
+        const r = this.alerts.acknowledge(id, s.t, station);
+        if (r !== 'ok') {
+          this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: r, id, ...(r === 'alertStationRequired' ? { station } : {}) } });
+          break;
+        }
+        if (this.opts.alerts && BRIDGE_STATIONS.has(station)) this.bnwas.reset(s.t, cmd.type, 'instructor', this.autopilot.enabled);
+        break;
+      }
+      case 'alertSilence': {
+        // 靜音不驗證站別(核心 SimulationEngine.AlertSilence 只呼叫 AlertManager.Silence,未知 id 才拒絕):
+        // args.station 只決定是否視為駕駛台操作(省略 = bridge、兩翼重設 BNWAS;ecr 與列舉外的站都不重設,指令仍接受並發 alertSilenced)
+        const id = this.alertTargetId(cmd);
+        if (!this.alerts.silence(id, s.t)) {
+          this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: 'unknownAlert', id } });
+          break;
+        }
+        const station = this.alertStation(cmd);
+        if (this.opts.alerts && station !== null && BRIDGE_STATIONS.has(station)) this.bnwas.reset(s.t, cmd.type, 'instructor', this.autopilot.enabled);
+        break;
+      }
+      case 'alertTransfer': {
+        // 核心 AlertManager.Transfer 順序:警報不在目前清單 → unknownAlert;站省略/列舉外 → unknownStation;再查 transferTargets
+        const id = this.alertTargetId(cmd);
+        const station = this.alertStation(cmd);
+        if (!this.alerts.isActive(id)) {
+          this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: 'unknownAlert', id, station: cmd.args?.['station'] } });
+          break;
+        }
+        if (station === null || cmd.args?.['station'] === undefined) {
+          this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: 'unknownStation', id, station: cmd.args?.['station'] } });
+          break;
+        }
+        const r = this.alerts.transfer(id, station, s.t);
+        if (r !== 'ok') this.emit('commandRejected', 'instructor', { data: { command: cmd.type, reason: r, id, station } });
         break;
       }
       case 'bnwasMode':

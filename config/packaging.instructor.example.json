@@ -1,0 +1,7 @@
+{
+  "$comment": "教官筆電 config/packaging.json 範例(simosa-pkg sync/export/import/store;docs/design/packaging-sync.md 第 6.1 節)。",
+  "role": "instructor",
+  "ships": { "FSB1": "192.168.77.11", "FSB2": "192.168.77.12" },
+  "port": 7300,
+  "store": "store"
+}
