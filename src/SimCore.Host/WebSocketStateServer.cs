@@ -136,6 +136,9 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         client.Outbox.Writer.TryComplete();
         client.Events.Writer.TryComplete();
         _clients.TryRemove(id, out _);
+        // 先等傳送迴圈結束(通道已關閉,送完在途訊息即退出):Windows 原生 WebSocket 不允許 CloseAsync 與 SendAsync 並行
+        try { await sender.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
+        catch (Exception) { }
         try
         {
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)

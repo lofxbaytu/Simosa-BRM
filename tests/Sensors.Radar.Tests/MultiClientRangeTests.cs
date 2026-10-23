@@ -296,8 +296,9 @@ public class MultiClientRangeTests
         Assert.DoesNotContain(cmds, c => c.ArgAsString("cmd") == "getTracks");
         Assert.Equal(2, service.ControlsForwarded);
 
-        // b 離線 → 處理執行緒清理其量程;a 仍收 6 nm
-        await b.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        // b 離線 → 處理執行緒清理其量程;a 仍收 6 nm(關閉握手若被伺服器先行中止亦不影響本測試的斷言)
+        try { await b.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token); }
+        catch (WebSocketException) { }
         SpinWait.SpinUntil(() => service.Units[0].ClientRanges.Count == 0, 5000);
         Assert.Empty(service.Units[0].ClientRanges);
         var ra2 = await Collect(a, 10);

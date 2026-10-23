@@ -201,6 +201,10 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         client.Json.Writer.TryComplete();
         _clients.TryRemove(id, out _);
         if (!replay) Commands.Enqueue(new RadarCommandRequest(radarId, id, "", Disconnected: true));
+        // 先等傳送迴圈結束(通道已關閉,送完在途幀即退出):Windows 的原生 HttpListener WebSocket 不允許
+        // CloseAsync 與 SendAsync 並行,否則會拋例外並中止連線,客戶端收不到關閉握手(Windows CI 曾因此失敗)。
+        try { await sender.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
+        catch (Exception) { }
         try
         {
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
