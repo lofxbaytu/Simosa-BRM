@@ -13,6 +13,9 @@ using SimosaBRM.SimCore.Ship;
 
 // 主控程序(規劃書第 5.2 節):啟動引擎、載入情境、WebSocket(ws://0.0.0.0:8765)、UDP 多播狀態匯流排、NMEA 閘道、紀錄/重播。
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
+// 主控台與重導向輸出一律 UTF-8:Windows 預設 OEM 字碼頁會把中文日誌印成「?」(啟動腳本的日誌檔與測試讀取都需要)
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
+catch (Exception) { /* 無主控台或不支援時維持預設 */ }
 HostOptions options;
 try { options = HostOptions.Parse(args); }
 catch (Exception ex)

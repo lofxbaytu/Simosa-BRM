@@ -58,6 +58,8 @@ public class HostStartUtcTests
             WorkingDirectory = TestData.Root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8, // 主控程序以 UTF-8 輸出(Windows 預設字碼頁會把中文變成「?」)
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
         };
         foreach (var a in new[] { hostDll, "--scenario", scenarioPath, "--record", recordPath, "--duration", "1", "--no-ws", "--no-udp", "--no-nmea", "--dynamics", "placeholder" })

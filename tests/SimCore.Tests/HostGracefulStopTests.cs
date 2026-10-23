@@ -44,6 +44,8 @@ public class HostGracefulStopTests
             WorkingDirectory = TestData.Root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8, // 主控程序以 UTF-8 輸出(Windows 預設字碼頁會把中文變成「?」)
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
         };
         psi.ArgumentList.Add(hostDll);
