@@ -7,7 +7,9 @@ namespace SimosaBRM.Packaging.Records;
 /// <summary>
 /// 自 JSON Lines 紀錄檔讀出練習摘要(只解析 header、最後一行 state/footer 與 summary 是否存在;不依賴 SimCore 型別,
 /// 以便舊版/新版紀錄都能打包)。完整性:footer.sha256 與 footer 前所有行(含換行)的 SHA-256 比對(同 RecordReader)。
-/// 參與者:header.participants(字串陣列或 {name, role} 物件陣列;日後由練習啟動畫面寫入)。
+/// 參與者與休息時間確認(教官站 sessionInfo 指令;規劃書第 5.5 節):header.participants / restHoursConfirmation / course(紀錄開啟前送達或
+/// 情境切換另開新檔時由 SimCore 寫入 header),否則取最後一行 {"kind":"session", participants, restHoursConfirmation, course, tick, t}
+/// (紀錄開啟後才送達);participants 為字串陣列或 {name, role, rank?, certificateNo?} 物件陣列。來源記於 sessionInfoSource(header | session)。
 /// 起訖與時長一律用<b>牆鐘</b>(供轉錄至船上工時/休息時間紀錄;倍速或凍結時模擬時間與實際經過時間不同):
 /// 開始 = header.createdUtc;結束 = footer.closedUtc(SimCore 寫入時)→ 否則紀錄檔最後修改時間(估計值)→ 否則開始 + 模擬時長(估計值)。
 /// 模擬時長(footer.finalTick × dt,無 footer 時取最後一行 state 的 t)另列為 simDurationS。
@@ -19,6 +21,7 @@ public static class RecordInspector
         var s = new ExerciseSummary { File = packagePath };
         JsonDocument? header = null;
         JsonDocument? footer = null;
+        JsonDocument? lastSession = null;
         double? lastStateT = null;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         try
@@ -36,6 +39,11 @@ public static class RecordInspector
                 hash.AppendData("\n"u8);
                 if (kind == "header" && header is null) header = TryParse(line);
                 else if (kind == "summary") s.HasSummary = true;
+                else if (kind == "session")
+                {
+                    // 只保留最後一行(教官站可重送修正)
+                    if (TryParse(line) is { } doc) { lastSession?.Dispose(); lastSession = doc; }
+                }
                 else if (kind == "state" && line.Length < 64 * 1024)
                 {
                     // 只取時間;以字串搜尋避免每行完整解析
@@ -61,15 +69,9 @@ public static class RecordInspector
                     s.ScenarioName = Str(sc, "name");
                 }
                 if (h.TryGetProperty("parameterSet", out var ps) && ps.ValueKind == JsonValueKind.Object) s.ParameterSetVersion = Str(ps, "version");
-                if (h.TryGetProperty("participants", out var parts) && parts.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var p in parts.EnumerateArray())
-                    {
-                        if (p.ValueKind == JsonValueKind.String && p.GetString() is { Length: > 0 } n) s.Participants.Add(new Participant { Name = n });
-                        else if (p.ValueKind == JsonValueKind.Object && Str(p, "name") is { Length: > 0 } pn) s.Participants.Add(new Participant { Name = pn, Role = Str(p, "role") });
-                    }
-                }
-                if (h.TryGetProperty("restHoursConfirmation", out var rc)) s.RestHoursConfirmation = rc.Clone();
+                // 參與者資訊:header 有就用 header,否則取最後一行 session
+                if (HasSessionFields(h)) { ReadSessionFields(h, s); s.SessionInfoSource = "header"; }
+                else if (lastSession is not null && HasSessionFields(lastSession.RootElement)) { ReadSessionFields(lastSession.RootElement, s); s.SessionInfoSource = "session"; }
                 double? dtStep = h.TryGetProperty("dt", out var d) && d.ValueKind == JsonValueKind.Number ? d.GetDouble() : null;
                 DateTime? closedUtc = null;
                 if (footer is not null)
@@ -104,8 +106,29 @@ public static class RecordInspector
         {
             header?.Dispose();
             footer?.Dispose();
+            lastSession?.Dispose();
         }
         return s;
+    }
+
+    private static bool HasSessionFields(JsonElement e)
+        => (e.TryGetProperty("participants", out var p) && p.ValueKind == JsonValueKind.Array)
+           || (e.TryGetProperty("restHoursConfirmation", out var r) && r.ValueKind == JsonValueKind.Object);
+
+    /// <summary>自 header 或 session 行讀 participants / restHoursConfirmation / course(欄位形狀相同)。</summary>
+    private static void ReadSessionFields(JsonElement e, ExerciseSummary s)
+    {
+        if (e.TryGetProperty("participants", out var parts) && parts.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var p in parts.EnumerateArray())
+            {
+                if (p.ValueKind == JsonValueKind.String && p.GetString() is { Length: > 0 } n) s.Participants.Add(new Participant { Name = n });
+                else if (p.ValueKind == JsonValueKind.Object && Str(p, "name") is { Length: > 0 } pn)
+                    s.Participants.Add(new Participant { Name = pn, Role = Str(p, "role"), Rank = Str(p, "rank"), CertificateNo = Str(p, "certificateNo") });
+            }
+        }
+        if (e.TryGetProperty("restHoursConfirmation", out var rc) && rc.ValueKind == JsonValueKind.Object) s.RestHoursConfirmation = rc.Clone();
+        if (e.TryGetProperty("course", out var c) && c.ValueKind == JsonValueKind.Object) s.Course = c.Clone();
     }
 
     /// <summary>是否已寫入 footer(練習已結束)。</summary>
@@ -157,6 +180,9 @@ public static class RecordInspector
             {
                 var k = p.Name + "\u0001" + (p.Role ?? "");
                 if (!byName.TryGetValue(k, out var ph)) byName[k] = ph = new ParticipantHours { Name = p.Name, Role = p.Role };
+                // 職級/證書號以最近一次練習填寫者為準(同人同職務)
+                if (p.Rank is { Length: > 0 }) ph.Rank = p.Rank;
+                if (p.CertificateNo is { Length: > 0 }) ph.CertificateNo = p.CertificateNo;
                 ph.Exercises++;
                 ph.TotalS += e.DurationS ?? 0;
                 ph.Sessions.Add(new Session { ScenarioId = e.ScenarioId, StartUtc = e.StartUtc, EndUtc = e.EndUtc, DurationS = e.DurationS, SimDurationS = e.SimDurationS, EndEstimated = e.EndEstimated });

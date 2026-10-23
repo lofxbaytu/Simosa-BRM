@@ -18,5 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/SimCore/SimCore.csproj" />
     <ProjectReference Include="../../src/Gateway.Nmea/Gateway.Nmea.csproj" />
+    <!-- 主控程序的可測類別(ShutdownCoordinator、StopFileWatcher、HostCommandRouter);Host 程序層級測試另以 dotnet 啟動建置好的 dll -->
+    <ProjectReference Include="../../src/SimCore.Host/SimCore.Host.csproj" />
   </ItemGroup>
 </Project>

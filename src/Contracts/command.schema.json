@@ -40,13 +40,15 @@
         "anchor",
         "mooring",
         "alertTransfer",
-        "radarControl"
+        "radarControl",
+        "sessionInfo",
+        "shutdown"
       ]
     },
     "value": {},
     "args": {
       "type": "object",
-      "description": "loadScenario:value 或 args.path 為情境檔路徑(相對專案根目錄)或代號;args.scenario 為完整內嵌情境物件(結構同 scenario.schema.json,可含 \"${params:…}\" 引用與 berth.file 參照;有此欄位時忽略路徑,C# 以 YAML→JSON 同一載入路徑解析,Python 參考伺服器同步解析),args.id 為紀錄/顯示用名稱(情境自帶 id 優先;皆無時 inline);靠離泊預演自動組題(規劃書第 9.1 節)以此送入;載入/驗證失敗(讀檔、YAML、參數集、泊位參照、結構檢查 error、船舶 particulars、動力學係數,或指令缺路徑與內嵌物件)時核心狀態不變,C# 發帶外事件 scenarioLoadRejected {scenarioId, origin: file|inline|command, path?, issueCount, issues[]{path, message, severity}}(seq −1、不進紀錄與雜湊、只走 WebSocket 事件框),Python 參考伺服器回 ack ok=false;targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate;setEnvironment:wind{trueSpeed,trueDir,gustiness}、current{set,drift}、waterDepth、visibility_nm、ramp_s;injectFault:{name, args};triggerTimeline:{id, force};acknowledge:{kind: verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|gyroCheck|prediction|driftCalculation|anchorDecision|notifyCompany|notifySar|lookoutReport|other(與 scenario.schema.json expectSpec.acknowledge.kind 一致), itemId?, role?, note?};endExercise:{reason?};steeringMode:{pump?: 1|2|both, direction?: port|starboard|stop(僅 nfu), heading?, rotLimit?(僅 autopilot)}(模式在 value);alertAcknowledge:{id?, station?: bridge|portWing|stbdWing|ecr(省略 = bridge;Category A 與已轉移責任的警報只能在負責站確認,否則 commandRejected {reason: alertStationRequired};未知站 unknownStation;只有駕駛台三站未被拒絕的確認視為駕駛台操作重設 BNWAS,ecr 不重設)};alertSilence:{id?, station?(不限制靜音,只決定是否視為駕駛台操作重設 BNWAS;省略 = bridge)};alertTransfer:{id, station}(MSC.302(87) 責任轉移;事件 alertTransferred {station, from, transferredTo};BNWAS 不可轉移、非 engine/thruster/steering 來源不可轉 ecr → commandRejected {reason: alertNotTransferable};轉回原站即解除);radarControl:{radar: x|s, client, cmd, ok, error?, id?, value?, request{原雷達指令欄位}}(雷達服務轉送的學員雷達操作,只寫 input 行並發事件 radarControl,不影響物理;無情境引擎時雜湊不變,有情境引擎時只有事件序號計入雜湊(確定性,與 acknowledge 相同);指標 radar.controlCount/acquisitions/rangeChanges);bnwasMode:{dormant_s?, stage3_s?}(模式在 value);injectFault 感測器故障 args 見 description"
+      "description": "loadScenario:value 或 args.path 為情境檔路徑(相對專案根目錄)或代號;args.scenario 為完整內嵌情境物件(結構同 scenario.schema.json,可含 \"${params:…}\" 引用與 berth.file 參照;有此欄位時忽略路徑,C# 以 YAML→JSON 同一載入路徑解析,Python 參考伺服器同步解析),args.id 為紀錄/顯示用名稱(情境自帶 id 優先;皆無時 inline);靠離泊預演自動組題(規劃書第 9.1 節)以此送入;載入/驗證失敗(讀檔、YAML、參數集、泊位參照、結構檢查 error、船舶 particulars、動力學係數,或指令缺路徑與內嵌物件)時核心狀態不變,C# 發帶外事件 scenarioLoadRejected {scenarioId, origin: file|inline|command, path?, issueCount, issues[]{path, message, severity}}(seq −1、不進紀錄與雜湊、只走 WebSocket 事件框),Python 參考伺服器回 ack ok=false;targetControl:id(add 除外)、add{目標船定義,同 scenario.schema.json targets[]}、remove、heading/speed(教官覆寫)、release、position{lat,lon|x,y}、waypoints[]、aisOn、aisError{…}|null、behaviour{…}、colreg(giveWay|standOn|auto|off)、lights、sound、activate;setEnvironment:wind{trueSpeed,trueDir,gustiness}、current{set,drift}、waterDepth、visibility_nm、ramp_s;injectFault:{name, args};triggerTimeline:{id, force};acknowledge:{kind: verbal|notifyEcr|callMaster|report|checklist|steeringMode|anchorReady|gyroCheck|prediction|driftCalculation|anchorDecision|notifyCompany|notifySar|lookoutReport|other(與 scenario.schema.json expectSpec.acknowledge.kind 一致), itemId?, role?, note?};endExercise:{reason?};steeringMode:{pump?: 1|2|both, direction?: port|starboard|stop(僅 nfu), heading?, rotLimit?(僅 autopilot)}(模式在 value);alertAcknowledge:{id?, station?: bridge|portWing|stbdWing|ecr(省略 = bridge;Category A 與已轉移責任的警報只能在負責站確認,否則 commandRejected {reason: alertStationRequired};未知站 unknownStation;只有駕駛台三站未被拒絕的確認視為駕駛台操作重設 BNWAS,ecr 不重設)};alertSilence:{id?, station?(不限制靜音,只決定是否視為駕駛台操作重設 BNWAS;省略 = bridge)};alertTransfer:{id, station}(MSC.302(87) 責任轉移;事件 alertTransferred {station, from, transferredTo};BNWAS 不可轉移、非 engine/thruster/steering 來源不可轉 ecr → commandRejected {reason: alertNotTransferable};轉回原站即解除);radarControl:{radar: x|s, client, cmd, ok, error?, id?, value?, request{原雷達指令欄位}}(雷達服務轉送的學員雷達操作,只寫 input 行並發事件 radarControl,不影響物理;無情境引擎時雜湊不變,有情境引擎時只有事件序號計入雜湊(確定性,與 acknowledge 相同);指標 radar.controlCount/acquisitions/rangeChanges);bnwasMode:{dormant_s?, stage3_s?}(模式在 value);injectFault 感測器故障 args 見 description;sessionInfo:$defs.sessionInfoArgs(參與者與休息時間確認,規劃書第 5.5 節;主控程序層指令:不進引擎佇列、不寫 input 行、不進雜湊;紀錄未開啟(或情境切換另開新檔)時寫進紀錄 header 的 participants / restHoursConfirmation / course,已開啟則追加一行 {\"kind\":\"session\", tick, t, 同欄位};回 ack {type: ack, command: sessionInfo, ok, detail, tick},格式不符 ok=false 且不寫入;Python 參考伺服器驗證後保存、不寫紀錄);shutdown:{reason?}(優雅停止;僅接受本機或直連私有網段(教官站)的客戶端:結束練習 → 寫紀錄 footer → 程序結束,回 ack ok=true 後 ≤ 1 s 內結束;其他來源 ok=false)"
     }
   },
   "examples": [
@@ -315,6 +317,18 @@
         "action": "heave",
         "tension_t": 8
       }
+    },
+    {
+      "type": "sessionInfo",
+      "args": {
+        "participants": [ { "name": "王大副", "role": "oow", "rank": "大副", "certificateNo": "C-123" }, { "name": "李舵工", "role": "helmsman" } ],
+        "restHoursConfirmation": { "confirmedBy": "船長", "confirmedAtUtc": "2026-10-08T01:30:00.000Z", "compliant": true, "note": "已核對休息時間紀錄" },
+        "course": { "id": "BRM-2026-03", "title": "BRM 複訓", "instructor": "陳教官" }
+      }
+    },
+    {
+      "type": "shutdown",
+      "args": { "reason": "stop-all" }
     }
   ],
   "$defs": {
@@ -338,6 +352,38 @@
         "action": { "type": "string", "enum": ["letGo", "veer", "heave", "brake", "release"], "description": "letGo 拋錨(自由送出 2 m/s 至目標後剎車;錨已著底或仍在送出/鬆鏈中時拒絕 anchorAlreadyOut,懸吊中再拋時目標短於目前鏈長拒絕 invalidTarget)、veer 鬆鏈(0.5 m/s 至目標)、heave 起錨(particulars 起錨速率;超過絞盤過載拉力停轉,停轉中張力超過剎車握持力時鏈與剎車同樣被拉出 anchorBrakeSlipping;目標省略 = 收妥)、brake 剎車、release 放開剎車自由送出" },
         "targetLength_shackles": { "type": "number", "minimum": 0, "description": "目標鏈長(節;一節 = particulars anchors.shackleLength_m,預設 27.5 m)" },
         "length_m": { "type": "number", "minimum": 0, "description": "目標鏈長(m;優先於 targetLength_shackles)" }
+      }
+    },
+    "sessionInfoArgs": {
+      "type": "object",
+      "description": "sessionInfo 的 args(教官站練習啟動畫面;C# RecordSessionInfo.TryParse 與 Python parse_session_info 相同驗證):participants 至少一位、name 非空、role 在列舉內(不分大小寫,寫入時小寫);restHoursConfirmation 必填;course 選填;未知欄位略過",
+      "required": ["participants", "restHoursConfirmation"],
+      "properties": {
+        "participants": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "required": ["name", "role"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "role": { "type": "string", "enum": ["master", "oow", "pilot", "helmsman", "lookout", "observer", "instructor"] },
+              "rank": { "type": "string", "description": "職級(船長、大副…;選填)" },
+              "certificateNo": { "type": "string", "description": "證書號(選填;教官端證書效期追蹤)" }
+            }
+          }
+        },
+        "restHoursConfirmation": {
+          "type": "object", "required": ["confirmedBy", "confirmedAtUtc", "compliant"],
+          "properties": {
+            "confirmedBy": { "type": "string", "minLength": 1, "description": "確認人(船長/帶領者)" },
+            "confirmedAtUtc": { "type": "string", "format": "date-time", "description": "ISO-8601(教官站取核心 state.utc,無則瀏覽器 UTC);核心寫入時正規化為毫秒 Z" },
+            "compliant": { "type": "boolean", "description": "是否符合 STCW A-VIII/1(MLC 2006 規則 2.3)與公司規定" },
+            "note": { "type": "string" }
+          }
+        },
+        "course": {
+          "type": "object",
+          "properties": { "id": { "type": "string" }, "title": { "type": "string" }, "instructor": { "type": "string" } }
+        }
       }
     },
     "mooringArgs": {

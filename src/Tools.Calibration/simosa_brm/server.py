@@ -27,14 +27,20 @@
   相同);clearFault 的名稱為 value 或 args.name(C# SimCommand.FaultName),兩者都缺或為 all 時清除全部;清除 tugLineBreak
   後斷纜拖船可重新帶纜。
   state 輸出 tugs[] / anchors[] / berth / bank(external.py;與 C# BuildState 相同的輸出條件)。
+- 主控程序層指令(語意與 C# SimCore.Host HostCommandRouter 一致;不影響模型):sessionInfo {participants[]{name, role, rank?, certificateNo?},
+  restHoursConfirmation{confirmedBy, confirmedAtUtc, compliant, note?}, course?} 驗證後保存在 SimServer.session_info 並回 ack ok=true
+  (Python 參考實作不寫紀錄;C# 寫進紀錄 header 或 session 行),格式不符回 ok=false 且不保存;shutdown 只接受本機/私有網段(直連教官筆電)
+  的客戶端,回 ack ok=true 後廣播迴圈結束、serve() 返回(≤ 1 s),其他來源回 ok=false。
 """
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import math
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from .mmg import (
@@ -83,6 +89,101 @@ UNIMPLEMENTED_DETAIL = {
 STEERING_MODE_LABEL = {"fu": "隨動(FU)", "nfu": "非隨動(NFU)", "autopilot": "自動舵", "emergency": "應急操舵"}
 NFU_LABEL = {-1: "推左舵", 0: "停", 1: "推右舵"}
 REJECT_DETAIL = "拒絕({reason}):{msg};狀態不變"
+# sessionInfo 契約的參與者職務列舉(與 C# RecordSessionInfo.Roles、教官站 session-info.ts 相同)
+SESSION_ROLES = ("master", "oow", "pilot", "helmsman", "lookout", "observer", "instructor")
+
+
+def _clean(v: Any) -> str:
+    """單行欄位:控制字元換成空白並去頭尾空白(C# RecordSessionInfo.Clean)。"""
+    if not isinstance(v, str):
+        return ""
+    return "".join(" " if (ord(ch) < 32 or ord(ch) == 127) else ch for ch in v).strip()
+
+
+def parse_session_info(args: Any) -> dict[str, Any]:
+    """驗證並正規化 sessionInfo 的 args(C# RecordSessionInfo.TryParse 相同規則):participants 非空且每位有 name 與列舉內的 role
+    (不分大小寫,存小寫;rank/certificateNo 選填),restHoursConfirmation 必填(confirmedBy 非空、confirmedAtUtc ISO-8601、compliant 布林),
+    course 選填;不符時丟 ValueError(整筆拒絕、不保存)。"""
+    if not isinstance(args, dict):
+        raise ValueError("缺少 args 物件")
+    raw_parts = args.get("participants")
+    if not isinstance(raw_parts, list):
+        raise ValueError("缺少 participants 陣列")
+    participants: list[dict[str, Any]] = []
+    for i, p in enumerate(raw_parts, 1):
+        if not isinstance(p, dict):
+            raise ValueError(f"participants[{i}] 須為物件")
+        name = _clean(p.get("name"))
+        if not name:
+            raise ValueError(f"participants[{i}] 缺少 name")
+        role = _clean(p.get("role")).lower()
+        if role not in SESSION_ROLES:
+            raise ValueError(f"participants[{i}]({name})的 role 不在列舉內:{'|'.join(SESSION_ROLES)}")
+        out: dict[str, Any] = {"name": name, "role": role}
+        for k in ("rank", "certificateNo"):
+            if _clean(p.get(k)):
+                out[k] = _clean(p.get(k))
+        participants.append(out)
+    if not participants:
+        raise ValueError("participants 至少一位")
+    rc = args.get("restHoursConfirmation")
+    if not isinstance(rc, dict):
+        raise ValueError("缺少 restHoursConfirmation 物件")
+    by = _clean(rc.get("confirmedBy"))
+    if not by:
+        raise ValueError("restHoursConfirmation.confirmedBy 必填")
+    at = _clean(rc.get("confirmedAtUtc"))
+    try:
+        at_dt = datetime.fromisoformat(at.replace("Z", "+00:00")) if at else None
+    except ValueError:
+        at_dt = None
+    if at_dt is None:
+        raise ValueError("restHoursConfirmation.confirmedAtUtc 須為 ISO-8601 時刻")
+    if at_dt.tzinfo is None:
+        at_dt = at_dt.replace(tzinfo=timezone.utc)
+    if not isinstance(rc.get("compliant"), bool):
+        raise ValueError("restHoursConfirmation.compliant 須為布林")
+    rest: dict[str, Any] = {
+        "confirmedBy": by,
+        "confirmedAtUtc": at_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{at_dt.microsecond // 1000:03d}Z",
+        "compliant": rc["compliant"],
+    }
+    if _clean(rc.get("note")):
+        rest["note"] = _clean(rc.get("note"))
+    info: dict[str, Any] = {"participants": participants, "restHoursConfirmation": rest}
+    course = args.get("course")
+    if isinstance(course, dict):
+        c = {k: _clean(course.get(k)) for k in ("id", "title", "instructor") if _clean(course.get(k))}
+        if c:
+            info["course"] = c
+    return info
+
+
+def shutdown_allowed(remote: Any) -> bool:
+    """shutdown 只接受本機或私有/鏈路本地位址(船上筆電與教官筆電直連;C# HostCommandRouter.IsAllowedShutdownClient);未知來源視為本機。"""
+    if not remote:
+        return True
+    host = remote[0] if isinstance(remote, (tuple, list)) else str(remote)
+    try:
+        ip = ipaddress.ip_address(host.split("%")[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_loopback:
+        return True
+    # 明確網段(與 C# 相同;不用 is_private,它另外接受 0.0.0.0/8、192.0.0.0/24、198.18.0.0/15、240.0.0.0/4 等特殊網段)
+    return any(ip in net for net in _SHUTDOWN_NETWORKS)
+
+
+_SHUTDOWN_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("fc00::/7"),
+)
 
 
 def _arg_str(args: dict[str, Any], name: str) -> str | None:
@@ -124,6 +225,8 @@ class SimServer:
         self.clients: set[Any] = set()
         self.snapshots: dict[str, dict[str, Any]] = {}
         self._accum = 0.0
+        self.session_info: dict[str, Any] | None = None  # 最近一次接受的 sessionInfo(參考實作不寫紀錄)
+        self.shutdown_requested = False  # shutdown 指令:回 ack 後 loop() 結束、serve() 返回
         # state.utc 起點:情境 startTimeUtc,未給時為現在(與 C# 相同規則);寫回情境 dict 使之後的 ack/重設沿用同一起點
         self._apply_start_utc()
 
@@ -166,7 +269,8 @@ class SimServer:
         return s
 
     # ---- 命令 ----
-    def apply_command(self, cmd: dict[str, Any]) -> dict[str, Any]:
+    def apply_command(self, cmd: dict[str, Any], remote: Any = None) -> dict[str, Any]:
+        """套用一筆命令並回 ack;remote 為客戶端位址(shutdown 的來源檢查;None = 本機)。"""
         t = cmd.get("type")
         v = cmd.get("value")
         args = cmd.get("args") or {}
@@ -344,6 +448,24 @@ class SimServer:
                 event = ship.mooring_command(lid, _arg_str(args, "action"), _arg_str(args, "bollard"), _arg_num(args, "tension_t"),
                                              _arg_num(args, "length_m"))
                 detail = event["message"]
+            elif t == "sessionInfo":
+                # 主控程序層指令:驗證後保存(C# 寫進紀錄 header 或 session 行;不影響模型與雜湊)
+                try:
+                    self.session_info = parse_session_info(cmd.get("args"))
+                except ValueError as exc:
+                    ok, detail = False, f"sessionInfo 被拒:{exc}"
+                else:
+                    si = self.session_info
+                    names = "、".join(f"{p['name']}/{p['role']}" for p in si["participants"])
+                    rc = si["restHoursConfirmation"]
+                    detail = (f"已接受:參與者 {len(si['participants'])} 位({names});休息時間由 {rc['confirmedBy']} 於 {rc['confirmedAtUtc']} 確認"
+                              f"{'符合' if rc['compliant'] else '不符合'}(參考實作不寫紀錄)")
+            elif t == "shutdown":
+                if not shutdown_allowed(remote):
+                    ok, detail = False, f"shutdown 只接受本機或直連網段的教官站(來源 {remote})"
+                else:
+                    self.shutdown_requested = True
+                    detail = "服務即將結束(≤ 1 s;參考實作無紀錄 footer)"
             elif t in UNIMPLEMENTED_DETAIL:
                 ok, detail = False, UNIMPLEMENTED_DETAIL[t]
             else:
@@ -373,15 +495,16 @@ class SimServer:
                 if not isinstance(cmd, dict):
                     await ws.send(json.dumps({"type": "ack", "ok": False, "detail": "命令必須為 JSON 物件"}, ensure_ascii=False))
                     continue
-                await ws.send(json.dumps(self.apply_command(cmd), ensure_ascii=False))
+                await ws.send(json.dumps(self.apply_command(cmd, getattr(ws, "remote_address", None)), ensure_ascii=False))
         except ConnectionClosed:
             pass  # 客戶端斷線屬正常
         finally:
             self.clients.discard(ws)
 
     async def loop(self) -> None:
+        """廣播迴圈;shutdown 指令(shutdown_requested)後結束,serve() 隨之返回。"""
         last = time.perf_counter()
-        while True:
+        while not self.shutdown_requested:
             await asyncio.sleep(BROADCAST_DT)
             now = time.perf_counter()
             self._accum += (now - last) * self.time_scale

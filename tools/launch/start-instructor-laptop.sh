@@ -56,6 +56,7 @@ if [[ "$STANDALONE" == true || "$STANDALONE" == 1 ]]; then
   [[ -n "$(cfg standalone_ship)" ]] && HOST_ARGS+=(--ship "$(cfg standalone_ship)")
   [[ -n "$(cfg standalone_loading)" ]] && HOST_ARGS+=(--loading "$(cfg standalone_loading)")
   [[ "$(cfg standalone_record false)" == true ]] && HOST_ARGS+=(--record)
+  HOST_ARGS+=(--stop-file "$(launch_stop_file "$ROOT" "$LOGS")")  # stop-all.sh 以停止檔讓核心寫完紀錄 footer
   start_bg simcore "$ROOT/$LOGS/simcore.log" dotnet "$HOST_DLL" "${HOST_ARGS[@]}"
   wait_tcp 127.0.0.1 "$WS_PORT" 30 || echo "警告:SimCore.Host 未開啟 $WS_PORT" >&2
   if RADAR_DLL="$(find_dll radar Sensors.Radar.Host SimosaBRM.Sensors.Radar.Host.dll "$ROOT")"; then

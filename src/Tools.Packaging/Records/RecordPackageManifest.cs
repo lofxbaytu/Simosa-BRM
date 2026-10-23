@@ -57,14 +57,23 @@ public sealed class ExerciseSummary
     public bool IntegrityOk { get; set; }
     public bool HasSummary { get; set; }
     public string? ParameterSetVersion { get; set; }
-    /// <summary>練習前休息時間核對確認(紀錄標頭有此欄時原樣帶出)</summary>
+    /// <summary>練習前休息時間核對確認 {confirmedBy, confirmedAtUtc, compliant, note?}(紀錄標頭或最後一行 session 有此欄時原樣帶出)</summary>
     public JsonElement? RestHoursConfirmation { get; set; }
+    /// <summary>課程資訊 {id?, title?, instructor?}(同上;選填)</summary>
+    public JsonElement? Course { get; set; }
+    /// <summary>participants / restHoursConfirmation 的來源:header(紀錄標頭)| session(紀錄開啟後的 session 行)| null(無)</summary>
+    public string? SessionInfoSource { get; set; }
 }
 
 public sealed class Participant
 {
     public string Name { get; set; } = "";
+    /// <summary>master | oow | pilot | helmsman | lookout | observer | instructor(舊紀錄可能為任意字串)</summary>
     public string? Role { get; set; }
+    /// <summary>職級(選填)</summary>
+    public string? Rank { get; set; }
+    /// <summary>證書號(選填;教官端證書效期追蹤)</summary>
+    public string? CertificateNo { get; set; }
 }
 
 public sealed class TrainingHours
@@ -84,6 +93,10 @@ public sealed class ParticipantHours
 {
     public string Name { get; set; } = "";
     public string? Role { get; set; }
+    /// <summary>職級(最近一次練習填寫者;選填)</summary>
+    public string? Rank { get; set; }
+    /// <summary>證書號(同上;選填)</summary>
+    public string? CertificateNo { get; set; }
     public int Exercises { get; set; }
     public double TotalS { get; set; }
     public double TotalHours => Math.Round(TotalS / 3600.0, 2);

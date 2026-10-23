@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 啟動腳本測試(Linux/容器;規劃書第 5.4–5.5 節、第 14 章「船上部署」):以真實的 SimCore.Host / simosa-web 與假程序驗證
-#   tools/launch/*.sh 的失敗回報、埠檢查、stop-all --keep-sync、--logs 傳遞、--ship <IP>、--check-wifi,以及 docs/驗收/需求追溯表.md 的數字。
+#   tools/launch/*.sh 的失敗回報、埠檢查、stop-all --keep-sync、--logs 傳遞、--ship <IP>、--check-wifi、停止檔優雅停止(footer),以及 docs/驗收/需求追溯表.md 的數字。
 # 用法:tools/launch/tests/launch-tests.sh [--only <測試名>] [--list]
 #   所有輸出留在專案內:build/test-tmp/launch/(設定檔、假 PID 檔)、build/logs-test*/(各測試的 log);埠自 LAUNCH_TEST_PORT_BASE(預設 18760)起。
 #   Windows 版(launch-common.ps1、stop-all.ps1)另見 launch-common.tests.ps1(pwsh 7 於 Linux 亦可執行)。
@@ -184,6 +184,46 @@ test_instructor_check_wifi_flag() {
   grep -q "CheckWifi" "$ROOT/config/instructor-laptop.json" || fail "config 註解應同時提及 Windows 的 -CheckWifi" || return 1
 }
 
+# 優雅停止(交接紀錄待辦第 1 項):stop-all.sh 先寫停止檔,SimCore.Host(E05、不設 --duration)自行結束並寫完紀錄 footer,
+# 不送 SIGINT、不 SIGKILL;停止檔與 simcore.stopfile 事後都不殘留
+test_stop_file_graceful() {
+  local dll
+  dll="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll simcore SimCore.Host SimosaBRM.SimCore.Host.dll '$ROOT'")" || fail "找不到/無法建置 SimCore.Host" || return 1
+  mkdir -p "$ROOT/$LOGS"; rm -f "$ROOT/$LOGS/simcore.stop" "$ROOT/$LOGS/simcore.stopfile" "$ROOT/$LOGS/simosa.pids"
+  local rec="$TMP/stopfile.jsonl" log="$TMP/stopfile.log" stop="$ROOT/$LOGS/simcore.stop"
+  rm -f "$rec"; : > "$log"
+  # 與 start_bg 相同的啟動方式;紀錄寫到專案內的測試目錄,不污染 build/records
+  ( exec dotnet "$dll" --scenario data/scenarios/E05_pilot_traffic.yaml --record "$rec" --stop-file "$stop" --port "$WS" --no-udp --no-nmea > "$log" 2>&1 ) &
+  local pid=$!; HELPERS+=("$pid")
+  local i; for ((i = 0; i < 120; i++)); do tcp_open "$WS" && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
+  tcp_open "$WS" || fail "SimCore.Host 未開啟埠 $WS:$(tail -5 "$log")" || return 1
+  printf 'simcore:%s\n' "$pid" > "$ROOT/$LOGS/simosa.pids"
+  echo "$stop" > "$ROOT/$LOGS/simcore.stopfile"
+  sleep 2   # 先錄一些狀態
+  local t0=$SECONDS
+  run_launch "$TMP/stopfile.out" bash "$LAUNCH/stop-all.sh" --logs "$LOGS"
+  [[ $CODE == 0 ]] || fail "stop-all 結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  local code=0; wait "$pid" || code=$?
+  local dt=$((SECONDS - t0))
+  [[ $code == 0 ]] || fail "核心結束碼應為 0(自行結束),實際 $code;log:$(tail -5 "$log")" || return 1
+  grep -q "寫入停止檔" <<<"$OUT" || fail "stop-all 應回報寫入停止檔;輸出:$OUT" || return 1
+  grep -q "強制結束" <<<"$OUT" && { fail "不應強制結束;輸出:$OUT"; return 1; }
+  grep -q "收到停止請求(stopFile)" "$log" || fail "核心 log 應有「收到停止請求(stopFile)」:$(tail -5 "$log")" || return 1
+  grep -q "紀錄已關閉" "$log" || fail "核心 log 應有「紀錄已關閉」(footer):$(tail -5 "$log")" || return 1
+  [[ $dt -lt 10 ]] || fail "核心應在逾時(10 s)前自行結束(耗時 $dt s)" || return 1
+  python3 -I - "$rec" <<'PYCHK' || fail "紀錄最後一行應為 footer" || return 1
+import json, sys
+lines = [l for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+last = json.loads(lines[-1])
+assert last["kind"] == "footer" and last["finalTick"] > 0 and "closedUtc" in last, last
+print("    footer:tick", last["finalTick"])
+PYCHK
+  [[ ! -f "$stop" ]] || fail "停止檔應已被核心刪除" || return 1
+  [[ ! -f "$ROOT/$LOGS/simcore.stopfile" ]] || fail "simcore.stopfile 應被 stop-all 清掉" || return 1
+  [[ ! -f "$ROOT/$LOGS/simosa.pids" ]] || fail "PID 檔應被移除" || return 1
+  return 0
+}
+
 # 發現 8:需求追溯表的情境檔數與 xfail 歸屬須與儲存庫一致
 test_traceability_numbers() {
   local doc="$ROOT/docs/驗收/需求追溯表.md"
@@ -197,7 +237,7 @@ test_traceability_numbers() {
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_traceability_numbers)
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_traceability_numbers)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers

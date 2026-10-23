@@ -74,6 +74,7 @@ dotnet run --project src/SimCore.Host -- [選項]
   --port 8765                  WebSocket 埠
   --timescale 1                初始時間倍率
   --duration <秒>              模擬時間到達後結束(煙霧測試)
+  --stop-file <路徑>           停止檔(預設 build/run/simcore.stop,須在專案內):每秒檢查,存在即刪除並正常結束(寫完 footer);--no-stop-file 關閉
   --dynamics mmg|placeholder   動力學模型(預設 mmg;係數檔不存在時以錯誤結束,可改 placeholder)
   --no-ws | --no-udp | --no-nmea
   --multicast 239.255.70.1:7001          狀態匯流排
@@ -81,7 +82,7 @@ dotnet run --project src/SimCore.Host -- [選項]
   --nmea-multicast 239.192.0.1:60001     NMEA 多播(IEC 61162-450 預設群組;目前無 TAG block)
 ```
 
-主控台每秒印一行狀態(航向、COG/SOG、ROT、舵、rpm、車鐘、UKC、倍率、每秒步數、WebSocket 連線數)。Ctrl+C 結束並關閉紀錄(寫入 footer)。
+主控台每秒印一行狀態(航向、COG/SOG、ROT、舵、rpm、車鐘、UKC、倍率、每秒步數、WebSocket 連線數)。優雅停止(`ShutdownCoordinator`):Ctrl+C、SIGINT/SIGTERM/SIGQUIT/SIGHUP(`PosixSignalRegistration`,Windows 不支援者略過)、`AppDomain.ProcessExit`、停止檔(`--stop-file`,`StopFileWatcher`;`tools/launch/stop-all.*` 先寫此檔)與 WebSocket `shutdown` 指令(`HostCommandRouter`;僅本機/直連私有網段的客戶端,語意:結束練習 → 寫 footer → 程序結束,回 ack 後 ≤ 1 s)都走同一個取消權杖,主迴圈結束後關閉紀錄(寫入 footer、`closedUtc`)再結束。`sessionInfo` 指令(參與者與休息時間確認)同樣由主控程序處理:紀錄已開啟時追加 `session` 行,未開啟或情境切換另開新檔時寫進 header,回 ack。
 
 ## 3. 與網頁儀器(src/Instruments.Web)連線
 
@@ -94,7 +95,7 @@ dotnet run --project src/SimCore.Host -- [選項]
 ## 4. 情境與紀錄
 
 - 情境 YAML 最小內容見 `src/Contracts/scenario.schema.json` 與 `data/scenarios/E01_baseline.yaml`(麥寮外海、FSB1 壓載、HAH 7.8 kn、風 15 kn NE、流 0.5 kn、水深 30 m、種子 20260101;另含 1 艘對遇、1 艘錨泊的目標船)。`initial.rpm`(選填)直接指定初始軸轉速;未指定車鐘與轉速時 MMG 取該航速的直航平衡轉速(與 Python `reset()` 相同),暫代模型取航速最接近的車令。`data/scenarios/E05_pilot_traffic.yaml`:高雄港外 Charlie 引水站附近,3 艘交通(對遇、橫越直航、不守規則的漁船)+ 自船接近引水站 1.5 nm 時出現並跟隨的引水船。目標船格式見第 6.2 節。
-- 紀錄檔(JSON Lines,UTF-8/LF;`header.version` 2):`header`(完整情境—參數引用已代入、動力學模型名稱、`parameterSet{id, version, path, sha256, resolved[]}`)、`input`(每個套用的教官/學員指令與其 tick,含 `targetControl`、`triggerTimeline`、`acknowledge`、`endExercise`;時間表自動動作**不**進 input 行)、`state`(25 Hz,含 `targets[]`、`scenario`、`route`、`visibility_nm`)、`event`(`SimEvent`:交通、時間表、評估、教官、引擎事件;`seq` 遞增)、`snapshot`(每 10 s 與手動;`EngineSnapshot.Version` 2 含 `timeline`/`assessment`)、`summary`(評估摘要;`endExercise` 時一行、關閉時再一行 `final: true`,講評站取最後一行)、`footer`(最終 tick、狀態雜湊、footer 之前所有位元組的 SHA-256、`summaryLines`)。
+- 紀錄檔(JSON Lines,UTF-8/LF;`header.version` 2):`header`(完整情境—參數引用已代入、動力學模型名稱、`parameterSet{id, version, path, sha256, resolved[]}`)、`input`(每個套用的教官/學員指令與其 tick,含 `targetControl`、`triggerTimeline`、`acknowledge`、`endExercise`;時間表自動動作**不**進 input 行)、`state`(25 Hz,含 `targets[]`、`scenario`、`route`、`visibility_nm`)、`event`(`SimEvent`:交通、時間表、評估、教官、引擎事件;`seq` 遞增)、`snapshot`(每 10 s 與手動;`EngineSnapshot.Version` 2 含 `timeline`/`assessment`)、`summary`(評估摘要;`endExercise` 時一行、關閉時再一行 `final: true`,講評站取最後一行)、`session`(紀錄開啟後收到 `sessionInfo` 時追加:`tick`、`t`、`participants[]`、`restHoursConfirmation`、`course`;不進狀態雜湊鏈,重播略過)、`footer`(最終 tick、狀態雜湊、footer 之前所有位元組的 SHA-256、`summaryLines`、`closedUtc`)。header 選填 `participants / restHoursConfirmation / course`(開檔前已收到 `sessionInfo`,或情境切換另開新檔時沿用);`RecordFile.SessionInfo` 取 header,無則最後一行 `session`。
 - 重播:`Replayer.Replay(path, shipLoader)` 依 header 情境重建引擎,依序在相同 tick 送入指令並推進到相同 tick:`HashMatches`、`EventSequenceMatches`(逐事件 seq/kind/tick/itemId/targetId)、`SummaryMatches`(JSON 相等)必須為真;動力學模型不同時會警告(雜湊預期不一致)。執行中以指令新增的目標船不在 header 情境內,由 `input` 行重播還原;時間表動作由重播引擎在相同 tick 重新產生。`rescore:` 參數以另一參數集代入 header `parameterSet.resolved` 的欄位得到重新評分情境,引擎仍以 header 情境執行(物理/交通/時間表/雜湊/事件序列不變),另建影子評估模組(`SimulationEngine.EnableRescore`、`RescoreAssessment`)產生新門檻的 summary(第 8.6 節)。重播時指令在引擎 tick 等於紀錄 tick 時立即套用(與主控程序等價),`restore`/`reset` 倒帶後的指令各自套在紀錄的 tick。`loadScenario` 不寫 input 行:紀錄器在情境切換前自動關閉(`ScenarioLoading` 事件;footer 為舊情境的最終 tick/雜湊),主控程序為新情境另開新檔;重播遇到舊紀錄的 `loadScenario` 行時中止並 Warning。
 
 ## 5. MMG 完整模型(`Physics/Mmg`,ModelName `mmg/1`)

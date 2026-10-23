@@ -9,7 +9,7 @@
   安裝根目錄為本檔上兩層(發行版 app\launch\..\..;儲存庫 tools\launch\..\..),所有輸出留在根目錄內,不寫 C:\。
 .PARAMETER Scenario   覆寫預設情境(例如 data\scenarios\E05_pilot_traffic.yaml)
 .PARAMETER Duration   模擬秒數到達後 SimCore 自動結束並一併結束其他程序(煙霧測試)
-.PARAMETER NoWait     啟動後即返回(預設前景等待 Ctrl+C;之後以 stop-all.ps1 結束)
+.PARAMETER NoWait     啟動後即返回(預設前景等待 Ctrl+C;之後以 stop-all.ps1 結束:先寫停止檔讓核心寫完紀錄 footer,逾時才強制結束)
 .EXAMPLE
   .\start-ship-laptop.ps1
   .\start-ship-laptop.ps1 -Scenario data\scenarios\E05_pilot_traffic.yaml -Duration 60 -NoVisual
@@ -78,6 +78,8 @@ try {
     if ($params -and (Test-Path (Join-Path $root $params))) { $hostArgs += @('--parameters', $params) }
     if (Get-Cfg $cfg 'simcore.record' $false) { $hostArgs += '--record' }
     if ($Duration -gt 0) { $hostArgs += @('--duration', "$Duration") }
+    # 停止檔(優雅停止;stop-all.ps1 先寫此檔讓核心寫完紀錄 footer):路徑記在 $logs\simcore.stopfile
+    $hostArgs += @('--stop-file', (Get-LaunchStopFile $root $logs))
     $hostProc = Start-LaunchProcess -Name 'simcore' -Log (Join-Path $logDir 'simcore.log') -File 'dotnet' -Arguments $hostArgs -WorkDir $root
     if (-not (Wait-LaunchTcp '127.0.0.1' $wsPort 30 -Process $hostProc)) {
         if ($hostProc.HasExited) { throw "SimCore.Host 已結束(啟動失敗,結束碼 $($hostProc.ExitCode)),見 $logs\simcore.log、simcore.err.log" }

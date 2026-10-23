@@ -17,9 +17,12 @@ public sealed class RecordWriter : IDisposable
     private readonly FileStream _stream;
     private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private readonly bool _includeStates;
+    // 引擎執行緒寫 input/state/event/snapshot,主控程序的 WebSocket 執行緒寫 session 行、主執行緒關檔:以同一把鎖序列化檔案與雜湊的寫入
+    private readonly object _sync = new();
     private long _lines;
     private long _inputs;
     private long _summaries;
+    private long _sessions;
     private bool _closed;
 
     public string Path { get; }
@@ -36,7 +39,8 @@ public sealed class RecordWriter : IDisposable
         return System.IO.Path.Combine(recordsDirectory, $"{stamp}-{safe}.jsonl");
     }
 
-    public RecordWriter(string path, SimulationEngine engine, bool includeStates = true)
+    /// <param name="session">開檔前已收到的參與者與休息時間確認(sessionInfo 指令;寫進 header 的 participants / restHoursConfirmation / course)</param>
+    public RecordWriter(string path, SimulationEngine engine, bool includeStates = true, RecordSessionInfo? session = null)
     {
         Path = path;
         _engine = engine;
@@ -56,6 +60,9 @@ public sealed class RecordWriter : IDisposable
             Scenario = engine.Scenario,
             ParameterSet = engine.ParameterSet,
             ManoeuvreTargets = HeaderTargets(engine),
+            Participants = session?.Participants,
+            RestHoursConfirmation = session?.RestHoursConfirmation,
+            Course = session?.Course,
         });
 
         engine.CommandApplied += OnCommand;
@@ -103,9 +110,32 @@ public sealed class RecordWriter : IDisposable
     private void OnCommand(SimulationEngine e, SimCommand cmd, long tick)
     {
         if (cmd.Type == SimCommandType.LoadScenario) return; // 情境切換不是可重播的輸入:舊檔已在切換前關閉,新檔由主控程序另開
+        if (cmd.Type is SimCommandType.SessionInfo or SimCommandType.Shutdown) return; // 主控程序層指令(不應進引擎佇列;保險起見不寫 input 行)
         _inputs++;
         WriteLine(new RecordInput { Tick = tick, Command = cmd });
     }
+
+    /// <summary>
+    /// 紀錄已開啟後收到 sessionInfo:追加一行 session(tick 與當前模擬時間;不進狀態雜湊鏈、只計入 footer 的檔案 SHA-256)。
+    /// 可由任何執行緒呼叫;已關閉時不寫並回傳 false(主控程序改把資訊帶進下一份紀錄的 header)。
+    /// </summary>
+    public bool WriteSession(RecordSessionInfo info)
+    {
+        lock (_sync)
+        {
+            if (_closed) return false;
+            WriteLine(new RecordSession
+            {
+                Tick = _engine.Tick, T = _engine.Time,
+                Participants = info.Participants, RestHoursConfirmation = info.RestHoursConfirmation, Course = info.Course,
+            });
+            _sessions++;
+            return true;
+        }
+    }
+
+    /// <summary>已寫入的 session 行數</summary>
+    public long SessionLines => _sessions;
 
     private void OnBroadcast(SimulationEngine e, OwnShipState state) => WriteLine(new RecordState { State = state });
 
@@ -114,49 +144,57 @@ public sealed class RecordWriter : IDisposable
     private void WriteLine<T>(T line)
     {
         var bytes = ContractJson.SerializeToUtf8Bytes(line);
-        _hash.AppendData(bytes);
-        _hash.AppendData("\n"u8);
-        _stream.Write(bytes);
-        _stream.WriteByte((byte)'\n');
-        _lines++;
+        lock (_sync)
+        {
+            if (_closed) return; // 關檔與引擎執行緒的最後幾行競爭時丟棄(footer 已定稿)
+            _hash.AppendData(bytes);
+            _hash.AppendData("\n"u8);
+            _stream.Write(bytes);
+            _stream.WriteByte((byte)'\n');
+            _lines++;
+        }
     }
 
-    /// <summary>寫入 footer 並關閉;回傳 footer。</summary>
+    /// <summary>寫入 footer(含關檔牆鐘 closedUtc)並關閉;回傳 footer。</summary>
     public RecordFooter Close()
     {
-        if (_closed) throw new InvalidOperationException("紀錄已關閉");
-        _closed = true;
-        _engine.CommandApplied -= OnCommand;
-        _engine.SnapshotTaken -= OnSnapshot;
-        _engine.EventRaised -= OnEvent;
-        _engine.ScenarioLoading -= OnScenarioLoading;
-        if (_includeStates) _engine.Broadcast -= OnBroadcast;
-
-        // 定稿摘要(final = true;endExercise 已寫過時內容相同)
-        if (_engine.Assessment is { } assessment)
+        lock (_sync)
         {
-            var summary = _engine.Ended ? assessment.LatestSummary ?? assessment.BuildSummary(_engine.Tick, final: true) : assessment.BuildSummary(_engine.Tick, final: true);
-            WriteLine(new RecordSummary { Tick = _engine.Tick, Summary = summary });
-            _summaries++;
+            if (_closed) throw new InvalidOperationException("紀錄已關閉");
+            _engine.CommandApplied -= OnCommand;
+            _engine.SnapshotTaken -= OnSnapshot;
+            _engine.EventRaised -= OnEvent;
+            _engine.ScenarioLoading -= OnScenarioLoading;
+            if (_includeStates) _engine.Broadcast -= OnBroadcast;
+
+            // 定稿摘要(final = true;endExercise 已寫過時內容相同)
+            if (_engine.Assessment is { } assessment)
+            {
+                var summary = _engine.Ended ? assessment.LatestSummary ?? assessment.BuildSummary(_engine.Tick, final: true) : assessment.BuildSummary(_engine.Tick, final: true);
+                WriteLine(new RecordSummary { Tick = _engine.Tick, Summary = summary });
+                _summaries++;
+            }
+            _closed = true;
+
+            var footer = new RecordFooter
+            {
+                FinalTick = _engine.Tick,
+                StateHash = _engine.StateHash,
+                Lines = _lines,
+                Inputs = _inputs,
+                Sha256 = Convert.ToHexString(_hash.GetCurrentHash()),
+                SummaryLines = _summaries,
+                ClosedUtc = DateTime.UtcNow,
+            };
+            var bytes = ContractJson.SerializeToUtf8Bytes(footer);
+            _stream.Write(bytes);
+            _stream.WriteByte((byte)'\n');
+            _stream.Flush(true);
+            _stream.Dispose();
+            _hash.Dispose();
+            Footer = footer;
+            return footer;
         }
-
-        var footer = new RecordFooter
-        {
-            FinalTick = _engine.Tick,
-            StateHash = _engine.StateHash,
-            Lines = _lines,
-            Inputs = _inputs,
-            Sha256 = Convert.ToHexString(_hash.GetCurrentHash()),
-            SummaryLines = _summaries,
-        };
-        var bytes = ContractJson.SerializeToUtf8Bytes(footer);
-        _stream.Write(bytes);
-        _stream.WriteByte((byte)'\n');
-        _stream.Flush(true);
-        _stream.Dispose();
-        _hash.Dispose();
-        Footer = footer;
-        return footer;
     }
 
     public void Dispose()

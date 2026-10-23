@@ -19,8 +19,11 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     private sealed class Client
     {
         public required WebSocket Socket { get; init; }
+        public IPEndPoint? Remote { get; init; }
         public Channel<byte[]> Outbox { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
         public Channel<byte[]> Events { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest });
+        /// <summary>送出迴圈實際送出的事件框數(主控程序層指令回覆後確認 ack 已送出用)</summary>
+        public long EventsSent;
     }
 
     private readonly HttpListener _listener = new();
@@ -36,6 +39,11 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     public bool ReadOnly { get; set; }
     public long CommandsIgnored;
     public event Action<string>? Log;
+    /// <summary>
+    /// 主控程序層指令(sessionInfo、shutdown;HostCommandRouter.Handle):回傳非 null 時把 Reply 當 ack 框送回該客戶端(不進引擎),
+    /// 並在 ack 送出後(最多等 500 ms)執行 AfterReply。參數為指令、客戶端端點與是否唯讀(重播)。
+    /// </summary>
+    public Func<SimCommand, IPEndPoint?, bool, HostCommandResult?>? HostCommandHandler { get; set; }
 
     public WebSocketStateServer(SimulationEngine engine, int port)
     {
@@ -126,7 +134,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         }
 
         var id = Guid.NewGuid();
-        var client = new Client { Socket = socket };
+        var client = new Client { Socket = socket, Remote = ctx.Request.RemoteEndPoint };
         _clients[id] = client;
         Log?.Invoke($"WebSocket 客戶端連線 {ctx.Request.RemoteEndPoint}(共 {_clients.Count})");
 
@@ -157,7 +165,10 @@ public sealed class WebSocketStateServer : IAsyncDisposable
             {
                 // 事件優先(不丟),再送最新狀態幀;兩者皆空時等待任一通道
                 while (c.Events.Reader.TryRead(out var ev))
+                {
                     await c.Socket.SendAsync(ev, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+                    Interlocked.Increment(ref c.EventsSent);
+                }
                 if (c.Outbox.Reader.TryRead(out var frame))
                 {
                     await c.Socket.SendAsync(frame, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
@@ -199,6 +210,17 @@ public sealed class WebSocketStateServer : IAsyncDisposable
                         c.Events.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(new { type = "assessment", final = summary?.Final ?? false, summary }));
                         continue;
                     }
+                    if (HostCommandHandler?.Invoke(cmd, c.Remote, ReadOnly) is { } hostResult)
+                    {
+                        // 主控程序層指令(sessionInfo / shutdown):回 ack 框;shutdown 要等 ack 真的送出再觸發停止(之後 socket 會被 Abort)
+                        await ReplyAsync(c, hostResult).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (cmd.Type is SimCommandType.SessionInfo or SimCommandType.Shutdown)
+                    {
+                        Log?.Invoke($"主控程序未註冊 {cmd.Type} 處理器,忽略");
+                        continue;
+                    }
                     if (ReadOnly)
                     {
                         if (Interlocked.Increment(ref CommandsIgnored) == 1) Log?.Invoke($"重播模式:忽略客戶端指令 {cmd.Type}(之後不再提示)");
@@ -213,6 +235,18 @@ public sealed class WebSocketStateServer : IAsyncDisposable
             }
         }
         catch (Exception) { /* 連線中斷或取消 */ }
+    }
+
+    /// <summary>把回覆放進事件通道,等送出迴圈實際送出(最多 500 ms)後執行 AfterReply。</summary>
+    private static async Task ReplyAsync(Client c, HostCommandResult result)
+    {
+        var before = Interlocked.Read(ref c.EventsSent);
+        c.Events.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(result.Reply));
+        if (result.AfterReply is null) return;
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(500);
+        while (Interlocked.Read(ref c.EventsSent) <= before && DateTime.UtcNow < deadline && c.Socket.State == WebSocketState.Open)
+            await Task.Delay(10).ConfigureAwait(false);
+        result.AfterReply();
     }
 
     public async ValueTask DisposeAsync()

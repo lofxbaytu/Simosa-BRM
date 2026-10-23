@@ -47,6 +47,9 @@ type AppInner = Updatable & {
   simplePhase: string;
   loadPending: boolean;
   scenarioRejection: ScenarioLoadRejection | null;
+  history: { length: number };
+  events: ReadonlyArray<{ kind: string }>;
+  exerciseStartedUtc: string | null;
 };
 
 const REJECT_FRAME = {
@@ -230,6 +233,36 @@ describe('教官站(簡化模式、live 來源)收到核心拒絕', () => {
     expect(app.loadPending).toBe(false);
     expect(app.simplePhase).toBe('briefing');
     expect(app.activeScenario?.id).toBe(again);
+  });
+
+  it('核心拒絕時保留載入前的航跡、事件流與練習開始時刻;成功時才重設(審查第十六輪 major)', async () => {
+    const { app, ws } = await mountApp();
+    for (let i = 1; i <= 5; i++) ws.push({ ...defaultState('FSB1'), t: i * 10, tick: i * 500, scenario: { id: 'E05', phase: 'normal' } });
+    ws.push({ type: 'event', event: { kind: 'frozen', tick: 2500, t: 50, source: 'instructor', seq: 1 } });
+    await app.updateComplete;
+    // 簡化模式只在 running 階段抽樣;航跡與事件流則在任何階段累積
+    const before = { history: app.history.length, events: app.events.length };
+    expect(before.history).toBeGreaterThan(0);
+    expect(before.events).toBe(1);
+
+    const id = await clickLoad(app);
+    expect(app.history.length).toBe(before.history); // 送出後、核心回覆前不清
+    ws.push({ ...REJECT_FRAME, event: { ...REJECT_FRAME.event, itemId: id, data: { ...REJECT_FRAME.event.data, scenarioId: id, origin: 'file' } } });
+    await app.updateComplete;
+    expect(app.simplePhase).toBe('select');
+    expect(app.history.length).toBe(before.history);
+    expect(app.events.length).toBe(before.events);
+    expect(app.events.some((e) => e.kind === 'scenarioLoadRejected')).toBe(false); // 帶外事件不進事件流/紀錄
+    expect(app.scenarioRejection?.scenarioId).toBe(id);
+
+    // 成功載入(狀態幀帶新情境 id)→ 重設本地練習資料
+    const again = await clickLoad(app);
+    ws.push({ ...defaultState('FSB1'), t: 0, tick: 0, scenario: { id: again, phase: 'normal' } });
+    await app.updateComplete;
+    expect(app.loadPending).toBe(false);
+    expect(app.history.length).toBe(1); // 只剩新情境的第一幀
+    expect(app.events.length).toBe(0);
+    expect(app.exerciseStartedUtc).toBeNull();
   });
 
   it('Python 參考伺服器 ack ok=false:同樣視為拒絕(detail 為原因、無問題清單);ack ok 則結束載入中', async () => {

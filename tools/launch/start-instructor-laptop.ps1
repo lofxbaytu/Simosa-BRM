@@ -51,6 +51,7 @@ try {
         $hostArgs = @($hostDll, '--scenario', (Get-Cfg $cfg 'standalone.scenario' 'data\scenarios\E01_baseline.yaml'), '--port', $wsPort, '--no-nmea')
         foreach ($pair in @(@('standalone.ship', '--ship'), @('standalone.loading', '--loading'))) { $v = Get-Cfg $cfg $pair[0]; if ($v) { $hostArgs += @($pair[1], "$v") } }
         if (Get-Cfg $cfg 'standalone.record' $false) { $hostArgs += '--record' }
+        $hostArgs += @('--stop-file', (Get-LaunchStopFile $root $logs))  # stop-all.ps1 以停止檔讓核心寫完紀錄 footer
         $hostProc = Start-LaunchProcess -Name 'simcore' -Log (Join-Path $logDir 'simcore.log') -File 'dotnet' -Arguments $hostArgs -WorkDir $root
         if (-not (Wait-LaunchTcp '127.0.0.1' $wsPort 30)) { Write-Warning "SimCore.Host 未開啟 $wsPort" }
         $radarDll = Find-LaunchDll 'radar' 'Sensors.Radar.Host' 'SimosaBRM.Sensors.Radar.Host.dll' $root

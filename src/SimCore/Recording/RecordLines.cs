@@ -20,6 +20,8 @@ public static class RecordKinds
     public const string Event = "event";
     /// <summary>評估摘要(footer 之前;endExercise 時也寫一行;講評站取最後一行)</summary>
     public const string Summary = "summary";
+    /// <summary>參與者與休息時間確認(紀錄已開啟後收到 sessionInfo 指令時追加;不進狀態雜湊鏈;RecordSession)</summary>
+    public const string Session = "session";
     public const string Footer = "footer";
 }
 
@@ -44,6 +46,19 @@ public sealed record RecordHeader
     /// <c>--rescore</c> 才讀目前檔案(與參數集重新評分一致);舊紀錄無此欄位時重播退回讀目前檔案並警告。
     /// </summary>
     [JsonPropertyName("manoeuvreTargets")] public RecordManoeuvreTargets? ManoeuvreTargets { get; init; }
+    /// <summary>
+    /// 參與者(規劃書第 5.5 節;教官站 sessionInfo 指令在紀錄開啟前送達,或情境切換另開新檔時由主控程序帶入;version 2 選填欄位)。
+    /// 紀錄開啟後才送達者寫成 session 行(<see cref="RecordSession"/>)。
+    /// </summary>
+    [JsonPropertyName("participants")] public IReadOnlyList<RecordParticipant>? Participants { get; init; }
+    /// <summary>練習前休息時間核對確認(同上)</summary>
+    [JsonPropertyName("restHoursConfirmation")] public RecordRestHoursConfirmation? RestHoursConfirmation { get; init; }
+    /// <summary>課程資訊(同上;選填)</summary>
+    [JsonPropertyName("course")] public RecordCourse? Course { get; init; }
+
+    /// <summary>標頭內的參與者資訊(無 participants 與 restHoursConfirmation 時為 null)。</summary>
+    [JsonIgnore] public RecordSessionInfo? SessionInfo => Participants is null && RestHoursConfirmation is null ? null
+        : new RecordSessionInfo { Participants = Participants ?? Array.Empty<RecordParticipant>(), RestHoursConfirmation = RestHoursConfirmation, Course = Course };
 }
 
 /// <summary>紀錄標頭的試俥目標值(<see cref="RecordHeader.ManoeuvreTargets"/>)。</summary>
@@ -109,4 +124,6 @@ public sealed record RecordFooter
     [JsonPropertyName("sha256")] public required string Sha256 { get; init; }
     /// <summary>summary 行數(選填)</summary>
     [JsonPropertyName("summaryLines")] public long? SummaryLines { get; init; }
+    /// <summary>關檔時的牆鐘 UTC(選填;紀錄包以它為練習結束時間,倍速/凍結時與模擬時長不同;docs/design/packaging-sync.md 第 7 節)</summary>
+    [JsonPropertyName("closedUtc")] public DateTime? ClosedUtc { get; init; }
 }

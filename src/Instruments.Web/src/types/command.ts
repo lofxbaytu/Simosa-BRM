@@ -71,7 +71,8 @@ export const COMMAND_TYPES: readonly CommandType[] = [
 
 /**
  * sessionInfo:練習開始前的參與者與休息時間確認(規劃書第 5.5 節;教官站送出、核心寫入紀錄標頭 participants /
- * restHoursConfirmation / course)。args 形狀見 lib/session-info.ts SessionInfo;不影響物理與雜湊(與 acknowledge 相同只寫 input 行)。
+ * restHoursConfirmation / course)。args 形狀見 lib/session-info.ts SessionInfo;主控程序層指令:不進引擎佇列、不寫 input 行、不進雜湊,
+ * 寫進紀錄 header 或追加 session 行,回 ack {ok, detail, tick}。
  */
 export interface SessionInfoCommand extends SimCommand {
   type: 'sessionInfo';

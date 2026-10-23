@@ -105,11 +105,12 @@ $components.Add("data=$paramVersion=data=參數集 company-procedures.yaml 版�
 New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'contracts') | Out-Null
 Copy-Item 'src\Contracts\*' (Join-Path $outDir 'contracts')
 $components.Add("contracts=$Version=contracts")
-foreach ($d in @('docs\design', 'docs\ops', 'docs\驗收', 'docs\components')) { New-Item -ItemType Directory -Force -Path (Join-Path $outDir $d) | Out-Null }
+foreach ($d in @('docs\design', 'docs\ops', 'docs\驗收', 'docs\訓練', 'docs\components')) { New-Item -ItemType Directory -Force -Path (Join-Path $outDir $d) | Out-Null }
 Copy-Item 'docs\Simosa-BRM-操船模擬器規劃書.md', 'README.md' (Join-Path $outDir 'docs')
 Copy-Item 'docs\design\*.md' (Join-Path $outDir 'docs\design')
 if (Test-Path 'docs\ops') { Copy-Item 'docs\ops\*.md' (Join-Path $outDir 'docs\ops') }
 if (Test-Path 'docs\驗收') { Copy-Item 'docs\驗收\*.md' (Join-Path $outDir 'docs\驗收') }
+if (Test-Path 'docs\訓練') { Copy-Item 'docs\訓練\*.md' (Join-Path $outDir 'docs\訓練') }
 Copy-Item 'src\Tools.Calibration\README.md' (Join-Path $outDir 'docs\components\校正工具-Tools.Calibration.md')
 Copy-Item 'src\Instruments.Web\README.md' (Join-Path $outDir 'docs\components\網頁儀器-Instruments.Web.md')
 Copy-Item 'src\Instruments.Web\RADAR.md' (Join-Path $outDir 'docs\components\雷達PPI-RADAR.md')

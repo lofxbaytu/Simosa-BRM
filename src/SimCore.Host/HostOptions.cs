@@ -34,6 +34,10 @@ public sealed class HostOptions
     public string? RecordPath { get; set; }
     /// <summary>重播時把紀錄的 radarControl 行重放到雷達服務的重播接收端(根 URL;null = 不嘗試;預設 ws://127.0.0.1:8766/)</summary>
     public string? RadarReplayUrl { get; set; } = "ws://localhost:8766/";
+    /// <summary>停止檔路徑(--stop-file;null = 預設 build/run/simcore.stop;必須在專案資料夾內);存在即如同 Ctrl+C 正常結束並刪除</summary>
+    public string? StopFile { get; set; }
+    /// <summary>--no-stop-file:不輪詢停止檔</summary>
+    public bool EnableStopFile { get; set; } = true;
     public bool Help { get; set; }
 
     public const string Usage = """
@@ -53,6 +57,8 @@ public sealed class HostOptions
           --port 8765                 WebSocket 埠(ws://0.0.0.0:8765)
           --timescale 1               初始時間倍率(0.1–10)
           --duration <秒>             模擬時間到達後自動結束(煙霧測試用)
+          --stop-file <路徑>          停止檔(預設 build/run/simcore.stop;須在專案資料夾內):每秒檢查,存在即刪除並如同 Ctrl+C 正常結束
+                                      (寫完紀錄 footer);tools/launch/stop-all.* 以此在 Windows 上優雅停止。--no-stop-file 關閉
           --dynamics mmg|placeholder  動力學模型(預設 mmg:MMG 完整模型,係數 data/ships/<ID>/coefficients.<loading>.json)
           --no-ws | --no-udp | --no-nmea
           --multicast 239.255.70.1:7001     狀態匯流排多播群組
@@ -86,6 +92,8 @@ public sealed class HostOptions
                 case "--port": o.Port = int.Parse(Next()); break;
                 case "--timescale": o.TimeScale = double.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--duration": o.Duration = double.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;
+                case "--stop-file": o.StopFile = Next(); break;
+                case "--no-stop-file": o.EnableStopFile = false; break;
                 case "--dynamics":
                     o.Dynamics = Next().ToLowerInvariant();
                     if (o.Dynamics is not ("mmg" or "placeholder")) throw new ArgumentException($"--dynamics 須為 mmg 或 placeholder:{o.Dynamics}");

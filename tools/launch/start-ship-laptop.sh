@@ -3,7 +3,7 @@
 #   依 config/ship-laptop.json 啟動 SimCore.Host(WebSocket/UDP 多播/NMEA)、Sensors.Radar.Host、靜態網頁(simosa-web 提供 app/web)、
 #   視景(匯出檔或 Godot 編輯器,每個 views[] 一個程序)、直連同步服務 simosa-pkg serve;各程序 log 在 build/logs/;Ctrl+C 一併結束。
 # 用法:start-ship-laptop.sh [--config config/ship-laptop.json] [--scenario <yaml>] [--duration <秒>] [--no-visual] [--no-web] [--no-radar] [--no-sync]
-#       [--check-only] [--wait](前景等待 Ctrl+C;預設啟動後即返回,之後用 stop-all.sh 結束)
+#       [--check-only] [--wait](前景等待 Ctrl+C;預設啟動後即返回,之後用 stop-all.sh 結束:先寫停止檔讓核心寫完紀錄 footer,逾時才強制結束)
 #       --duration:模擬秒數到達後 SimCore 自動結束,本腳本於同一時間結束其他程序(煙霧測試;容器以 E05 60 s 驗證)。
 #   啟動前檢查各埠未被殘留程序占住(占用即報錯 exit 1),SimCore.Host 啟動後若程序結束(而非只是埠未開)立即回報失敗;測試見 tests/launch-tests.sh。
 source "$(dirname "${BASH_SOURCE[0]}")/launch-common.sh"
@@ -70,6 +70,8 @@ HOST_ARGS=(--scenario "${SCENARIO:-$(cfg simcore_scenario data/scenarios/E01_bas
 [[ -n "$(cfg ports_nmeaUdp)" ]] && HOST_ARGS+=(--nmea-port "$(cfg ports_nmeaUdp)")
 [[ -n "$(cfg ports_nmeaMulticast)" ]] && HOST_ARGS+=(--nmea-multicast "$(cfg ports_nmeaMulticast)")
 [[ -n "$DURATION" ]] && HOST_ARGS+=(--duration "$DURATION")
+# 停止檔(優雅停止;stop-all.sh 先寫此檔讓核心寫完紀錄 footer):路徑記在 $LOGS/simcore.stopfile
+HOST_ARGS+=(--stop-file "$(launch_stop_file "$ROOT" "$LOGS")")
 start_bg simcore "$ROOT/$LOGS/simcore.log" dotnet "$HOST_DLL" "${HOST_ARGS[@]}"
 HOST_PID="$LAST_PID"
 rc=0; wait_tcp 127.0.0.1 "$WS_PORT" 30 "$HOST_PID" || rc=$?

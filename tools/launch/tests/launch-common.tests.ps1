@@ -3,7 +3,7 @@
   launch-common.ps1 / stop-all.ps1 的測試(PowerShell 7;Windows 或 Linux 皆可執行,不需 Pester)。
 .DESCRIPTION
   驗證:Start-LaunchProcess 不覆寫既有 log(輪替保留歷史、啟動標頭寫入 launch.log)、Test-LaunchPortFree 偵測被占用的埠、
-  Wait-LaunchTcp -Process 在程序結束時立即回傳、stop-all.ps1 -KeepSync 保留同步服務。所有輸出留在 build\test-tmp\launch-ps\。
+  Wait-LaunchTcp -Process 在程序結束時立即回傳、stop-all.ps1 -KeepSync 保留同步服務、stop-all.ps1 先寫停止檔(Get-LaunchStopFile)再逾時強制結束。所有輸出留在 build\test-tmp\launch-ps\。
   用法:pwsh -NoProfile -File tools\launch\tests\launch-common.tests.ps1(tools\launch\tests\launch-tests.sh 為 .sh 版測試)
 #>
 [CmdletBinding()]
@@ -92,6 +92,35 @@ Invoke-Test 'stop-all.ps1 -KeepSync 保留同步服務' {
         Assert-True (-not (Test-Path (Join-Path $dir 'simosa.pids'))) 'PID 檔應被移除'
     } finally {
         foreach ($p in @($web, $sync)) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+    }
+}
+
+Invoke-Test 'stop-all.ps1 先寫停止檔讓 SimCore 自行結束,逾時才強制結束' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $logs = 'build\test-tmp\launch-ps\logs3'
+    $dir = Join-Path $root $logs
+    Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+    # Get-LaunchStopFile:回傳 <logs>\simcore.stop 並把路徑記在 simcore.stopfile(stop-all.ps1 讀取)
+    $stop = Get-LaunchStopFile $root $logs
+    Assert-True ($stop -eq (Join-Path $dir 'simcore.stop')) "停止檔路徑應為 <logs>\simcore.stop:$stop"
+    Assert-True ((Get-Content (Join-Path $dir 'simcore.stopfile') | Where-Object { $_ } | Select-Object -First 1) -eq $stop) 'simcore.stopfile 應記錄停止檔路徑'
+    # 假的核心(sleep 不會消化停止檔):stop-all 應先寫停止檔、等候 -StopTimeoutSeconds 後才強制結束,並清掉停止檔與路徑紀錄
+    $core = Start-Process -FilePath $sleeper.File -ArgumentList $sleeper.Args -PassThru
+    try {
+        Set-Content -Path (Join-Path $dir 'simosa.pids') -Value @("simcore:$($core.Id)") -Encoding UTF8
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $out = (& (Join-Path $launch 'stop-all.ps1') -Logs $logs -StopTimeoutSeconds 1 *>&1 | Out-String)
+        $sw.Stop()
+        Assert-True ($out.Contains('寫入停止檔')) "應回報寫入停止檔:$out"
+        Assert-True ($out.Contains('強制結束')) "假核心不會自行結束,逾時後應強制結束:$out"
+        Assert-True ($sw.Elapsed.TotalSeconds -ge 1 -and $sw.Elapsed.TotalSeconds -lt 8) "應等滿 1 s 逾時再強制結束(耗時 $([int]$sw.Elapsed.TotalSeconds) s)"
+        Start-Sleep -Milliseconds 500
+        Assert-True $core.HasExited '假核心應已被強制結束'
+        Assert-True (-not (Test-Path $stop)) '未被消化的停止檔應被 stop-all 清掉'
+        Assert-True (-not (Test-Path (Join-Path $dir 'simcore.stopfile'))) 'simcore.stopfile 應被清掉'
+        Assert-True (-not (Test-Path (Join-Path $dir 'simosa.pids'))) 'PID 檔應被移除'
+    } finally {
+        if (-not $core.HasExited) { Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue }
     }
 }
 

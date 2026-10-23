@@ -133,21 +133,23 @@ public sealed class TestEnv : IDisposable
     /// 寫一個合成的練習紀錄(header + state + footer;footer.sha256 與 RecordReader 相同算法)。
     /// 有 footer 時把檔案修改時間設為牆鐘結束時間(預設 = 起始 + 模擬時長,即 1 倍速;<paramref name="wallS"/> 可指定實際經過秒數),
     /// 與 SimCore 實際寫檔的結果一致;<paramref name="closedUtc"/> 不為 null 時在 footer 寫入牆鐘結束時間。
+    /// <paramref name="restHoursConfirmation"/> / <paramref name="course"/> 寫進 header;<paramref name="extraLines"/>(例如 {"kind":"session",…})插在兩行 state 之間。
     /// </summary>
     public static string WriteRecord(string dir, string fileName, string scenarioId, DateTime startUtc, double durationS, object[]? participants = null, bool footer = true,
-                                     double? wallS = null, DateTime? closedUtc = null)
+                                     double? wallS = null, DateTime? closedUtc = null, object? restHoursConfirmation = null, object? course = null, IEnumerable<string>? extraLines = null)
     {
         Directory.CreateDirectory(dir);
-        var lines = new List<string>
+        var header = new Dictionary<string, object?>
         {
-            JsonSerializer.Serialize(new Dictionary<string, object?>
-            {
-                ["kind"] = "header", ["version"] = 2, ["createdUtc"] = startUtc.ToString("O"), ["shipId"] = "FSB1", ["loading"] = "ballast", ["seed"] = 1, ["dt"] = 0.02,
-                ["dynamics"] = "test", ["scenario"] = new { id = scenarioId, name = scenarioId + " 測試" }, ["participants"] = participants,
-            }),
+            ["kind"] = "header", ["version"] = 2, ["createdUtc"] = startUtc.ToString("O"), ["shipId"] = "FSB1", ["loading"] = "ballast", ["seed"] = 1, ["dt"] = 0.02,
+            ["dynamics"] = "test", ["scenario"] = new { id = scenarioId, name = scenarioId + " 測試" }, ["participants"] = participants,
         };
+        if (restHoursConfirmation is not null) header["restHoursConfirmation"] = restHoursConfirmation;
+        if (course is not null) header["course"] = course;
+        var lines = new List<string> { JsonSerializer.Serialize(header) };
         var ticks = (long)Math.Round(durationS / 0.02);
         lines.Add($"{{\"kind\":\"state\",\"state\":{{\"t\":{(durationS / 2).ToString(System.Globalization.CultureInfo.InvariantCulture)},\"tick\":{ticks / 2}}}}}");
+        if (extraLines is not null) lines.AddRange(extraLines);
         lines.Add($"{{\"kind\":\"state\",\"state\":{{\"t\":{durationS.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"tick\":{ticks}}}}}");
         using var h = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var l in lines)

@@ -598,7 +598,7 @@ export class InstructorApp extends LitElement {
     this.hasReceived = true;
     this.shipState = state;
     this.issues = issues;
-    if (this.pendingLoad && state.scenario?.id === this.pendingLoad.targetId) this.finishLoad(); // 核心已換成要求的情境:載入成功
+    if (this.pendingLoad && state.scenario?.id === this.pendingLoad.targetId) this.finishLoad(true); // 核心已換成要求的情境:載入成功
     this.history.push(state.pos.x, state.pos.y, state.t);
     const recording = this.pageMode !== 'simple' || this.simplePhase === 'running';
     if (recording) {
@@ -637,7 +637,7 @@ export class InstructorApp extends LitElement {
     this.commandLog = [...this.commandLog];
     // Python 參考伺服器:loadScenario 以 ack ok=false + detail 回報載入失敗(狀態不變);C# 核心改以 scenarioLoadRejected 事件
     if (entry.command.type === 'loadScenario') {
-      if (ack.ok) this.finishLoad();
+      if (ack.ok) this.finishLoad(true);
       else this.onScenarioLoadRejected({ scenarioId: this.pendingLoad?.targetId ?? '', origin: 'ack', message: ack.detail ?? '核心拒絕載入情境', issues: [], t: this.shipState.t });
     }
   }
@@ -662,12 +662,16 @@ export class InstructorApp extends LitElement {
   /** 核心事件:存入事件流;語音事件在簡化教官模式自動播放;練習結束時請求 summary;
    *  steeringModeChanged 記入學員操作紀錄(與 state.steering 的推導去重);commandRejected 標記對應教官指令為核心拒絕。 */
   private onSimEvent(ev: SimEvent): void {
+    if (ev.kind === 'scenarioLoadRejected') {
+      // 帶外事件(seq −1、不在核心紀錄中):只處理拒絕、不進教官站事件流與紀錄
+      this.onScenarioLoadRejected(scenarioLoadRejection(ev)!);
+      return;
+    }
     this.eventStore.push(ev);
     this.events = [...this.eventStore.all()];
     if (this.alarms.apply(ev)) this.alarmTargets = this.alarms.snapshot();
     if (ev.kind === 'steeringModeChanged') this.recordSteeringEvent(ev);
     else if (ev.kind === 'commandRejected') this.markRejected(ev);
-    else if (ev.kind === 'scenarioLoadRejected') this.onScenarioLoadRejected(scenarioLoadRejection(ev)!);
     const v = voiceScriptData(ev);
     if (v) {
       this.lastVoice = voiceLine(v);
@@ -848,42 +852,50 @@ export class InstructorApp extends LitElement {
 
   /**
    * 送 loadScenario 並樂觀地切到新情境;核心結果以三種方式回來:scenarioLoadRejected 事件 / Python ack(ok 或 ok=false)/ 狀態幀帶新情境 id。
-   * 被拒時 onScenarioLoadRejected 還原載入前的情境、組題結果與簡化模式階段,並顯示問題清單(不得停在「已載入」)。
+   * 本地練習資料(航跡、事件流、操作紀錄、講評累計、開始時刻)要等核心確認成功才清(finishLoad(true)):
+   * 被拒時核心仍在跑原練習,onScenarioLoadRejected 只還原情境、組題結果與簡化模式階段並顯示問題清單(不得停在「已載入」)。
    */
   private loadScenarioSummary(s: ScenarioSummary, cmd: SimCommand, rehearsal: BerthingRehearsalResult | null): void {
     this.pendingLoad = { targetId: s.id, previous: this.activeScenario, previousRehearsal: this.rehearsal, previousPhase: this.simplePhase };
     this.scenarioRejection = null;
     this.loadPending = true;
     if (this.loadTimer) clearTimeout(this.loadTimer);
-    this.loadTimer = setTimeout(() => this.finishLoad(), LOAD_PENDING_TIMEOUT_MS); // 核心無回應(例如舊版核心):不讓載入鈕永遠停用
+    this.loadTimer = setTimeout(() => this.finishLoad(true), LOAD_PENDING_TIMEOUT_MS); // 核心無回應(例如舊版核心):維持樂觀切換,不讓載入鈕永遠停用
     this.rehearsal = rehearsal;
     this.activeScenario = s;
-    this.restartExercise();
     if (this.sourceMode === 'demo') {
+      this.finishLoad(true); // 示範模式沒有核心:立即視為成功(先清再啟動來源,避免第一幀被清掉)
       this.startSource(s);
       this.send(cmd, { ok: true, detail: '示範模式:以情境的船、初始狀態與環境重建示範運動學' });
-      this.finishLoad();
     } else {
       this.send(cmd);
     }
     if (this.pageMode === 'simple') {
       // 簡報期間先凍結,按「開始練習」才恢復
       this.send(simpleCommand('freeze'));
-      this.opLog.clear();
-      this.opEvents = [];
-      this.markerStore.clear();
-      this.markers = [];
       this.simplePhase = 'briefing';
     }
   };
 
-  /** 載入有結果(成功或逾時):結束載入中狀態。 */
-  private finishLoad(): void {
+  /**
+   * 載入有結果:結束載入中狀態;succeeded(狀態幀帶新情境 id / ack ok / 示範模式 / 逾時視同成功)才重設本地練習資料與簡化模式的
+   * 操作紀錄/標記;被拒(false)時全部保留,原練習的紀錄與講評不受影響。
+   */
+  private finishLoad(succeeded: boolean): void {
+    const wasPending = this.pendingLoad !== null;
     this.pendingLoad = null;
     this.loadPending = false;
     if (this.loadTimer) {
       clearTimeout(this.loadTimer);
       this.loadTimer = null;
+    }
+    if (!succeeded || !wasPending) return;
+    this.restartExercise();
+    if (this.pageMode === 'simple') {
+      this.opLog.clear();
+      this.opEvents = [];
+      this.markerStore.clear();
+      this.markers = [];
     }
   }
 
@@ -905,7 +917,7 @@ export class InstructorApp extends LitElement {
       if (!rej.scenarioId) rej = { ...rej, scenarioId: pending.targetId };
     }
     this.scenarioRejection = rej;
-    this.finishLoad();
+    this.finishLoad(false);
   }
 
   private onSnapshotTaken = (ev: CustomEvent<SnapshotEntry>): void => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 啟動腳本共用函式(Linux/開發機;Windows 版為 launch-common.ps1):找安裝根目錄、讀 config/*.json、找各元件、背景啟動並記 PID。
 # 安裝根目錄 = 本檔上兩層(儲存庫:tools/launch/../..;發行版:app/launch/../..),必須含 data/。
-# 所有輸出留在根目錄內:build/logs/<元件>.log、build/logs/simosa.pids(規劃書第 11.2 節、CLAUDE.md)。
+# 所有輸出留在根目錄內:build/logs/<元件>.log、build/logs/simosa.pids、build/logs/simcore.stop[file](規劃書第 11.2 節、CLAUDE.md)。
 set -euo pipefail
 # 容器/開發機:dotnet 不在 PATH 時先載入 /etc/profile.d/dotnet.sh(Windows 版不需要)
 if ! command -v dotnet >/dev/null 2>&1 && [[ -f /etc/profile.d/dotnet.sh ]]; then . /etc/profile.d/dotnet.sh; fi
@@ -107,6 +107,18 @@ start_bg() {
   echo "$name:$LAST_PID" >> "$PIDFILE"
 }
 LAST_PID=""
+
+# launch_stop_file <root> <logs>:SimCore.Host 的停止檔路徑(--stop-file;stop-all.sh 先寫此檔讓核心自行結束並寫完紀錄 footer,逾時才強制結束)。
+# 路徑記在 <logs>/simcore.stopfile 供 stop-all.sh 讀取(PID 檔以「:」分隔,Windows 路徑含「:」,所以另存一檔);殘留的停止檔先刪
+STOPFILE=""
+launch_stop_file() {
+  local root="$1" logs="$2"
+  mkdir -p "$root/$logs"
+  STOPFILE="$root/$logs/simcore.stop"
+  rm -f "$STOPFILE"
+  echo "$STOPFILE" > "$root/$logs/simcore.stopfile"
+  echo "$STOPFILE"
+}
 
 # process_alive <PID>:程序仍在執行
 process_alive() { kill -0 "$1" 2>/dev/null; }

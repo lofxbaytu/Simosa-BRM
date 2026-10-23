@@ -173,14 +173,32 @@ catch (FileNotFoundException ex) when (options.Dynamics == "mmg")
     Console.Error.WriteLine("(或以 --dynamics placeholder 使用暫代模型)");
     return 3;
 }
+// 優雅停止(交接紀錄待辦第 1 項):Ctrl+C / SIGINT / SIGTERM / SIGHUP / ProcessExit、停止檔、WebSocket shutdown 指令與 --duration 都經同一個協調器,
+// 主迴圈結束後關閉紀錄(寫 footer)再結束程序
+using var shutdown = new ShutdownCoordinator();
+shutdown.RegisterProcessSignals();
+StopFileWatcher? stopFile = null;
+if (options.EnableStopFile)
+{
+    try { stopFile = StopFileWatcher.Create(root, options.StopFile); }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 2;
+    }
+}
+// 主控程序層指令(sessionInfo / shutdown;不進引擎、不進雜湊):sessionInfo 寫進目前紀錄(session 行)或帶進下一份紀錄的 header
+var router = new HostCommandRouter(engine, shutdown);
+router.Log += msg => Console.WriteLine($"  [host] {msg}");
 // 紀錄(規劃書第 5.3 節):每份紀錄一個 header 情境;loadScenario 時紀錄器在引擎重設前自動關閉,這裡再為新情境開新檔
 RecordWriter? recorder = null;
+router.Recorder = () => recorder;
 string RecordPathFor(string scenarioId) => options.RecordPath is { } rp && recorder is null
     ? (Path.IsPathRooted(rp) ? rp : Path.Combine(root, rp))
     : RecordWriter.DefaultPath(RepositoryPaths.RecordsDirectory(root), scenarioId);
 if (options.Record)
 {
-    recorder = new RecordWriter(RecordPathFor(scenario.Id), engine);
+    recorder = new RecordWriter(RecordPathFor(scenario.Id), engine, session: router.Session);
     Console.WriteLine($"  紀錄:{recorder.Path}");
 }
 // 情境切換(檔案路徑或內嵌情境物件共用;交接紀錄待辦第 1 項):載入結果 → TryApplyScenarioLoad(驗證錯誤/船舶/動力學失敗 → 拒絕,
@@ -195,8 +213,9 @@ void ApplyLoadedScenario(SimulationEngine e, ScenarioLoadResult result, string o
     {
         var footer = closed.Footer!;
         Console.WriteLine($"紀錄已關閉(情境切換):{closed.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…)");
-        recorder = new RecordWriter(RecordPathFor(sc.Id), e);
-        Console.WriteLine($"  紀錄(新情境):{recorder.Path}");
+        // 參與者與休息時間確認沿用到新情境的紀錄 header(同一批人繼續練習;教官站可再送 sessionInfo 覆寫為 session 行)
+        recorder = new RecordWriter(RecordPathFor(sc.Id), e, session: router.Session);
+        Console.WriteLine($"  紀錄(新情境):{recorder.Path}{(router.Session is { } si ? $"(header 含 {si.Describe()})" : "")}");
     }
 }
 engine.ScenarioLoadRequested += (e, path) =>
@@ -240,10 +259,10 @@ if (scenario.Timeline.Count > 0 || scenario.Route is not null || scenario.Zones.
 WebSocketStateServer? ws = null;
 if (options.EnableWebSocket)
 {
-    ws = new WebSocketStateServer(engine, options.Port);
+    ws = new WebSocketStateServer(engine, options.Port) { HostCommandHandler = router.Handle };
     ws.Log += msg => Console.WriteLine($"  [ws] {msg}");
     ws.Start();
-    Console.WriteLine($"  WebSocket:{ws.Prefix!.Replace("http://", "ws://").Replace("*", "0.0.0.0")}(推送 OwnShipState JSON 每 40 ms;接收 SimCommand JSON)");
+    Console.WriteLine($"  WebSocket:{ws.Prefix!.Replace("http://", "ws://").Replace("*", "0.0.0.0")}(推送 OwnShipState JSON 每 40 ms;接收 SimCommand JSON;sessionInfo / shutdown 由主控程序回 ack)");
 }
 
 UdpStateBus? bus = null;
@@ -285,20 +304,25 @@ engine.EventRaised += (e, ev) =>
 // 情境載入被拒(不進紀錄與雜湊的帶外事件):以同樣的事件框送教官站,教官站據此把載入標為失敗並顯示問題清單
 engine.ScenarioLoadRejected += (_, ev) => ws?.PublishEvent(ContractJson.SerializeToUtf8Bytes(new { type = "event", @event = ev }));
 
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 if (options.Duration > 0)
-    engine.Stepped += e => { if (e.Time >= options.Duration) cts.Cancel(); };
+    engine.Stepped += e => { if (e.Time >= options.Duration) shutdown.Request("duration"); };
+if (stopFile is not null)
+{
+    if (stopFile.RemovedStale) Console.WriteLine($"  已刪除殘留的停止檔:{stopFile.Path}");
+    Console.WriteLine($"  停止檔:{stopFile.Path}(每秒檢查,存在即正常結束並寫完紀錄 footer;stop-all 腳本寫入)");
+    _ = stopFile.RunAsync(TimeSpan.FromSeconds(1), () => shutdown.Request("stopFile"), shutdown.Token);
+}
+shutdown.Requested += reason => Console.WriteLine($"收到停止請求({reason}),結束中…");
 
 var runner = new RealtimeRunner(engine);
-var thread = new Thread(() => runner.Run(cts.Token)) { Name = "SimCore", IsBackground = true };
+var thread = new Thread(() => runner.Run(shutdown.Token)) { Name = "SimCore", IsBackground = true };
 thread.Start();
-Console.WriteLine("執行中(Ctrl+C 結束)…");
+Console.WriteLine("執行中(Ctrl+C / SIGTERM / 停止檔 / shutdown 指令結束)…");
 
 var lastTick = 0L;
-while (!cts.IsCancellationRequested)
+while (!shutdown.IsRequested)
 {
-    try { await Task.Delay(1000, cts.Token); } catch (OperationCanceledException) { break; }
+    try { await Task.Delay(1000, shutdown.Token); } catch (OperationCanceledException) { break; }
     var s = latest;
     if (s is null) continue;
     var rate = s.Tick - lastTick;
@@ -307,7 +331,13 @@ while (!cts.IsCancellationRequested)
         $"t={s.T,8:F1}s  HDG {s.Heading,6:F1}  COG {s.Cog,6:F1}  SOG {s.Sog,5:F1}kn  STW {s.Stw,5:F1}  ROT {s.Rot,6:F1}  舵 {s.Rudder,5:F1}/{s.RudderOrder,5:F1}  rpm {s.Rpm,6:F1}  {s.Telegraph}  UKC {s.DepthBelowKeel,5:F1}m  ×{engine.TimeScale:F1}{(engine.Frozen ? " 凍結" : "")}  steps/s {rate}  ws {ws?.ClientCount ?? 0}{(runner.DroppedSteps > 0 ? $"  掉拍 {runner.DroppedSteps}" : "")}{(s.Targets is { Count: > 0 } tg ? $"  目標 {tg.Count}(最近 {tg.MinBy(x => x.RangeNm)!.Id} {tg.Min(x => x.RangeNm):F2} nm,CPA {tg.MinBy(x => x.CpaNm)!.CpaNm:F2} nm)" : "")}{(s.Flags?.Collision == true ? "  碰撞" : "")}{(s.Alerts is { Count: > 0 } al ? $"  警報 {al.Count}(未確認 {al.Count(a => a.State is SimosaBRM.SimCore.Alerts.AlertState.ActiveUnacknowledged or SimosaBRM.SimCore.Alerts.AlertState.ActiveSilenced or SimosaBRM.SimCore.Alerts.AlertState.RectifiedUnacknowledged)}{(al.Any(a => a.Audible) ? ",聲響" : "")})" : "")}{(s.Bnwas is { Active: true } bn ? $"  BNWAS {bn.Stage}/{bn.RemainingS:F0}s" : "")}{(s.Tugs is { Count: > 0 } tgs ? $"  拖船 {string.Join(" ", tgs.Select(t => $"{t.Id}:{t.Status}/{t.ForceT:F0}t@{t.DirectionDeg:F0}°"))}" : "")}{(s.Anchors?.Where(a => a.Status != "stowed").ToList() is { Count: > 0 } ans ? $"  錨 {string.Join(" ", ans.Select(a => $"{a.Side}:{a.Status}/{a.LengthShackles:F1}節/{a.TensionT:F1}t"))}" : "")}{(s.Berth is { } bst && (bst.Contacts.Count > 0 || bst.QuayContact) ? $"  碰墊 {bst.Contacts.Count}{(bst.QuayContact ? " 硬接觸" : "")}" : "")}{(s.Truth is { } tr && (Math.Abs(tr.HeadingErrorDeg) > 0.05 || tr.PositionErrorM > 1) ? $"  [真值 HDG {tr.Heading:F1} 誤差 {tr.HeadingErrorDeg:+0.0;-0.0}° / {tr.PositionErrorM:F0} m]" : "")}");
 }
 
-thread.Join(TimeSpan.FromSeconds(2));
+var joined = thread.Join(TimeSpan.FromSeconds(2));
+// shutdown 指令的語意:先結束練習(定稿 summary、發 exerciseEnded 並寫入紀錄)再寫 footer;引擎執行緒已停,主執行緒可安全套用
+if (joined && shutdown.EndExerciseRequested && !engine.Ended)
+{
+    engine.Enqueue(SimCommand.EndExercise(shutdown.Reason ?? "shutdown"));
+    engine.ProcessPendingCommands();
+}
 nmea?.Dispose();
 bus?.Dispose();
 if (ws is not null) await ws.DisposeAsync();
@@ -316,7 +346,8 @@ if (recorder is not null)
     var footer = recorder.Closed ? recorder.Footer! : recorder.Close();
     Console.WriteLine($"紀錄已關閉:{recorder.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…,檔案 SHA-256 {footer.Sha256[..16]}…,summary 行 {footer.SummaryLines})");
 }
+shutdown.MarkFinished();
 if (engine.LatestSummary is { } finalSummary)
     Console.WriteLine($"評估摘要:分數 {finalSummary.Assessment.Score:F0}/{finalSummary.Assessment.PassMark:F0},{(finalSummary.Assessment.Passed ? "通過" : "未通過")}{(finalSummary.Assessment.HardFailed ? "(硬性失敗)" : "")};事件 {finalSummary.Events.Total}");
-Console.WriteLine("結束。");
+Console.WriteLine($"結束(原因:{shutdown.Reason ?? "未知"})。");
 return 0;

@@ -54,6 +54,15 @@ public enum SimCommandType
     /// 只寫 input 行並發 radarControl 事件,不影響物理;無情境引擎時雜湊不變,有情境引擎時只有事件序號計入雜湊(與 acknowledge 相同;規劃書第 8.3 節第 7 類)
     /// </summary>
     RadarControl,
+    /// <summary>
+    /// 參與者與休息時間確認(規劃書第 5.5 節;args:participants[]{name, role, rank?, certificateNo?}、restHoursConfirmation{confirmedBy, confirmedAtUtc, compliant, note?}、course?{id, title, instructor}):
+    /// 主控程序層指令,不進引擎佇列、不寫 input 行、不進雜湊;寫進紀錄 header(紀錄未開啟時)或追加 session 行,並回 ack
+    /// </summary>
+    SessionInfo,
+    /// <summary>
+    /// 優雅停止(主控程序層指令;僅接受本機/直連私有網段的客戶端,例如教官站):結束練習 → 寫紀錄 footer → 程序結束,回 ack 後 ≤ 1 s 內結束;args:reason?
+    /// </summary>
+    Shutdown,
 }
 
 /// <summary>
@@ -92,6 +101,10 @@ public sealed record SimCommand
     public static SimCommand EndExercise(string? reason = null)
         => new() { Type = SimCommandType.EndExercise, Args = Obj(new { reason }) };
     public static SimCommand GetAssessment() => new() { Type = SimCommandType.GetAssessment };
+    /// <summary>參與者與休息時間確認(<paramref name="args"/> 為匿名物件或字典,鍵名見 RecordSessionInfo.TryParse)。</summary>
+    public static SimCommand SessionInfo(object args) => new() { Type = SimCommandType.SessionInfo, Args = Obj(args) };
+    /// <summary>優雅停止主控程序(結束練習 → footer → 程序結束)。</summary>
+    public static SimCommand Shutdown(string? reason = null) => new() { Type = SimCommandType.Shutdown, Args = reason is null ? null : Obj(new { reason }) };
     /// <summary>
     /// 操舵模式:<paramref name="pump"/> 為 "1"|"2"|"both"(未給時不變);<paramref name="direction"/> 只在 nfu 有效(port|starboard|stop;未給時不變,首次進入 nfu 視為 stop)。
     /// </summary>

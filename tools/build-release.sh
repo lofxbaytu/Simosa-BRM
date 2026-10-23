@@ -96,11 +96,12 @@ PARAM_VERSION="$(sed -n 's/^version: *"\([^"]*\)".*/\1/p' data/parameters/compan
 COMPONENTS+=("data=${PARAM_VERSION:-$VERSION}=data=參數集 company-procedures.yaml 版次;ships/*/confidential 已排除")
 mkdir -p "$OUT/contracts" && cp src/Contracts/* "$OUT/contracts/"
 COMPONENTS+=("contracts=$VERSION=contracts")
-mkdir -p "$OUT/docs/design" "$OUT/docs/ops" "$OUT/docs/驗收" "$OUT/docs/components"
+mkdir -p "$OUT/docs/design" "$OUT/docs/ops" "$OUT/docs/驗收" "$OUT/docs/訓練" "$OUT/docs/components"
 cp docs/Simosa-BRM-操船模擬器規劃書.md README.md "$OUT/docs/"
 cp docs/design/*.md "$OUT/docs/design/"
 [[ -d docs/ops ]] && cp docs/ops/*.md "$OUT/docs/ops/"
 [[ -d docs/驗收 ]] && cp docs/驗收/*.md "$OUT/docs/驗收/"
+[[ -d docs/訓練 ]] && cp docs/訓練/*.md "$OUT/docs/訓練/"
 cp src/Tools.Calibration/README.md "$OUT/docs/components/校正工具-Tools.Calibration.md"
 cp src/Instruments.Web/README.md "$OUT/docs/components/網頁儀器-Instruments.Web.md"
 cp src/Instruments.Web/RADAR.md "$OUT/docs/components/雷達PPI-RADAR.md"

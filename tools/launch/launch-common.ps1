@@ -1,6 +1,6 @@
 # 啟動腳本共用函式(Windows;Linux 版為 launch-common.sh):找安裝根目錄、讀 config\*.json、找各元件、背景啟動並記 PID。
 # 安裝根目錄 = 本檔上兩層(儲存庫:tools\launch\..\..;發行版:app\launch\..\..),必須含 data\。
-# 所有輸出留在根目錄內:build\logs\<元件>.log、build\logs\simosa.pids(規劃書第 11.2 節、CLAUDE.md:不寫 C:\)。
+# 所有輸出留在根目錄內:build\logs\<元件>.log、build\logs\simosa.pids、build\logs\simcore.stop[file](規劃書第 11.2 節、CLAUDE.md:不寫 C:\)。
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:LaunchDir = $PSScriptRoot
@@ -93,6 +93,17 @@ function Start-LaunchProcess([string]$Name, [string]$Log, [string]$File, [string
     Add-Content -Path $script:PidFile -Value "${Name}:$($p.Id)" -Encoding UTF8
     Add-Content -Path (Join-Path (Split-Path -Parent $Log) 'launch.log') -Value ("# {0:u} {1} PID {2} {3} {4}" -f (Get-Date).ToUniversalTime(), $Name, $p.Id, $File, ($Arguments -join ' ')) -Encoding UTF8
     return $p
+}
+
+# Get-LaunchStopFile <根目錄> <logs>:SimCore.Host 的停止檔路徑(--stop-file;stop-all.ps1 先寫此檔讓核心自行結束並寫完紀錄 footer — Windows 的
+# Stop-Process 不會送 Ctrl+C,主控台程序收不到訊號)。路徑記在 <logs>\simcore.stopfile 供 stop-all.ps1 讀取;殘留的停止檔先刪。
+function Get-LaunchStopFile([string]$Root, [string]$Logs) {
+    $dir = Join-Path $Root $Logs
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $stop = Join-Path $dir 'simcore.stop'
+    Remove-Item $stop -ErrorAction SilentlyContinue
+    Set-Content -Path (Join-Path $dir 'simcore.stopfile') -Value $stop -Encoding UTF8
+    return $stop
 }
 
 # Test-LaunchTcpOpen <主機> <埠> [毫秒]:在限時內連得上即為 true(連線包在 ConnectAsync().Wait 內:對不可達的 IP,例如船上筆電未接線,
