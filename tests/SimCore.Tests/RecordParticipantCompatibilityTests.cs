@@ -33,6 +33,13 @@ public class RecordParticipantCompatibilityTests
     }
 
     [Fact]
+    public void Deserialize_RejectsNullElement()
+    {
+        var ex = Assert.Throws<JsonException>(() => ContractJson.Deserialize<RecordSession>("""{"kind":"session","tick":0,"t":0,"participants":[null,"甲"]}"""));
+        Assert.Contains("不可為 null", ex.Message);
+    }
+
+    [Fact]
     public void Serialize_IsUnchangedFromAutomaticShape()
     {
         Assert.Equal("""{"name":"王大副","role":"oow","rank":"大副","certificateNo":"C-123"}""",

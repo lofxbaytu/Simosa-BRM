@@ -116,10 +116,15 @@ public sealed record RecordParticipant
 /// </summary>
 public sealed class RecordParticipantConverter : JsonConverter<RecordParticipant>
 {
+    /// <summary>陣列中的 null 元素也交給 Read(預設 false 時 System.Text.Json 會直接放入 null,後續讀 Name 會 NullReferenceException)。</summary>
+    public override bool HandleNull => true;
+
     public override RecordParticipant? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         switch (reader.TokenType)
         {
+            case JsonTokenType.Null:
+                throw new JsonException("participants[] 不可為 null");
             case JsonTokenType.String:
                 return new RecordParticipant { Name = reader.GetString() ?? "" };
             case JsonTokenType.StartObject:

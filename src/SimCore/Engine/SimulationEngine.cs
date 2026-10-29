@@ -522,20 +522,28 @@ public sealed class SimulationEngine
     /// (Hs ≥ 0 有限、Tp &gt; 0、來向有限(正規化到 0–360)、spectrum pm|jonswap、gamma ≥ 1);不合法 → commandRejected {reason: invalidWaves} 且 (false, null),
     /// 其他環境欄位照常套用。
     /// </summary>
-    private (bool Given, ScenarioWaves? Target) ParseWavesArg(SimCommand cmd, string source, string? itemId)
+    private (bool Given, ScenarioWaves? Target, bool HsGiven) ParseWavesArg(SimCommand cmd, string source, string? itemId)
     {
-        if (cmd.Arg("waves") is not { } wv) return (false, null);
-        if (wv.ValueKind == JsonValueKind.Null) return (true, null);
+        if (cmd.Arg("waves") is not { } wv) return (false, null, false);
+        if (wv.ValueKind == JsonValueKind.Null) return (true, null, true);
         var ok = wv.ValueKind == JsonValueKind.Object;
         var cur = _waveSettings;
         var target = new ScenarioWaves();
+        var hsGiven = false;
         if (ok)
         {
-            static double? Num(JsonElement o, string name) => o.TryGetProperty(name, out var e) ? SimCommand.AsDouble(e) : null;
-            target.SignificantHeightM = Num(wv, "significantHeight_m") ?? _waves?.SignificantHeightM ?? cur?.SignificantHeightM;
-            target.PeakPeriodS = Num(wv, "peakPeriod_s") ?? cur?.PeakPeriodS;
-            target.DirectionDeg = Num(wv, "direction_deg") is { } d ? Units.NormalizeHeadingDeg(d) : cur?.DirectionDeg is { } cd ? Units.NormalizeHeadingDeg(cd) : null;
-            target.Gamma = Num(wv, "gamma") ?? cur?.Gamma;
+            // 屬性存在但非數值(null、布林、字串)→ 拒絕,與 Python MMGShip.set_waves 及時間表結構檢查 CheckSetEnvironmentAction 同語意;不存在 → 沿用目前值
+            static (bool Present, double? Value) Num(JsonElement o, string name) => o.TryGetProperty(name, out var e) ? (true, SimCommand.AsDouble(e)) : (false, null);
+            var hsN = Num(wv, "significantHeight_m");
+            var tpN = Num(wv, "peakPeriod_s");
+            var dirN = Num(wv, "direction_deg");
+            var gN = Num(wv, "gamma");
+            if ((hsN.Present && hsN.Value is null) || (tpN.Present && tpN.Value is null) || (dirN.Present && dirN.Value is null) || (gN.Present && gN.Value is null)) ok = false;
+            hsGiven = hsN.Value is not null;
+            target.SignificantHeightM = hsN.Value ?? _waves?.SignificantHeightM ?? cur?.SignificantHeightM;
+            target.PeakPeriodS = tpN.Value ?? cur?.PeakPeriodS;
+            target.DirectionDeg = dirN.Value is { } d ? Units.NormalizeHeadingDeg(d) : cur?.DirectionDeg is { } cd ? Units.NormalizeHeadingDeg(cd) : null;
+            target.Gamma = gN.Value ?? cur?.Gamma;
             if (wv.TryGetProperty("spectrum", out var sp))
             {
                 if (sp.ValueKind == JsonValueKind.String) target.Spectrum = sp.GetString()?.Trim().ToLowerInvariant();
@@ -552,19 +560,26 @@ public sealed class SimulationEngine
         if (!ok)
         {
             RejectCommand(cmd, source, itemId, CommandRejectReasons.InvalidWaves);
-            return (false, null);
+            return (false, null, false);
         }
-        return (true, target.SignificantHeightM == 0.0 ? null : target);
+        return (true, target.SignificantHeightM == 0.0 ? null : target, hsGiven);
     }
 
     /// <summary>
     /// 套用浪變更(<paramref name="target"/> null = 關閉):ramp_s &gt; 0 時 Hs 自目前值(無浪時 0)線性漸變到目標(通道 WaveHeight;關閉時漸變到 0 後再移除模型),
-    /// Tp/來向/浪譜/γ 立即生效(模型以目前 Hs 重建);否則立即。回傳事件 changes.waves 的 {from, to}。
+    /// Tp/來向/浪譜/γ 立即生效(模型以目前 Hs 重建);否則立即。未給 Hs 的部分更新不動 WaveHeight 漸變(進行中的漸變照常跑完,
+    /// 與風/流/水深通道「只動本次指令給到的通道」一致)。回傳事件 changes.waves 的 {from, to}。
     /// </summary>
-    private object ApplyWaves(ScenarioWaves? target, long rampTicks)
+    private object ApplyWaves(ScenarioWaves? target, long rampTicks, bool hsGiven = true)
     {
         var fromHs = _waves?.SignificantHeightM ?? _waveSettings?.SignificantHeightM ?? 0.0;
         var from = WavesExternal(_waveSettings, fromHs);
+        if (target is not null && !hsGiven)
+        {
+            // 部分更新(Tp/來向/浪譜/γ):以目前 Hs 重建模型,既有 Hs 漸變保留(下一步照常把插值寫回)
+            SetWaves(new ScenarioWaves { SignificantHeightM = fromHs, PeakPeriodS = target.PeakPeriodS, DirectionDeg = target.DirectionDeg, Spectrum = target.Spectrum, Gamma = target.Gamma });
+            return new { from, to = WavesExternal(target) };
+        }
         if (target is null)
         {
             if (rampTicks > 0 && _waveSettings is not null && fromHs > 0.0)
@@ -1481,7 +1496,7 @@ public sealed class SimulationEngine
         if (cmd.ArgAsDouble("waterDepth") is { } depth && depth > 0) targets.Add((RampChannel.WaterDepth, depth));
         if (cmd.ArgAsDouble("visibility_nm") is { } vis && vis > 0) targets.Add((RampChannel.Visibility, vis));
         // 浪(args.waves;設計文件 physics-waves.md「練習中變更」):null 或 Hs = 0 → 關閉;物件 → 建立/更新(缺的欄位沿用目前值);不合法時只拒絕浪的部分
-        var (wavesGiven, wavesTarget) = ParseWavesArg(cmd, source, itemId);
+        var (wavesGiven, wavesTarget, wavesHsGiven) = ParseWavesArg(cmd, source, itemId);
         if (targets.Count == 0 && !wavesGiven) return;
 
         // 時變流場(environment.current.table | tidal)被常數覆寫:時變停止直到再載入情境(情境引擎設計第 1.5.2 節);漸變自目前模型值起算
@@ -1514,7 +1529,7 @@ public sealed class SimulationEngine
             changes[ContractJson.EnumName(ch)] = new { from = RampSet.External(ch, from), to = RampSet.External(ch, to) };
         }
         // 浪:Hs 漸變(通道 waveHeight)或立即;changes.waves 為 {from, to}(null = 無浪)
-        if (wavesGiven) changes["waves"] = ApplyWaves(wavesTarget, rampTicks);
+        if (wavesGiven) changes["waves"] = ApplyWaves(wavesTarget, rampTicks, wavesHsGiven);
         Raise(NewEvent(SimEventKinds.EnvironmentChange, source, itemId, null, null, new
         {
             wind = cmd.Arg("wind"), current = cmd.Arg("current"), waterDepth = cmd.ArgAsDouble("waterDepth"), visibility_nm = cmd.ArgAsDouble("visibility_nm"),

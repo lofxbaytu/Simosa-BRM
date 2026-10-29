@@ -126,6 +126,9 @@ public class WaveEnvironmentCommandTests
     [InlineData("{\"waves\":{\"significantHeight_m\":1,\"peakPeriod_s\":7,\"direction_deg\":90,\"spectrum\":3}}")]
     [InlineData("{\"waves\":\"rough\"}")]
     [InlineData("{\"waves\":[1,7,90]}")]
+    [InlineData("{\"waves\":{\"significantHeight_m\":null,\"peakPeriod_s\":7,\"direction_deg\":90}}")] // 存在但非數值:與 Python 同樣拒絕
+    [InlineData("{\"waves\":{\"significantHeight_m\":true,\"peakPeriod_s\":7,\"direction_deg\":90}}")]
+    [InlineData("{\"waves\":{\"significantHeight_m\":1,\"peakPeriod_s\":7,\"direction_deg\":90,\"gamma\":null}}")]
     public void InvalidWavesAreRejectedButOtherFieldsStillApply(string argsJson)
     {
         var e = MmgEngine(Yaml());
@@ -182,6 +185,31 @@ public class WaveEnvironmentCommandTests
         Assert.NotNull(e.BuildState().Waves);
         TestData.RunTo(e, 18);
         Assert.Equal(1.0, e.Waves!.SignificantHeightM, 12);
+    }
+
+    [Fact]
+    public void PartialUpdateDuringRampKeepsRampRunning()
+    {
+        // 審查(第十九輪):漸變中只改來向/Tp 的部分更新不得取消 Hs 漸變,也不得多發 environmentRampDone;無 Hs 的部分更新附 ramp_s 不建立平坦漸變
+        var e = MmgEngine(Yaml(BeamWaves));
+        var events = TestData.Capture(e);
+        Apply(e, SimCommand.SetWaves(significantHeightM: 4.0, rampS: 10.0));
+        TestData.RunTo(e, 5);
+        e.Step();
+        Assert.Equal(3.0, e.Waves!.SignificantHeightM, 9);
+        Apply(e, new SimCommand { Type = SimCommandType.SetEnvironment, Args = SimCommand.RawJson("{\"waves\":{\"direction_deg\":180}}") });
+        Assert.Equal(180.0, e.Waves!.DirectionDeg);
+        Assert.Single(e.Ramps); // 漸變保留
+        TestData.RunTo(e, 11);
+        Assert.Equal(4.0, e.Waves!.SignificantHeightM, 12);
+        Assert.Empty(e.Ramps);
+        Assert.Single(events, x => x.Kind == SimEventKinds.EnvironmentRampDone);
+        // 無 Hs 的部分更新附 ramp_s:不建立平坦漸變、不再發 rampDone
+        Apply(e, new SimCommand { Type = SimCommandType.SetEnvironment, Args = SimCommand.RawJson("{\"waves\":{\"peakPeriod_s\":9},\"ramp_s\":10}") });
+        Assert.Empty(e.Ramps);
+        Assert.Equal(9.0, e.Waves!.PeakPeriodS);
+        TestData.RunTo(e, 25);
+        Assert.Single(events, x => x.Kind == SimEventKinds.EnvironmentRampDone);
     }
 
     [Fact]

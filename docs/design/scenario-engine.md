@@ -410,7 +410,7 @@ environment:
 - 契約:`state.waves {significantHeight_m, peakPeriod_s, direction_deg, wavelength_m, spectrum, X_kN, Y_kN, N_kNm}`(**只在情境有 `waves` 時輸出**);視景以 `significantHeight_m`/`direction_deg` 畫海面(`Visual.Shared` `EnvironmentMapper`,取代由風速推得的波高)。無 `waves` 的情境:零力,所有數值、雜湊與既有夾具/黃金測試位元不變。
 - 結構檢查(`Scenario.StructuralIssues` 與 Python `waves_issues`,路徑 `environment.waves.*`、訊息相同):Hs ≥ 0 有限、Tp > 0、來向 0–360、`spectrum` pm|jonswap、`gamma ≥ 1`。
 - Python 參考實作:`external.py WaveDriftModel` 同公式同運算順序,`scenario.validate_scenario` 正規化 `environment.waves` 並經 `normalise_sections` 交給 `MMGShip.configure_external`;跨語言夾具 `tests/SimCore.Tests/Golden/waves_force_table.csv`(純函數 120 列,相對 ≤ 1e-12,實測逐位元相同)與 `waves_drift_run.{yaml,csv}`(300 s 積分,< 1%,實測 ~1e-16),`export_waves_reference.py` 產生。
-- 限制:浪在練習中固定(`setEnvironment`/時間表尚無 `waves`);無橫搖;係數為文獻量級估計(physics-waves.md 第 4、7、9 節)。
+- 限制:練習中變更見 physics-waves.md 6.1(`setEnvironment`/時間表 `waves`;只有 Hs 漸變、其餘階躍;Python 無漸變);無橫搖;係數為文獻量級估計(physics-waves.md 第 4、7、9 節)。
 
 ### 1.5.4 `environment.shipInteraction`:船間交互作用(2026-10-29)
 

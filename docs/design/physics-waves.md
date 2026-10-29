@@ -160,9 +160,11 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
 
 ```yaml
 - setEnvironment: { waves: { significantHeight_m: 2.5, peakPeriod_s: 8, direction_deg: 45, spectrum: jonswap }, ramp_s: 120 }   # 建立或更新
-- setEnvironment: { waves: { direction_deg: 180 } }      # 部分更新:缺的欄位沿用目前值(Hs 取模型目前值)
+- setEnvironment: { waves: { direction_deg: 180 } }      # 部分更新:缺的欄位沿用目前值(Hs 取模型目前值);進行中的 Hs 漸變保留,附 ramp_s 也不建立漸變
 - setEnvironment: { waves: null }                        # 關閉(significantHeight_m: 0 亦為關閉);ramp_s > 0 時 Hs 先漸變到 0 再移除
 ```
+
+欄位語意:屬性**不存在**→ 沿用目前值;屬性存在但為 `null`、布林或非數值字串 → 整個 `waves` 拒絕(`commandRejected invalidWaves`;Python `invalidWaves`;時間表結構檢查同路徑),其他環境欄位照常套用。
 
 - 語意(`SimulationEngine.ParseWavesArg` / `ApplyWaves`;Python `MMGShip.set_waves`):`waves` 缺省 = 不變;`null` 或 Hs = 0 = 關閉(模型移除:零力、`state.waves` 省略、
   雜湊不再追加區塊);物件 = 與目前設定合併後檢查(Hs ≥ 0 有限、Tp > 0、來向有限並正規化到 0–360、`spectrum` pm|jonswap、`gamma` ≥ 1;無浪時 `peakPeriod_s` 與

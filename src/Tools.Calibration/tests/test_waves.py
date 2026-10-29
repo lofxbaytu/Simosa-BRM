@@ -349,7 +349,10 @@ def test_set_waves_partial_update_off_and_invalid() -> None:
     for bad in ({"significantHeight_m": -1, "peakPeriod_s": 7, "direction_deg": 90}, {"significantHeight_m": 1, "peakPeriod_s": 0, "direction_deg": 90},
                 {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "spectrum": "bretschneider"},
                 {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "gamma": 0.5},
-                {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "spectrum": 3}, "rough", [1, 7, 90]):
+                {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "spectrum": 3}, "rough", [1, 7, 90],
+                # 存在但非數值(None/布林)→ 拒絕(C# ParseWavesArg 同語意)
+                {"significantHeight_m": None, "peakPeriod_s": 7, "direction_deg": 90}, {"significantHeight_m": True, "peakPeriod_s": 7, "direction_deg": 90},
+                {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "gamma": None}):
         with pytest.raises(ValueError, match="invalidWaves"):
             ship.set_waves(bad)
         assert ship.waves is None

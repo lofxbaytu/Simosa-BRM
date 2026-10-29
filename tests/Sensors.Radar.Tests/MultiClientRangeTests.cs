@@ -267,6 +267,13 @@ public class MultiClientRangeTests
         // 先讓 b 的指令生效(每個客戶端各自收;a 的幀在 b 指令前可能已有 6 nm,之後也仍是 6 nm)
         var rb = await Collect(b, 60);
         var ra = await Collect(a, 60);
+        // 四個測試專案併行時 a 可能在 60 幀內尚未收到含新增益的 status:再等最多 200 幀直到 gain = 55(只看增益;量程斷言仍用首批)
+        for (var extra = 0; ra.Gain != 55.0 && extra < 10; extra++)
+        {
+            var more = await Collect(a, 20);
+            Assert.All(more.Ranges, r => Assert.Equal(6 * 1852f, r));
+            ra = (ra.Ranges, ra.StatusRanges, more.Gain ?? ra.Gain);
+        }
         Assert.Contains(3 * 1852f, rb.Ranges);
         Assert.Contains(3.0, rb.StatusRanges);
         Assert.All(ra.Ranges, r => Assert.Equal(6 * 1852f, r));
