@@ -20,6 +20,9 @@
   (``parameters.resolve_references``;情境引擎設計第 2.3 節):有引用而未給參數集時依 ``assessment.parameterSet``
   (相對專案根目錄或情境檔目錄,預設 data/parameters/company-procedures.yaml)自動載入,仍無則 ``ValueError``。
   載入結果的 ``parameterSet`` 為 ``{id, version, path, sha256, resolved}``(無引用時 None),形狀同紀錄標頭 ``header.parameterSet``。
+- ``zones[].waterDepth_m``(區域水深覆寫;情境引擎設計第 4.3 節):正規化為 ``depthZones``(id、ENU 多邊形、水深;``depth.py``),
+  ``apply_scenario`` 交給 ``MMGShip.set_depth_zones``,有效水深 = 區域基底(在內取最淺,否則 waterDepth)+ 潮高(C# ``ZoneDepth``);
+  ``zones`` 本身仍原樣保留(跨語言比對用)。
 - timeline / route / zones / assessment / briefing 只做結構檢查(C# ``Scenario.StructuralIssues`` 的便宜規則:必要欄位、
   id 唯一、參照存在、動作/條件/規則名稱在允許清單、航點 ≥ 2 且不重合、多邊形 3–64 點且不自交 …),**不模擬**;解析後的子樹
   原樣保留在結果中。與 C# 相同:origin 未給時先以 initial.position 推導再做航點/多邊形幾何檢查;id/name 可為數字(讀成字串)、
@@ -43,6 +46,7 @@ from . import paths
 from .external import normalise_sections, normalise_ship_interaction, normalise_waves
 from .external import structural_issues as external_structural_issues
 from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship, parse_utc
+from .depth import depth_zones_from_scenario
 from .tide import tide_from_scenario
 from .current import current_from_scenario
 from .parameters import ParameterSet, find_parameter_set, has_references, resolve_references, yaml_to_tree
@@ -878,6 +882,27 @@ def tide_issues(tide: Any, start_time_utc: Any, error: Any) -> None:
                 error(cp, "phase_deg 必須為有限數值")
 
 
+def normalise_depth_zones(zones: Any, origin: dict[str, Any]) -> list[dict[str, Any]]:
+    """``zones[]`` 中有 ``waterDepth_m``(> 0;任何 type)者 → ``[{"id", "waterDepth_m", "polygon": [[x, y], …]}]``(C# ``ZoneTracker.DepthZones``):
+    頂點 ``{x, y}`` 原值、``{lat, lon}`` 以情境 origin 的 ``LocalTangentPlane`` 換算為 ENU(C# ``Scenario.Resolve``);結構檢查已通過。"""
+    out: list[dict[str, Any]] = []
+    ltp: LocalTangentPlane | None = None
+    for z in zones or []:
+        if not isinstance(z, dict):
+            continue
+        wd = z.get("waterDepth_m")
+        if not _is_num(wd) or wd <= 0:
+            continue
+        if ltp is None:
+            ltp = LocalTangentPlane(float(origin["lat"]), float(origin["lon"]))
+        out.append({
+            "id": str(_lenient_str(z.get("id")) or ""),
+            "waterDepth_m": float(wd),
+            "polygon": [list(_resolve_xy(ltp, p)) for p in z.get("polygon") or []],
+        })
+    return out
+
+
 def normalise_tide(tide: Any, start_time_utc: Any) -> dict[str, Any] | None:
     """``environment.tide`` → 正規化形狀(結構檢查已通過):``{"table": [{"t", "height_m"}]}``(utc 換算為相對 startTimeUtc 的秒數)或
     ``{"harmonic": {"meanLevel_m", "constituents": [{"name", "amplitude_m", "period_s", "phase_deg"}]}}``;None → None。"""
@@ -1128,6 +1153,8 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         "timeline": copy.deepcopy(raw.get("timeline") or []),
         "route": copy.deepcopy(raw.get("route")),
         "zones": copy.deepcopy(raw.get("zones") or []),
+        # 區域水深覆寫(depth.py;Python 專用的正規化形狀,zones 本身原樣保留供跨語言比對):apply_scenario 交給 MMGShip.set_depth_zones
+        "depthZones": normalise_depth_zones(raw.get("zones"), origin),
         "assessment": copy.deepcopy(raw.get("assessment") or {}),
         "briefing": copy.deepcopy(raw.get("briefing")),
         # 感測器/警報/BNWAS 設定(補 C# 預設值;Python 不模擬,只保留供 state.scenario/講評與跨語言比對)
@@ -1217,6 +1244,10 @@ def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
                          env["waterDepth"], gustiness=env["wind"]["gustiness"], visibility_nm=env["visibility_nm"])
     # 時變流場(environment.current.table | tidal;current.py):以 t = 0 的模型值覆寫常數流;無模型時常數流(數值與舊版相同)
     ship.set_current_model(current_from_scenario(env.get("current"), ship.tide))
+    # 區域水深覆寫(zones[].waterDepth_m;depth.py):在 reset 之後設定,直航平衡轉速仍以基底 + 潮高(0)計算(C# ResolveInitialPropulsion);
+    # 在外力模組之前設定,岸壁/浪/交互作用的步末結果以所在區域的有效水深重算(C# Initialize 先設 ZoneDepth 再 RefreshBank/Waves/Interaction);
+    # 無 waterDepth_m 區域的情境為空清單(數值與舊版相同)
+    ship.set_depth_zones(depth_zones_from_scenario(sc.get("depthZones")))
     # 外力模組:以情境初始狀態與水深建立(拖船 initial、初始已錨泊、繫纜 initial fast、岸壁;C# Initialize)
     ship.configure_external(sc.get("external"))
 

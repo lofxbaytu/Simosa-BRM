@@ -287,7 +287,7 @@ environment:
 - 情境:`E18b_tide_table.yaml` 為 E18 的潮高表版(基底 = 海圖水深 CD 7.0 m,實際潮位表「比預報低且提早退潮」,時間表無 `setEnvironment`);E18 本身與既有夾具不變。靠離泊預演範本仍以「基底 = 泊位水深 + 潮高」常數表示,日後可改為 `tide.table`。
 - 潮高變化率:`TideModel.RateAt(t)`(dH/dt,m/s;表為分段常數、範圍外 0;調和潮為解析導數)、`MaxRate`(表取各段斜率絕對值最大;調和潮 Σ A·2π/T)、`ReferencePeriodS`(調和潮取最大振幅分潮週期;表取 M2 44714.16 s),供第 1.5.2 節潮流模型使用(2026-10-29 第十八輪)。
 
-### 1.5.2 `environment.current.table` | `tidal`:時變流場(2026-10-29)
+### 1.5.2 `environment.current.table` | `tidal` | `field`:時變與空間變化流場(2026-10-29)
 
 > 注意:`tide.table` 的變化率 dH/dt 為分段常數(`TideTable.RateAt`),`current.tidal` 的流速/流向因此在每個表點**瞬間**切換(無漸變;相當於 `ramp_s: 0`)。要平滑變化請用 `tide.harmonic`(導數連續)或在表中多放中間點縮小每段的跳變;E06b 以此示意,跳變量見 scenario-library.md 第 3 節。
 
@@ -326,6 +326,70 @@ environment:
 - Python 參考實作:`simosa_brm/current.py` 同公式(運算順序相同),`tide.py` 的 `rate_at/max_rate/reference_period_s`,`scenario.validate_scenario` 正規化為 `current: {set, drift, table | None, tidal | None}`,`MMGShip.current_model / current_overridden / set_current_model / _refresh_current`(步末與 reset/apply_scenario),`set_environment` 給 current 即覆寫,`state_json` 的 `currentSource`。跨語言夾具 `tests/SimCore.Tests/Golden/current_table.{yaml,csv}`、`current_tidal.{yaml,csv}`(`export_current_reference.py` 產生;C# `TidalStreamTests.GoldenCurrentMatchesPythonReference` 與 Python `test_current.py` 比對到 1e-9)。
 - 情境:`E06b_tidal_stream.yaml` 為 E06 的潮流版(示意潮高表 + `current.tidal`:漲 085° 2.5 kn → T+11–13 平潮 → 退 265° 3.0 kn,時間表無 `setEnvironment`);E06 兩檔與既有夾具不變。
 - 儀表:操船台深度方塊在 `state.tideHeight_m` 存在時顯示「潮高 +x.x m」、流方塊標示來源;教官站環境面板標題顯示目前流向/流速與來源並提示「套用流會改為常數並停止時變」;情境摘要帶「(流場表)/(潮流)」。
+
+#### 1.5.2.1 `environment.current.field`:空間變化流場(2026-10-29 第十九輪)
+
+選填,可與 `table`/`tidal` 並存(需求追溯表 R3 原「流場仍為空間均勻」的補強)。規則網格上的東/北分量以**雙線性**內插,流由**位置與 t** 共同決定;
+無 `field` 時行為與數值與舊版完全相同(既有情境、夾具、黃金測試不變)。
+
+```yaml
+environment:
+  current:
+    set: 85                      # 載入瞬間的常數值(t = 0 即被場在自船位置的值覆寫)
+    drift: 2.5
+    tidal:                       # 有 field 時 table/tidal 只作為 timeScale 的流速比例來源(方向不使用;timeScale none 時不使用)
+      flood: { speed_kn: 2.5, direction_deg: 85 }
+      ebb: { speed_kn: 3.0, direction_deg: 265 }
+    field:
+      grid: { x0: -200, y0: -100, dx: 100, dy: 100, nx: 5, ny: 4 }   # 本地 ENU 公尺(原點與情境座標語意相同);dx/dy > 0、nx/ny ≥ 2
+      u_kn:                      # 東向分量 (kn):ny 列 × nx 行,u_kn[j][i] 對應節點 (x0 + i·dx, y0 + j·dy)
+        - [ 0.0, 0.5, 1.0, 1.5, 2.0 ]   # j = 0:y = y0 = −100
+        - [ 0.2, 0.7, 1.2, 1.7, 2.2 ]   # j = 1:y = 0
+        - [ 0.4, 0.9, 1.4, 1.9, 2.4 ]   # j = 2:y = 100
+        - [ 0.6, 1.1, 1.6, 2.1, 2.6 ]   # j = 3:y = 200
+      v_kn: [...]                # 北向分量 (kn):排列同 u_kn
+      outside: edge              # 格外:edge(預設)取最近邊緣值(座標夾到網格範圍)| zero 取 0
+      timeScale: tidal           # none(預設)| tidal(需 current.tidal 與 environment.tide)| table(需 current.table)
+```
+
+陣列排列(列為 y 索引 j、行為 x 索引 i;YAML 由上而下 = y 由小到大):
+
+```
+            i = 0        i = 1        i = 2   …   i = nx−1
+ j = ny−1   (x0, y0+(ny−1)dy) … … … … … … … (x0+(nx−1)dx, y0+(ny−1)dy)
+   …
+ j = 1      (x0, y0+dy)   (x0+dx, y0+dy)   …
+ j = 0      (x0, y0)      (x0+dx, y0)      (x0+2dx, y0)   …          ← u_kn[0] / v_kn[0]
+```
+
+- **雙線性內插**(C# `CurrentField.Interpolate`、Python `CurrentField.interpolate`,運算順序相同):`fx = (x − x0)/dx`、`fy = (y − y0)/dy`;
+  `outside: zero` 且任一超出 [0, n−1] → (0, 0);否則夾到範圍後 `i = min(⌊fx⌋, nx−2)`、`j = min(⌊fy⌋, ny−2)`、`tx = fx − i`、`ty = fy − j`,
+  `a = u[j][i] + (u[j][i+1] − u[j][i])·tx`、`b = u[j+1][i] + (u[j+1][i+1] − u[j+1][i])·tx`、`u = a + (b − a)·ty`(v 同);
+  輸出 set = atan2(E, N)、drift = √(E²+N²)(與 table 相同)。
+- **timeScale 語意**:`none` 不縮放;`tidal`/`table` 時整個場逐步乘以該均勻時變模型的**流速比例** `k(t) = 該模型當下流速 / 其最大流速`
+  (`table` 取各表點流速的最大值,向量內插不會超過;`tidal` 取 max(flood, ebb);最大流速為 0 時 k = 0;k 夾到 [0, 1]),
+  **方向永遠取場的向量**:潮流退潮相位只提供比例,場不會反向(平潮時 k = 0、整個場為零向量);要表現漲退反向的場需以場本身的方向表達。
+  `state.currentSource` 為 `"field"` | `"field+tidal"` | `"field+table"`。
+- **取樣**:引擎每步 `Tick++` 後以 `RefreshCurrent(Time, Motion.X, Motion.Y)` 把**自船位置**的值寫入 `CurrentSetRad/CurrentDriftMps`
+  (`state.current` 為自船位置的值、`setEnvironment` 漸變自此值起算、快照存此值);`EnvironmentConditions.SampleAt(x, y)` 在場啟用時以
+  `CurrentVectorAt(CurrentTimeS, x, y)` 依位置取樣(自船位置與既有欄位一致);**目標船**每艘以自身位置、步首時刻取流
+  (`TrafficManager.Step(..., currentAt)`;Python 船間交互作用的 `KinematicTarget` 經 `advance_targets(..., current_at)`),拖船/錨/繫纜等外力
+  仍用自船位置的步首取樣(拖船附著於自船)。均勻流時這些路徑不經過場,位元與舊版相同。
+- **覆寫語意**與 1.5.2 相同:`setEnvironment current` 後 `CurrentOverridden = true`,場停用、各位置皆為常數,直到再載入情境或倒帶到覆寫前。
+- **確定性**:場由情境重建、不進快照與雜湊;還原後以 Tick 與位置重算(`CurrentFieldTests.SnapshotRestoreRecomputesFieldFromTickAndPosition`、
+  `OverrideAndRewindAreRecordReplayConsistent`)。
+- **結構檢查**(`Scenario.StructuralIssues` 與 Python `current_field_issues`,路徑 `environment.current.field…`,訊息相同):`grid` 必填、`x0/y0` 有限、
+  `dx/dy > 0`、`nx/ny` 為 ≥ 2 的整數;`u_kn/v_kn` 必填、`ny` 列、每列 `nx` 個有限數值;`outside ∈ edge|zero`;`timeScale ∈ none|tidal|table` 且
+  `tidal` 需 `current.tidal`、`table` 需 `current.table`(table 與 tidal 仍擇一)。
+- 核心:`Environment/CurrentModel.cs`(`CurrentField`、`CurrentModel.At(t, x, y)`、`SpatiallyVarying`、`CurrentTable.MaxSpeedMps`),
+  `EnvironmentConditions.CurrentFieldActive / CurrentTimeS / RefreshCurrent(t, x, y) / CurrentVectorAt(t, x, y)`,`Scenario.ScenarioCurrentField/Grid`;
+  Python `current.CurrentField`、`scenario.normalise_current` 的 `field`、`MMGShip.current_field_active / current_en_at`。
+  測試 `CurrentFieldTests`(內插角點/中點/格內/格外、timeScale、無 field 不變、目標船取流、快照/重播、覆寫、結構檢查、跨語言夾具)、
+  Python `test_current.py` 的 field 段;跨語言夾具 `Golden/current_field.{yaml,csv}`(`export_current_reference.py`;`point` 列直接取樣比對 1e-9,
+  `run` 列以 Python 記錄的位置取樣比對 1e-9、自船位置 1 mm 內)。
+- 契約:`scenario.schema.json` `environment.current.field`;`state.schema.json` `currentSource` 增 `field | field+tidal | field+table`,`state.current` 為自船位置的值;
+  儀表 `CURRENT_SOURCE_LABELS` 增「流場網格」等標籤、情境摘要「(流場網格)」,情境編輯器原樣保留 `field`(未知鍵不丟棄)。
+- 限制:網格由情境手寫;ENC/實測流場資料的匯入與港區流場建置需實機資料;場在練習中固定(只隨 timeScale 縮放)。
 
 ### 1.5.3 `environment.waves`:浪與平均波浪漂移力(2026-10-29)
 
@@ -378,7 +442,7 @@ targets:
 
 ### 1.6 schema 變更清單
 
-- `scenario.schema.json`:`properties` 新增 `timeline`(array of `$defs.timelineItem`)、`route`(`$defs.route`)、`zones`(array of `$defs.zone`)、`briefing`(`oneOf [string, $defs.briefing]`);`environment.visibility_nm`;`environment.tide`(第 1.5.1 節;`oneOf` table | harmonic);`environment.current.table` / `tidal` 與 `$defs.tidalCurrentPhase`(第 1.5.2 節);`environment.waves`(第 1.5.3 節);`environment.shipInteraction` 與 `$defs.target.displacement_t`(第 1.5.4 節);`assessment` 擴充(第 1.3 節);`$defs` 新增 `triggerCondition`、`timelineAction`、`timelineItem`、`route`、`routeWaypoint`、`zone`、`paramRef`(`{"type":"string","pattern":"^\\$\\{params:[A-Za-z0-9_.\\-]+\\}$"}`)與 `numberOrParam`(`oneOf [number, paramRef]`)。凡可引用參數的數值欄位型別改為 `numberOrParam`(`minCpa_nm`、門檻、速限、`xtdLimit_m` 等)。
+- `scenario.schema.json`:`properties` 新增 `timeline`(array of `$defs.timelineItem`)、`route`(`$defs.route`)、`zones`(array of `$defs.zone`)、`briefing`(`oneOf [string, $defs.briefing]`);`environment.visibility_nm`;`environment.tide`(第 1.5.1 節;`oneOf` table | harmonic);`environment.current.table` / `tidal` 與 `$defs.tidalCurrentPhase`(第 1.5.2 節);`environment.current.field`(grid / u_kn / v_kn / outside / timeScale;第 1.5.2.1 節);`environment.waves`(第 1.5.3 節);`environment.shipInteraction` 與 `$defs.target.displacement_t`(第 1.5.4 節);`assessment` 擴充(第 1.3 節);`$defs` 新增 `triggerCondition`、`timelineAction`、`timelineItem`、`route`、`routeWaypoint`、`zone`、`paramRef`(`{"type":"string","pattern":"^\\$\\{params:[A-Za-z0-9_.\\-]+\\}$"}`)與 `numberOrParam`(`oneOf [number, paramRef]`)。凡可引用參數的數值欄位型別改為 `numberOrParam`(`minCpa_nm`、門檻、速限、`xtdLimit_m` 等)。
 - schema `examples[0]` 增補一段 `timeline`、`route`、`assessment.hardFail`,供 `ScenarioTests` 的 schema 範例測試(現有測試只檢查 title 與 example 可解析,新範例必須能被 C# 載入)。
 
 ## 2. 公司程序參數集

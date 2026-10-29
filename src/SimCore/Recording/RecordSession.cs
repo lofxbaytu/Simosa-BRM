@@ -92,15 +92,66 @@ public sealed record RecordSessionInfo
     private static string? NullIfEmpty(string s) => s.Length == 0 ? null : s;
 }
 
+/// <summary>
+/// 參與者。核心一律寫 <c>{name, role, rank?, certificateNo?}</c> 物件(<see cref="RecordSessionInfo.TryParse"/> 保證 role 在列舉內);
+/// 讀取時另接受舊/外部紀錄的字串元素(<c>"王大副"</c> → <c>{name, role: null}</c>;<see cref="RecordParticipantConverter"/>),
+/// 使 <c>RecordReader</c>/<c>Replayer</c> 讀含字串陣列 participants 的紀錄不再丟例外(與 Tools.Packaging RecordInspector 的讀法一致)。
+/// </summary>
+[JsonConverter(typeof(RecordParticipantConverter))]
 public sealed record RecordParticipant
 {
     [JsonPropertyName("name")] public required string Name { get; init; }
-    /// <summary>master | oow | pilot | helmsman | lookout | observer | instructor</summary>
-    [JsonPropertyName("role")] public required string Role { get; init; }
+    /// <summary>master | oow | pilot | helmsman | lookout | observer | instructor;舊/外部紀錄以字串給參與者時為 null</summary>
+    [JsonPropertyName("role")] public string? Role { get; init; }
     /// <summary>職級(船長、大副…;選填)</summary>
     [JsonPropertyName("rank")] public string? Rank { get; init; }
     /// <summary>證書號(選填;報告頁以此對應證書效期追蹤)</summary>
     [JsonPropertyName("certificateNo")] public string? CertificateNo { get; init; }
+}
+
+/// <summary>
+/// <see cref="RecordParticipant"/> 的 JSON 轉換:讀取接受字串(→ name,其餘 null)或物件(name/role/rank/certificateNo,鍵不分大小寫、
+/// 未知欄位略過、缺 name 時為空字串);寫出與原自動序列化相同(<c>{"name","role","rank","certificateNo"}</c> 依序、null 欄位省略),
+/// 既有紀錄的位元組不變。
+/// </summary>
+public sealed class RecordParticipantConverter : JsonConverter<RecordParticipant>
+{
+    public override RecordParticipant? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.String:
+                return new RecordParticipant { Name = reader.GetString() ?? "" };
+            case JsonTokenType.StartObject:
+                string? name = null, role = null, rank = null, cert = null;
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject) break;
+                    if (reader.TokenType != JsonTokenType.PropertyName) throw new JsonException("participants[] 物件格式錯誤");
+                    var key = reader.GetString() ?? "";
+                    if (!reader.Read()) throw new JsonException("participants[] 物件未結束");
+                    if (reader.TokenType is not (JsonTokenType.String or JsonTokenType.Null)) { reader.Skip(); continue; }
+                    var value = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+                    if (key.Equals("name", StringComparison.OrdinalIgnoreCase)) name = value;
+                    else if (key.Equals("role", StringComparison.OrdinalIgnoreCase)) role = value;
+                    else if (key.Equals("rank", StringComparison.OrdinalIgnoreCase)) rank = value;
+                    else if (key.Equals("certificateNo", StringComparison.OrdinalIgnoreCase)) cert = value;
+                }
+                return new RecordParticipant { Name = name ?? "", Role = role, Rank = rank, CertificateNo = cert };
+            default:
+                throw new JsonException($"participants[] 須為字串或物件,得到 {reader.TokenType}");
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, RecordParticipant value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("name", value.Name);
+        if (value.Role is not null) writer.WriteString("role", value.Role);
+        if (value.Rank is not null) writer.WriteString("rank", value.Rank);
+        if (value.CertificateNo is not null) writer.WriteString("certificateNo", value.CertificateNo);
+        writer.WriteEndObject();
+    }
 }
 
 public sealed record RecordRestHoursConfirmation

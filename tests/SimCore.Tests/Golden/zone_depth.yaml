@@ -1,0 +1,52 @@
+# 跨語言區域水深覆寫夾具情境(export_zone_depth_reference.py 產生 zone_depth.csv,C# ZoneDepthTests 讀取比對):
+#   基底水深 25 m + 調和潮(tick 0 潮高 = 0.5 + 0.4·cos 60° = 0.7 m);zones 覆寫:A 12 m 與 B 8 m 重疊(取最淺)、C 凹多邊形 15 m、
+#   D 40 m 比基底深(不覆寫)、E 以經緯度頂點 10 m、F noGo 無 waterDepth_m(不參與)、G reporting 6 m(任何 type 皆參與)。
+#   自船 FSB1 滿載、初始位置在所有區域之外(直航平衡轉速以基底 + 潮高(0)計算)。
+id: zone_depth
+name: 區域水深覆寫跨語言夾具
+seed: 20261029
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial:
+  position: { x: -1500, y: 0 }
+  heading: 90
+  speed: 8
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 25
+  tide:
+    harmonic:
+      meanLevel_m: 0.5
+      constituents:
+        - { name: M2, amplitude_m: 0.4, period_s: 44714.16, phase_deg: 60 }
+zones:
+  - id: A
+    type: ukcPolicy
+    waterDepth_m: 12
+    polygon: [ { x: -300, y: -300 }, { x: 300, y: -300 }, { x: 300, y: 300 }, { x: -300, y: 300 } ]
+  - id: B
+    type: ukcPolicy
+    waterDepth_m: 8
+    polygon: [ { x: 0, y: 0 }, { x: 600, y: 0 }, { x: 600, y: 600 }, { x: 0, y: 600 } ]
+  - id: C
+    type: ukcPolicy
+    waterDepth_m: 15
+    polygon: [ { x: -900, y: -900 }, { x: -500, y: -900 }, { x: -500, y: -700 }, { x: -700, y: -700 }, { x: -700, y: -500 }, { x: -900, y: -500 } ]
+  - id: D
+    type: ukcPolicy
+    waterDepth_m: 40
+    polygon: [ { x: 1000, y: -200 }, { x: 1400, y: -200 }, { x: 1400, y: 200 }, { x: 1000, y: 200 } ]
+  - id: E
+    type: ukcPolicy
+    waterDepth_m: 10
+    polygon: [ { lat: 23.805, lon: 120.158 }, { lat: 23.805, lon: 120.162 }, { lat: 23.809, lon: 120.160 } ]
+  - id: F
+    type: noGo
+    polygon: [ { x: -2000, y: -2000 }, { x: -1600, y: -2000 }, { x: -1600, y: -1600 }, { x: -2000, y: -1600 } ]
+  - id: G
+    type: reporting
+    waterDepth_m: 6
+    polygon: [ { x: 700, y: 700 }, { x: 900, y: 700 }, { x: 900, y: 900 }, { x: 700, y: 900 } ]

@@ -203,8 +203,8 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
 - Visual.Shared `OptionsEnvironmentAndClientTests.StateWavesOverrideWindDerivedWaveHeightAndDirection`。
 - Python `src/Tools.Calibration/tests/test_waves.py`(40 項):同上各項的 Python 版、`normalise_sections`/`validate_scenario` 帶出 `waves`、快照/還原/`reset`/`configure_external(None)`、夾具可重現;
   練習中變更(11 項):指令加浪與情境浪逐位元相同、部分更新/關閉/不合法、快照/還原/`reset`、伺服器 ack 與拒絕、時間表結構檢查(與 C# 同路徑/訊息)。
-- C# `tests/SimCore.Tests/WaveEnvironmentCommandTests.cs`(21 項;第 6.1 節):指令加浪逐位元相同、部分更新與關閉、不合法 7 例(其他欄位照常)、Hs 漸變與漸變到 0 關閉、
-  快照(變更後才寫、漸變中途還原、倒帶恢復情境浪、關閉快照、`reset`)、紀錄/重播、時間表動作、結構檢查 7 例、不接受外力的動力學。
+- C# `tests/SimCore.Tests/WaveEnvironmentCommandTests.cs`(22 項;第 6.1 節):指令加浪逐位元相同、部分更新與關閉、不合法 7 例(其他欄位照常)、Hs 漸變與漸變到 0 關閉、
+  快照(變更後才寫、漸變中途還原、倒帶恢復情境浪、關閉快照、`reset`)、紀錄/重播、時間表動作、結構檢查 7 例、`command.schema.json` 範例、不接受外力的動力學。
 - Sensors.Radar `WaveSeaStateTests`(17 項):Douglas 分界表、`RadarScene.WaveHeightM`、浪驅動海雜波與練習中變更/關閉、明示海況優先。
 - vitest `src/Instruments.Web/tests/waves-sea.test.ts`(7 項):`state.waves` / `shipInteraction` 解析、指令形狀、SEA 方塊與 conning 條、教官站環境面板、事件列。
 

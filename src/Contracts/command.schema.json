@@ -170,17 +170,6 @@
     {
       "type": "setEnvironment",
       "args": {
-        "wind": {
-          "trueSpeed": 20,
-          "trueDir": 10
-        },
-        "visibility_nm": 2,
-        "ramp_s": 180
-      }
-    },
-    {
-      "type": "setEnvironment",
-      "args": {
         "waves": {
           "significantHeight_m": 2.5,
           "peakPeriod_s": 8,
@@ -194,6 +183,17 @@
       "type": "setEnvironment",
       "args": {
         "waves": null
+      }
+    },
+    {
+      "type": "setEnvironment",
+      "args": {
+        "wind": {
+          "trueSpeed": 20,
+          "trueDir": 10
+        },
+        "visibility_nm": 2,
+        "ramp_s": 180
       }
     },
     {

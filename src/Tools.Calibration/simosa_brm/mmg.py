@@ -33,6 +33,7 @@ from typing import Any
 from collections import deque
 
 from .coefficients import r0_prime
+from .depth import DepthZone, zone_depth
 from .tide import TideModel
 from .current import CurrentModel
 from .external import BankEffectModel, Env, ExternalForceModel, Kin, ShipInteractionModel, WaveDriftModel, normalize_heading_deg
@@ -262,6 +263,9 @@ class MMGShip:
         self.start_utc: datetime | None = None
         # 潮高模型(情境 environment.tide;tide.py):有效水深 = env.water_depth(基底)+ 潮高(tick·dt);None = 無潮汐(數值與舊版相同)
         self.tide: TideModel | None = None
+        # 區域水深覆寫(情境 zones[].waterDepth_m;depth.py;C# ZoneDepth):自船在多邊形內時基底改取區域值(多區取最淺);
+        # 由情境決定、不進快照;空清單 = 無覆寫(數值與舊版相同)
+        self.depth_zones: list[DepthZone] = []
         # 時變/空間變化流場(情境 environment.current.table | tidal | field;current.py):每步以 tick·dt 與自船位置的模型值覆寫
         # env.current_set/current_speed;None = 常數流(數值與舊版相同);set_environment 給 current 後 current_overridden = True(停止,直到 apply_scenario)
         self.current_model: CurrentModel | None = None
@@ -408,8 +412,8 @@ class MMGShip:
         self.vol = self.mass / rho
         self._update_shallow()
 
-    def _shallow_factor(self, group: str) -> float:
-        h = self._effective_depth()
+    def _shallow_factor(self, group: str, zones: bool = True) -> float:
+        h = self._effective_depth(zones)
         if h is None:
             return 1.0
         ratio = h / self.d
@@ -419,14 +423,15 @@ class MMGShip:
         g = self.sw[group]
         return 1.0 + float(g["a"]) * x ** float(g["n"])
 
-    def _update_shallow(self) -> None:
-        self.f_lin_sway = self._shallow_factor("linearSway")
-        self.f_lin_yaw = self._shallow_factor("linearYaw")
-        self.f_nonlin = self._shallow_factor("nonlinear")
-        self.f_res = self._shallow_factor("resistance")
-        self.mx = self.mx0 * self._shallow_factor("addedMassSurge")
-        self.my = self.my0 * self._shallow_factor("addedMassSway")
-        self.Jzz = self.Jzz0 * self._shallow_factor("addedInertia")
+    def _update_shallow(self, zones: bool = True) -> None:
+        """以目前(tick、位置)的有效水深重算淺水修正;``zones=False`` 不含區域覆寫(reset 的直航平衡轉速,C# ResolveInitialPropulsion)。"""
+        self.f_lin_sway = self._shallow_factor("linearSway", zones)
+        self.f_lin_yaw = self._shallow_factor("linearYaw", zones)
+        self.f_nonlin = self._shallow_factor("nonlinear", zones)
+        self.f_res = self._shallow_factor("resistance", zones)
+        self.mx = self.mx0 * self._shallow_factor("addedMassSurge", zones)
+        self.my = self.my0 * self._shallow_factor("addedMassSway", zones)
+        self.Jzz = self.Jzz0 * self._shallow_factor("addedInertia", zones)
 
     # ------------------------------------------------------------------
     # 潮汐(tide.py;C# EnvironmentConditions.TideHeightM / DepthAt)
@@ -437,12 +442,29 @@ class MMGShip:
             return 0.0
         return self.tide.height_at(self.state.tick * self.dt)
 
-    def _effective_depth(self) -> float | None:
-        """有效水深 = 基底水深 + 潮高;基底 None(深水)時 None。無潮汐時 + 0.0 與基底位元相同。"""
+    def _effective_depth(self, zones: bool = True) -> float | None:
+        """有效水深 = 區域基底水深(自船位置在 waterDepth_m 區域內取最淺區域值,否則 env.water_depth;C# ZoneDepth.DepthAt)+ 潮高;
+        基底 None(深水)時 None。無潮汐時 + 0.0、無區域時基底不經 zone_depth,與舊版位元相同。``zones=False`` 忽略區域覆寫。"""
         h = self.env.water_depth
         if h is None:
             return None
+        if zones and self.depth_zones:
+            h = zone_depth(h, self.depth_zones, self.state.x, self.state.y)
         return h + self.tide_height()
+
+    def depth_at(self, x_east: float, y_north: float) -> float | None:
+        """任意位置的有效水深(目前 tick 的潮高;C# EnvironmentConditions.DepthAt):區域覆寫 + 潮高;基底 None 時 None。"""
+        h = self.env.water_depth
+        if h is None:
+            return None
+        if self.depth_zones:
+            h = zone_depth(h, self.depth_zones, x_east, y_north)
+        return h + self.tide_height()
+
+    def set_depth_zones(self, zones: list[DepthZone] | None) -> None:
+        """設定區域水深覆寫(apply_scenario;None/[] 清除)並以目前位置與 tick 的有效水深重算淺水修正。"""
+        self.depth_zones = list(zones or [])
+        self._update_shallow()
 
     def set_tide(self, tide: TideModel | None) -> None:
         """設定潮高模型(apply_scenario;None 清除)並以目前 tick 的有效水深重算淺水修正。"""
@@ -577,8 +599,10 @@ class MMGShip:
         self.faults = []
         self.rng = random.Random(self.seed)
         self.gust_factor = 1.0
-        if self.tide is not None:
-            self._update_shallow()  # 直航平衡轉速以 tick 0 的有效水深(基底 + 潮高(0))計算(C# ResolveInitialPropulsion)
+        if self.tide is not None or self.depth_zones:
+            # 直航平衡轉速以 tick 0 的基底 + 潮高(0)計算,不含區域覆寫(C# ResolveInitialPropulsion 用 environment.waterDepth + 潮高(0));
+            # 區域覆寫自第一步步首(step 的 _update_shallow)起生效,與 C# 第一步取樣 ZoneDepth 相同
+            self._update_shallow(zones=False)
         self.current_overridden = False  # 回到情境初始:時變流場恢復(C# Initialize)
         self._refresh_current()
         if rpm is None:
@@ -601,8 +625,8 @@ class MMGShip:
     # ------------------------------------------------------------------
     # 外力(拖船 / 錨 / 泊位 / 岸壁;external.py)
     # ------------------------------------------------------------------
-    def _water_depth_or_inf(self) -> float:
-        h = self._effective_depth()
+    def _water_depth_or_inf(self, zones: bool = True) -> float:
+        h = self._effective_depth(zones)
         return h if h is not None else math.inf
 
     def _kin(self) -> Kin:
@@ -617,9 +641,12 @@ class MMGShip:
         """依 ``external_sections`` 與目前狀態/水深建立外力模組(C# CreateExternal、CreateBank 與 RefreshBank)。"""
         sec = self.external_sections or {}
         load = self.sp.loading.name
+        # 外力模組的初始水深(初始已錨泊的鏈長、初始 fast 繫纜)不含區域覆寫(C# CreateExternal 用 environment.waterDepth);
+        # 岸壁/浪/交互作用的步末結果則用所在位置的有效水深(C# RefreshBank/RefreshWaves/RefreshInteraction 的 DepthAt);無區域時兩者相同
+        depth_init = self._water_depth_or_inf(zones=False)
         depth = self._water_depth_or_inf()
         k = self._kin()
-        self.external = ExternalForceModel(self.sp.raw, load, sec, self.ltp, self.dt, k, depth)
+        self.external = ExternalForceModel(self.sp.raw, load, sec, self.ltp, self.dt, k, depth_init)
         bk = sec.get("banks")
         has_banks = isinstance(bk, dict) and (bool(bk.get("lines")) or bool(bk.get("definitions")))
         self.bank = BankEffectModel(self.sp.raw, load, bk, self.ltp) if has_banks else None
@@ -1244,8 +1271,8 @@ class MMGShip:
             return
         s = self.state
         t0 = s.tick * self.dt  # 步首練習時間(C# Advance 的 t;空間變化流場的目標船取流用)
-        # 潮汐:淺水修正以步首(tick·dt)的有效水深重算(C# 每步由 EnvironmentSample 取樣,無潮汐時係數不變)
-        if self.tide is not None:
+        # 潮汐/區域水深:淺水修正以步首(tick·dt、步首位置)的有效水深重算(C# 每步由 EnvironmentSample 取樣;無潮汐也無區域時係數不變)
+        if self.tide is not None or self.depth_zones:
             self._update_shallow()
         # 陣風:每秒以種子亂數更新一次(即使 gustiness = 0 也抽號,使亂數序列與快照的計數一致;C# Advance 同)
         if s.tick % self._steps_per_second == 0:

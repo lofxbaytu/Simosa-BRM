@@ -119,7 +119,7 @@ manifest.json  manifest.sig  records/<相對 build/records 的路徑>
   "device": { "keyId": "…", "publicKey": "-----BEGIN PUBLIC KEY-----…" }
 }
 ```
-練習起訖與時長一律用**牆鐘**(供轉錄至船上工時/休息時間紀錄;SimCore 可倍速 0.1–10 或凍結,模擬時間與實際經過時間不同):開始 = `header.createdUtc`;結束 = `footer.closedUtc`(SimCore 寫入時;**目前尚未寫入,建議 SimCore 後續在 footer 加上**)→ 否則紀錄檔最後修改時間(SimCore 寫完 footer 即關檔)→ 否則開始 + 模擬時長;後兩者標 `endEstimated: true`。`durationS` = 結束 − 開始;模擬時長(`footer.finalTick × header.dt`,無 footer 時取最後一行 state 的 t)另列為 `simDurationS`。參與者:紀錄標頭 `participants`(SimCore 一律寫 `{name, role, rank?, certificateNo?}` 物件陣列,`RecordReader` 只接受此格式;字串陣列只供舊/外部紀錄由 `RecordInspector` 讀取),有 `restHoursConfirmation` 時原樣帶出;紀錄開啟後才送達的 `sessionInfo` 寫成最後一行 `session`(見下文)。完整性同 `RecordReader`(footer.sha256 對 footer 前所有行)。
+練習起訖與時長一律用**牆鐘**(供轉錄至船上工時/休息時間紀錄;SimCore 可倍速 0.1–10 或凍結,模擬時間與實際經過時間不同):開始 = `header.createdUtc`;結束 = `footer.closedUtc`(SimCore 寫入時;**目前尚未寫入,建議 SimCore 後續在 footer 加上**)→ 否則紀錄檔最後修改時間(SimCore 寫完 footer 即關檔)→ 否則開始 + 模擬時長;後兩者標 `endEstimated: true`。`durationS` = 結束 − 開始;模擬時長(`footer.finalTick × header.dt`,無 footer 時取最後一行 state 的 t)另列為 `simDurationS`。參與者:紀錄標頭 `participants`(SimCore 一律寫 `{name, role, rank?, certificateNo?}` 物件陣列;舊/外部紀錄的字串陣列 `RecordInspector` 與 `RecordReader`/`Replayer` 都可讀,字串元素讀成 `{name, role: null}`,`RecordParticipant` 的 JsonConverter,2026-10-29),有 `restHoursConfirmation` 時原樣帶出;紀錄開啟後才送達的 `sessionInfo` 寫成最後一行 `session`(見下文)。完整性同 `RecordReader`(footer.sha256 對 footer 前所有行)。
 
 ### 3.4 已備份回報 `.sbbak`(SignedDocument,教官金鑰簽章)
 
@@ -275,7 +275,7 @@ DPA 以備援金鑰:`simosa-pkg pack --kind trust --version <新版> --summary "
 - **UpdateApplyResult**(`updateResult.result`):`{ ok, packageId, version, kind, summary, signer, signerRole, components[], errors[], warnings[], rolledBack, message }`。
 - **CleanupResult**(`cleanupResult.result`):`{ ok, reportId, signer, deleted[], deletedFiles[], retained[], mismatched[], unknown[], failed[], warnings[], errors[] }`(`failed`:無法刪除的檔案「紀錄包 路徑:原因」,該紀錄包保留待下次重試)。
 - **fleet-versions.json**(教官端兩船版次清單):`{ "ships": { "FSB1": { shipId, deviceId, version, packageId, components, parameterSet, updatedUtc, via } } }`。
-- 練習紀錄標頭(SimCore 已實作;教官站 `sessionInfo` 指令):`participants: [{ "name": "王大副", "role": "oow", "rank"?, "certificateNo"? }]`、`restHoursConfirmation: { "confirmedBy": "船長", "confirmedAtUtc": "…", "compliant": true, "note"? }`、`course?`;紀錄已開啟後才送達者寫成最後一行 `{"kind":"session", …}`,`RecordInspector` header 有就用 header、否則取最後一行 session(`sessionInfoSource`),紀錄包據此彙總訓練時數(`participants[].rank/certificateNo` 一併帶出)。footer 已含 `closedUtc`(關檔時的牆鐘 UTC),紀錄包以它為練習結束時間(舊紀錄無此欄時仍以檔案最後修改時間估計)。
+- 練習紀錄標頭(SimCore 已實作;教官站 `sessionInfo` 指令):`participants: [{ "name": "王大副", "role": "oow", "rank"?, "certificateNo"? }]`、`restHoursConfirmation: { "confirmedBy": "船長", "confirmedAtUtc": "…", "compliant": true, "note"? }`、`course?`;紀錄已開啟後才送達者寫成最後一行 `{"kind":"session", …}`,`RecordInspector` header 有就用 header、否則取最後一行 session(`sessionInfoSource`),紀錄包據此彙總訓練時數(`participants[].rank/certificateNo` 一併帶出);舊/外部紀錄的字串陣列 participants 兩邊(`RecordInspector`、核心 `RecordReader`)皆讀成 `{name, role: null}`。footer 已含 `closedUtc`(關檔時的牆鐘 UTC),紀錄包以它為練習結束時間(舊紀錄無此欄時仍以檔案最後修改時間估計)。
 
 ## 8. 金鑰保管程序要點(納入公司網路風險管理程序,TMSA 第 13 要素)
 

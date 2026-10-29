@@ -114,6 +114,12 @@ public sealed class ShipInteractionModel : IExternalForceField
 
     private readonly HullProfile _own;
     private InteractionTarget[] _targets = Array.Empty<InteractionTarget>();
+    /// <summary>
+    /// 目標船剖面積曲線快取,鍵 (L, B, T, Cb)(目標船尺寸在練習中不變;只省去每次 Compute 重建 <see cref="HullProfile"/> 的配置,
+    /// 同鍵回傳同一實例、數值與每次重建逐位元相同;不進快照與雜湊)。上限 <see cref="MaxCachedTargetProfiles"/>,超過即清空重建。
+    /// </summary>
+    private readonly Dictionary<(double L, double B, double T, double Cb), HullProfile> _targetProfiles = new();
+    public const int MaxCachedTargetProfiles = 64;
 
     public ShipInteractionCoefficients Coefficients { get; }
     public bool Supported { get; }
@@ -267,7 +273,7 @@ public sealed class ShipInteractionModel : IExternalForceField
             var beta = t.PsiRad - s.Psi;
             var cb = Math.Cos(beta);
             var sb = Math.Sin(beta);
-            var tgt = HullProfile.Build(t.LengthM, t.BeamM, t.DraftM, t.Cb, c);
+            var tgt = TargetProfile(t);
             var delta = c.CoreFactor * (B + t.BeamM);
             var delta2 = delta * delta;
             var uo = s.U;
@@ -317,6 +323,20 @@ public sealed class ShipInteractionModel : IExternalForceField
         }
         return new ShipInteractionResult(tx, ty, tn, count > 0, best, bestXi, bestEta, count);
     }
+
+    /// <summary>目標船的剖面積曲線(快取;同尺寸回傳同一實例,見 <see cref="_targetProfiles"/>)。</summary>
+    public HullProfile TargetProfile(in InteractionTarget t)
+    {
+        var key = (t.LengthM, t.BeamM, t.DraftM, t.Cb);
+        if (_targetProfiles.TryGetValue(key, out var cached)) return cached;
+        if (_targetProfiles.Count >= MaxCachedTargetProfiles) _targetProfiles.Clear();
+        var built = HullProfile.Build(t.LengthM, t.BeamM, t.DraftM, t.Cb, Coefficients);
+        _targetProfiles[key] = built;
+        return built;
+    }
+
+    /// <summary>目前快取的目標船剖面數(診斷/測試用)。</summary>
+    public int CachedTargetProfiles => _targetProfiles.Count;
 
     /// <summary>範圍漸減:q ≤ start 為 1,start–1 之間以 smoothstep 降到 0。</summary>
     public static double Taper(double q, double start)

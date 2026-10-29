@@ -117,6 +117,16 @@ public sealed class SimulationEngine
     private long _radarEnvironmentSentTick;
     /// <summary>外力模組 + 岸壁的和(兩者皆 Active 時用;_external/_bank 重建時一併重建)</summary>
     private SumForceField? _sumField;
+    /// <summary>
+    /// Advance 用的合成外力場快取(外力/岸壁/浪/船間交互作用的啟用組合;比照 <see cref="_sumField"/>:只省去每步 new SumForceField 的配置,
+    /// 組合方式與評估順序和逐步重建完全相同,數值逐位元不變;不進快照與雜湊)。鍵為該步的啟用組合(外力 Active 旗標與三個模組的參考);
+    /// 情境載入/重設/還原時模組重建(<see cref="_combinedField"/> 歸 null),setEnvironment waves 重建浪模型時參考不同而自動重組。
+    /// </summary>
+    private IExternalForceField? _combinedField;
+    private bool _combinedExternal;
+    private BankEffectModel? _combinedBank;
+    private WaveDriftModel? _combinedWaves;
+    private ShipInteractionModel? _combinedInteraction;
 
     public EngineOptions Options { get; }
     public ShipParticulars Ship { get; private set; }
@@ -428,6 +438,7 @@ public sealed class SimulationEngine
         _external = CreateExternal();
         _bank = CreateBank();
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
+        _combinedField = null;
         _waveSettings = sc.Environment.Waves;
         _wavesOverridden = false;
         _waves = CreateWaves();
@@ -586,6 +597,29 @@ public sealed class SimulationEngine
         => ShipInteractionModel.Create(Ship, Loading, Scenario, Dynamics.SupportsExternalForces);
 
     /// <summary>船間交互作用的步末結果(雜湊與 state.shipInteraction):以目前狀態、有效水深與目前的目標船重算(力為純函數;事件旗標不變)。</summary>
+    /// <summary>
+    /// 本步的合成外力場(Advance 用):只有外力模組 → _external;只有岸壁 → _bank;兩者 → _sumField;有浪 → (前者) + 浪,只有浪 → 浪;
+    /// 有船間交互作用 → (前者) + 交互作用。啟用組合與上一步相同時回傳同一實例(見 <see cref="_combinedField"/>),否則重組。
+    /// </summary>
+    private IExternalForceField CombinedField(bool external, BankEffectModel? bank, WaveDriftModel? waves, ShipInteractionModel? interaction)
+    {
+        if (_combinedField is { } cached && _combinedExternal == external && ReferenceEquals(_combinedBank, bank)
+            && ReferenceEquals(_combinedWaves, waves) && ReferenceEquals(_combinedInteraction, interaction))
+            return cached;
+        IExternalForceField? baseField = bank is null ? (external ? _external : null) : external ? _sumField! : bank;
+        IExternalForceField? field = waves is null ? baseField : baseField is null ? waves : new SumForceField(baseField, waves);
+        if (interaction is not null) field = field is null ? interaction : new SumForceField(field, interaction);
+        _combinedField = field!;
+        _combinedExternal = external;
+        _combinedBank = bank;
+        _combinedWaves = waves;
+        _combinedInteraction = interaction;
+        return field!;
+    }
+
+    /// <summary>最近一步 Advance 使用的合成外力場(診斷/測試用;無外力的步或尚未推進為 null;載入/重設/還原後歸 null)。</summary>
+    public IExternalForceField? CombinedForceField => _combinedField;
+
     private void RefreshInteraction()
     {
         if (_interaction is not { Active: true } si) return;
@@ -1555,10 +1589,8 @@ public sealed class SimulationEngine
             bank?.PreStep(controls.C1.Rpm);
             interaction?.PreStep(_traffic.Targets);
             // 只有外力模組 → 與舊版相同的 _external;只有岸壁 → _bank;兩者 → 和;有浪 → (前者) + 浪,只有浪 → 浪;有船間交互作用 → (前者) + 交互作用
-            IExternalForceField? baseField = bank is null ? (external ? _external : null) : external ? _sumField! : bank;
-            IExternalForceField? field = waves is null ? baseField : baseField is null ? waves : new SumForceField(baseField, waves);
-            if (interaction is not null) field = field is null ? interaction : new SumForceField(field, interaction);
-            Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt, field!);
+            //(組合依啟用組合快取,見 CombinedField)
+            Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt, CombinedField(external, bank, waves, interaction));
         }
         else Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
         Tick++;
@@ -1826,6 +1858,7 @@ public sealed class SimulationEngine
         // 岸壁效應:無跨步狀態,依情境重建幾何,於還原完成後以還原的狀態重算步末結果(RefreshBank)
         _bank = CreateBank();
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
+        _combinedField = null;
         // 波浪漂移力:純函數,依目前設定重建(快照有 Waves = setEnvironment 變更後的設定,否則情境值),還原完成後以還原的狀態重算步末結果(RefreshWaves)
         if (s.Waves is { } ws)
         {

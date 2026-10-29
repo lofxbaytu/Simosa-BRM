@@ -328,6 +328,30 @@ public class WaveEnvironmentCommandTests
     }
 
     [Fact]
+    public void CommandSchemaWaveExamplesParseAndApply()
+    {
+        // command.schema.json 的 waves 範例(設定含 ramp_s、關閉 null)可被核心解析並套用;ClearWaves 的 JSON 明確寫出 null
+        var schemaPath = Path.Combine(TestData.Root, "src", "Contracts", "command.schema.json");
+        using var schema = System.Text.Json.JsonDocument.Parse(File.ReadAllText(schemaPath));
+        var examples = schema.RootElement.GetProperty("examples").EnumerateArray().Select(x => SimCommand.Parse(x.GetRawText())!).ToList();
+        var set = examples.Single(c => c.Type == SimCommandType.SetEnvironment && c.Arg("waves") is { ValueKind: System.Text.Json.JsonValueKind.Object });
+        var clear = examples.Single(c => c.Type == SimCommandType.SetEnvironment && c.Arg("waves") is { ValueKind: System.Text.Json.JsonValueKind.Null });
+        Assert.Equal(120.0, set.ArgAsDouble("ramp_s"));
+        var e = MmgEngine(Yaml());
+        Apply(e, set);
+        Assert.NotNull(e.Waves);
+        Assert.Equal("jonswap", e.Waves!.Spectrum);
+        Assert.Equal(45.0, e.Waves.DirectionDeg);
+        Assert.Equal(RampChannel.WaveHeight, Assert.Single(e.Ramps).Channel);
+        Apply(e, clear);
+        Assert.Null(e.Waves);
+        Assert.Empty(e.Ramps);
+        Assert.Contains("\"waves\":null", SimCommand.ClearWaves().ToJson());
+        Assert.Contains("\"ramp_s\":5", SimCommand.ClearWaves(5).ToJson());
+        Assert.Contains("\"significantHeight_m\":2", SimCommand.SetWaves(2.0, 7.0, 90.0).ToJson());
+    }
+
+    [Fact]
     public void UnsupportedDynamicsIgnoreWaveCommandsWithoutChangingOutputs()
     {
         // 不接受外力的動力學:指令照常記錄設定(快照/事件)但不施力、不輸出 state.waves、雜湊不追加

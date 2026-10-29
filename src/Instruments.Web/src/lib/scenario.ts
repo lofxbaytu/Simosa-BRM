@@ -178,7 +178,7 @@ export function parseScenario(yamlText: string, path = ''): ScenarioSummary {
     if (Array.isArray(c['table'])) current.source = 'table';
     else if (isRecord(c['tidal'])) current.source = 'tidal';
     // 空間網格(field)可與 table/tidal 並存(後者只作為 timeScale 來源):來源標為 field / field+table / field+tidal
-    if (isRecord(c['field'])) current.source = current.source ? `field+${current.source}` : 'field';
+    if (isRecord(c['field'])) current.source = current.source === 'table' ? 'field+table' : current.source === 'tidal' ? 'field+tidal' : 'field';
     environment.current = current;
   }
   const depth = optNumber(env['waterDepth']);
