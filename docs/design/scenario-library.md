@@ -273,6 +273,7 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 | E16 | `data/scenarios/E16_night_approach_keelung.yaml` | FSB1 滿載 | 基隆港北口(`data/areas/keelung-approach.json`) | ≤ 35 min |
 | E17 | `data/scenarios/E17_typhoon_departure_kaohsiung.yaml` | FSB1 壓載 | 高雄港南端油品碼頭(`data/areas/kaohsiung-south-oil-berth.json`) | ≤ 45 min |
 | E18 | `data/scenarios/E18_ukc_squat_anping.yaml` | FSB2 滿載 | 安平港油品碼頭進港航道(`data/areas/anping-approach.json`) | ≤ 55 min |
+| E18b | `data/scenarios/E18b_tide_table.yaml` | FSB2 滿載 | 同 E18 幾何;潮汐以 `environment.tide.table` 表示(基底 CD 7.0 m + 潮高表),時間表無 `setEnvironment` 水深漸變 | ≤ 55 min |
 | E21 | `data/scenarios/E21_cargo_heating_pressure_anping.yaml` | FSB1 滿載 | 同 E18(同一幾何、不同船與潮況) | ≤ 65 min |
 
 ## 9. E15 干擾與工作負荷過載(高雄引航進港)
@@ -329,6 +330,8 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 **升級**:normal → **T+5 degraded**(`tideLower`:潮位比預報低 0.3 m 且提早退潮,8.9 → 8.6 m、600 s)→ T+12 碼頭要求加速到 8 kn 以上(速度誘惑)→ **通過 BAR(或 T+35)emergency**(`barShoaling`:前船回報沙洲段淺於海圖、潮位 → 8.4 m)→ 到達迴船池、擱淺或 T+55。測深儀淺水警報 `alerts.shallowWater_m` = `navigation.ukc.shallowAlarm_m`(龍骨下 0.8 m,含 squat)。無人操作(HAH 不減速):degraded 300 s、淺水警報約 585 s、emergency 1333 s、到達 2167 s;UKC 低於政策 1400 s 以上(fail)、最小 0.48 m(warn)、超速 1.3 kn(warn),不及格。
 
 **評估**:`assessment.ukc.min` 與 `zones[channel].ukcMin` 皆為 `navigation.ukc.channel_fraction`(10 % 吃水,0.72 m;淺水沿岸進港段全程適用,開闊海 20 % 會使沿岸段誤扣);硬性失敗擱淺、`ukcHard`(< 5 % 吃水);容許帶 `ukc.min_m`(warn `navigation.ukc.minWarn_m` 0.6、fail `minFail_m` 0.45 m)、`ukc.timeBelowLimit_s`(fail 120 s)、`manoeuvring.maxOverSpeed_kn`(warn 0.5、fail 2.0 kn)、XTD(warn `navigation.xtd.dredgedChannel_m` 70 m、fail 1.4×)、走廊外時間;必要事件 `handoverChecklist`、`tideReport`(report/verbal ≤ `navigation.ukc.tideReport_s`)、`speedChallenge`(verbal/report)、`ukcAlarmResponse`(`alertRaised shallowWater` → 車令/轉速令 ≤ `navigation.ukc.alarmResponse_s`;警報未響時 notApplicable)。合理操作:開場減至 SAH、通過 BAR 減至 DSAH:UKC 最小約 0.91 m、警報未響、100 分。
+
+**變體 E18b**(`E18b_tide_table.yaml`):同一幾何與升級腳本,潮汐改以 `environment.tide.table`(潮高表)表示,「比預報低且提早退潮」由表點呈現而非 `setEnvironment` 漸變;核心有效水深 = 海圖基底 + 潮高(scenario-engine.md 第 1.5.1 節),`state.tideHeight_m` 可供儀表顯示。
 
 ## 13. E21 貨物加熱系統故障下的到港壓力(安平)
 

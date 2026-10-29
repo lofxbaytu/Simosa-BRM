@@ -7,6 +7,10 @@
 - 初始車鐘/轉速:``initial.rpm`` 優先(車鐘未指定時以最接近者標示);否則車鐘指定時取其轉速;否則航速 > 0 取直航平衡轉速
   (``MMGShip.reset`` 的預設);否則停俥。
 - 角度為度、速度為節;風向為來向、流向為去向;時間倍率夾到 [0.1, 10];``environment.visibility_nm``(schema 未定義)只記錄。
+- ``environment.tide``(選填;情境引擎設計第 1.5.1 節):``table``(``[{t | utc, height_m}]``,utc 換算為相對 ``startTimeUtc`` 的秒數)或
+  ``harmonic``(``{meanLevel_m, constituents: [{name?, amplitude_m, period_s, phase_deg}]}``)擇一,正規化為 ``{"table": [{t, height_m}]}`` 或
+  ``{"harmonic": {...}}``;結構檢查(至少 2 點、t 嚴格遞增、period_s > 0 …)與 C# ``Scenario.StructuralIssues`` 一致。模型見 ``tide.py``:
+  有效水深 = ``waterDepth``(基底)+ 潮高(t),``setEnvironment waterDepth`` 仍改基底。
 - YAML 以 ``parameters.yaml_to_tree`` 讀取(純量型別推斷與 C# YamlJson 相同),``${params:<key>}`` 引用在檢查前以參數集替換
   (``parameters.resolve_references``;情境引擎設計第 2.3 節):有引用而未給參數集時依 ``assessment.parameterSet``
   (相對專案根目錄或情境檔目錄,預設 data/parameters/company-procedures.yaml)自動載入,仍無則 ``ValueError``。
@@ -24,6 +28,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import re
 from pathlib import Path
@@ -32,7 +37,8 @@ from typing import Any
 from . import paths
 from .external import normalise_sections
 from .external import structural_issues as external_structural_issues
-from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship
+from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship, parse_utc
+from .tide import tide_from_scenario
 from .parameters import ParameterSet, find_parameter_set, has_references, resolve_references, yaml_to_tree
 
 SCENARIO_SUFFIXES = (".yaml", ".yml")
@@ -624,7 +630,115 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
                     if not isinstance(role, dict) or not str(role.get("role") or "").strip():
                         error(f"briefing.roles[{i}]", "角色需要 role")
         # minParticipants / duration_s 的數值範圍 C# 不檢查(只讀取),此處亦不檢查以免 C# 可載入的情境在此被拒
+
+    # ---- 潮汐(environment.tide;C# 在 assessment 之後檢查)
+    env = raw.get("environment")
+    if isinstance(env, dict) and env.get("tide") is not None:
+        tide_issues(env.get("tide"), raw.get("startTimeUtc"), error)
     return issues
+
+
+def tide_issues(tide: Any, start_time_utc: Any, error: Any) -> None:
+    """``environment.tide`` 的結構檢查(C# Scenario.StructuralIssues 的潮汐段;路徑與訊息相同):table 與 harmonic 擇一;
+    table 至少 2 點、每點 t 或 utc 擇一、utc 需情境 startTimeUtc 可解析、t 嚴格遞增;harmonic 至少 1 個分潮、period_s > 0、amplitude_m ≥ 0。"""
+    tp = "environment.tide"
+    if not isinstance(tide, dict):
+        error(tp, "tide 需為 table 或 harmonic 擇一")
+        return
+    table, harmonic = tide.get("table"), tide.get("harmonic")
+    if (table is None) == (harmonic is None):
+        error(tp, "tide 需為 table 或 harmonic 擇一")
+    if table is not None:
+        if not isinstance(table, list):
+            error(f"{tp}.table", "潮高表至少需要 2 點")
+            table = []
+        elif len(table) < 2:
+            error(f"{tp}.table", "潮高表至少需要 2 點")
+        start = parse_utc(start_time_utc if isinstance(start_time_utc, str) else None)
+        prev: float | None = None
+        for i, p in enumerate(table):
+            pp = f"{tp}.table[{i}]"
+            if not isinstance(p, dict):
+                error(pp, "表點需要 t 或 utc")
+                continue
+            t: float | None = None
+            has_t, has_utc = p.get("t") is not None, p.get("utc") is not None
+            if has_t and has_utc:
+                error(pp, "表點的 t 與 utc 只能擇一")
+            elif has_t:
+                if not _is_num(p.get("t")):
+                    error(pp, "t 必須為有限數值")
+                else:
+                    t = float(p["t"])
+            elif has_utc:
+                utc = parse_utc(str(p["utc"]))
+                if utc is None:
+                    error(pp, f"utc 無法解析:{p['utc']}")
+                elif start is None:
+                    error(pp, "表點以 utc 指定時情境必須有可解析的 startTimeUtc")
+                else:
+                    t = (utc - start).total_seconds()
+            else:
+                error(pp, "表點需要 t 或 utc")
+            if not _is_num(p.get("height_m")):
+                error(pp, "height_m 必須為有限數值")
+            if t is not None:
+                if not math.isfinite(t):
+                    error(pp, "t 必須為有限數值")
+                elif prev is not None and t <= prev:
+                    error(pp, "潮高表的 t 必須嚴格遞增")
+                prev = t
+    if harmonic is not None:
+        hp = f"{tp}.harmonic"
+        if not isinstance(harmonic, dict):
+            error(f"{hp}.constituents", "調和潮至少需要 1 個分潮")
+            return
+        mean = harmonic.get("meanLevel_m")
+        if mean is not None and not _is_num(mean):
+            error(f"{hp}.meanLevel_m", "meanLevel_m 必須為有限數值")
+        cons = harmonic.get("constituents")
+        if not isinstance(cons, list) or len(cons) == 0:
+            error(f"{hp}.constituents", "調和潮至少需要 1 個分潮")
+            cons = []
+        for i, c in enumerate(cons):
+            cp = f"{hp}.constituents[{i}]"
+            if not isinstance(c, dict):
+                error(cp, "period_s 必須為正")
+                continue
+            period, amp, phase = c.get("period_s"), c.get("amplitude_m"), c.get("phase_deg")
+            if not _is_num(period) or float(period) <= 0.0:
+                error(cp, "period_s 必須為正")
+            if not _is_num(amp) or float(amp) < 0.0:
+                error(cp, "amplitude_m 不可為負")
+            if phase is not None and not _is_num(phase):
+                error(cp, "phase_deg 必須為有限數值")
+
+
+def normalise_tide(tide: Any, start_time_utc: Any) -> dict[str, Any] | None:
+    """``environment.tide`` → 正規化形狀(結構檢查已通過):``{"table": [{"t", "height_m"}]}``(utc 換算為相對 startTimeUtc 的秒數)或
+    ``{"harmonic": {"meanLevel_m", "constituents": [{"name", "amplitude_m", "period_s", "phase_deg"}]}}``;None → None。"""
+    if not isinstance(tide, dict):
+        return None
+    if tide.get("table") is not None:
+        start = parse_utc(start_time_utc if isinstance(start_time_utc, str) else None)
+        points = []
+        for p in tide["table"]:
+            if p.get("t") is not None:
+                t = float(p["t"])
+            else:
+                utc = parse_utc(str(p["utc"]))
+                if utc is None or start is None:
+                    raise ValueError("environment.tide.table 的 utc 需有可解析的情境 startTimeUtc")
+                t = (utc - start).total_seconds()
+            points.append({"t": t, "height_m": float(p["height_m"])})
+        return {"table": points}
+    h = tide.get("harmonic") or {}
+    return {"harmonic": {
+        "meanLevel_m": float(h.get("meanLevel_m") or 0.0),
+        "constituents": [{"name": (str(c["name"]) if c.get("name") is not None else None), "amplitude_m": float(c["amplitude_m"]),
+                          "period_s": float(c["period_s"]), "phase_deg": float(c.get("phase_deg") or 0.0)}
+                         for c in h.get("constituents") or []],
+    }}
 
 
 def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: dict[str, Any] | None = None,
@@ -705,6 +819,7 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
     vis = _num(env, "visibility_nm", where="environment")
     if vis is None:
         vis = _num(env, "visibility", where="environment")
+    tide = normalise_tide(env.get("tide"), raw.get("startTimeUtc"))  # 結構檢查已於 structural_issues 通過
 
     seed_raw = raw.get("seed", 1)
     if isinstance(seed_raw, bool) or not isinstance(seed_raw, int):
@@ -731,6 +846,7 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
                         "drift": max(0.0, _num(cur, "drift", 0.0, where="environment.current") or 0.0)},
             "waterDepth": depth,
             "visibility_nm": vis,
+            "tide": tide,
         },
         # 情境引擎區段(只結構檢查、不模擬;數值已代入參數)
         "timeline": copy.deepcopy(raw.get("timeline") or []),
@@ -804,6 +920,8 @@ def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
     # 直航平衡轉速以情境水深(淺水修正)、無風計算(C# ResolveInitialPropulsion:SteadyRpmForSpeed(u, scenario waterDepth));
     # 先前在 reset 之後才設水深,淺水情境的初始轉速取到深水值(外力一致性測試 ext_bank_suction 發現,h/T 1.4 時差約 9 rpm)
     ship.set_environment(wind_speed_kn=0.0, water_depth_m=sc["environment"]["waterDepth"])
+    # 潮汐模型(有效水深 = 基底 + 潮高(tick·dt);reset 後以 tick 0 的潮高重算淺水修正,與 C# 初始平衡轉速相同)
+    ship.set_tide(tide_from_scenario(sc["environment"].get("tide")))
     if rpm0 is not None:
         ship.reset(x, y, heading, speed, rpm=rpm0)
         if telegraph is not None:

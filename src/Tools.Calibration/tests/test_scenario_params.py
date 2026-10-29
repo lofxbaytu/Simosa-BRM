@@ -65,6 +65,7 @@ REQUIRED_FIXTURES = {
     "E16_night_approach_keelung",
     "E17_typhoon_departure_kaohsiung",
     "E18_ukc_squat_anping",
+    "E18b_tide_table",
     "E19_fire_isps_pilotage_kaohsiung",
     "E20_comprehensive_assessment_default",
     "E20_comprehensive_assessment_kaohsiung",

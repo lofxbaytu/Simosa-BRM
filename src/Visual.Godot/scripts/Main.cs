@@ -19,7 +19,7 @@ namespace SimosaBRM.Visual.Godot;
 /// 啟動參數 → 專案根目錄/資料 → 硬體偵測與品質等級 → 建立海面/天候/港口/自船/目標船/拖船錨/相機/HUD → 訂閱狀態流。
 /// 每顯示幀:自 StateClient 取插值樣本 → 更新各節點 → 自動降級檢查 → HUD。無頭煙霧模式(--smoke)以假狀態序列餵入並輸出 build/visual/smoke.json
 /// (煙霧時鐘固定每顯示幀 1/60 s,N 幀 = N/60 s 模擬時間,與主機幀距無關;t ≥ 2 s 起帶示意泊位與繫纜,泊位幾何由 SmokeSequence.SmokeBerthArea 併入港口)。
-/// 日夜:--daynight=auto 時依 state.utc(無則 --start-utc + t;EnvironmentMapper)。
+/// 日夜:--daynight=auto 時依 state.utc(無則 --start-utc + t;EnvironmentMapper);月光/夜間環境光由 EnvironmentLook.Moon 與 NightSkyBrightness 套用於 WeatherNode。
 /// 品質持久化(build/visual/quality.json):啟動偵測後、每次等級改變(暖機再偵測、自動降級、手動覆寫)、Esc 與視窗關閉時寫入;
 /// 無頭/煙霧模式不寫(避免 CI 的 headless=low 影響實機的啟動渲染器)。
 /// 視景不做物理、不送指令(規劃書第 10.1 節)。
@@ -392,6 +392,12 @@ public partial class Main : Node3D
         sb.Append("\n目標 ").Append(_targets.DrawnCount).Append('/').Append(_targets.NodeCount).Append("  港口網格 ").Append(_harbour.MeshCount);
         if (st.Berth is { } berth) sb.Append("  泊位 ").Append(berth.Id).Append(" 繫纜 ").Append(_mooring.DrawnCount).Append('/').Append(_mooring.InStateCount);
         if (st.Utc is { } utc) sb.Append("  UTC ").Append(utc);
+        if (look.Daylight < 1.0)
+        {
+            sb.Append("  月 ");
+            if (look.Moon.AboveHorizon) sb.Append(look.Moon.ElevationDeg.ToString("0")).Append("°/").Append(look.Moon.AzimuthDeg.ToString("000")).Append("° 相位 ").Append((look.Moon.Phase * 100).ToString("0")).Append("% 月光 ").Append((look.Moon.Light * 100).ToString("0")).Append('%');
+            else sb.Append("地平線下");
+        }
         if (_client?.LastEventKind is { } ev) sb.Append("  最近事件 ").Append(ev);
         sb.Append("\n鍵:1–5 視角、滑鼠拖曳環視、滾輪視野、H HUD、F11 全螢幕、Esc 離開");
         return sb;

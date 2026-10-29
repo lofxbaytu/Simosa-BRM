@@ -26,6 +26,29 @@ public sealed record EnvironmentLook
     /// <summary>浪向(去向,度)</summary>
     public required double WaveDirectionDeg { get; init; }
     public required double WindSpeedKn { get; init; }
+    /// <summary>月球位置、月相與月光強度(夜間光照;規劃書第 7.3 節)</summary>
+    public required MoonLook Moon { get; init; }
+    /// <summary>
+    /// 夜空亮度 0–1(0 = 無月、濃霧;1 = 晴空滿月高掛):夜間(太陽高度 &lt; −6°)的環境光/天空底色依此;
+    /// = 星光底值 0.08 + 0.92 × 衰減後月光;白天/曙暮光時以 (1 − Daylight) 加權,Godot 端再與日光環境光混合。
+    /// </summary>
+    public required double NightSkyBrightness { get; init; }
+}
+
+/// <summary>月球呈現參數(<see cref="MoonModel"/> 的結果經日夜模式與天候整理;Godot 端月光 DirectionalLight3D 只套用)。</summary>
+public sealed record MoonLook
+{
+    /// <summary>月球高度角(度;負 = 地平線下)</summary>
+    public required double ElevationDeg { get; init; }
+    public required double AzimuthDeg { get; init; }
+    /// <summary>照明比例 0(新月)–1(滿月)</summary>
+    public required double Phase { get; init; }
+    /// <summary>晴空月光相對強度 0–1(滿月天頂 = 1 ≈ 0.25 lux;地平線下 0;已含高度角與大氣消光)</summary>
+    public required double Intensity { get; init; }
+    /// <summary>經霧/雨衰減後的月光 0–1(月光 DirectionalLight 的強度依此)</summary>
+    public required double Light { get; init; }
+    /// <summary>月球是否在地平線上</summary>
+    public bool AboveHorizon => ElevationDeg > 0.0;
 }
 
 /// <summary>
@@ -33,6 +56,9 @@ public sealed record EnvironmentLook
 /// 真風 → 海況(Douglas,依 Beaufort 近似)與波高;radarEnvironment 雨區(多邊形或圓)含自船位置 → 雨;
 /// 日夜:啟動參數 daynight 為 day/dusk/night 時固定;auto 時依 state.utc(核心:情境 startTimeUtc 或載入時的實際時鐘 + t)
 /// 與自船經緯度算太陽高度(簡化天文公式,誤差約 1°);state 無 utc(舊核心/Python 未設)時退回 --start-utc + 模擬秒數,兩者皆無則白天。
+/// 月光:auto 時依同一 UTC 以 <see cref="MoonModel"/> 算月球高度/方位/月相與相對照度;night 固定模式月球固定在高度 45°、方位 135°,
+/// 月相由顯示幀 UTC(state.utc 或 --start-utc + t)推得、皆無時 0.5;day/dusk 固定模式月球在地平線下(無月光)。
+/// 月光經霧(能見度)與雨衰減(<see cref="MoonlightWeatherFactor"/>),夜空亮度 = 星光底值 + 月光。
 /// 無物理效果,只影響畫面(規劃書第 10.1 節)。
 /// </summary>
 public static class EnvironmentMapper
@@ -48,6 +74,8 @@ public static class EnvironmentMapper
         var sea = radar?.SeaState ?? SeaStateFromWind(wind);
         var (elev, az) = SunPosition(mode, s.Utc, startUtc, s.T, s.Pos.Lat, s.Pos.Lon);
         var daylight = Math.Clamp((elev + 6.0) / 12.0, 0.0, 1.0); // −6°(民用曙暮光)→ 0,+6° → 1
+        var rain = RainAt(radar, s.Pos.X, s.Pos.Y);
+        var moon = MoonLookFor(mode, s.Utc, startUtc, s.T, s.Pos.Lat, s.Pos.Lon, visNm, rain);
         return new EnvironmentLook
         {
             SunElevationDeg = elev,
@@ -56,12 +84,81 @@ public static class EnvironmentMapper
             NavigationLightsOn = elev < 0.0,
             FogDensity = fog,
             VisibilityM = visM,
-            Rain = RainAt(radar, s.Pos.X, s.Pos.Y),
+            Rain = rain,
             SeaState = sea,
             WaveHeightM = WaveHeightFromSeaState(sea),
             WaveDirectionDeg = Units.NormalizeHeadingDeg(s.Wind.TrueDir + 180.0),
             WindSpeedKn = wind,
+            Moon = moon,
+            NightSkyBrightness = NightSkyBrightnessFor(daylight, moon.Light),
         };
+    }
+
+    /// <summary>night 固定模式的月球高度/方位(度):固定高掛東南方,讓夜間情境有月光與陰影方向。</summary>
+    public const double FixedNightMoonElevationDeg = 45.0;
+    public const double FixedNightMoonAzimuthDeg = 135.0;
+    /// <summary>無法推得月相時(night 固定模式且無任何 UTC)的預設照明比例</summary>
+    public const double DefaultMoonPhase = 0.5;
+    /// <summary>夜空亮度的星光/氣輝底值(無月時仍可辨海天線)</summary>
+    public const double StarlightSkyBrightness = 0.08;
+
+    /// <summary>
+    /// 月球呈現參數:auto 模式依顯示幀 UTC(state.utc → --start-utc + t)算位置與月相,無 UTC 時(白天)月球在地平線下;
+    /// day/dusk 固定模式月球在地平線下;night 固定模式月球固定於 45°/135°,月相由 UTC 推得、皆無時 <see cref="DefaultMoonPhase"/>。
+    /// </summary>
+    public static MoonLook MoonLookFor(DayNightMode mode, string? stateUtc, DateTimeOffset? startUtc, double simSeconds, double latDeg, double lonDeg, double visibilityNm, double rain)
+    {
+        var utc = ResolveUtc(stateUtc, startUtc, simSeconds);
+        double elev, az, phase;
+        switch (mode)
+        {
+            case DayNightMode.Day:
+                (elev, az, phase) = (-45.0, 0.0, utc is { } du ? MoonModel.Compute(du, latDeg, lonDeg).IlluminatedFraction : DefaultMoonPhase);
+                break;
+            case DayNightMode.Dusk:
+                (elev, az, phase) = (-10.0, 80.0, utc is { } ku ? MoonModel.Compute(ku, latDeg, lonDeg).IlluminatedFraction : DefaultMoonPhase);
+                break;
+            case DayNightMode.Night:
+                (elev, az, phase) = (FixedNightMoonElevationDeg, FixedNightMoonAzimuthDeg, utc is { } nu ? MoonModel.Compute(nu, latDeg, lonDeg).IlluminatedFraction : DefaultMoonPhase);
+                break;
+            default:
+                if (utc is { } au)
+                {
+                    var m = MoonModel.Compute(au, latDeg, lonDeg);
+                    (elev, az, phase) = (m.ElevationDeg, m.AzimuthDeg, m.IlluminatedFraction);
+                }
+                else (elev, az, phase) = (-45.0, 0.0, DefaultMoonPhase); // 無 UTC → 白天,無月光
+                break;
+        }
+        var intensity = MoonModel.RelativeIlluminance(elev, phase);
+        return new MoonLook
+        {
+            ElevationDeg = elev,
+            AzimuthDeg = az,
+            Phase = phase,
+            Intensity = intensity,
+            Light = intensity * MoonlightWeatherFactor(visibilityNm, rain),
+        };
+    }
+
+    /// <summary>
+    /// 霧/雨對月光的衰減 0–1(示意,非輻射傳輸):能見度 ≥ 5 nm 不衰減,線性降到 0.5 nm 以下的 0.1(霧中月光散成微弱天光);
+    /// 雨強度 1 再乘 0.4(雲層遮蔽)。
+    /// </summary>
+    public static double MoonlightWeatherFactor(double visibilityNm, double rain)
+    {
+        var fog = Math.Clamp((visibilityNm - 0.5) / 4.5, 0.0, 1.0);
+        var fogFactor = 0.1 + 0.9 * fog;
+        var rainFactor = 1.0 - 0.6 * Math.Clamp(rain, 0.0, 1.0);
+        return fogFactor * rainFactor;
+    }
+
+    /// <summary>夜空亮度:(1 − 日光) × (星光底值 + (1 − 底值) × 衰減後月光)。</summary>
+    public static double NightSkyBrightnessFor(double daylight, double moonLight)
+    {
+        var night = 1.0 - Math.Clamp(daylight, 0.0, 1.0);
+        var sky = StarlightSkyBrightness + (1.0 - StarlightSkyBrightness) * Math.Clamp(moonLight, 0.0, 1.0);
+        return night * sky;
     }
 
     /// <summary>真風速(kn)→ Douglas 海況(近似:Beaufort 對應)。</summary>

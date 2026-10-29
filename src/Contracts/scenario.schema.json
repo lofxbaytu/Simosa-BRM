@@ -220,6 +220,94 @@
           "exclusiveMinimum": 0,
           "description": "能見度(nm;未給 = 無限制);核心只保存、漸變、廣播與記錄,無物理效果"
         },
+        "tide": {
+          "type": "object",
+          "description": "潮汐(選填;docs/design/scenario-engine.md 第 1.5.1 節):有效水深 = waterDepth(海圖/基底水深,含 zones 覆寫與 setEnvironment waterDepth 漸變)+ 潮高(t)。table 與 harmonic 擇一;未給時潮高恆為 0(行為與數值與無潮汐相同)。潮高由練習時間決定(確定性,不進快照/雜湊),state.tideHeight_m 輸出;C# 與 Python 參考實作同公式",
+          "oneOf": [
+            {
+              "required": [
+                "table"
+              ]
+            },
+            {
+              "required": [
+                "harmonic"
+              ]
+            }
+          ],
+          "properties": {
+            "table": {
+              "type": "array",
+              "minItems": 2,
+              "description": "潮高表:線性內插,範圍外取端點;t 嚴格遞增。每點以 t(秒,相對練習開始)或 utc(ISO 8601,換算為相對情境 startTimeUtc 的秒數;此時 startTimeUtc 必填)擇一",
+              "items": {
+                "type": "object",
+                "required": [
+                  "height_m"
+                ],
+                "properties": {
+                  "t": {
+                    "type": "number",
+                    "description": "時間(秒,自練習開始)"
+                  },
+                  "utc": {
+                    "type": "string",
+                    "description": "UTC 時刻(ISO 8601)"
+                  },
+                  "height_m": {
+                    "type": "number",
+                    "description": "潮高(m,相對海圖基準面)"
+                  }
+                }
+              }
+            },
+            "harmonic": {
+              "type": "object",
+              "required": [
+                "constituents"
+              ],
+              "description": "調和潮:高度 = meanLevel_m + Σ amplitude_m·cos(2π·t/period_s + phase_deg)",
+              "properties": {
+                "meanLevel_m": {
+                  "type": "number",
+                  "default": 0,
+                  "description": "平均水位(m,相對海圖基準面)"
+                },
+                "constituents": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "amplitude_m",
+                      "period_s"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "分潮名稱(標示用,例如 M2、S2、K1、O1)"
+                      },
+                      "amplitude_m": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "period_s": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "description": "週期(秒;M2 ≈ 44714)"
+                      },
+                      "phase_deg": {
+                        "type": "number",
+                        "default": 0,
+                        "description": "相位(度;t = 0 時的相位角)"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "seabed": {
           "type": "string",
           "enum": [

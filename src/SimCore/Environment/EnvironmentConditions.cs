@@ -20,13 +20,24 @@ public sealed class EnvironmentConditions
     public double CurrentSetRad { get; set; }
     /// <summary>流速(m/s)</summary>
     public double CurrentDriftMps { get; set; }
+    /// <summary>基底水深(海圖水深;常數或 zones 覆寫;setEnvironment waterDepth 漸變改此值)</summary>
     public IDepthProvider Depth { get; set; } = new ConstantDepth(50.0);
+    /// <summary>潮高模型(情境 environment.tide;null = 無潮汐,潮高恆為 0 且數值與舊版完全相同)</summary>
+    public TideModel? Tide { get; set; }
+    /// <summary>目前潮高(m)= Tide.HeightAt(練習時間);由引擎每步以 Tick 重算(情境引擎設計第 1.5.1 節);無 Tide 時 0</summary>
+    public double TideHeightM { get; set; }
     /// <summary>能見度(nm;null = 無限制);只保存、漸變、廣播與記錄,無物理效果(情境引擎設計第 1.5 節)</summary>
     public double? VisibilityNm { get; set; }
 
     public double WindEffectiveSpeedMps => WindTrueSpeedMps * GustFactor;
 
-    /// <summary>在指定位置取樣,供動力學模型使用。</summary>
+    /// <summary>有效水深 = 基底水深(含 zones 覆寫)+ 潮高;無潮汐時 + 0.0 與基底位元相同。</summary>
+    public double DepthAt(double xEast, double yNorth) => Depth.DepthAt(xEast, yNorth) + TideHeightM;
+
+    /// <summary>以練習時間 t(秒)更新潮高(無 Tide 時 0)。</summary>
+    public void RefreshTide(double t) => TideHeightM = Tide?.HeightAt(t) ?? 0.0;
+
+    /// <summary>在指定位置取樣,供動力學模型使用(水深為有效水深:基底 + 潮高)。</summary>
     public EnvironmentSample SampleAt(double xEast, double yNorth)
     {
         var w = WindEffectiveSpeedMps;
@@ -36,7 +47,7 @@ public sealed class EnvironmentConditions
         // 流「去向」:向量 = (C sinθ, C cosθ)
         var curE = CurrentDriftMps * Math.Sin(CurrentSetRad);
         var curN = CurrentDriftMps * Math.Cos(CurrentSetRad);
-        return new EnvironmentSample(windE, windN, curE, curN, Depth.DepthAt(xEast, yNorth));
+        return new EnvironmentSample(windE, windN, curE, curN, DepthAt(xEast, yNorth));
     }
 }
 

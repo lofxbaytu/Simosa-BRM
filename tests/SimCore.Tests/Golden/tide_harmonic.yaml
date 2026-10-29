@@ -1,0 +1,24 @@
+# 跨語言潮汐夾具情境(調和潮;export_tide_reference.py 產生 tide_harmonic.csv,C# TideTests 讀取比對):
+#   基底水深 9 m + 平均水位 0.8 m + M2/S2/K1 三分潮(振幅、週期、相位為示意值),FSB2 壓載直航、無風無流。
+id: tide_harmonic
+name: 調和潮跨語言夾具
+seed: 20261105
+ship: { id: FSB2, loading: ballast }
+origin: { lat: 22.99, lon: 120.15 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 90
+  speed: 5
+  telegraph: DSAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 9
+  tide:
+    harmonic:
+      meanLevel_m: 0.8
+      constituents:
+        - { name: M2, amplitude_m: 0.9, period_s: 44714.16, phase_deg: 30 }
+        - { name: S2, amplitude_m: 0.3, period_s: 43200, phase_deg: -45 }
+        - { name: K1, amplitude_m: 0.2, period_s: 86164.1, phase_deg: 120 }

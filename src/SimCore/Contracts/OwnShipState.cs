@@ -48,7 +48,10 @@ public sealed record OwnShipState
     [JsonPropertyName("telegraph")] public required TelegraphOrder Telegraph { get; init; }
     [JsonPropertyName("thruster")] public ThrusterState? Thruster { get; init; }
     [JsonPropertyName("depthBelowKeel")] public required double DepthBelowKeel { get; init; }
+    /// <summary>有效水深(m)= 基底水深(含 zones 覆寫與 setEnvironment 漸變)+ 潮高</summary>
     [JsonPropertyName("waterDepth")] public double? WaterDepth { get; init; }
+    /// <summary>潮高(m;情境有 environment.tide 時輸出,由練習時間決定;無潮汐情境省略)</summary>
+    [JsonPropertyName("tideHeight_m")] public double? TideHeightM { get; init; }
     [JsonPropertyName("squat")] public double? Squat { get; init; }
     [JsonPropertyName("wind")] public required WindState Wind { get; init; }
     [JsonPropertyName("current")] public required CurrentState Current { get; init; }

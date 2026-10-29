@@ -227,7 +227,7 @@ targets:
 - MMG(與 Python 參考實作相同的模型結構限制,偏差記錄於黃金測試與驗證報告):右迴旋橫距偏小約 19 %(初期迴轉反應與定常圓的比例);慣性停船減至 5 kn 的時間偏長(試俥航跡彎曲,直線滑行無法重現);倒車 6.2 kn → 全速進的停船時間偏長約 46 %;艏側推 90° 左偏快約 17 %(右 8.8 % 在公差內)。倒車/風車區為簡化四象限(負 J 外推 + 截止),完整 Wageningen 四象限 C_T*(β) 表未納入;無浪、岸壁效應、船間交互作用、橫搖;淺水倍率為趨勢用(未經驗證);風壓面積為估計值(GH-1040 曲線尚未數位化)。
 - MMG 壓載係數(FSB1)與 FSB2 均未識別;C# 自動舵仍為引擎的串級 P 控制(與 Python 的 PID 不同,不影響數值一致性測試)。
 - 暫代模型無迴旋速度–迴轉率耦合、單俥倒車艉偏、風力矩、浪、淺水附加質量(僅把 Nomoto 時間常數放大)、岸壁效應;倒車航速以前進曲線的 60 % 估計。
-- 暫代模型的 squat 用 Barrass 開闊水域簡式(`Cb·V²/100`),比海報值偏保守(MMG 用 ICORELS);UKC 由常數水深計算(`IDepthProvider` 已可接水深網格 callback,但 callback 無法進快照)。
+- 暫代模型的 squat 用 Barrass 開闊水域簡式(`Cb·V²/100`),比海報值偏保守(MMG 用 ICORELS);UKC 由常數水深(含 `zones` 覆寫)加情境 `environment.tide` 的潮高計算(`Environment/TideModel.cs`:潮高表/調和潮,只由 Tick 決定、不進快照;無 tide 時為 0,數值不變;`IDepthProvider` 已可接水深網格 callback,但 callback 無法進快照)。
 - `restore` 只能回到記憶體內的快照歷史;從紀錄檔任意快照接續的講評功能尚未接到 Host。
 - WebSocket 以 `System.Net.HttpListener` 實作(無 ASP.NET Core 相依),無 TLS 與驗證(船上/直連區網使用)。Windows 上非管理員且未設 URL ACL 時會退回只監聽 localhost;教官筆電直連前請執行一次 `netsh http add urlacl url=http://*:8765/ user=Everyone`(安裝程式應代為設定)。
 - NMEA 多播尚未加 IEC 61162-450 TAG block;無自船 AIS(VDO)、THS、XDR、ALF/ALC、HDG(警報以 ALR 輸出,第 9 節)。

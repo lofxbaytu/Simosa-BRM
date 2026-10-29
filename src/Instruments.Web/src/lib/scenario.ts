@@ -318,3 +318,8 @@ const SCENARIO_FILES = import.meta.glob('@data/scenarios/*.{yaml,yml}', { query:
 export function loadScenarioList(): ScenarioSummary[] {
   return parseScenarioMap(SCENARIO_FILES);
 }
+
+/** 建置時匯入的情境 YAML 原文(鍵為 ScenarioSummary.path,即 data/scenarios/<檔名>);情境編輯器的範本來源。 */
+export function loadScenarioSources(): Record<string, string> {
+  return Object.fromEntries(Object.entries(SCENARIO_FILES).map(([key, text]) => [scenarioPathFromKey(key), text]));
+}

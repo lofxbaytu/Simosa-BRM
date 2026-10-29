@@ -230,7 +230,7 @@ test_traceability_numbers() {
   local n; n="$(ls "$ROOT"/data/scenarios/*.yaml | wc -l)"
   local t; t="$(find "$ROOT/data/scenarios/templates" -name '*.yaml' | wc -l)"
   [[ $(grep -c "($n 檔" "$doc") -ge 2 ]] || fail "追溯表(R4 列與第 2 節情境列)的情境檔數應為 $n(data/scenarios/*.yaml)" || return 1
-  grep -q "(36 檔" "$doc" && { fail "追溯表仍寫 36 檔"; return 1; }
+  grep -q "($((n - 1)) 檔\|($((n + 1)) 檔" "$doc" && { fail "追溯表仍有舊的情境檔數($((n - 1)) 或 $((n + 1)) 檔)"; return 1; }
   grep -Eq "templates/examples\`?[^|]{0,20}$t 檔" "$doc" || fail "追溯表應註明 templates/examples $t 檔" || return 1
   grep -q "FSB1 4 項" "$doc" && grep -q "FSB2 3 項" "$doc" || fail "R2 狀態應寫明 pytest 7 xfail = FSB1 4 項 + FSB2 3 項" || return 1
   grep -q "7 項 xfail:右迴旋橫距" "$doc" && { fail "R2 狀態仍把 7 項 xfail 全歸 FSB1 滿載"; return 1; }

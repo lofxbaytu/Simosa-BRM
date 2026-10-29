@@ -163,7 +163,12 @@
       "description": "龍骨下水深(m;指示值:測深儀,echoSounderFailure 時保持最後值且 sensors.depthValid = false;真值見 truth.depthBelowKeel)"
     },
     "waterDepth": {
-      "type": "number"
+      "type": "number",
+      "description": "有效水深(m)= 基底水深(海圖水深,含 zones 覆寫與 setEnvironment 漸變)+ 潮高"
+    },
+    "tideHeight_m": {
+      "type": "number",
+      "description": "潮高(m;情境有 environment.tide 時輸出,由練習時間決定;無潮汐情境省略)"
     },
     "squat": {
       "type": "number"

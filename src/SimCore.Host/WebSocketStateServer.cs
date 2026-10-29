@@ -12,7 +12,10 @@ namespace SimosaBRM.SimCore.Host;
 /// WebSocket 伺服器(System.Net.HttpListener,無額外套件;與 Python 參考實作相同契約):
 /// 每個廣播週期(40 ms)推送 OwnShipState JSON 文字框,接收 SimCommand JSON 文字框送入引擎佇列。
 /// 慢速客戶端只會拿到最新一幀(每客戶端容量 1 的通道,舊幀丟棄),不會拖慢引擎。
-/// 事件框({"type":"event",…})與查詢回覆({"type":"assessment",…})走另一條容量 256 的通道,不被狀態幀丟棄(情境引擎設計第 5.2 節)。
+/// 事件框({"type":"event",…})走另一條容量 256 的通道(事件爆量時丟最舊),不被狀態幀丟棄(情境引擎設計第 5.2 節)。
+/// 該客戶端自己指令的回覆(主控程序層指令的 ack、getAssessment 的 {"type":"assessment",…})走第三條**無界、不丟棄**的回覆通道,
+/// 送出順序為回覆 → 事件 → 狀態幀:事件爆量時 shutdown / sessionInfo 的 ack 仍一定送達(第十六輪審查已知限制 2);
+/// 回覆只因客戶端自己送指令而產生,數量受其自身速率限制。
 /// </summary>
 public sealed class WebSocketStateServer : IAsyncDisposable
 {
@@ -22,8 +25,12 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         public IPEndPoint? Remote { get; init; }
         public Channel<byte[]> Outbox { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
         public Channel<byte[]> Events { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest });
-        /// <summary>送出迴圈實際送出的事件框數(主控程序層指令回覆後確認 ack 已送出用)</summary>
-        public long EventsSent;
+        /// <summary>該客戶端指令的回覆(ack / assessment):無界、不丟棄,送出迴圈最優先</summary>
+        public Channel<byte[]> Replies { get; } = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions { SingleReader = true });
+        /// <summary>送出迴圈實際送出的回覆框數(主控程序層指令回覆後確認 ack 已送出用)</summary>
+        public long RepliesSent;
+        /// <summary>已入列的回覆數(入列序號;同一客戶端的回覆依序送出,RepliesSent ≥ 序號即該回覆已送出)</summary>
+        public long RepliesQueued;
     }
 
     private readonly HttpListener _listener = new();
@@ -40,10 +47,14 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     public long CommandsIgnored;
     public event Action<string>? Log;
     /// <summary>
-    /// 主控程序層指令(sessionInfo、shutdown;HostCommandRouter.Handle):回傳非 null 時把 Reply 當 ack 框送回該客戶端(不進引擎),
-    /// 並在 ack 送出後(最多等 500 ms)執行 AfterReply。參數為指令、客戶端端點與是否唯讀(重播)。
+    /// 主控程序層指令(sessionInfo、shutdown;HostCommandRouter.Handle):回傳非 null 時把 Reply 當 ack 框送回該客戶端(不進引擎;
+    /// 走不丟棄的回覆通道),並在 ack 送出後(最多等 <see cref="ReplyGrace"/>)執行 AfterReply。參數為指令、客戶端端點與是否唯讀(重播)。
     /// </summary>
     public Func<SimCommand, IPEndPoint?, bool, HostCommandResult?>? HostCommandHandler { get; set; }
+    /// <summary>AfterReply(shutdown)前等 ack 真的送出的上限;逾時仍執行 AfterReply 並記 log</summary>
+    public TimeSpan ReplyGrace { get; set; } = TimeSpan.FromMilliseconds(500);
+    /// <summary>逾時未能送出 ack 就執行 AfterReply 的次數(診斷用)</summary>
+    public long RepliesNotSent;
 
     public WebSocketStateServer(SimulationEngine engine, int port)
     {
@@ -143,6 +154,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         await Task.WhenAny(sender, receiver).ConfigureAwait(false);
         client.Outbox.Writer.TryComplete();
         client.Events.Writer.TryComplete();
+        client.Replies.Writer.TryComplete();
         _clients.TryRemove(id, out _);
         // 先等傳送迴圈結束(通道已關閉,送完在途訊息即退出):Windows 原生 WebSocket 不允許 CloseAsync 與 SendAsync 並行
         try { await sender.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
@@ -163,21 +175,28 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         {
             while (c.Socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
             {
-                // 事件優先(不丟),再送最新狀態幀;兩者皆空時等待任一通道
-                while (c.Events.Reader.TryRead(out var ev))
+                // 回覆最優先(不丟、無界),再送事件(不被狀態幀丟棄),最後最新狀態幀;三者皆空時等待任一通道
+                if (c.Replies.Reader.TryRead(out var reply))
+                {
+                    await c.Socket.SendAsync(reply, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+                    Interlocked.Increment(ref c.RepliesSent);
+                    continue;
+                }
+                if (c.Events.Reader.TryRead(out var ev))
                 {
                     await c.Socket.SendAsync(ev, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
-                    Interlocked.Increment(ref c.EventsSent);
+                    continue;
                 }
                 if (c.Outbox.Reader.TryRead(out var frame))
                 {
                     await c.Socket.SendAsync(frame, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
                     continue;
                 }
+                var waitReply = c.Replies.Reader.WaitToReadAsync(_cts.Token).AsTask();
                 var waitState = c.Outbox.Reader.WaitToReadAsync(_cts.Token).AsTask();
                 var waitEvent = c.Events.Reader.WaitToReadAsync(_cts.Token).AsTask();
-                var done = await Task.WhenAny(waitState, waitEvent).ConfigureAwait(false);
-                if (!await done.ConfigureAwait(false) && c.Outbox.Reader.Completion.IsCompleted && c.Events.Reader.Completion.IsCompleted) break;
+                var done = await Task.WhenAny(waitReply, waitState, waitEvent).ConfigureAwait(false);
+                if (!await done.ConfigureAwait(false) && c.Replies.Reader.Completion.IsCompleted && c.Outbox.Reader.Completion.IsCompleted && c.Events.Reader.Completion.IsCompleted) break;
             }
         }
         catch (Exception) { /* 連線中斷或取消 */ }
@@ -205,9 +224,9 @@ public sealed class WebSocketStateServer : IAsyncDisposable
                     Interlocked.Increment(ref CommandsReceived);
                     if (cmd.Type == SimCommandType.GetAssessment)
                     {
-                        // 查詢:直接以 LatestSummary 回覆該客戶端(不進引擎佇列、不寫 input 行)
+                        // 查詢:直接以 LatestSummary 回覆該客戶端(不進引擎佇列、不寫 input 行;回覆通道不被事件爆量丟掉)
                         var summary = _engine.LatestSummary;
-                        c.Events.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(new { type = "assessment", final = summary?.Final ?? false, summary }));
+                        c.Replies.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(new { type = "assessment", final = summary?.Final ?? false, summary }));
                         continue;
                     }
                     if (HostCommandHandler?.Invoke(cmd, c.Remote, ReadOnly) is { } hostResult)
@@ -237,15 +256,28 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         catch (Exception) { /* 連線中斷或取消 */ }
     }
 
-    /// <summary>把回覆放進事件通道,等送出迴圈實際送出(最多 500 ms)後執行 AfterReply。</summary>
-    private static async Task ReplyAsync(Client c, HostCommandResult result)
+    /// <summary>
+    /// 把回覆放進該客戶端的回覆通道(無界、不丟棄;送出迴圈最優先),有 AfterReply(shutdown)時等送出迴圈實際送出
+    /// (最多 <see cref="ReplyGrace"/>)再執行;逾時或客戶端已斷線則記 log 後仍執行(停止不因 ack 送不出去而取消)。
+    /// </summary>
+    private async Task ReplyAsync(Client c, HostCommandResult result)
     {
-        var before = Interlocked.Read(ref c.EventsSent);
-        c.Events.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(result.Reply));
+        long seq;
+        bool queued;
+        lock (c.Replies) // 序號與入列同一原子區:之前的回覆(例如 shutdown 前一筆 sessionInfo ack)送出不會被誤判為本回覆已送出
+        {
+            seq = Interlocked.Increment(ref c.RepliesQueued);
+            queued = c.Replies.Writer.TryWrite(ContractJson.SerializeToUtf8Bytes(result.Reply)); // 只在客戶端已離線(通道已完成)時為 false
+        }
         if (result.AfterReply is null) return;
-        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(500);
-        while (Interlocked.Read(ref c.EventsSent) <= before && DateTime.UtcNow < deadline && c.Socket.State == WebSocketState.Open)
+        var deadline = DateTime.UtcNow + ReplyGrace;
+        while (queued && Interlocked.Read(ref c.RepliesSent) < seq && DateTime.UtcNow < deadline && c.Socket.State == WebSocketState.Open)
             await Task.Delay(10).ConfigureAwait(false);
+        if (Interlocked.Read(ref c.RepliesSent) < seq)
+        {
+            Interlocked.Increment(ref RepliesNotSent);
+            Log?.Invoke($"ack 未能送出給 {c.Remote?.ToString() ?? "客戶端"}({(!queued || c.Socket.State != WebSocketState.Open ? "客戶端已離線" : $"{ReplyGrace.TotalMilliseconds:F0} ms 內未送出")}),仍執行後續動作(shutdown)");
+        }
         result.AfterReply();
     }
 

@@ -193,16 +193,15 @@ if (options.EnableStopFile)
 // 主控程序層指令(sessionInfo / shutdown;不進引擎、不進雜湊):sessionInfo 寫進目前紀錄(session 行)或帶進下一份紀錄的 header
 var router = new HostCommandRouter(engine, shutdown);
 router.Log += msg => Console.WriteLine($"  [host] {msg}");
-// 紀錄(規劃書第 5.3 節):每份紀錄一個 header 情境;loadScenario 時紀錄器在引擎重設前自動關閉,這裡再為新情境開新檔
-RecordWriter? recorder = null;
-router.Recorder = () => recorder;
-string RecordPathFor(string scenarioId) => options.RecordPath is { } rp && recorder is null
+// 紀錄(規劃書第 5.3 節):每份紀錄一個 header 情境;loadScenario 時紀錄器在引擎重設前自動關閉,這裡再為新情境開新檔。
+// 紀錄器由 router 擁有:開檔/換檔(SwapRecorder,帶入目前的 sessionInfo 寫 header)與 sessionInfo 寫 session 行在同一把鎖內
+string RecordPathFor(string scenarioId) => options.RecordPath is { } rp && router.Recorder is null
     ? (Path.IsPathRooted(rp) ? rp : Path.Combine(root, rp))
     : RecordWriter.DefaultPath(RepositoryPaths.RecordsDirectory(root), scenarioId);
 if (options.Record)
 {
-    recorder = new RecordWriter(RecordPathFor(scenario.Id), engine, session: router.Session);
-    Console.WriteLine($"  紀錄:{recorder.Path}");
+    var first = router.SwapRecorder(session => new RecordWriter(RecordPathFor(scenario.Id), engine, session: session));
+    Console.WriteLine($"  紀錄:{first.Path}");
 }
 // 情境切換(檔案路徑或內嵌情境物件共用;交接紀錄待辦第 1 項):載入結果 → TryApplyScenarioLoad(驗證錯誤/船舶/動力學失敗 → 拒絕,
 // 引擎狀態不變、紀錄不切換,引擎發 scenarioLoadRejected 由下方訂閱者印出並轉給教官站)→ 成功才列印檢查、紀錄另開新檔
@@ -212,13 +211,15 @@ void ApplyLoadedScenario(SimulationEngine e, ScenarioLoadResult result, string o
     var sc = e.Scenario;
     Console.WriteLine($"已載入情境 {sc.Id}({(origin == "file" ? "檔案" : "內嵌")})");
     PrintIssues(sc, e.Ship);
-    if (recorder is { Closed: true } closed)
+    if (router.Recorder is { Closed: true } closed)
     {
         var footer = closed.Footer!;
         Console.WriteLine($"紀錄已關閉(情境切換):{closed.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…)");
-        // 參與者與休息時間確認沿用到新情境的紀錄 header(同一批人繼續練習;教官站可再送 sessionInfo 覆寫為 session 行)
-        recorder = new RecordWriter(RecordPathFor(sc.Id), e, session: router.Session);
-        Console.WriteLine($"  紀錄(新情境):{recorder.Path}{(router.Session is { } si ? $"(header 含 {si.Describe()})" : "")}");
+        // 參與者與休息時間確認沿用到新情境的紀錄 header(同一批人繼續練習;教官站可再送 sessionInfo 覆寫為 session 行);
+        // 在 router 的鎖內以當下的 Session 開新檔,與同時到達的 sessionInfo 互斥(不會兩份紀錄都沒有)
+        RecordSessionInfo? headerSession = null;
+        var next = router.SwapRecorder(session => new RecordWriter(RecordPathFor(sc.Id), e, session: headerSession = session));
+        Console.WriteLine($"  紀錄(新情境):{next.Path}{(headerSession is { } si ? $"(header 含 {si.Describe()})" : "")}");
     }
 }
 engine.ScenarioLoadRequested += (e, path) =>
@@ -344,7 +345,7 @@ if (joined && shutdown.EndExerciseRequested && !engine.Ended)
 nmea?.Dispose();
 bus?.Dispose();
 if (ws is not null) await ws.DisposeAsync();
-if (recorder is not null)
+if (router.Recorder is { } recorder)
 {
     var footer = recorder.Closed ? recorder.Footer! : recorder.Close();
     Console.WriteLine($"紀錄已關閉:{recorder.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…,檔案 SHA-256 {footer.Sha256[..16]}…,summary 行 {footer.SummaryLines})");

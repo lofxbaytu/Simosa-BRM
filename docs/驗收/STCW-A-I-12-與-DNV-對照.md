@@ -118,12 +118,12 @@
 
 | 項目 | Class A 要求摘要 | 本系統對應 | 狀態 | 缺項/備註 |
 |---|---|---|---|---|
-| 日夜與光照 | 日夜循環、月光、背景岸燈 | `state.utc`、日夜(`EnvironmentUtcTests`);E16 岸燈 | 部分 | 月光未實作(`Visual.Shared`/`Visual.Godot` 無月相/月光模型) |
+| 日夜與光照 | 日夜循環、月光、背景岸燈 | `state.utc`、日夜(`EnvironmentUtcTests`);月球位置/月相/月光照度與夜間環境光 `Visual.Shared/Env/MoonModel.cs`、`EnvironmentMapper`(`MoonModelTests`、`EnvironmentMoonlightTests`)、Godot 月光 `WeatherNode`;E16 岸燈 | 已實作 / 需實機 | 月光與夜間環境光的亮度係數需實機(暗室、內顯筆電)確認(`docs/design/visual-client.md` 第 11 節) |
 | 能見度與降水 | 能見度可變、霧區、雨/雪與雷達雜波 | 能見度/雨區/環境漸變(`EnvironmentRampTests`) | 已實作 | — |
 | 風 | 風速/風向含陣風與時間剖面 | 風與陣風、風向轉變(E13、E14、E17) | 已實作 | — |
 | 浪與湧浪 | 浪譜、湧浪方向 | — | 未實作 | R2/R3 缺項 |
 | 潮流場 | 依海圖隨時間變化的流場 | 均勻流;E06 以漲/退潮兩檔表示 | 部分 | 時變流場未實作(R3) |
-| 潮高 | 潮高隨時間變化影響 UKC | E18 潮窗以時間表 `setEnvironment` 水深漸變近似 | 部分 | 無潮汐(潮高時間表)模型;UKC 由 `waterDepth` 漸變驅動 |
+| 潮高 | 潮高隨時間變化影響 UKC | 情境 `environment.tide`(潮高表線性內插或調和潮)`src/SimCore/Environment/TideModel.cs`:有效水深 = 海圖水深(含區域覆寫)+ 潮高(t),UKC/squat/擱淺/警報與 `summary.ukc` 皆用有效水深,`state.tideHeight_m` 輸出;E18b 潮高表情境(`TideTests`:內插/端點、快照還原、C#↔Python 夾具 `Golden/tide_*.csv`、E18b 紀錄/重播;Python `test_tide`) | 已實作 | E18 原檔仍以水深漸變近似(夾具不變);潮高為情境給定的表/調和式,無潮汐資料庫 |
 
 ### 4.4 視景
 

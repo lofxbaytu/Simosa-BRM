@@ -29,6 +29,7 @@ import { COMMAND_EVENT, tileStyles, type CommandEvent } from './components/share
 import { briefingText, loadScenarioList, loadingLabel, type ScenarioSummary } from './lib/scenario.js';
 import { endExerciseCommand, getAssessmentCommand, loadScenarioCommand, loadScenarioInlineCommand } from './lib/instructor-command.js';
 import type { BerthingRehearsalResult } from './lib/berthing-rehearsal.js';
+import type { ScenarioEditorResult } from './components/instructor/scenario-editor.js';
 import { simpleCommand } from './lib/command.js';
 import { OperationLogDeriver, type OperationEvent } from './lib/operation-log.js';
 import { DebriefAccumulator, type DebriefSummary } from './lib/debrief.js';
@@ -58,6 +59,7 @@ import './components/track-plot.js';
 import './components/instructor/scenario-panel.js';
 import './components/instructor/session-info-panel.js';
 import './components/instructor/berthing-rehearsal-panel.js';
+import './components/instructor/scenario-editor.js';
 import './components/instructor/run-control-panel.js';
 import './components/instructor/environment-panel.js';
 import './components/instructor/fault-panel.js';
@@ -415,7 +417,8 @@ export class InstructorApp extends LitElement {
   ];
 
   @state() private pageMode: PageMode = 'full';
-  @state() private view: 'live' | 'replay' = 'live';
+  /** 完整教官模式的檢視:即時版面、重播檢視、情境編輯(規劃書第 9.1 節「依範本組出新練習」;三者常駐,以 hidden 切換) */
+  @state() private view: 'live' | 'replay' | 'editor' = 'live';
   @state() private sourceMode: SourceMode = 'live';
   @state() private status: ConnectionStatus = 'disconnected';
   @state() private statusDetail = '';
@@ -506,6 +509,7 @@ export class InstructorApp extends LitElement {
     this.addEventListener('sim-reset', this.onReset);
     this.addEventListener('scenario-load', this.onScenarioLoad as EventListener);
     this.addEventListener('rehearsal-compose', this.onRehearsalCompose as EventListener);
+    this.addEventListener('scenario-editor-load', this.onScenarioEditorLoad as EventListener);
     this.addEventListener('snapshot-taken', this.onSnapshotTaken as EventListener);
     this.addEventListener('time-scale-changed', this.onTimeScale as EventListener);
     this.addEventListener('brm-mark', this.onBrmMark as EventListener);
@@ -530,6 +534,7 @@ export class InstructorApp extends LitElement {
     this.removeEventListener('sim-reset', this.onReset);
     this.removeEventListener('scenario-load', this.onScenarioLoad as EventListener);
     this.removeEventListener('rehearsal-compose', this.onRehearsalCompose as EventListener);
+    this.removeEventListener('scenario-editor-load', this.onScenarioEditorLoad as EventListener);
     this.removeEventListener('snapshot-taken', this.onSnapshotTaken as EventListener);
     this.removeEventListener('time-scale-changed', this.onTimeScale as EventListener);
     this.removeEventListener('brm-mark', this.onBrmMark as EventListener);
@@ -845,6 +850,12 @@ export class InstructorApp extends LitElement {
     this.loadScenarioSummary(r.summary, loadScenarioInlineCommand(r.id, r.scenario), r);
   };
 
+  /** 情境編輯器「載入核心」(完整教官模式):同靠離泊預演,以 loadScenario args.scenario 送內嵌情境物件;被拒時由 onScenarioLoadRejected 還原並在編輯器顯示原因。 */
+  private onScenarioEditorLoad = (ev: CustomEvent<ScenarioEditorResult>): void => {
+    const r = ev.detail;
+    this.loadScenarioSummary(r.summary, loadScenarioInlineCommand(r.id, r.scenario), null);
+  };
+
   private downloadRehearsalYaml(): void {
     const r = this.rehearsal;
     if (r) downloadText(`${r.id}.yaml`, r.yaml, 'application/yaml');
@@ -961,7 +972,7 @@ export class InstructorApp extends LitElement {
     const target = ev.composedPath()[0] as HTMLElement | undefined;
     const tag = target?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    if (this.view === 'replay' || (this.pageMode === 'simple' && this.simplePhase !== 'running')) return;
+    if (this.view !== 'live' || (this.pageMode === 'simple' && this.simplePhase !== 'running')) return;
     const cat = BRM_CATEGORIES.find((c) => c.key === ev.key);
     if (cat) {
       this.addMarker({ category: cat.id, note: '' });
@@ -1058,7 +1069,9 @@ export class InstructorApp extends LitElement {
       ${this.renderHeader()}
       ${this.pageMode === 'simple'
         ? this.renderSimple()
-        : html`${this.renderFull()}<brm-replay-view ?hidden=${this.view !== 'replay'}></brm-replay-view>`}
+        : html`${this.renderFull()}<brm-replay-view ?hidden=${this.view !== 'replay'}></brm-replay-view>${this.pageMode === 'full'
+              ? html`<brm-scenario-editor ?hidden=${this.view !== 'editor'} .scenarios=${this.scenarios} .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-scenario-editor>`
+              : nothing}`}
     `;
   }
 
@@ -1098,6 +1111,7 @@ export class InstructorApp extends LitElement {
           ? html`<span class="seg" role="group" aria-label="檢視">
               <button class=${this.view === 'live' ? 'active' : ''} @click=${() => (this.view = 'live')}>即時</button>
               <button class="view-replay ${this.view === 'replay' ? 'active' : ''}" @click=${() => (this.view = 'replay')}>重播檢視</button>
+              <button class="view-editor ${this.view === 'editor' ? 'active' : ''}" title="依範本組出新練習:環境、目標船、故障、評估規則;下載 YAML 或內嵌載入核心" @click=${() => (this.view = 'editor')}>情境編輯</button>
             </span>`
           : nothing}
         ${live && this.sourceMode === 'demo'

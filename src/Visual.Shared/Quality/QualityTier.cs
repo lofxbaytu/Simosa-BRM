@@ -34,6 +34,8 @@ public sealed record QualitySettings
     public required bool GerstnerWaves { get; init; }
     public required bool Foam { get; init; }
     public required bool Shadows { get; init; }
+    /// <summary>月光 DirectionalLight3D 投影(低品質關閉;月光本身三級都有)</summary>
+    public required bool MoonShadows { get; init; }
     public required bool PostProcessing { get; init; }
     public required int Msaa { get; init; }
     public required bool RainParticles { get; init; }
@@ -57,6 +59,7 @@ public sealed record QualitySettings
             GerstnerWaves = false,
             Foam = false,
             Shadows = false,
+            MoonShadows = false,
             PostProcessing = false,
             Msaa = 0,
             RainParticles = false,
@@ -74,6 +77,7 @@ public sealed record QualitySettings
             GerstnerWaves = true,
             Foam = true,
             Shadows = true,
+            MoonShadows = true,
             PostProcessing = true,
             Msaa = 2,
             RainParticles = true,
@@ -91,6 +95,7 @@ public sealed record QualitySettings
             GerstnerWaves = true,
             Foam = true,
             Shadows = true,
+            MoonShadows = true,
             PostProcessing = true,
             Msaa = 4,
             RainParticles = true,

@@ -67,8 +67,7 @@ public class SessionInfoRecordTests
         var engine = TestData.Engine();
         using var shutdown = new ShutdownCoordinator();
         var router = new HostCommandRouter(engine, shutdown);
-        RecordWriter writer = new(path, engine);
-        router.Recorder = () => writer;
+        var writer = router.SwapRecorder(_ => new RecordWriter(path, engine));
         string? acceptedWhere = null;
         router.SessionInfoAccepted += (_, where) => acceptedWhere = where;
 
@@ -137,13 +136,13 @@ public class SessionInfoRecordTests
         var engine = TestData.Engine();
         using var shutdown = new ShutdownCoordinator();
         var router = new HostCommandRouter(engine, shutdown); // Recorder 預設 null:紀錄尚未開啟
+        Assert.Null(router.Recorder);
         var first = router.Handle(SimCommand.SessionInfo(ValidArgs()), Loopback)!;
         Assert.True(AckOf(first).GetProperty("ok").GetBoolean());
         Assert.Contains("header", AckOf(first).GetProperty("detail").GetString());
         Assert.NotNull(router.Session);
 
-        using var writer = new RecordWriter(path, engine, session: router.Session);
-        router.Recorder = () => writer;
+        using var writer = router.SwapRecorder(session => new RecordWriter(path, engine, session: session));
         TestData.RunTo(engine, 1.0);
         // 之後再送一次(例如修正職務):已開啟 → session 行;讀取規則 header 優先
         var second = router.Handle(SimCommand.SessionInfo(ValidArgs("張二副")), Loopback)!;
@@ -172,8 +171,7 @@ public class SessionInfoRecordTests
         var engine = TestData.Engine();
         using var shutdown = new ShutdownCoordinator();
         var router = new HostCommandRouter(engine, shutdown);
-        using var writer = new RecordWriter(path, engine);
-        router.Recorder = () => writer;
+        using var writer = router.SwapRecorder(_ => new RecordWriter(path, engine));
         var bad = router.Handle(new SimCommand { Type = SimCommandType.SessionInfo, Args = SimCommand.Obj(new { participants = new object[] { new { name = "甲", role = "captain" } } }) }, Loopback)!;
         Assert.False(AckOf(bad).GetProperty("ok").GetBoolean());
         Assert.Contains("role", AckOf(bad).GetProperty("detail").GetString());
@@ -201,12 +199,11 @@ public class SessionInfoRecordTests
         var engine = TestData.Engine();
         using var shutdown = new ShutdownCoordinator();
         var router = new HostCommandRouter(engine, shutdown);
-        RecordWriter? recorder = new(path1, engine);
-        router.Recorder = () => recorder;
+        router.SwapRecorder(_ => new RecordWriter(path1, engine));
         engine.ScenarioLoadRequested += (e, _) =>
         {
             e.LoadScenario(TestData.E07());
-            recorder = new RecordWriter(path2, e, session: router.Session);
+            router.SwapRecorder(session => new RecordWriter(path2, e, session: session));
         };
         TestData.RunTo(engine, 1.0);
         Assert.True(AckOf(router.Handle(SimCommand.SessionInfo(ValidArgs()), Loopback)!).GetProperty("ok").GetBoolean());
@@ -214,7 +211,7 @@ public class SessionInfoRecordTests
         engine.ProcessPendingCommands();
         Assert.Equal("E07_steering_failure", engine.Scenario.Id);
         TestData.RunTo(engine, 1.0);
-        recorder!.Close();
+        router.Recorder!.Close();
 
         var rec1 = RecordReader.Read(path1);
         Assert.Equal("session", rec1.SessionInfoSource);

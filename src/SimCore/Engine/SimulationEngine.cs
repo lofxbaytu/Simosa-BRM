@@ -349,6 +349,8 @@ public sealed class SimulationEngine
         _pendingDynamics = null;
         _projection = new LocalTangentPlane(sc.Origin!.Lat, sc.Origin.Lon);
         StartUtc = ResolveStartUtc(sc);
+        // 潮汐(environment.tide):潮高為練習時間的純函數,不進快照/雜湊;無 tide 時 null(潮高 0,數值與舊版相同)
+        var tide = TideModel.FromScenario(sc.Environment.Tide, StartUtc);
 
         var pos = sc.Initial.Position!;
         double x, y;
@@ -358,7 +360,8 @@ public sealed class SimulationEngine
         var u = Units.KnToMps(sc.Initial.Speed);
         Motion = new StateVector(u, 0.0, 0.0, x, y, psi);
 
-        var (telegraph, rpm) = ResolveInitialPropulsion(sc, u);
+        // 直航平衡轉速以初始有效水深(基底 + 潮高(0))計算;無 tide 時 + 0.0 與舊版位元相同
+        var (telegraph, rpm) = ResolveInitialPropulsion(sc, u, sc.Environment.WaterDepth + (tide?.HeightAt(0.0) ?? 0.0));
         _telegraph = telegraph;
         _act = new ActuatorModel(ActuatorParametersForDynamics())
         {
@@ -378,11 +381,13 @@ public sealed class SimulationEngine
             CurrentSetRad = Units.DegToRad(sc.Environment.Current.Set),
             CurrentDriftMps = Units.KnToMps(sc.Environment.Current.Drift),
             Depth = new ConstantDepth(sc.Environment.WaterDepth),
+            Tide = tide,
             VisibilityNm = sc.Environment.VisibilityNm,
         };
 
         _rng = new DeterministicRandom(sc.Seed);
         Tick = 0;
+        Environment.RefreshTide(Time);
         Array.Clear(_hash);
         Frozen = false;
         TimeScale = Units.Clamp(sc.TimeScale <= 0 ? 1.0 : sc.TimeScale, 0.1, Options.MaxTimeScale);
@@ -440,7 +445,7 @@ public sealed class SimulationEngine
     {
         if (_bank is not { Active: true } b) return;
         b.PreStep(_act.Rpm);
-        b.UpdateLast(Motion, Environment.Depth.DepthAt(Motion.X, Motion.Y), _act.Rpm);
+        b.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y), _act.Rpm);
     }
 
     /// <summary>依目前情境、船舶與裝載建立外力模組(初始狀態:拖船 initial、錨收存或情境初始已錨泊、繫纜 initial)。</summary>
@@ -565,7 +570,7 @@ public sealed class SimulationEngine
     /// 否則(航速 &gt; 0 且模型能解直航穩態,如 MMG)取該航速的平衡轉速,與 Python 參考實作 reset() 相同;
     /// 最後退回「航速最接近的前進車令」(暫代模型)。
     /// </summary>
-    private (TelegraphOrder Telegraph, double Rpm) ResolveInitialPropulsion(Scenario.Scenario sc, double u)
+    private (TelegraphOrder Telegraph, double Rpm) ResolveInitialPropulsion(Scenario.Scenario sc, double u, double initialDepth)
     {
         var explicitOrder = !string.IsNullOrWhiteSpace(sc.Initial.Telegraph) &&
                             Enum.TryParse<TelegraphOrder>(sc.Initial.Telegraph, ignoreCase: true, out var parsed)
@@ -574,7 +579,7 @@ public sealed class SimulationEngine
             return (explicitOrder ?? NearestTelegraphForRpm(rpm0), rpm0);
         if (explicitOrder is { } o)
             return (o, Ship.TelegraphRpm(o));
-        if (u > 0.0 && Dynamics.SteadyRpmForSpeed(u, sc.Environment.WaterDepth) is { } steady)
+        if (u > 0.0 && Dynamics.SteadyRpmForSpeed(u, initialDepth) is { } steady)
             return (NearestTelegraphForRpm(steady), steady);
         var order = ResolveInitialTelegraph(sc);
         return (order, Ship.TelegraphRpm(order));
@@ -1354,6 +1359,8 @@ public sealed class SimulationEngine
         }
         else Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
         Tick++;
+        // 潮高隨練習時間更新(步末位置的 UKC/擱淺檢查與下一步的取樣用新時刻的潮高)
+        Environment.RefreshTide(Time);
         if (external)
         {
             _externalEvents.Clear();
@@ -1362,7 +1369,7 @@ public sealed class SimulationEngine
                 Raise(NewEvent(ev.Kind, SimEventSources.Engine, ev.ItemId, null, ev.Message, ev.Data, visible: true));
         }
         // 岸壁效應步末結果(雜湊與 state.bank;步末位置的水深、實際轉速)
-        bank?.UpdateLast(Motion, Environment.Depth.DepthAt(Motion.X, Motion.Y), _act.Rpm);
+        bank?.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y), _act.Rpm);
 
         if (!Aground && UnderKeelClearance() <= 0.0)
         {
@@ -1632,9 +1639,12 @@ public sealed class SimulationEngine
             CurrentSetRad = s.Environment.CurrentSetRad,
             CurrentDriftMps = s.Environment.CurrentDriftMps,
             Depth = depth,
+            // 潮汐模型來自情境(不進快照),沿用並以還原的 Tick 重算潮高
+            Tide = Environment.Tide,
             // Version 2 快照含能見度(null = 無限制,直接取快照值);Version 1 快照沒有此欄位才沿用目前值
             VisibilityNm = s.Version >= 2 ? s.VisibilityNm : Environment.VisibilityNm,
         };
+        Environment.RefreshTide(Time);
         if (_rng.Seed != s.RandomSeed) _rng = new DeterministicRandom(s.RandomSeed, s.RandomCount);
         else _rng.ResetTo(s.RandomCount);
         if (!keepRunState)
@@ -1729,7 +1739,7 @@ public sealed class SimulationEngine
 
     private double UnderKeelClearance()
     {
-        var depth = Environment.Depth.DepthAt(Motion.X, Motion.Y);
+        var depth = Environment.DepthAt(Motion.X, Motion.Y);
         return EnvironmentMath.UnderKeelClearance(depth, Ship.GetLoading(Loading).MaxDraft_m, SquatAt(depth));
     }
 
@@ -1826,6 +1836,7 @@ public sealed class SimulationEngine
             Thruster = _act.Parameters.HasBowThruster ? new ThrusterState { Order = _act.ThrusterOrder, Actual = _act.ThrusterActual } : null,
             DepthBelowKeel = ind.DepthBelowKeelM,
             WaterDepth = sample.WaterDepthM,
+            TideHeightM = env.Tide is null ? null : env.TideHeightM,
             Squat = squat,
             Wind = new WindState
             {

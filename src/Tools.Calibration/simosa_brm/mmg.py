@@ -33,6 +33,7 @@ from typing import Any
 from collections import deque
 
 from .coefficients import r0_prime
+from .tide import TideModel
 from .external import BankEffectModel, Env, ExternalForceModel, Kin
 from .particulars import GRAVITY, KN_TO_MPS, ShipParticulars
 from .propeller import PropellerModel
@@ -258,6 +259,8 @@ class MMGShip:
         # 練習開始的 UTC 時刻(state.utc = start_utc + t;與 C# SimulationEngine.StartUtc 相同:情境 startTimeUtc,未給時由伺服器以實際時鐘代入);
         # None 時 state_json 不輸出 utc(不進雜湊)
         self.start_utc: datetime | None = None
+        # 潮高模型(情境 environment.tide;tide.py):有效水深 = env.water_depth(基底)+ 潮高(tick·dt);None = 無潮汐(數值與舊版相同)
+        self.tide: TideModel | None = None
         self._eng_mode = "stopped"  # stopped | run | reversing | starting
         self._eng_timer = 0.0
         self._n_target = 0.0
@@ -396,7 +399,7 @@ class MMGShip:
         self._update_shallow()
 
     def _shallow_factor(self, group: str) -> float:
-        h = self.env.water_depth
+        h = self._effective_depth()
         if h is None:
             return 1.0
         ratio = h / self.d
@@ -414,6 +417,27 @@ class MMGShip:
         self.mx = self.mx0 * self._shallow_factor("addedMassSurge")
         self.my = self.my0 * self._shallow_factor("addedMassSway")
         self.Jzz = self.Jzz0 * self._shallow_factor("addedInertia")
+
+    # ------------------------------------------------------------------
+    # 潮汐(tide.py;C# EnvironmentConditions.TideHeightM / DepthAt)
+    # ------------------------------------------------------------------
+    def tide_height(self) -> float:
+        """目前潮高(m)= tide.height_at(tick·dt)(與 C# RefreshTide(Time = Tick·Dt) 相同:以 tick 計時,不累加浮點 t);無潮汐 0。"""
+        if self.tide is None:
+            return 0.0
+        return self.tide.height_at(self.state.tick * self.dt)
+
+    def _effective_depth(self) -> float | None:
+        """有效水深 = 基底水深 + 潮高;基底 None(深水)時 None。無潮汐時 + 0.0 與基底位元相同。"""
+        h = self.env.water_depth
+        if h is None:
+            return None
+        return h + self.tide_height()
+
+    def set_tide(self, tide: TideModel | None) -> None:
+        """設定潮高模型(apply_scenario;None 清除)並以目前 tick 的有效水深重算淺水修正。"""
+        self.tide = tide
+        self._update_shallow()
 
     # ------------------------------------------------------------------
     # 設定與命令
@@ -449,6 +473,8 @@ class MMGShip:
         self.faults = []
         self.rng = random.Random(self.seed)
         self.gust_factor = 1.0
+        if self.tide is not None:
+            self._update_shallow()  # 直航平衡轉速以 tick 0 的有效水深(基底 + 潮高(0))計算(C# ResolveInitialPropulsion)
         if rpm is None:
             rpm = self.steady_rpm_for_speed(self.state.u) if speed_kn > 0 else 0.0
         self.state.n = rpm / 60.0
@@ -470,7 +496,8 @@ class MMGShip:
     # 外力(拖船 / 錨 / 泊位 / 岸壁;external.py)
     # ------------------------------------------------------------------
     def _water_depth_or_inf(self) -> float:
-        return self.env.water_depth if self.env.water_depth is not None else math.inf
+        h = self._effective_depth()
+        return h if h is not None else math.inf
 
     def _kin(self) -> Kin:
         s = self.state
@@ -1092,6 +1119,9 @@ class MMGShip:
         if self.ctl.frozen:
             return
         s = self.state
+        # 潮汐:淺水修正以步首(tick·dt)的有效水深重算(C# 每步由 EnvironmentSample 取樣,無潮汐時係數不變)
+        if self.tide is not None:
+            self._update_shallow()
         # 陣風:每秒以種子亂數更新一次(即使 gustiness = 0 也抽號,使亂數序列與快照的計數一致;C# Advance 同)
         if s.tick % self._steps_per_second == 0:
             self.gust_factor = 1.0 + self.env.gustiness * (2.0 * self.rng.random() - 1.0)
@@ -1175,7 +1205,7 @@ class MMGShip:
     # 輸出
     # ------------------------------------------------------------------
     def squat(self) -> float:
-        h = self.env.water_depth
+        h = self._effective_depth()
         if h is None:
             return 0.0
         U = math.hypot(self.state.u, self.state.v)
@@ -1185,7 +1215,7 @@ class MMGShip:
         return self.squat_cs * self.vol / (self.L * self.L) * fnh * fnh / math.sqrt(1.0 - fnh * fnh)
 
     def depth_below_keel(self) -> float:
-        h = self.env.water_depth
+        h = self._effective_depth()
         if h is None:
             return 999.0
         return h - max(self.sp.loading.draft_fore_m, self.sp.loading.draft_aft_m) - self.squat()
@@ -1269,7 +1299,8 @@ class MMGShip:
             "telegraph": self.ctl.telegraph,
             "thruster": {"order": self.ctl.thruster_order, "actual": s.thr},
             "depthBelowKeel": self.depth_below_keel(),
-            "waterDepth": self.env.water_depth if self.env.water_depth is not None else 999.0,
+            "waterDepth": self._effective_depth() if self.env.water_depth is not None else 999.0,
+            **({"tideHeight_m": self.tide_height()} if self.tide is not None else {}),
             "squat": self.squat(),
             "wind": {"trueSpeed": w_eff / KN_TO_MPS, "trueDir": deg360(wind.wind_dir_from),
                      "relSpeed": rel_speed / KN_TO_MPS, "relDir": rel_dir},

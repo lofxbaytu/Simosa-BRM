@@ -1,0 +1,88 @@
+namespace SimosaBRM.SimCore.Environment;
+
+/// <summary>
+/// 潮高模型(情境 environment.tide;情境引擎設計第 1.5.1 節):潮高(m)為練習時間 t(秒,自練習開始)的純函數,
+/// 有效水深 = 基底水深(海圖水深,含 zones 覆寫與 setEnvironment waterDepth 漸變)+ 潮高(t)。
+/// 確定性:只由 t 決定,不進快照與雜湊(還原後以 Tick 重算);Python 參考實作 simosa_brm/tide.py 為同一公式。
+/// </summary>
+public abstract class TideModel
+{
+    /// <summary>練習時間 t(秒)的潮高(m)。</summary>
+    public abstract double HeightAt(double t);
+
+    /// <summary>
+    /// 由情境建立模型:table 以線性內插(範圍外取端點),utc 時刻換算為相對 <paramref name="startUtc"/> 的秒數;
+    /// harmonic 為 mean + Σ A·cos(2πt/T + φ)。無 tide 時 null。結構錯誤(表點 &lt; 2、t 未遞增、週期 ≤ 0 …)由
+    /// <see cref="Scenario.Scenario.StructuralIssues"/> 先擋,此處只做最低限度的防呆。
+    /// </summary>
+    public static TideModel? FromScenario(Scenario.ScenarioTide? tide, DateTime? startUtc)
+    {
+        if (tide is null) return null;
+        if (tide.Table is { Count: > 0 } table)
+        {
+            var points = new List<(double T, double Height)>(table.Count);
+            foreach (var p in table)
+            {
+                double t;
+                if (p.T is { } given) t = given;
+                else if (startUtc is { } start && Engine.SimulationEngine.TryParseUtc(p.Utc, out var utc)) t = (utc - start).TotalSeconds;
+                else throw new InvalidDataException("environment.tide.table 的 utc 需有可解析的情境 startTimeUtc");
+                points.Add((t, p.HeightM));
+            }
+            return new TideTable(points);
+        }
+        if (tide.Harmonic is { } h)
+            return new HarmonicTide(h.MeanLevelM, h.Constituents.Select(c => (c.AmplitudeM, c.PeriodS, Contracts.Units.DegToRad(c.PhaseDeg))).ToList());
+        return null;
+    }
+}
+
+/// <summary>潮高表:(t, 高度) 線性內插,t 在範圍外取端點值;表至少 2 點且 t 嚴格遞增(結構檢查保證)。</summary>
+public sealed class TideTable : TideModel
+{
+    public IReadOnlyList<(double T, double Height)> Points { get; }
+
+    public TideTable(IReadOnlyList<(double T, double Height)> points)
+    {
+        if (points.Count == 0) throw new ArgumentException("潮高表至少需要 1 點", nameof(points));
+        Points = points;
+    }
+
+    public override double HeightAt(double t)
+    {
+        var pts = Points;
+        if (t <= pts[0].T) return pts[0].Height;
+        var last = pts[pts.Count - 1];
+        if (t >= last.T) return last.Height;
+        // 線性搜尋(表通常只有數十點);公式與 Python TideTable.height_at 相同的運算順序
+        for (var i = 1; i < pts.Count; i++)
+        {
+            var (t1, h1) = pts[i];
+            if (t > t1) continue;
+            var (t0, h0) = pts[i - 1];
+            return h0 + (h1 - h0) * (t - t0) / (t1 - t0);
+        }
+        return last.Height;
+    }
+}
+
+/// <summary>調和潮:高度 = meanLevel + Σ amplitude·cos(2π·t/period + phase)(phase 為弧度)。</summary>
+public sealed class HarmonicTide : TideModel
+{
+    public double MeanLevelM { get; }
+    public IReadOnlyList<(double AmplitudeM, double PeriodS, double PhaseRad)> Constituents { get; }
+
+    public HarmonicTide(double meanLevelM, IReadOnlyList<(double AmplitudeM, double PeriodS, double PhaseRad)> constituents)
+    {
+        MeanLevelM = meanLevelM;
+        Constituents = constituents;
+    }
+
+    public override double HeightAt(double t)
+    {
+        var h = MeanLevelM;
+        foreach (var (a, period, phase) in Constituents)
+            h += a * Math.Cos(2.0 * Math.PI * t / period + phase);
+        return h;
+    }
+}

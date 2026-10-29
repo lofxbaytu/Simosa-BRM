@@ -53,6 +53,16 @@ public static class ScenarioValidator
             if (inside && z.Type == ZoneType.NoGo && scenario.Assessment.HardFail.Any(r => r.Rule == "zoneEntered" && r.ZoneId == z.Id))
                 Error($"zones[{scenario.Zones.IndexOf(z)}]", $"初始位置已在禁區 {z.Id} 內(硬性失敗在初始狀態已成立)");
         }
+        // 潮汐:初始有效水深 = 基底(含區域覆寫)+ 潮高(t = 0)(與 SimulationEngine.Initialize 相同);utc 表點而無 startTimeUtc 時結構檢查已回報,此處略過潮高
+        if (scenario.Environment.Tide is { } tideSpec)
+        {
+            var hasStart = Engine.SimulationEngine.TryParseUtc(scenario.StartTimeUtc, out var startUtc);
+            try
+            {
+                if (Environment.TideModel.FromScenario(tideSpec, hasStart ? startUtc : null) is { } tide) depth0 += tide.HeightAt(0.0);
+            }
+            catch (InvalidDataException) { }
+        }
         if (maxDraft is { } draft)
         {
             var ukc0 = depth0 - draft;

@@ -1,0 +1,26 @@
+# 跨語言潮汐夾具情境(潮高表;export_tide_reference.py 產生 tide_table.csv,C# TideTests 讀取比對):
+#   基底水深 12 m + 潮高表(t 與 utc 混用;utc 相對 startTimeUtc 05:00:00Z 換算),FSB1 滿載直航、無風無流(潮高與水深只由 t 決定)。
+id: tide_table
+name: 潮高表跨語言夾具
+seed: 20261104
+startTimeUtc: "2026-11-04T05:00:00Z"
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.05 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 0
+  speed: 6
+  telegraph: SAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 12
+  tide:
+    table:
+      - { utc: "2026-11-04T04:50:00Z", height_m: 2.1 }     # 練習開始前(t = −600):t ≤ 首點取首點值
+      - { t: 0, height_m: 1.9 }
+      - { utc: "2026-11-04T05:00:10Z", height_m: 1.85 }    # t = 10
+      - { t: 25.5, height_m: 1.6 }
+      - { utc: "2026-11-04T05:00:45.5Z", height_m: 1.1 }   # t = 45.5
+      - { t: 50, height_m: 1.25 }                          # 短暫回升(內插在兩點間線性)

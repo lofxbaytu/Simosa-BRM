@@ -3,6 +3,7 @@
 # 口門、浚深航道(軸 080°、底寬 200 m、維護水深 CD 7.0 m)、兩側淺灘(CD 5.0 m)、速限區與迴船池皆為示意值(data/areas/anping-approach.json;示意,待 ENC 校正)。
 # FSB2 滿載(7.2 m 平吃水)自口門外 4.0 nm 進港,HAH 約 7.5 kn(計畫在航道外端前減至 SAH)、自動舵 077°(含橫流修正)。潮汐以基底水深 = 維護水深 + 潮高表示:
 #   預報潮高 +1.9 m(水深 8.9 m、靜態 UKC 1.7 m);實際潮位比預報低且提早退潮(setEnvironment waterDepth 漸變,degraded 8.6 m、emergency 8.4 m)。
+#   潮高表版見 E18b_tide_table.yaml(environment.tide.table:基底 = 海圖水深 CD 7.0 m,潮高(t)另加,state.tideHeight_m 輸出;情境引擎設計第 1.5.1 節);本檔與既有夾具/測試維持不變。
 # squat 隨速度劇增(MMG ICORELS;FSB2 在 8.5 m 水深:DSAH 約 0.35 m、SAH 約 0.45 m、HAH 約 0.8 m、FAH 約 1.0 m):碼頭「速度誘惑」要求加速趕泊位時段。
 # 時間表:T+5 degraded(tideLower:潮位站通報潮位比預報低 0.3 m 且提早)→ T+12 碼頭/代理行要求加速(速度誘惑)→ 通過沙洲段 BAR(或 T+35)emergency(barShoaling:潮位續降、
 #   前船回報沙洲段水深淺於海圖)→ 到達迴船池、擱淺或 T+55 結束;測深儀淺水警報(alerts.shallowWater_m,龍骨下 < 0.8 m)。

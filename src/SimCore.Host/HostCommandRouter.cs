@@ -12,16 +12,23 @@ public sealed record HostCommandResult(object Reply, Action? AfterReply = null);
 /// 主控程序層指令(不進引擎佇列、不寫 input 行、不進雜湊;與 getAssessment 同一層):
 /// <list type="bullet">
 /// <item><c>sessionInfo</c>:參與者與休息時間確認(RecordSessionInfo.TryParse 驗證)。寫進目前紀錄 — 紀錄已開啟時追加 session 行;
-/// 未開啟(或已關閉等待情境切換另開新檔)時保留,由主控程序在開新紀錄時寫進 header。回 ack {ok, detail, tick}。</item>
+/// 未開啟(或已關閉等待情境切換另開新檔)時保留,由 <see cref="SwapRecorder"/> 在開新紀錄時寫進 header。回 ack {ok, detail, tick}。</item>
 /// <item><c>shutdown</c>:僅接受本機或直連私有網段(教官筆電)的客戶端;語意 = 結束練習 → 寫 footer → 程序結束,回覆後 ≤ 1 s 內結束。</item>
 /// </list>
 /// 其他指令回傳 null(交給引擎)。
+/// <para>
+/// 紀錄器由本類別擁有(<see cref="Recorder"/>、<see cref="SwapRecorder"/>):sessionInfo 的「寫 session 行或留給下一份 header」
+/// 與情境切換時「以目前的 Session 開新檔並換上」在同一把鎖內完成,所以不論 sessionInfo 落在切換前後,資訊都恰好進入一份紀錄
+/// (舊檔 session 行 / 新檔 header / 新檔 session 行),不會兩邊都沒有(第十六輪審查已知限制 1)。
+/// </para>
 /// </summary>
 public sealed class HostCommandRouter
 {
     private readonly SimulationEngine _engine;
     private readonly ShutdownCoordinator _shutdown;
+    // 保護 Session 與 _recorder 的一致性:sessionInfo(WebSocket 執行緒)與 SwapRecorder(引擎執行緒的情境切換)互斥
     private readonly object _sync = new();
+    private RecordWriter? _recorder;
 
     public HostCommandRouter(SimulationEngine engine, ShutdownCoordinator shutdown)
     {
@@ -29,10 +36,29 @@ public sealed class HostCommandRouter
         _shutdown = shutdown;
     }
 
-    /// <summary>目前的紀錄器(可為 null;主控程序於情境切換時換新)</summary>
-    public Func<RecordWriter?> Recorder { get; set; } = () => null;
+    /// <summary>目前的紀錄器(可為 null = 未開啟紀錄;只由 <see cref="SwapRecorder"/> 換上)</summary>
+    public RecordWriter? Recorder
+    {
+        get { lock (_sync) return _recorder; }
+    }
     /// <summary>最近一次接受的參與者資訊(開新紀錄時寫進 header)</summary>
     public RecordSessionInfo? Session { get; private set; }
+
+    /// <summary>
+    /// 開第一份紀錄或情境切換另開新檔:在 <c>_sync</c> 內以目前的 <see cref="Session"/> 呼叫 <paramref name="factory"/> 建立新紀錄器
+    /// (通常 <c>new RecordWriter(path, engine, session: session)</c>)並換上,回傳新紀錄器。舊紀錄器不由此關閉
+    /// (情境切換時 RecordWriter 已在 <see cref="SimulationEngine.ScenarioLoading"/> 自動關閉;程序結束時由主控程序關閉)。
+    /// factory 擲例外時紀錄器維持原樣。
+    /// </summary>
+    public RecordWriter SwapRecorder(Func<RecordSessionInfo?, RecordWriter> factory)
+    {
+        lock (_sync)
+        {
+            var writer = factory(Session);
+            _recorder = writer;
+            return writer;
+        }
+    }
     public event Action<RecordSessionInfo, string>? SessionInfoAccepted;
     public event Action<string>? Log;
 
@@ -49,9 +75,9 @@ public sealed class HostCommandRouter
                 string where;
                 lock (_sync)
                 {
+                    // 與 SwapRecorder 同一把鎖:此處看到的紀錄器若已關閉(情境切換中),Session 必定被接下來的 SwapRecorder 寫進新檔 header
                     Session = info;
-                    var rec = Recorder();
-                    where = rec is not null && rec.WriteSession(info) ? "session 行" : "下一份紀錄的 header";
+                    where = _recorder is not null && _recorder.WriteSession(info) ? "session 行" : "下一份紀錄的 header";
                 }
                 SessionInfoAccepted?.Invoke(info, where);
                 Log?.Invoke($"sessionInfo 已寫入{where}:{info.Describe()}");

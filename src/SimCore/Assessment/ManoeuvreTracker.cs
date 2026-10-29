@@ -565,7 +565,7 @@ public sealed class ManoeuvreTracker
         var act = _engine.Actuators;
         var env = _engine.Environment;
         var t = tick * _dt;
-        var depth = env.Depth.DepthAt(m.X, m.Y);
+        var depth = env.DepthAt(m.X, m.Y); // 有效水深(基底 + 潮高),與 state.waterDepth、UKC 同源;h/T 可比較性判斷據此
         var rec = new ManoeuvreRecord
         {
             Id = id, Kind = kind, Side = side, StartS = t, ShipId = _ship.Id, Loading = _loading, Dynamics = _engine.Dynamics.ModelName,

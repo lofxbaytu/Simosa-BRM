@@ -264,6 +264,55 @@ public sealed class Scenario
                 if (leaf.Event is { } ev && ev.ItemId is { } eid && ItemIdRefersToTimeline(ev.Kind) && !allItemIds.Contains(eid)) Error($"{path}.expect", $"expect 引用不存在的時間表項目:{eid}");
             }
         }
+        // 潮汐(environment.tide;情境引擎設計第 1.5.1 節):table 至少 2 點、t 嚴格遞增、utc 需情境 startTimeUtc;harmonic 週期為正。與 Python structural_issues 一致
+        if (Environment.Tide is { } tide)
+        {
+            const string tp = "environment.tide";
+            var hasTable = tide.Table is not null;
+            var hasHarmonic = tide.Harmonic is not null;
+            if (hasTable == hasHarmonic) Error(tp, "tide 需為 table 或 harmonic 擇一");
+            if (tide.Table is { } table)
+            {
+                if (table.Count < 2) Error($"{tp}.table", "潮高表至少需要 2 點");
+                var startOk = Engine.SimulationEngine.TryParseUtc(StartTimeUtc, out var start);
+                double? prev = null;
+                for (var i = 0; i < table.Count; i++)
+                {
+                    var p = table[i];
+                    var pp = $"{tp}.table[{i}]";
+                    double? t = null;
+                    if (p.T is not null && p.Utc is not null) Error(pp, "表點的 t 與 utc 只能擇一");
+                    else if (p.T is { } given) t = given;
+                    else if (p.Utc is { } utcText)
+                    {
+                        if (!Engine.SimulationEngine.TryParseUtc(utcText, out var utc)) Error(pp, $"utc 無法解析:{utcText}");
+                        else if (!startOk) Error(pp, "表點以 utc 指定時情境必須有可解析的 startTimeUtc");
+                        else t = (utc - start).TotalSeconds;
+                    }
+                    else Error(pp, "表點需要 t 或 utc");
+                    if (!double.IsFinite(p.HeightM)) Error(pp, "height_m 必須為有限數值");
+                    if (t is { } tv)
+                    {
+                        if (!double.IsFinite(tv)) Error(pp, "t 必須為有限數值");
+                        else if (prev is { } pv && tv <= pv) Error(pp, "潮高表的 t 必須嚴格遞增");
+                        prev = tv;
+                    }
+                }
+            }
+            if (tide.Harmonic is { } h)
+            {
+                if (!double.IsFinite(h.MeanLevelM)) Error($"{tp}.harmonic.meanLevel_m", "meanLevel_m 必須為有限數值");
+                if (h.Constituents.Count == 0) Error($"{tp}.harmonic.constituents", "調和潮至少需要 1 個分潮");
+                for (var i = 0; i < h.Constituents.Count; i++)
+                {
+                    var c = h.Constituents[i];
+                    var cp = $"{tp}.harmonic.constituents[{i}]";
+                    if (!(c.PeriodS > 0) || !double.IsFinite(c.PeriodS)) Error(cp, "period_s 必須為正");
+                    if (!(c.AmplitudeM >= 0) || !double.IsFinite(c.AmplitudeM)) Error(cp, "amplitude_m 不可為負");
+                    if (!double.IsFinite(c.PhaseDeg)) Error(cp, "phase_deg 必須為有限數值");
+                }
+            }
+        }
         return issues;
     }
 
@@ -433,6 +482,44 @@ public sealed class ScenarioEnvironment
     public string? Seabed { get; set; }
     /// <summary>雷達環境(雨區、海況;無物理效果,以 state.radarEnvironment 廣播給雷達服務;ScenarioRadarEnvironment.cs)</summary>
     public ScenarioRadarEnvironment? Radar { get; set; }
+    /// <summary>
+    /// 潮汐(選填;情境引擎設計第 1.5.1 節):有效水深 = waterDepth(海圖/基底水深,含 zones 覆寫與 setEnvironment 漸變)+ 潮高(t)。
+    /// table(線性內插,範圍外取端點)或 harmonic(mean + Σ A·cos(2πt/T + φ))擇一;未給時潮高恆為 0,數值與舊版相同。
+    /// </summary>
+    public ScenarioTide? Tide { get; set; }
+}
+
+/// <summary>情境潮汐設定:<see cref="Table"/> 與 <see cref="Harmonic"/> 擇一(<see cref="Scenario.StructuralIssues"/> 檢查)。</summary>
+public sealed class ScenarioTide
+{
+    /// <summary>潮高表(≥ 2 點、t 嚴格遞增)</summary>
+    public List<ScenarioTidePoint>? Table { get; set; }
+    /// <summary>調和潮</summary>
+    public ScenarioHarmonicTide? Harmonic { get; set; }
+}
+
+/// <summary>潮高表的一點:t(秒,相對練習開始)或 utc(ISO 8601,換算為相對情境 startTimeUtc 的秒數)擇一,height_m 為潮高(m,相對海圖基準)。</summary>
+public sealed class ScenarioTidePoint
+{
+    public double? T { get; set; }
+    public string? Utc { get; set; }
+    [JsonPropertyName("height_m")] public double HeightM { get; set; }
+}
+
+/// <summary>調和潮:高度 = meanLevel_m + Σ amplitude_m·cos(2π·t/period_s + phase_deg)。</summary>
+public sealed class ScenarioHarmonicTide
+{
+    [JsonPropertyName("meanLevel_m")] public double MeanLevelM { get; set; }
+    public List<ScenarioTideConstituent> Constituents { get; set; } = new();
+}
+
+/// <summary>分潮(name 只作標示,例如 M2、S2、K1、O1)。</summary>
+public sealed class ScenarioTideConstituent
+{
+    public string? Name { get; set; }
+    [JsonPropertyName("amplitude_m")] public double AmplitudeM { get; set; }
+    [JsonPropertyName("period_s")] public double PeriodS { get; set; }
+    [JsonPropertyName("phase_deg")] public double PhaseDeg { get; set; }
 }
 
 public enum ScenarioIssueSeverity
