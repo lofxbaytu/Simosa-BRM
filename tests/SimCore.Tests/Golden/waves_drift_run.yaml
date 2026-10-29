@@ -1,0 +1,11 @@
+# 由 export_waves_reference.py 產生(請勿手改):FSB1 滿載 6 kn、Hs 2 m / Tp 7 s 自 045° JONSWAP、水深 20 m,100 s 右舵 10°(300 s)
+id: waves_drift_run
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 6, telegraph: HAH }
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 20
+  waves: { significantHeight_m: 2.0, peakPeriod_s: 7.0, direction_deg: 45, spectrum: jonswap, gamma: 3.3 }

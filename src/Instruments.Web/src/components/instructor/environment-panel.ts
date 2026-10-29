@@ -1,12 +1,13 @@
 // 環境即時改變(規劃書第 9.1 節):真風速/向、陣風、流向/流速、水深、能見度;分組套用,送 setEnvironment。
 // 漸變秒數 ramp_s(設計文件第 3.5 節)附在每次套用上(0 = 立即)。只有 C# 核心支援的欄位(陣風、能見度、漸變)標示但仍送出。
+// 時變流場(state.currentSource = table | tidal;設計文件第 1.5.2 節):標題顯示目前流向/流速與來源,並提示套用流會改為常數、時變停止。
 
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { dispatchCommand, tileStyles } from '../shared.js';
 import { instructorStyles, numberFromInput } from './instructor-shared.js';
 import { CORE_SUPPORT_LABEL, ENVIRONMENT_FIELD_SUPPORT, setEnvironmentCommand, type EnvironmentChange } from '../../lib/instructor-command.js';
-import type { OwnShipState } from '../../types/state.js';
+import { CURRENT_SOURCE_LABELS, type OwnShipState } from '../../types/state.js';
 
 interface EnvForm {
   windSpeed: number;
@@ -115,8 +116,11 @@ export class EnvironmentPanel extends LitElement {
       <div class="panel">
         <div class="panel-title">
           <span>環境 ENVIRONMENT</span>
-          <span class="zh">${s ? `現在 風 ${round1(s.wind.trueSpeed)} kn/${Math.round(s.wind.trueDir)}° · 流 ${Math.round(s.current.set)}°/${round1(s.current.drift)} kn · 水深 ${s.waterDepth !== undefined ? round1(s.waterDepth) : '--'} m${s.visibility_nm !== undefined ? ` · 能見度 ${round1(s.visibility_nm)} nm` : ''}` : '等待狀態'}</span>
+          <span class="zh">${s ? `現在 風 ${round1(s.wind.trueSpeed)} kn/${Math.round(s.wind.trueDir)}° · 流 ${Math.round(s.current.set)}°/${round1(s.current.drift)} kn${s.currentSource ? `(${CURRENT_SOURCE_LABELS[s.currentSource]})` : ''} · 水深 ${s.waterDepth !== undefined ? round1(s.waterDepth) : '--'} m${s.tideHeight_m !== undefined ? `(潮高 ${s.tideHeight_m >= 0 ? '+' : ''}${round1(s.tideHeight_m)} m)` : ''}${s.visibility_nm !== undefined ? ` · 能見度 ${round1(s.visibility_nm)} nm` : ''}` : '等待狀態'}</span>
         </div>
+        ${s?.currentSource
+          ? html`<div class="hint current-source">時變流場(${CURRENT_SOURCE_LABELS[s.currentSource]})執行中:流向/流速由核心依練習時間更新;套用「流」會改為常數並停止時變,直到再載入情境。</div>`
+          : nothing}
         <div class="group">
           <label>真風 kn / 來向°${this.tag('wind')}</label>
           <input class="wind-speed" type="number" min="0" max="100" step="1" .value=${String(f.windSpeed)} @input=${(e: Event) => this.set('windSpeed', e)} />

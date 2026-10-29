@@ -1,0 +1,21 @@
+# 由 export_interaction_reference.py 產生(請勿手改):FSB1 滿載 8 kn 被 OVT(L 130 m、16 490 t)以 12 kn 自左舷 50 m 追越、深水 1000 m,80 s 右舵 5°(210 s)
+id: interaction_overtaking_run
+seed: 1
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 8, telegraph: HAH }
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 1000
+  shipInteraction: { enabled: true, coefficientScale: 1.0, eventThreshold_t: 3.0 }
+targets:
+  - id: OVT
+    name: OVERTAKER
+    shipType: cargo
+    loa: 130
+    beam: 22
+    draft: 7.5
+    displacement_t: 16490
+    initial: { position: { x: -50, y: -200 }, heading: 0, speed: 12 }
+    behaviour: { mode: hold }

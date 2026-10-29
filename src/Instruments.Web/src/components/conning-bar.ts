@@ -80,6 +80,7 @@ export class ConningBar extends LitElement {
         <brm-depth
           .ukc=${s.depthBelowKeel}
           .waterDepth=${s.waterDepth}
+          .tideHeight=${s.tideHeight_m}
           .squat=${s.squat}
           .draftFore=${s.draft?.fore}
           .draftAft=${s.draft?.aft}
@@ -88,7 +89,7 @@ export class ConningBar extends LitElement {
           .sensorInvalid=${sen ? !sen.depthValid : false}
         ></brm-depth>
         <brm-wind .trueDir=${s.wind.trueDir} .trueSpeed=${s.wind.trueSpeed} .relDir=${s.wind.relDir} .relSpeed=${s.wind.relSpeed} .heading=${s.heading}></brm-wind>
-        <brm-current .set=${s.current.set} .drift=${s.current.drift} .heading=${s.heading}></brm-current>
+        <brm-current .set=${s.current.set} .drift=${s.current.drift} .heading=${s.heading} .source=${s.currentSource}></brm-current>
         <brm-clock .simTime=${s.t} .tick=${s.tick} .lat=${s.pos.lat} .lon=${s.pos.lon} .frozen=${s.flags?.frozen ?? false} .posInvalid=${sen ? !sen.positionValid : false}></brm-clock>
         ${withRoute ? html`<brm-route .route=${s.route} .visibility=${s.visibility_nm}></brm-route>` : ''}
       </div>

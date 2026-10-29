@@ -66,6 +66,13 @@ export interface Current {
   drift: number;
 }
 
+/** 流場來源(state.currentSource;設計文件第 1.5.2 節):流場表 table、潮流 tidal;常數流(含被 setEnvironment 覆寫後)省略 */
+export type CurrentSource = 'table' | 'tidal';
+
+export const CURRENT_SOURCES: readonly CurrentSource[] = ['table', 'tidal'] as const;
+
+export const CURRENT_SOURCE_LABELS: Readonly<Record<CurrentSource, string>> = { table: '流場表', tidal: '潮流' };
+
 export interface Thruster {
   /** 指令 −1 至 1(右推正) */
   order: number;
@@ -171,10 +178,15 @@ export interface OwnShipState {
   telegraph: TelegraphPosition;
   thruster?: Thruster;
   depthBelowKeel: number;
+  /** 有效水深 (m) = 基底水深 + 潮高 */
   waterDepth?: number;
+  /** 潮高 (m;情境有 environment.tide 時才有;設計文件第 1.5.1 節) */
+  tideHeight_m?: number;
   squat?: number;
   wind: Wind;
   current: Current;
+  /** 流場來源(時變流場時才有;state.current 隨時間變化;設計文件第 1.5.2 節) */
+  currentSource?: CurrentSource;
   loading: LoadingCondition;
   draft?: Draft;
   engine?: EngineStatus;

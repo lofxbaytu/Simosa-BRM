@@ -55,6 +55,8 @@ public sealed record OwnShipState
     [JsonPropertyName("squat")] public double? Squat { get; init; }
     [JsonPropertyName("wind")] public required WindState Wind { get; init; }
     [JsonPropertyName("current")] public required CurrentState Current { get; init; }
+    /// <summary>流場來源("table" | "tidal";情境 environment.current 為時變流場且未被 setEnvironment 覆寫時輸出;常數流省略)</summary>
+    [JsonPropertyName("currentSource")] public string? CurrentSource { get; init; }
     [JsonPropertyName("loading")] public required LoadingCondition Loading { get; init; }
     [JsonPropertyName("draft")] public DraftState? Draft { get; init; }
     [JsonPropertyName("engine")] public EngineStatus? Engine { get; init; }
@@ -91,6 +93,10 @@ public sealed record OwnShipState
     [JsonPropertyName("berth")] public BerthStatusState? Berth { get; init; }
     /// <summary>岸壁效應(情境無 banks 時省略;設計文件 physics-bank-effect.md 第 5 節)</summary>
     [JsonPropertyName("bank")] public Physics.External.BankEffectState? Bank { get; init; }
+    /// <summary>浪與平均漂移力(情境無 environment.waves 時省略;設計文件 physics-waves.md 第 5 節;視景以 significantHeight_m 畫海面)</summary>
+    [JsonPropertyName("waves")] public Physics.External.WaveDriftState? Waves { get; init; }
+    /// <summary>船間交互作用(只在情境 environment.shipInteraction.enabled 且動力學接受外力時輸出;docs/design/physics-ship-interaction.md 第 5 節)</summary>
+    [JsonPropertyName("shipInteraction")] public Physics.External.ShipInteractionState? ShipInteraction { get; init; }
     /// <summary>雷達環境(情境 environment.radar 換算為 ENU;情境未給時省略;docs/design/radar-arpa.md 第 2.1 節)</summary>
     [JsonPropertyName("radarEnvironment")] public SimosaBRM.SimCore.Scenario.RadarEnvironmentState? RadarEnvironment { get; init; }
 }

@@ -5,6 +5,8 @@ import {
   SHIP_IDS,
   TELEGRAPH_POSITIONS,
   type Current,
+  CURRENT_SOURCES,
+  type CurrentSource,
   type EngineStatus,
   type LoadingCondition,
   type OwnShipState,
@@ -217,6 +219,12 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
   if (drift !== undefined) state.drift = drift;
   const waterDepth = optNum(raw, 'waterDepth', issues, 'waterDepth');
   if (waterDepth !== undefined) state.waterDepth = waterDepth;
+  // 潮高(情境有 environment.tide 時才有)與流場來源(時變流場時才有):型別錯誤記入 issues,不影響其他欄位
+  const tide = optNum(raw, 'tideHeight_m', issues, 'tideHeight_m');
+  if (tide !== undefined) state.tideHeight_m = tide;
+  const source = raw['currentSource'];
+  if (typeof source === 'string' && (CURRENT_SOURCES as readonly string[]).includes(source)) state.currentSource = source as CurrentSource;
+  else if (source !== undefined && source !== null) issues.push('currentSource');
   const squat = optNum(raw, 'squat', issues, 'squat');
   if (squat !== undefined) state.squat = squat;
 

@@ -76,6 +76,9 @@ public static class EnvironmentMapper
         var daylight = Math.Clamp((elev + 6.0) / 12.0, 0.0, 1.0); // −6°(民用曙暮光)→ 0,+6° → 1
         var rain = RainAt(radar, s.Pos.X, s.Pos.Y);
         var moon = MoonLookFor(mode, s.Utc, startUtc, s.T, s.Pos.Lat, s.Pos.Lon, visNm, rain);
+        // 情境有浪(state.waves)時波高與浪向取核心的 Hs 與來向(去向 = 來向 + 180°);否則維持由風速推得的海況波高與風向推得的浪向
+        var waveHeight = s.Waves is { } w ? Math.Max(0.0, w.SignificantHeightM) : WaveHeightFromSeaState(sea);
+        var waveDir = s.Waves is { } wd ? Units.NormalizeHeadingDeg(wd.DirectionDeg + 180.0) : Units.NormalizeHeadingDeg(s.Wind.TrueDir + 180.0);
         return new EnvironmentLook
         {
             SunElevationDeg = elev,
@@ -86,8 +89,8 @@ public static class EnvironmentMapper
             VisibilityM = visM,
             Rain = rain,
             SeaState = sea,
-            WaveHeightM = WaveHeightFromSeaState(sea),
-            WaveDirectionDeg = Units.NormalizeHeadingDeg(s.Wind.TrueDir + 180.0),
+            WaveHeightM = waveHeight,
+            WaveDirectionDeg = waveDir,
             WindSpeedKn = wind,
             Moon = moon,
             NightSkyBrightness = NightSkyBrightnessFor(daylight, moon.Light),

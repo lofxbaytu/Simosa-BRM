@@ -1,0 +1,245 @@
+# E06b 狹窄航道/防波堤口橫流 — 台中港(潮流自動轉向版;E06 的變體;規劃書第 8.1 節 E06、第 3.4 節台中港;設計 docs/design/scenario-library.md 第 5 節;
+#   情境引擎設計第 1.5.2 節 environment.current.tidal;schema src/Contracts/scenario.schema.json)
+# 與 E06_taichung_channel_flood / _ebb 同一幾何、同一評估;差別在流場:E06 兩檔以常數流 + setEnvironment 漸變各表示漲潮或退潮,
+#   本檔以 environment.tide(示意潮高表,T+11–13 分高潮平潮)+ environment.current.tidal(漲 085° 2.5 kn、退 265° 3.0 kn)表示
+#   漲潮 → 平潮 → 退潮的自動切換:進港途中轉流,偏航角修正方向反轉;時間表不再有 setEnvironment(覆寫會停止時變),
+#   流壓在口門內不消失(示意:均勻流場)。潮高表的變化率為分段常數 → 潮流在表點瞬間切換(480/660/780/960 s;無漸變),
+#   要平滑變化請改用 tide.harmonic 或增加中間表點(scenario-engine.md 第 1.5.2 節)。state.currentSource = tidal,state.current 隨時間變化,state.tideHeight_m 輸出潮高。
+# 航道中心線 125°(WP0–WP3)、口門寬 350 m、北/南防波堤(禁區,水深 2 m)與導燈皆為示意值(data/areas/taichung-harbour-entrance.json,示意,待 ENC 校正);
+# 迴船池前減速區與出港船設計航跡(中心線北側 110 m)見 data/areas/taichung-inner-harbour.json(示意,待 ENC 校正)。
+# 岸壁效應:banks 引用 data/areas/taichung-harbour-entrance.json banks[](外航道兩側浚深邊坡、南北防波堤港內側岸壁;示意,係數為估計值,見 docs/design/physics-bank-effect.md);航道中線上不受岸壁力,偏離中線約 90 m 以上才明顯。
+# FSB1 滿載進港,引水人在船(帶領者扮演,下舵令/車令);HAH 約 7.5 kn;東北風 6 級(25 kn);漲潮流 085° 2.5 kn(左舷橫流約 1.6 kn,壓向北防波堤),
+#   T+8 起減弱、T+11–13 平潮、T+16 起退潮流 265° 3.0 kn(右舷橫流並逆流,壓向南防波堤)。
+# 三步升級:normal(交班、MPX 已完成)→ T+8 degraded(潮位站通報提早轉流、導燈被遮蔽)
+#          → 距口門 0.8 nm 或 degraded 後 navigation.channel.e06.emergencyAfter_s emergency(出港船 OUT1 已在航道內,此時多已轉為退潮);過口門後流壓不消失(示意)。
+# 評估:ROT 控制(manoeuvring.rotLimit_degPerMin)、XTD 走廊(navigation.xtd.channel_m)、舵令紀律(舵令次數 manoeuvring.channel.rudderOrdersMax、滿舵次數)、
+#       航道速限(口門外/內 port.taichung.channelSpeedLimit_kn;迴船池前減速區 innerSpeedLimit 起 port.taichung.innerSpeedLimit_kn,data/areas/taichung-inner-harbour.json)、會船通過距離(navigation.cpa.channel_nm)、導燈遮蔽回報、出港船反應;硬性失敗:擱淺、碰撞、進入防波堤禁區。課程前段情境,不注入技術故障。
+id: E06b_tidal_stream
+name: 台中港防波堤口橫流(潮流自動轉向)
+description: >-
+  台中港(示意)進港(E06 的潮流版):潮汐與潮流由 environment.tide + current.tidal 表示,進港途中漲潮 085° 2.5 kn 減弱、平潮、
+  轉為退潮 265° 3.0 kn,偏航角修正方向反轉;東北風 6 級、導燈被遮蔽、出港船已在航道內。練習轉流預判、偏航角與 ROT 控制、舵令紀律與團隊監控引水人。
+seed: 20261208
+startTimeUtc: "2026-12-08T02:00:00Z"
+timeScale: 1
+ship:
+  id: FSB1
+  loading: full
+origin: { lat: 24.2950, lon: 120.4850 }          # 口門中心(示意)
+initial:
+  position: { lat: 24.31898, lon: 120.44764 }     # WP0:口門外 2.5 nm,航道延長線上
+  heading: 125
+  speed: 7.5
+  telegraph: HAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 25, trueDir: 40, gustiness: 0.2 }    # 東北季風蒲氏 6 級
+  current:                                        # 潮流(情境引擎設計第 1.5.2 節):由 tide 的 dH/dt 符號決定漲/退,|dH/dt| 相對最大值縮放流速
+    set: 85                                       # 載入瞬間的常數值(= t = 0 的模型值),之後由潮流模型覆寫
+    drift: 2.5
+    tidal:
+      flood: { speed_kn: 2.5, direction_deg: 85 }     # 漲潮流(左舷橫流,壓向北防波堤)
+      ebb: { speed_kn: 3.0, direction_deg: 265 }      # 退潮流(右舷橫流並逆流,壓向南防波堤)
+      slackWindow_min: 20                             # 平潮門檻 sin(π·20 min / M2) ≈ 8 %(潮高表以平段表示平潮)
+  waterDepth: 14
+  visibility_nm: 8
+  tide:                                           # 示意潮高表(相對 CD,台中港大潮差簡化;T+11–13 分高潮平潮):斜率 0.4 mm/s 為最大 → 該相流速全速
+    table:
+      - { t: -1800, height_m: 3.28 }              # 練習開始前:漲潮全速(斜率 4.0e-4 m/s)
+      - { t: 0, height_m: 4.0 }
+      - { t: 480, height_m: 4.192 }               # T+8 前:漲潮全速 2.5 kn
+      - { t: 660, height_m: 4.222 }               # T+8–11:斜率 42 % → 漲潮流減弱約 0.9 kn
+      - { t: 780, height_m: 4.222 }               # T+11–13:高潮平潮(平段,流速 0)
+      - { t: 960, height_m: 4.192 }               # T+13–16:退潮開始,約 1.1 kn
+      - { t: 1800, height_m: 3.856 }              # T+16 起:退潮全速 3.0 kn
+      - { t: 3600, height_m: 3.136 }
+briefing:
+  text: |
+    交班(10:00 地方時):No.1 滿載瀝青進台中港,引水人已在駕駛台(帶領者扮演)並完成 MPX:航道 125°、口門寬約 350 m、
+    航道速限 10 kn(口門內沿用)、迴船池前減速區(口門內約 900 m 起)6 kn(參數集 port.taichung.*,示意,以對地速度計);
+    潮汐:高潮約 12:12 地方時(T+12 分),目前漲潮流 085° 約 2.5 kn(左舷橫流,壓向北防波堤),預計 T+8 起減弱、T+11 至 13 平潮、之後轉為退潮流 265°,T+16 起約 3.0 kn(右舷橫流並逆流,壓向南防波堤);東北風 25 kn。
+    計畫:HAH 約 7.5 kn,以偏航角修正流壓並在轉流時反向修正;導燈疊標 125°。過口門後減速,進入迴船池前減速區(口門內約 0.5 nm)時對地速度須在 6 kn 以下。
+    出港船(若有)依港規靠航道北側(中心線北側約 110 m)出港,左舷對左舷通過。
+    團隊分工:船副監控 XTD/ROT/航速並複誦引水人舵令,舵工複誦執行;發現偏離或導燈異常立即向引水人與船長報告。
+    走廊半寬見參數集 navigation.xtd.channel_m;ROT 上限 manoeuvring.rotLimit_degPerMin。
+  attachments:
+    - { title: "航程計畫(台中港進港,示意)", file: docs/passage-plan-E06.pdf }
+    - { title: "引水卡(Pilot Card)", file: docs/pilot-card-FSB1.pdf }
+  roles:
+    - { role: pilot, playedBy: leader, required: true }
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: helmsman, required: true }
+    - { role: vts, playedBy: voiceScript }
+  minParticipants: 3
+  duration_s: 1800
+route:
+  name: 台中港進港航道(示意)
+  xtdLimit_m: "${params:navigation.xtd.channel_m}"
+  waypoints:                                      # 與 data/areas/taichung-harbour-entrance.json channel.centreline 相同
+    - { name: WP0, lat: 24.31898, lon: 120.44764 }
+    - { name: WP1, lat: 24.30939, lon: 120.46258, xtdLimit_m: "${params:navigation.xtd.coastal_m}" }                 # 航段 0(港外接近)
+    - { name: WP2, lat: 24.295, lon: 120.485, checkpoint: true, speedLimit_kn: "${params:port.taichung.channelSpeedLimit_kn}" }   # 航段 1(外航道 → 口門)
+    - { name: WP3, lat: 24.28733, lon: 120.49696, arrivalRadius_m: 200, speedLimit_kn: "${params:port.taichung.channelSpeedLimit_kn}" }   # 航段 2(防波堤內 → 迴船池;內港 6 kn 由 zones[innerSpeedLimit] 減速區起算)
+zones:
+  - id: northBreakwater
+    name: 北防波堤(示意)
+    type: noGo
+    waterDepth_m: 2
+    polygon:                                      # 與 data/areas/taichung-harbour-entrance.json breakwaters[0].polygon 相同
+      - { lat: 24.29649, lon: 120.48587 }
+      - { lat: 24.31517, lon: 120.52116 }
+      - { lat: 24.31477, lon: 120.5214 }
+      - { lat: 24.2961, lon: 120.48611 }
+  - id: southBreakwater
+    name: 南防波堤(示意)
+    type: noGo
+    waterDepth_m: 2
+    polygon:                                      # 與 data/areas/taichung-harbour-entrance.json breakwaters[1].polygon 相同
+      - { lat: 24.29374, lon: 120.48425 }
+      - { lat: 24.24485, lon: 120.49366 }
+      - { lat: 24.24477, lon: 120.49318 }
+      - { lat: 24.29367, lon: 120.48377 }
+  - id: innerSpeedLimit
+    name: 迴船池前減速區(示意)
+    type: speedLimit
+    speedLimit_kn: "${params:port.taichung.innerSpeedLimit_kn}"
+    polygon:                                      # 與 data/areas/taichung-inner-harbour.json speedLimitZones[0].polygon 相同(口門內沿航道 900–1800 m、寬 350 m)
+      - { lat: 24.29163, lon: 120.49325 }
+      - { lat: 24.28697, lon: 120.50051 }
+      - { lat: 24.28438, lon: 120.49854 }
+      - { lat: 24.28905, lon: 120.49127 }
+banks:                                            # 岸壁效應(docs/design/physics-bank-effect.md;係數為估計值,未校正):外航道兩側浚深邊坡(1:5,坡頂 10 m)與南北防波堤港內側岸壁
+  file: data/areas/taichung-harbour-entrance.json # banks[]:TCH-CH-N/S(邊坡坡腳 = 航道多邊形南北邊,至堤頭)、TCH-BW-N-IN/S-IN(示意,待 ENC 校正)
+timeline:
+  - id: handover
+    name: 交班(引水人在船,MPX 已完成)
+    when: { type: time, atLeast: 1 }
+    actions:
+      - voiceScript: { role: narrator, channel: bridge, text: "交班:引水人在駕駛台,MPX 已完成。航向 125,半速進,漲潮往東兩節半,十二分鐘後高潮轉流,之後退潮往西三節。導燈疊標 125。", lang: zh-TW }
+      - message: { to: instructor, text: "交班開始:觀察是否確認流壓修正計畫(含轉流時反向修正)、ROT/XTD 監控分工與舵令複誦,完成後按「檢查表」", severity: info }
+  - id: autopilotOn
+    name: 自動舵 132°(港外流壓修正)
+    when: { type: time, atLeast: 2 }
+    actions:
+      - autopilot: { enabled: true, heading: 132 }
+  - id: tideTurning
+    name: 潮位站通報提早轉流
+    phase: degraded
+    when: { type: time, atLeast: 480 }               # T+8:潮高表自此減緩 → 漲潮流減弱,T+11–13 平潮,之後退潮(潮流模型自動切換,無 setEnvironment)
+    actions:
+      - voiceScript: { role: vts, channel: vhfPort, text: "台中 VTS 通報:潮位站實測比預報早,口門流在減弱,預計十分鐘內轉為退潮往西。", lang: zh-TW }
+      - voiceScript: { role: pilot, channel: bridge, text: "流要轉了,到口門可能已經是退潮往西三節,偏航角要反過來。注意偏航,隨時報 XTD 和對地速度。", lang: zh-TW }
+      - message: { to: instructor, text: "轉流(潮流模型:漲 2.5 kn → 平潮 → 退 3.0 kn,T+8–16):觀察偏航角反向修正、XTD/ROT 報告與舵令複誦;state.current/currentSource 隨時間變化", severity: warning }
+  - id: leadingLightsObscured
+    name: 導燈被遮蔽
+    visibility: all
+    when: { type: time, atLeast: 90, since: { event: timelineTriggered, itemId: tideTurning } }
+    actions:
+      - message: { to: all, text: "瞭望:前方導燈疊標被港內作業船的煙霧遮住,看不到後導燈。", severity: warning }
+      - message: { to: instructor, text: "導燈被遮蔽:觀察是否回報引水人/船長並改用雷達平行指標或 ECDIS 監控航跡", severity: info }
+  - id: outboundInChannel
+    name: 出港船已在航道內
+    phase: emergency
+    when:
+      any:
+        - { type: ownDistance, waypoint: WP2, lessThan: 0.8 }
+        - { type: time, atLeast: "${params:navigation.channel.e06.emergencyAfter_s}", since: { event: timelineTriggered, itemId: tideTurning } }
+    actions:
+      - targetControl: { id: OUT1, activate: true }
+      - voiceScript: { role: vts, channel: vhfPort, text: "台中 VTS 通報:出港船 TAI CHUNG 6 已在航道內出港,預計在口門附近與你船會船,請引水人協調。", lang: zh-TW }
+      - message: { to: instructor, text: "出港船在航道內(口門會船):觀察是否提出減速/港外等候或靠右通過的選項、監控通過距離", severity: alarm }
+  - id: insideBreakwater
+    name: 過口門
+    when: { type: routeLeg, atLeast: 2 }
+    actions:
+      - targetControl: { id: OUT1, behaviour: { mode: waypoints, waypoints: [ { lat: 24.3102, lon: 120.46321, speed: 8 }, { lat: 24.33418, lon: 120.42585, speed: 10 } ], stopAtEnd: false } }   # OUT1 改沿中心線北側 110 m 的航點出港(示意:口門內流壓不消失,航點模式在退潮流下會略偏北)
+      - message: { to: instructor, text: "過口門(示意:均勻潮流場,口門內流壓不消失):觀察退潮流下的偏航角維持、ROT 控制與減速計畫(迴船池前減速區 6 kn,口門內約 0.5 nm 起)", severity: info }
+  - id: speedCoach
+    name: 超速提示
+    repeat: { every_s: 60, max: 3 }
+    when: { type: event, kind: speedLimitExceeded }
+    actions:
+      - message: { to: instructor, text: "超過航道速限或迴船池前減速區速限;觀察團隊是否提出", severity: warning }
+  - id: arrived
+    name: 到達迴船池
+    when: { type: ownDistance, waypoint: WP3, lessThan: 0.15 }
+    actions:
+      - endExercise: { reason: 到達迴船池 }
+  - id: groundingEnd
+    name: 擱淺
+    delay_s: 2
+    when: { type: event, kind: grounding }
+    actions:
+      - message: { to: all, text: "船已擱淺。", severity: alarm }
+      - endExercise: { reason: 擱淺 }
+  - id: timeUp
+    name: 練習時間到
+    when: { type: time, atLeast: 1800 }
+    actions:
+      - endExercise: { reason: 練習時間到 }
+assessment:
+  parameterSet: data/parameters/company-procedures.yaml
+  minCpa_nm: "${params:navigation.cpa.channel_nm}"
+  encounter:
+    detectionRange_nm: 3
+    substantialCourseChange_deg: "${params:navigation.encounter.substantialAlteration_deg}"
+  manoeuvring:
+    rotLimit_degPerMin: "${params:manoeuvring.rotLimit_degPerMin}"
+  hardFail:
+    - { id: grounding, rule: grounding }
+    - { id: collision, rule: collision }
+    - { id: northBreakwater, rule: zoneEntered, zoneId: northBreakwater }
+    - { id: southBreakwater, rule: zoneEntered, zoneId: southBreakwater }
+  bands:
+    - { id: xtdMax, metric: track.maxXtd_m, warn: "${params:navigation.xtd.channel_m}", fail: 2x, penalty: 10, failPenalty: 25 }
+    - { id: xtdTime, metric: track.timeOutsideCorridor_s, warn: 0, fail: 60, penalty: 5, failPenalty: 15 }
+    - { id: rotOver, metric: manoeuvring.timeRotOverLimit_s, warn: 0, fail: 30, penalty: 5, failPenalty: 15 }
+    - { id: rudderOrders, metric: manoeuvring.rudderOrders, warn: "${params:manoeuvring.channel.rudderOrdersMax}", fail: 2x, penalty: 5, failPenalty: 10 }
+    - { id: hardOver, metric: manoeuvring.hardOverCount, warn: 0, fail: 2, penalty: 5, failPenalty: 10 }
+    - { id: speed, metric: manoeuvring.maxOverSpeed_kn, warn: 1.0, fail: 2.5, penalty: 5, failPenalty: 15 }   # 超過速限的最大幅度(kn,對地;航道 10 kn、迴船池前減速區 6 kn);滿載船過口門後減速需時,以幅度而非秒數評估
+    - { id: minCpa, metric: collisionAvoidance.minCpa_nm, direction: below, warn: "${params:navigation.cpa.channel_nm}", fail: "${params:navigation.cpa.channelHardFail_nm}", penalty: 10, failPenalty: 30 }
+  required:
+    - id: handoverChecklist
+      after: { event: timelineTriggered, itemId: handover }
+      expect: { acknowledge: { kind: checklist } }
+      within_s: "${params:bridge.handover.checklist_s}"
+      penalty: 5
+    - id: leadingLightReport
+      after: { event: timelineTriggered, itemId: leadingLightsObscured }
+      expect: { any: [ { acknowledge: { kind: report } }, { acknowledge: { kind: verbal } } ] }
+      within_s: "${params:navigation.channel.leadingLightReport_s}"
+      penalty: 5
+    - id: outboundResponse
+      after: { event: timelineTriggered, itemId: outboundInChannel }
+      expect: { any: [ rudderOrder, telegraphChange, rpmOrder, { acknowledge: { kind: verbal } } ] }
+      within_s: "${params:navigation.channel.outboundResponse_s}"
+      penalty: 10
+  scoring: { start: 100, passMark: "${params:assessment.passMark}" }
+targets:
+  - id: OUT1
+    name: TAI CHUNG 6
+    mmsi: 416506001
+    shipType: cargo
+    loa: 120
+    beam: 19
+    draft: 6.5
+    callSign: BTC6
+    destination: KAOHSIUNG
+    initial:
+      position: { lat: 24.28908, lon: 120.49611 }  # 防波堤內、航道中心線北側(自船左舷)110 m;對地航跡 305° 沿中心線北側 110 m 出港,左舷對左舷通過(COLREG 第 9 條)
+      heading: 321                                 # 對水航向 = 航跡 305° 加退潮橫流修正角(7 kn 對水;OUT1 於 emergency 出現時多已轉為退潮;流場均勻,航點模式不修正橫向偏移,故以 scripted 固定修正角)
+      speed: 7
+    behaviour:
+      mode: scripted
+      script:
+        - { t: 0, heading: 321, speed: 7 }           # 自船過口門(insideBreakwater)時由時間表切換為航點模式
+    trigger: { type: time, time: 86400 }          # 不自動出現:由時間表 outboundInChannel 以 targetControl activate 啟動
+  - id: ANCH1
+    name: HONG YUN
+    mmsi: 416506002
+    shipType: cargo
+    loa: 140
+    beam: 22
+    initial: { position: { lat: 24.3300, lon: 120.4400 }, heading: 40 }   # 港外錨泊船(示意)
+    behaviour: { mode: anchored, anchor: { swing: 15, period: 420 } }

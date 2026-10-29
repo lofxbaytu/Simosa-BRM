@@ -101,6 +101,11 @@ public sealed class SimulationEngine
     private readonly List<ExternalEvent> _externalEvents = new();
     // 岸壁效應(設計文件 docs/design/physics-bank-effect.md);情境有 banks 區段時建立,Initialize/Restore 時依情境重建
     private BankEffectModel? _bank;
+    // 平均波浪漂移力(設計文件 docs/design/physics-waves.md);情境有 environment.waves 時建立,Initialize/Restore 時依情境重建(純函數,無跨步狀態)
+    private WaveDriftModel? _waves;
+    // 船間交互作用(設計文件 docs/design/physics-ship-interaction.md);情境 environment.shipInteraction.enabled 時建立,Initialize/Restore 時依情境重建
+    // (力為純函數;跨步狀態只有事件旗標,進快照)
+    private ShipInteractionModel? _interaction;
     private RadarEnvironmentState? _radarEnvironment;
     // state.radarEnvironment 廣播關鍵幀(只影響廣播/紀錄內容,不進快照與雜湊):載入/重設/倒帶後第一幀與之後每秒一次帶出,
     // 其他幀省略(內容練習中不變;雷達服務視省略為不變,時間倒退或情境切換時清除)。避免 25 Hz 每幀重複整份雨區定義
@@ -181,6 +186,10 @@ public sealed class SimulationEngine
     public ExternalForceModel External => _external;
     /// <summary>岸壁效應(情境無 banks 時 null;<see cref="BankEffectModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
     public BankEffectModel? Bank => _bank;
+    /// <summary>平均波浪漂移力(情境無 environment.waves 時 null;<see cref="WaveDriftModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
+    public WaveDriftModel? Waves => _waves;
+    /// <summary>船間交互作用(情境未啟用 environment.shipInteraction 時 null;<see cref="ShipInteractionModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
+    public ShipInteractionModel? ShipInteraction => _interaction;
     /// <summary>自動舵可啟用:無 autopilotFailure,且電羅經未失效(指示航向有效)</summary>
     public bool AutopilotAvailable => !_faults.Contains(FaultNames.AutopilotFailure) && !_faults.Contains(FaultNames.GyroFailure);
 
@@ -382,12 +391,16 @@ public sealed class SimulationEngine
             CurrentDriftMps = Units.KnToMps(sc.Environment.Current.Drift),
             Depth = new ConstantDepth(sc.Environment.WaterDepth),
             Tide = tide,
+            // 時變流場(environment.current.table | tidal):流向/流速為練習時間的純函數,不進快照/雜湊;無模型時 null(常數流,數值與舊版相同)
+            CurrentModel = CurrentModel.FromScenario(sc.Environment.Current, tide, StartUtc),
+            CurrentOverridden = false,
             VisibilityNm = sc.Environment.VisibilityNm,
         };
 
         _rng = new DeterministicRandom(sc.Seed);
         Tick = 0;
         Environment.RefreshTide(Time);
+        Environment.RefreshCurrent(Time);
         Array.Clear(_hash);
         Frozen = false;
         TimeScale = Units.Clamp(sc.TimeScale <= 0 ? 1.0 : sc.TimeScale, 0.1, Options.MaxTimeScale);
@@ -409,6 +422,8 @@ public sealed class SimulationEngine
         _external = CreateExternal();
         _bank = CreateBank();
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
+        _waves = CreateWaves();
+        _interaction = CreateInteraction();
         // 雷達環境:只來自情境、練習中不變(不進快照與雜湊;重播由紀錄 header 的情境重建;廣播只在關鍵幀帶出)
         _radarEnvironment = ScenarioRadarEnvironmentBuilder.Build(sc, _projection);
         _radarEnvironmentPending = true;
@@ -434,11 +449,53 @@ public sealed class SimulationEngine
         var depthZones = _assessment.Zones.DepthZones();
         if (depthZones.Count > 0) Environment.Depth = new ZoneDepth((ConstantDepth)Environment.Depth, depthZones);
         RefreshBank();
+        RefreshWaves();
+        RefreshInteraction();
     }
 
     /// <summary>依目前情境建立岸壁效應模組(情境無 banks 時 null)。</summary>
     private BankEffectModel? CreateBank()
         => BankEffectModel.Create(Ship, Loading, Scenario, _projection, Dynamics.SupportsExternalForces);
+
+    /// <summary>依目前情境建立平均波浪漂移力模組(情境無 environment.waves 時 null)。</summary>
+    private WaveDriftModel? CreateWaves()
+        => WaveDriftModel.Create(Ship, Loading, Scenario, Dynamics.SupportsExternalForces);
+
+    /// <summary>依目前情境建立船間交互作用模組(情境未啟用 environment.shipInteraction 時 null)。</summary>
+    private ShipInteractionModel? CreateInteraction()
+        => ShipInteractionModel.Create(Ship, Loading, Scenario, Dynamics.SupportsExternalForces);
+
+    /// <summary>船間交互作用的步末結果(雜湊與 state.shipInteraction):以目前狀態、有效水深與目前的目標船重算(力為純函數;事件旗標不變)。</summary>
+    private void RefreshInteraction()
+    {
+        if (_interaction is not { Active: true } si) return;
+        si.Refresh(Motion, Environment.DepthAt(Motion.X, Motion.Y), _traffic.Targets);
+    }
+
+    /// <summary>船間交互作用力跨過門檻 → shipInteraction 事件(進入/離開各一次;source engine、targetId = 主要目標、學員站可見)。</summary>
+    private void RaiseInteractionTransition(ShipInteractionTransition transition)
+    {
+        if (transition == ShipInteractionTransition.None || _interaction is not { } si) return;
+        var r = si.Last;
+        var enter = transition == ShipInteractionTransition.Enter;
+        var targetId = enter ? r.TargetId : si.EventTargetId;
+        var data = new
+        {
+            phase = enter ? "enter" : "exit", targetId, forceSurge_t = r.X / ShipInteractionModel.TonneForce, forceSway_t = r.Y / ShipInteractionModel.TonneForce,
+            momentYaw_tm = r.N / ShipInteractionModel.TonneForce, xi = r.Xi, eta = r.Eta, threshold_t = si.EventThresholdN / ShipInteractionModel.TonneForce,
+        };
+        var message = enter
+            ? $"船間交互作用:{targetId} 側向力 {r.Y / ShipInteractionModel.TonneForce:+0.0;-0.0} t、艏搖 {r.N / ShipInteractionModel.TonneForce:+0;-0} t·m(超過門檻)"
+            : $"船間交互作用結束:{targetId}";
+        Raise(NewEvent(SimEventKinds.ShipInteraction, SimEventSources.Engine, null, targetId, message, data, visible: true));
+    }
+
+    /// <summary>波浪漂移力的步末結果(雜湊與 state.waves):以目前狀態與所在有效水深重算(純函數,快照不需新欄位)。</summary>
+    private void RefreshWaves()
+    {
+        if (_waves is not { Active: true } w) return;
+        w.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y));
+    }
 
     /// <summary>岸壁效應的步末結果(雜湊與 state.bank):以目前狀態、所在水深與實際轉速重算(純函數,故快照不需新欄位)。</summary>
     private void RefreshBank()
@@ -1261,14 +1318,23 @@ public sealed class SimulationEngine
             if (wind.TryGetProperty("trueDir", out var wd) && SimCommand.AsDouble(wd) is { } wdv) targets.Add((RampChannel.WindDir, Units.DegToRad(Units.NormalizeHeadingDeg(wdv))));
             if (wind.TryGetProperty("gustiness", out var wg) && SimCommand.AsDouble(wg) is { } wgv) targets.Add((RampChannel.Gustiness, Units.Clamp(wgv, 0, 1)));
         }
+        var currentGiven = false;
         if (cmd.Arg("current") is { } cur && cur.ValueKind == JsonValueKind.Object)
         {
-            if (cur.TryGetProperty("set", out var cs) && SimCommand.AsDouble(cs) is { } csv) targets.Add((RampChannel.CurrentSet, Units.DegToRad(Units.NormalizeHeadingDeg(csv))));
-            if (cur.TryGetProperty("drift", out var cd) && SimCommand.AsDouble(cd) is { } cdv) targets.Add((RampChannel.CurrentDrift, Units.KnToMps(Math.Max(0, cdv))));
+            if (cur.TryGetProperty("set", out var cs) && SimCommand.AsDouble(cs) is { } csv) { targets.Add((RampChannel.CurrentSet, Units.DegToRad(Units.NormalizeHeadingDeg(csv)))); currentGiven = true; }
+            if (cur.TryGetProperty("drift", out var cd) && SimCommand.AsDouble(cd) is { } cdv) { targets.Add((RampChannel.CurrentDrift, Units.KnToMps(Math.Max(0, cdv)))); currentGiven = true; }
         }
         if (cmd.ArgAsDouble("waterDepth") is { } depth && depth > 0) targets.Add((RampChannel.WaterDepth, depth));
         if (cmd.ArgAsDouble("visibility_nm") is { } vis && vis > 0) targets.Add((RampChannel.Visibility, vis));
         if (targets.Count == 0) return;
+
+        // 時變流場(environment.current.table | tidal)被常數覆寫:時變停止直到再載入情境(情境引擎設計第 1.5.2 節);漸變自目前模型值起算
+        bool? currentModelStopped = null;
+        if (currentGiven && Environment.CurrentModelActive)
+        {
+            Environment.CurrentOverridden = true;
+            currentModelStopped = true;
+        }
 
         var changes = new Dictionary<string, object>();
         var rampTicks = (long)Math.Round(rampS * _stepsPerSecond);
@@ -1294,7 +1360,7 @@ public sealed class SimulationEngine
         Raise(NewEvent(SimEventKinds.EnvironmentChange, source, itemId, null, null, new
         {
             wind = cmd.Arg("wind"), current = cmd.Arg("current"), waterDepth = cmd.ArgAsDouble("waterDepth"), visibility_nm = cmd.ArgAsDouble("visibility_nm"),
-            ramp_s = rampS, changes,
+            ramp_s = rampS, changes, currentModelStopped,
         }));
     }
 
@@ -1349,18 +1415,26 @@ public sealed class SimulationEngine
         // 岸壁效應:情境有 banks 時與外力模組相加(螺槳載荷取步首轉速,四階段共用);兩者皆未使用時走舊積分多載
         var external = _external.Active;
         var bank = _bank is { Active: true } bk ? bk : null;
-        if (external || bank is not null)
+        // 波浪漂移力:情境有 environment.waves 時再與前兩者相加(純函數;無 waves 的情境此處為 null、運算順序與舊版相同)
+        var waves = _waves is { Active: true } wv ? wv : null;
+        // 船間交互作用:情境啟用 environment.shipInteraction 時最後相加(目標船取步首狀態,四階段共用;未啟用的情境此處為 null、運算順序與舊版相同)
+        var interaction = _interaction is { Active: true } si ? si : null;
+        if (external || bank is not null || waves is not null || interaction is not null)
         {
             if (external) _external.PreStep(Motion, Options.Dt);
             bank?.PreStep(controls.C1.Rpm);
-            // 只有外力模組 → 與舊版相同的 _external;只有岸壁 → _bank;兩者 → 和
-            IExternalForceField field = bank is null ? _external : external ? _sumField! : bank;
-            Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt, field);
+            interaction?.PreStep(_traffic.Targets);
+            // 只有外力模組 → 與舊版相同的 _external;只有岸壁 → _bank;兩者 → 和;有浪 → (前者) + 浪,只有浪 → 浪;有船間交互作用 → (前者) + 交互作用
+            IExternalForceField? baseField = bank is null ? (external ? _external : null) : external ? _sumField! : bank;
+            IExternalForceField? field = waves is null ? baseField : baseField is null ? waves : new SumForceField(baseField, waves);
+            if (interaction is not null) field = field is null ? interaction : new SumForceField(field, interaction);
+            Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt, field!);
         }
         else Motion = Rk4Integrator.Step(Dynamics, t, Motion, sample, controls, Options.Dt);
         Tick++;
-        // 潮高隨練習時間更新(步末位置的 UKC/擱淺檢查與下一步的取樣用新時刻的潮高)
+        // 潮高隨練習時間更新(步末位置的 UKC/擱淺檢查與下一步的取樣用新時刻的潮高);時變流場同(state.current 與下一步取樣用新時刻的流)
         Environment.RefreshTide(Time);
+        Environment.RefreshCurrent(Time);
         if (external)
         {
             _externalEvents.Clear();
@@ -1370,6 +1444,8 @@ public sealed class SimulationEngine
         }
         // 岸壁效應步末結果(雜湊與 state.bank;步末位置的水深、實際轉速)
         bank?.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y), _act.Rpm);
+        // 波浪漂移力步末結果(雜湊與 state.waves;步末位置的有效水深)
+        waves?.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y));
 
         if (!Aground && UnderKeelClearance() <= 0.0)
         {
@@ -1381,6 +1457,9 @@ public sealed class SimulationEngine
         // 目標船:與自船同 dt,依自船推進後的狀態更新(跟隨、COLREG、會遇指標、碰撞)
         if (_traffic.Targets.Count > 0)
             _traffic.Step(OwnKinematics(), sample, Tick);
+        // 船間交互作用步末結果(雜湊與 state.shipInteraction;自船與目標船皆已推進到本 tick 的幾何)與門檻事件
+        if (interaction is not null)
+            RaiseInteractionTransition(interaction.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y), _traffic.Targets));
 
         // BNWAS 與警報管理(每步;評估步之前,使同一 tick 的評估看得到警報事件)
         _bnwas.Update(Tick, Autopilot.Enabled);
@@ -1452,6 +1531,12 @@ public sealed class SimulationEngine
         // 岸壁效應只在情境有 banks 且動力學接受外力時追加(未使用者雜湊與舊版相同)
         var hashBank = _bank is { Active: true };
         if (hashBank) size += BankEffectModel.HashLongs * 8;
+        // 波浪漂移力只在情境有 environment.waves 且動力學接受外力時追加(未使用者雜湊與舊版相同)
+        var hashWaves = _waves is { Active: true };
+        if (hashWaves) size += WaveDriftModel.HashLongs * 8;
+        // 船間交互作用只在情境啟用且動力學接受外力時追加(未使用者雜湊與舊版相同)
+        var hashInteraction = _interaction is { Active: true };
+        if (hashInteraction) size += ShipInteractionModel.HashLongs * 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
@@ -1509,6 +1594,8 @@ public sealed class SimulationEngine
             BinaryPrimitives.WriteInt64LittleEndian(buf[o..], BitConverter.DoubleToInt64Bits(_act.StartAttemptTimerSec)); o += 8;
         }
         if (hashBank) o += _bank!.WriteHash(buf[o..]);
+        if (hashWaves) o += _waves!.WriteHash(buf[o..]);
+        if (hashInteraction) o += _interaction!.WriteHash(buf[o..]);
         SHA256.HashData(buf[..o], _hash);
     }
 
@@ -1530,7 +1617,9 @@ public sealed class SimulationEngine
         Environment = new EnvironmentSnapshot(
             Environment.WindTrueSpeedMps, Environment.WindTrueDirFromRad, Environment.Gustiness, Environment.GustFactor,
             Environment.CurrentSetRad, Environment.CurrentDriftMps,
-            Environment.Depth is ConstantDepth cd ? cd.Depth : Environment.Depth is ZoneDepth zd ? zd.Base.Depth : null),
+            Environment.Depth is ConstantDepth cd ? cd.Depth : Environment.Depth is ZoneDepth zd ? zd.Base.Depth : null,
+            // 只在情境有時變流場時寫出覆寫旗標(常數流情境的快照位元不變)
+            Environment.CurrentModel is null ? null : Environment.CurrentOverridden),
         RandomSeed = _rng.Seed,
         RandomCount = _rng.Count,
         Frozen = Frozen,
@@ -1549,6 +1638,7 @@ public sealed class SimulationEngine
         Alerts = _alerts.CreateSnapshot(),
         Bnwas = _bnwas.CreateSnapshot(),
         External = _external.Active ? _external.CreateSnapshot() : null,
+        ShipInteraction = _interaction is { Active: true } ? _interaction.CreateSnapshot() : null,
         Phase = Phase,
         VisibilityNm = Environment.VisibilityNm,
         StateHash = StateHash,
@@ -1603,6 +1693,11 @@ public sealed class SimulationEngine
         // 岸壁效應:無跨步狀態,依情境重建幾何,於還原完成後以還原的狀態重算步末結果(RefreshBank)
         _bank = CreateBank();
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
+        // 波浪漂移力:純函數,依情境重建,還原完成後以還原的狀態重算步末結果(RefreshWaves)
+        _waves = CreateWaves();
+        // 船間交互作用:力為純函數、事件旗標依快照(舊快照或未啟用者為未進入),目標船還原後重算步末結果(RefreshInteraction)
+        _interaction = CreateInteraction();
+        if (s.ShipInteraction is { } sis) _interaction?.RestoreEvent(sis.EventActive, sis.EventTargetId);
 
         Tick = s.Tick;
         _radarEnvironmentPending = true;
@@ -1641,10 +1736,14 @@ public sealed class SimulationEngine
             Depth = depth,
             // 潮汐模型來自情境(不進快照),沿用並以還原的 Tick 重算潮高
             Tide = Environment.Tide,
+            // 時變流場模型來自情境(不進快照);覆寫旗標由快照還原(倒帶到覆寫前即恢復時變),舊快照無此欄位視為未覆寫
+            CurrentModel = Environment.CurrentModel,
+            CurrentOverridden = s.Environment.CurrentOverridden ?? false,
             // Version 2 快照含能見度(null = 無限制,直接取快照值);Version 1 快照沒有此欄位才沿用目前值
             VisibilityNm = s.Version >= 2 ? s.VisibilityNm : Environment.VisibilityNm,
         };
         Environment.RefreshTide(Time);
+        Environment.RefreshCurrent(Time);
         if (_rng.Seed != s.RandomSeed) _rng = new DeterministicRandom(s.RandomSeed, s.RandomCount);
         else _rng.ResetTo(s.RandomCount);
         if (!keepRunState)
@@ -1689,6 +1788,8 @@ public sealed class SimulationEngine
         hash.CopyTo(_hash, 0);
         _snapshots.RemoveAll(x => x.Tick > s.Tick);
         RefreshBank();
+        RefreshWaves();
+        RefreshInteraction();
 
         static IDepthProvider SetDepth(ConstantDepth existing, double value) { existing.Depth = value; return existing; }
     }
@@ -1850,6 +1951,7 @@ public sealed class SimulationEngine
                 Set = Units.NormalizeHeadingDeg(Units.RadToDeg(env.CurrentSetRad)),
                 Drift = Units.MpsToKn(env.CurrentDriftMps),
             },
+            CurrentSource = env.CurrentSource,
             Loading = Loading,
             Draft = lc.DraftFore_m is { } df && lc.DraftAft_m is { } da ? new DraftState { Fore = df, Aft = da } : null,
             Engine = new EngineStatus { State = engineState, StartsRemaining = _startsRemaining, LoadPct = loadPct },
@@ -1898,6 +2000,8 @@ public sealed class SimulationEngine
             Anchors = _external.AnchorStates(_projection),
             Berth = _external.BerthState(),
             Bank = _bank is { Active: true } bank ? bank.State() : null,
+            Waves = _waves is { Active: true } waves ? waves.State() : null,
+            ShipInteraction = _interaction is { Active: true } inter ? inter.State() : null,
             RadarEnvironment = includeRadarEnvironment ? _radarEnvironment : null,
         };
     }

@@ -417,6 +417,7 @@ export function tugDirectionText(deg: number): string {
 const EXTERNAL_KINDS: ReadonlySet<string> = new Set([
   'tugCommand',
   'tugLineParted',
+  'shipInteraction',
   'anchorLetGo',
   'anchorCommand',
   'anchorBroughtUp',
@@ -483,6 +484,14 @@ export function externalEventLabel(e: SimEvent): string | null {
     }
     case 'tugLineParted':
       return `拖纜斷裂 ${ds(d, 'id') || e.itemId || '?'}(斷前 ${dn(d, 'force_t')} t${d?.['stillPushing'] === true ? ',推頂中仍可續推' : ''})`;
+    case 'shipInteraction': {
+      // 核心 RaiseInteractionTransition:data {phase enter|exit, targetId, forceSway_t, momentYaw_tm, threshold_t}
+      const target = ds(d, 'targetId') || e.targetId || '?';
+      if (ds(d, 'phase') === 'exit') return `船間交互作用結束 ${target}`;
+      const sway = finite(d?.['forceSway_t']);
+      const yaw = finite(d?.['momentYaw_tm']);
+      return `船間交互作用 ${target}:側向力 ${sway !== undefined ? `${sway >= 0 ? '+' : ''}${sway.toFixed(1)} t` : '?'}、艏搖 ${yaw !== undefined ? `${yaw >= 0 ? '+' : ''}${Math.round(yaw)} t·m` : '?'}(超過門檻)`;
+    }
     case 'anchorLetGo':
       return `${sideText(e)}拋錨${targetText(d) || '(至鏈端)'}`;
     case 'anchorCommand': {
@@ -536,6 +545,8 @@ export function externalEventSeverity(e: SimEvent): 'info' | 'warning' | 'alarm'
     case 'anchorDragging':
     case 'quayContact':
       return 'alarm';
+    case 'shipInteraction':
+      return e.data?.['phase'] === 'exit' ? 'info' : 'warning';
     case 'fenderContact': {
       if (e.data?.['overload'] === true) return 'alarm';
       const v = finite(e.data?.['normalSpeed_mps']);

@@ -1,0 +1,28 @@
+# 跨語言時變流場夾具情境(流場表;export_current_reference.py 產生 current_table.csv,C# TidalStreamTests 讀取比對):
+#   流場表 t 與 utc 混用(utc 相對 startTimeUtc 05:00:00Z 換算),方向跨 360°(350° → 20°:向量內插不繞遠路、流速在兩點間不歸零)、
+#   流速自 0 升起再降回,範圍外取端點;FSB1 滿載直航、無風(流向/流速只由 t 決定)。
+id: current_table
+name: 流場表跨語言夾具
+seed: 20261208
+startTimeUtc: "2026-12-08T05:00:00Z"
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.05 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 0
+  speed: 6
+  telegraph: SAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current:
+    set: 350                                            # 載入瞬間的常數值,t = 0 即被表覆寫
+    drift: 1.0
+    table:
+      - { utc: "2026-12-08T04:55:00Z", speed_kn: 0.0, direction_deg: 0 }     # 練習開始前(t = −300):t ≤ 首點取首點值(無流)
+      - { t: 0, speed_kn: 1.0, direction_deg: 350 }
+      - { utc: "2026-12-08T05:00:10Z", speed_kn: 1.0, direction_deg: 20 }    # t = 10:方向跨 360°,向量內插(中點方向 005°、流速 cos 15° 倍)
+      - { t: 25.5, speed_kn: 2.5, direction_deg: 90 }
+      - { utc: "2026-12-08T05:00:45.5Z", speed_kn: 0.5, direction_deg: 270 } # t = 45.5:反向(中點流速穿過 0 附近)
+      - { t: 50, speed_kn: 0.0, direction_deg: 270 }                         # 之後無流
+  waterDepth: 40

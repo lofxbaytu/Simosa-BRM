@@ -1,9 +1,10 @@
-// 流:流向(去向)與流速,附艏向上的箭頭(指向流去的方向)。
+// 流:流向(去向)與流速,附艏向上的箭頭(指向流去的方向);時變流場(state.currentSource)時標示來源(流場表/潮流)。
 
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { tileStyles } from './shared.js';
 import { formatBearing, formatKnots } from '../lib/format.js';
+import { CURRENT_SOURCE_LABELS, type CurrentSource } from '../types/state.js';
 
 @customElement('brm-current')
 export class CurrentReadout extends LitElement {
@@ -50,12 +51,15 @@ export class CurrentReadout extends LitElement {
   @property({ type: Number }) set = 0;
   @property({ type: Number }) drift = 0;
   @property({ type: Number }) heading = 0;
+  /** 流場來源(時變流場時才有):顯示「流(潮流)」/「流(流場表)」 */
+  @property({ type: String }) source: CurrentSource | undefined = undefined;
 
   override render() {
     const rel = this.set - this.heading;
+    const label = this.source ? CURRENT_SOURCE_LABELS[this.source] : undefined;
     return html`
       <div class="tile">
-        <div class="tile-title"><span>CURRENT</span><span class="zh">流</span></div>
+        <div class="tile-title"><span>CURRENT</span><span class="zh">流${label ? html`<span class="source" title="時變流場:流向/流速隨時間變化">(${label})</span>` : nothing}</span></div>
         <div class="body">
           <div class="rose">
             <svg viewBox="0 0 50 50" aria-label="流向">

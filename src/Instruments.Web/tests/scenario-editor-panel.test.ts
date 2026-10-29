@@ -137,7 +137,10 @@ describe('情境編輯器:範本與表單', () => {
     expect(el.shadowRoot!.querySelectorAll('.row.target')).toHaveLength(1);
     expect(el.shadowRoot!.querySelectorAll('.timeline .item')).toHaveLength(2);
     expect(text(el)).toContain('範本的 seabed 原樣保留');
-    expect(text(el)).toContain('範本的 required 原樣保留');
+    // 必要事件、區域、簡報角色自第十八輪起為表格編輯(不再是「原樣保留」提示)
+    expect(el.shadowRoot!.querySelectorAll('.row.required')).toHaveLength(1);
+    expect(el.shadowRoot!.querySelectorAll('.row.zone')).toHaveLength(1);
+    expect(el.shadowRoot!.querySelectorAll('.row.role')).toHaveLength(1);
     expect(text(el)).toContain('保留:behaviour');
     const out = el.lastValidation.scenario;
     expect(out['origin']).toEqual({ lat: 23.78, lon: 120.1 });

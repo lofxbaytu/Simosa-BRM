@@ -34,7 +34,8 @@ from collections import deque
 
 from .coefficients import r0_prime
 from .tide import TideModel
-from .external import BankEffectModel, Env, ExternalForceModel, Kin
+from .current import CurrentModel
+from .external import BankEffectModel, Env, ExternalForceModel, Kin, ShipInteractionModel, WaveDriftModel
 from .particulars import GRAVITY, KN_TO_MPS, ShipParticulars
 from .propeller import PropellerModel
 
@@ -261,6 +262,10 @@ class MMGShip:
         self.start_utc: datetime | None = None
         # 潮高模型(情境 environment.tide;tide.py):有效水深 = env.water_depth(基底)+ 潮高(tick·dt);None = 無潮汐(數值與舊版相同)
         self.tide: TideModel | None = None
+        # 時變流場(情境 environment.current.table | tidal;current.py):每步以 tick·dt 的模型值覆寫 env.current_set/current_speed;
+        # None = 常數流(數值與舊版相同);set_environment 給 current 後 current_overridden = True(時變停止,直到 apply_scenario)
+        self.current_model: CurrentModel | None = None
+        self.current_overridden = False
         self._eng_mode = "stopped"  # stopped | run | reversing | starting
         self._eng_timer = 0.0
         self._n_target = 0.0
@@ -270,6 +275,11 @@ class MMGShip:
         self.external_sections: dict[str, Any] = {}
         self.external: ExternalForceModel | None = None
         self.bank: BankEffectModel | None = None
+        # 平均波浪漂移力(external.WaveDriftModel;情境 environment.waves,經 normalise_sections 進 external_sections["waves"]);None = 無浪
+        self.waves: WaveDriftModel | None = None
+        # 船間交互作用(external.ShipInteractionModel;情境 environment.shipInteraction.enabled 經 normalise_sections 進 external_sections["shipInteraction"],
+        # 含直線等速目標船);None = 未啟用
+        self.interaction: ShipInteractionModel | None = None
         self.external_events: deque[dict[str, Any]] = deque(maxlen=1000)
         self._build_external()
 
@@ -440,6 +450,32 @@ class MMGShip:
         self._update_shallow()
 
     # ------------------------------------------------------------------
+    # 時變流場(current.py;C# EnvironmentConditions.CurrentModel / RefreshCurrent)
+    # ------------------------------------------------------------------
+    @property
+    def current_model_active(self) -> bool:
+        return self.current_model is not None and not self.current_overridden
+
+    @property
+    def current_source(self) -> str | None:
+        """state.currentSource("table" | "tidal");常數流(含覆寫後)None → 省略。"""
+        return self.current_model.source if self.current_model_active else None
+
+    def set_current_model(self, model: CurrentModel | None) -> None:
+        """設定時變流場模型(apply_scenario;None = 常數流)並清除覆寫旗標、以目前 tick 的模型值覆寫流向/流速。"""
+        self.current_model = model
+        self.current_overridden = False
+        self._refresh_current()
+
+    def _refresh_current(self) -> None:
+        """以 tick·dt 的模型值覆寫 env.current_set/current_speed(C# RefreshCurrent:Initialize、每步 Tick++ 之後與還原後);常數流或已覆寫時不動。"""
+        if not self.current_model_active:
+            return
+        set_rad, drift = self.current_model.at(self.state.tick * self.dt)
+        self.env.current_set = set_rad
+        self.env.current_speed = drift
+
+    # ------------------------------------------------------------------
     # 設定與命令
     # ------------------------------------------------------------------
     def set_environment(self, wind_speed_kn: float | None = None, wind_dir_deg: float | None = None,
@@ -458,6 +494,8 @@ class MMGShip:
             self.env.current_set = (float(current_set_deg) % 360.0) * DEG
         if current_drift_kn is not None:
             self.env.current_speed = max(0.0, float(current_drift_kn)) * KN_TO_MPS
+        if current_set_deg is not None or current_drift_kn is not None:
+            self.current_overridden = True  # 時變流場被常數覆寫:時變停止直到 apply_scenario(C# ApplyEnvironment)
         if water_depth_m != "keep":
             self.env.water_depth = None if water_depth_m is None else float(water_depth_m)
         if visibility_nm != "keep":
@@ -475,6 +513,8 @@ class MMGShip:
         self.gust_factor = 1.0
         if self.tide is not None:
             self._update_shallow()  # 直航平衡轉速以 tick 0 的有效水深(基底 + 潮高(0))計算(C# ResolveInitialPropulsion)
+        self.current_overridden = False  # 回到情境初始:時變流場恢復(C# Initialize)
+        self._refresh_current()
         if rpm is None:
             rpm = self.steady_rpm_for_speed(self.state.u) if speed_kn > 0 else 0.0
         self.state.n = rpm / 60.0
@@ -521,6 +561,16 @@ class MMGShip:
             rpm = self.state.n * 60.0
             self.bank.pre_step(rpm)
             self.bank.update_last(k, depth, rpm)
+        # 波浪漂移力(C# CreateWaves / RefreshWaves):純函數,以目前狀態與有效水深算步末結果
+        wv = sec.get("waves")
+        self.waves = WaveDriftModel(self.sp.raw, load, wv) if isinstance(wv, dict) else None
+        if self.waves is not None and self.waves.active:
+            self.waves.update_last(k, depth)
+        # 船間交互作用(C# CreateInteraction / RefreshInteraction):目標船回到初始位置,以目前狀態算步末結果
+        si = sec.get("shipInteraction")
+        self.interaction = ShipInteractionModel(self.sp.raw, load, si, self.ltp) if isinstance(si, dict) and si.get("enabled") else None
+        if self.interaction is not None and self.interaction.active:
+            self.interaction.refresh(k, depth)
 
     def configure_external(self, sections: dict[str, Any] | None) -> None:
         """設定情境的外力區段(``external.normalise_sections`` 的結果;None = 無)並以目前狀態重建模組。"""
@@ -781,6 +831,10 @@ class MMGShip:
             "external_sections": copy.deepcopy(self.external_sections),
             "external": copy.deepcopy(self.external),
             "bank": copy.deepcopy(self.bank),
+            "waves": copy.deepcopy(self.waves),
+            "interaction": copy.deepcopy(self.interaction),
+            # 時變流場是否已被 setEnvironment 常數覆寫(C# EngineSnapshot.Environment.CurrentOverridden;倒帶到覆寫前即恢復時變)
+            "current_overridden": self.current_overridden,
         }
 
     def restore(self, snap: dict[str, Any]) -> None:
@@ -793,11 +847,15 @@ class MMGShip:
         self.faults = list(snap["faults"])
         self.gust_factor = float(snap["gust_factor"])
         self.rng.setstate(snap["rng"])
+        self.current_overridden = bool(snap.get("current_overridden", False))  # 舊快照視為未覆寫(C# ?? false)
+        self._refresh_current()
         self._update_shallow()
         if "external" in snap:
             self.external_sections = copy.deepcopy(snap["external_sections"])
             self.external = copy.deepcopy(snap["external"])
             self.bank = copy.deepcopy(snap["bank"])
+            self.waves = copy.deepcopy(snap.get("waves"))
+            self.interaction = copy.deepcopy(snap.get("interaction"))
         else:  # 舊快照:外力模組回到初始
             self._build_external()
 
@@ -1134,6 +1192,7 @@ class MMGShip:
             s.u = s.v = s.r = 0.0
             s.t += self.dt
             s.tick += 1
+            self._refresh_current()
             return
         dt = self.dt
         y0 = s.as_tuple()
@@ -1142,25 +1201,51 @@ class MMGShip:
         rate = 0.0 if rudder_jammed else self.rudder_rate_for_step()  # 舵機故障:速率 0,舵角停在目前位置(舵令照記)
         ext = self.external if self.external is not None and self.external.active else None
         bank = self.bank if self.bank is not None and self.bank.active else None
+        waves = self.waves if self.waves is not None and self.waves.active else None
+        interaction = self.interaction if self.interaction is not None and self.interaction.active else None
         field = None
         env_s = None
-        if ext is not None or bank is not None:
-            # 外力(C# Advance):環境取樣於步首;拖船出力以步首對水速度更新;岸壁螺槳項用步首轉速(四階段共用)
+        if ext is not None or bank is not None or waves is not None or interaction is not None:
+            # 外力(C# Advance):環境取樣於步首;拖船出力以步首對水速度更新;岸壁螺槳項用步首轉速(四階段共用);船間交互作用取步首的目標船狀態
             env_s = self._env_sample()
             if ext is not None:
                 ext.pre_step(Kin(y0[0], y0[1], y0[2], y0[3], y0[4], y0[5]), dt)
             if bank is not None:
                 bank.pre_step(y0[7] * 60.0)
+            if interaction is not None:
+                interaction.pre_step()
 
-            def field(y: tuple[float, ...]) -> tuple[float, float, float]:
-                k = Kin(y[0], y[1], y[2], y[3], y[4], y[5])
+            def base_field(k: Kin) -> tuple[float, float, float] | None:
+                """外力模組 / 岸壁 / 兩者之和(C# baseField;兩者皆無時 None)。"""
                 if bank is None:
-                    return ext.evaluate(k, env_s)
+                    return ext.evaluate(k, env_s) if ext is not None else None
                 fb = bank.evaluate(k, env_s)
                 if ext is None:
                     return fb
                 fa = ext.evaluate(k, env_s)
                 return (fa[0] + fb[0], fa[1] + fb[1], fa[2] + fb[2])
+
+            def wave_field(k: Kin) -> tuple[float, float, float] | None:
+                """外力模組/岸壁 (+ 浪)(C# field 在加入船間交互作用之前;皆無時 None)。"""
+                fa = base_field(k)
+                if waves is None:
+                    return fa
+                # 波浪漂移力與前者相加(C# SumForceField(baseField, waves);只有浪時直接取浪)
+                fw = waves.evaluate(k, env_s)
+                if fa is None:
+                    return fw
+                return (fa[0] + fw[0], fa[1] + fw[1], fa[2] + fw[2])
+
+            def field(y: tuple[float, ...]) -> tuple[float, float, float]:
+                k = Kin(y[0], y[1], y[2], y[3], y[4], y[5])
+                fa = wave_field(k)
+                if interaction is None:
+                    return fa  # type: ignore[return-value]
+                # 船間交互作用最後相加(C# SumForceField(field, interaction);只有它時直接取它)
+                fi = interaction.evaluate(k, env_s)
+                if fa is None:
+                    return fi
+                return (fa[0] + fi[0], fa[1] + fi[1], fa[2] + fi[2])
         k1 = self._derivs(y0, dcmd, nt, ntau, tcmd, rate, field(y0) if field else None)
         y1 = tuple(a + 0.5 * dt * b for a, b in zip(y0, k1))
         k2 = self._derivs(y1, dcmd, nt, ntau, tcmd, rate, field(y1) if field else None)
@@ -1181,6 +1266,8 @@ class MMGShip:
             s.delta = -self.delta_max
         s.t += dt
         s.tick += 1
+        # 時變流場:步末以新時刻的模型值覆寫流向/流速(C# Advance 的 RefreshCurrent;state 與下一步的取樣用新時刻的流)
+        self._refresh_current()
         if ext is not None:
             # 步末:錨(鏈長/走錨/事件)、泊位(碰墊事件/硬接觸/繫纜);環境為步首取樣(C# 相同)
             events: list[dict[str, Any]] = []
@@ -1189,6 +1276,14 @@ class MMGShip:
                 self._emit(ev)
         if bank is not None:
             bank.update_last(self._kin(), self._water_depth_or_inf(), s.n * 60.0)
+        if waves is not None:
+            waves.update_last(self._kin(), self._water_depth_or_inf())
+        if interaction is not None:
+            # 目標船推進(C# TrafficManager.Step 在自船之後)→ 步末結果 → 門檻事件(C# RaiseInteractionTransition)
+            events_si: list[dict[str, Any]] = []
+            interaction.post_step(self._kin(), Env(env_s.current_e, env_s.current_n, self._water_depth_or_inf()), dt, events_si)
+            for ev in events_si:
+                self._emit(ev)
         # 擱淺/水深檢查
         if self.env.water_depth is not None and self.depth_below_keel() <= 0.0:
             self.aground = True
@@ -1239,6 +1334,12 @@ class MMGShip:
             payload += self.external.hash_bytes()
         if self.bank is not None and self.bank.active:
             payload += self.bank.hash_bytes()
+        # 波浪漂移力:有 environment.waves 時追加(C# WaveDriftModel.WriteHash;無浪的情境雜湊不變)
+        if self.waves is not None and self.waves.active:
+            payload += self.waves.hash_bytes()
+        # 船間交互作用:啟用時追加(C# ShipInteractionModel.WriteHash;未啟用的情境雜湊不變)
+        if self.interaction is not None and self.interaction.active:
+            payload += self.interaction.hash_bytes()
         return hashlib.sha256(payload).hexdigest()
 
     def set_start_utc(self, iso_or_none: str | None) -> datetime:
@@ -1305,6 +1406,7 @@ class MMGShip:
             "wind": {"trueSpeed": w_eff / KN_TO_MPS, "trueDir": deg360(wind.wind_dir_from),
                      "relSpeed": rel_speed / KN_TO_MPS, "relDir": rel_dir},
             "current": {"set": deg360(wind.current_set), "drift": wind.current_speed / KN_TO_MPS},
+            **({"currentSource": self.current_source} if self.current_source is not None else {}),
             "loading": self.sp.loading.name,
             "draft": {"fore": self.sp.loading.draft_fore_m, "aft": self.sp.loading.draft_aft_m},
             "engine": {"state": eng_state, "startsRemaining": int(self.sp.engine.get("maxConsecutiveStarts") or 0), "load_pct": load_pct},
@@ -1326,6 +1428,10 @@ class MMGShip:
                     out[key] = val
         if self.bank is not None and self.bank.active:
             out["bank"] = self.bank.state()
+        if self.waves is not None and self.waves.active:
+            out["waves"] = self.waves.state()
+        if self.interaction is not None and self.interaction.active:
+            out["shipInteraction"] = self.interaction.state()
         return out
 
 

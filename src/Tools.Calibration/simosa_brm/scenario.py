@@ -11,6 +11,9 @@
   ``harmonic``(``{meanLevel_m, constituents: [{name?, amplitude_m, period_s, phase_deg}]}``)擇一,正規化為 ``{"table": [{t, height_m}]}`` 或
   ``{"harmonic": {...}}``;結構檢查(至少 2 點、t 嚴格遞增、period_s > 0 …)與 C# ``Scenario.StructuralIssues`` 一致。模型見 ``tide.py``:
   有效水深 = ``waterDepth``(基底)+ 潮高(t),``setEnvironment waterDepth`` 仍改基底。
+- ``environment.current.table`` | ``tidal``(選填;情境引擎設計第 1.5.2 節):時變流場,正規化為 ``current: {set, drift, table: [{t, speed_kn,
+  direction_deg}] | None, tidal: {flood, ebb, slackWindow_min} | None}``(utc 已換算);結構檢查(擇一、表 ≥ 2 點且 t 嚴格遞增、速度非負、
+  tidal 需 tide 且 flood/ebb 皆要有)與 C# 一致。模型見 ``current.py``。
 - YAML 以 ``parameters.yaml_to_tree`` 讀取(純量型別推斷與 C# YamlJson 相同),``${params:<key>}`` 引用在檢查前以參數集替換
   (``parameters.resolve_references``;情境引擎設計第 2.3 節):有引用而未給參數集時依 ``assessment.parameterSet``
   (相對專案根目錄或情境檔目錄,預設 data/parameters/company-procedures.yaml)自動載入,仍無則 ``ValueError``。
@@ -35,10 +38,11 @@ from pathlib import Path
 from typing import Any
 
 from . import paths
-from .external import normalise_sections
+from .external import normalise_sections, normalise_ship_interaction, normalise_waves
 from .external import structural_issues as external_structural_issues
 from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship, parse_utc
 from .tide import tide_from_scenario
+from .current import current_from_scenario
 from .parameters import ParameterSet, find_parameter_set, has_references, resolve_references, yaml_to_tree
 
 SCENARIO_SUFFIXES = (".yaml", ".yml")
@@ -635,7 +639,136 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
     env = raw.get("environment")
     if isinstance(env, dict) and env.get("tide") is not None:
         tide_issues(env.get("tide"), raw.get("startTimeUtc"), error)
+    # ---- 時變流場(environment.current.table | tidal;C# 在潮汐之後檢查)
+    if isinstance(env, dict) and isinstance(env.get("current"), dict):
+        current_issues(env["current"], raw.get("startTimeUtc"), env.get("tide") is not None, error)
+    # ---- 浪(environment.waves;C# 在流場之後檢查)
+    if isinstance(env, dict) and env.get("waves") is not None:
+        waves_issues(env.get("waves"), error)
+    # ---- 船間交互作用(environment.shipInteraction;C# 在浪之後檢查)
+    if isinstance(env, dict) and env.get("shipInteraction") is not None:
+        ship_interaction_issues(env.get("shipInteraction"), error)
     return issues
+
+
+def ship_interaction_issues(si: Any, error: Any) -> None:
+    """``environment.shipInteraction`` 的結構檢查(C# Scenario.StructuralIssues 的船間交互作用段;路徑與訊息相同;
+    docs/design/physics-ship-interaction.md 第 2 節):coefficientScale ≥ 0、eventThreshold_t ≥ 0(皆有限)。非物件視為兩者皆無效。"""
+    sp = "environment.shipInteraction"
+    if not isinstance(si, dict):
+        error(f"{sp}.coefficientScale", "coefficientScale 必須為 ≥ 0 的有限數值")
+        error(f"{sp}.eventThreshold_t", "eventThreshold_t 必須為 ≥ 0 的有限數值")
+        return
+    scale = si.get("coefficientScale")
+    if scale is not None and (not _is_num(scale) or float(scale) < 0.0):
+        error(f"{sp}.coefficientScale", "coefficientScale 必須為 ≥ 0 的有限數值")
+    thr = si.get("eventThreshold_t")
+    if thr is not None and (not _is_num(thr) or float(thr) < 0.0):
+        error(f"{sp}.eventThreshold_t", "eventThreshold_t 必須為 ≥ 0 的有限數值")
+
+
+def waves_issues(waves: Any, error: Any) -> None:
+    """``environment.waves`` 的結構檢查(C# Scenario.StructuralIssues 的浪段;路徑與訊息相同;docs/design/physics-waves.md 第 2 節):
+    significantHeight_m ≥ 0、peakPeriod_s > 0、direction_deg 0–360、spectrum pm|jonswap、gamma ≥ 1。"""
+    wp = "environment.waves"
+    if not isinstance(waves, dict):
+        error(f"{wp}.significantHeight_m", "significantHeight_m 必須為 ≥ 0 的有限數值")
+        error(f"{wp}.peakPeriod_s", "peakPeriod_s 必須為正")
+        error(f"{wp}.direction_deg", "direction_deg 須在 0–360(來向)")
+        return
+    hs, tp, direction = waves.get("significantHeight_m"), waves.get("peakPeriod_s"), waves.get("direction_deg")
+    if not _is_num(hs) or float(hs) < 0.0:
+        error(f"{wp}.significantHeight_m", "significantHeight_m 必須為 ≥ 0 的有限數值")
+    if not _is_num(tp) or float(tp) <= 0.0:
+        error(f"{wp}.peakPeriod_s", "peakPeriod_s 必須為正")
+    if not _is_num(direction) or float(direction) < 0.0 or float(direction) > 360.0:
+        error(f"{wp}.direction_deg", "direction_deg 須在 0–360(來向)")
+    spec = waves.get("spectrum")
+    if spec is not None and str(spec).lower() not in ("pm", "jonswap"):
+        error(f"{wp}.spectrum", f"spectrum 須為 pm | jonswap:{spec}")
+    gamma = waves.get("gamma")
+    if gamma is not None and (not _is_num(gamma) or float(gamma) < 1.0):
+        error(f"{wp}.gamma", "gamma 必須 ≥ 1")
+
+
+def _table_point_time(p: dict[str, Any], pp: str, start: Any, error: Any) -> float | None:
+    """表點的 t 或 utc(擇一)→ 相對練習開始的秒數;錯誤訊息與 C#(潮高表/流場表共用)相同。"""
+    t: float | None = None
+    has_t, has_utc = p.get("t") is not None, p.get("utc") is not None
+    if has_t and has_utc:
+        error(pp, "表點的 t 與 utc 只能擇一")
+    elif has_t:
+        if not _is_num(p.get("t")):
+            error(pp, "t 必須為有限數值")
+        else:
+            t = float(p["t"])
+    elif has_utc:
+        utc = parse_utc(str(p["utc"]))
+        if utc is None:
+            error(pp, f"utc 無法解析:{p['utc']}")
+        elif start is None:
+            error(pp, "表點以 utc 指定時情境必須有可解析的 startTimeUtc")
+        else:
+            t = (utc - start).total_seconds()
+    else:
+        error(pp, "表點需要 t 或 utc")
+    return t
+
+
+def current_issues(cur: Any, start_time_utc: Any, has_tide: bool, error: Any) -> None:
+    """``environment.current`` 的時變流場結構檢查(C# Scenario.StructuralIssues 的流場段;路徑與訊息相同):table 與 tidal 擇一;
+    table ≥ 2 點、每點 t/utc 擇一、t 嚴格遞增、speed_kn ≥ 0、direction_deg 有限;tidal 需 environment.tide、flood/ebb 皆要有且數值合法、
+    slackWindow_min ≥ 0。常數流(無 table/tidal)不檢查。"""
+    cp = "environment.current"
+    if not isinstance(cur, dict):
+        return
+    table, tidal = cur.get("table"), cur.get("tidal")
+    if table is not None and tidal is not None:
+        error(cp, "current 的 table 與 tidal 只能擇一")
+    if table is not None:
+        if not isinstance(table, list):
+            error(f"{cp}.table", "流場表至少需要 2 點")
+            table = []
+        elif len(table) < 2:
+            error(f"{cp}.table", "流場表至少需要 2 點")
+        start = parse_utc(start_time_utc if isinstance(start_time_utc, str) else None)
+        prev: float | None = None
+        for i, p in enumerate(table):
+            pp = f"{cp}.table[{i}]"
+            if not isinstance(p, dict):
+                error(pp, "表點需要 t 或 utc")
+                continue
+            t = _table_point_time(p, pp, start, error)
+            if not _is_num(p.get("speed_kn")) or float(p["speed_kn"]) < 0.0:
+                error(pp, "speed_kn 不可為負")
+            if not _is_num(p.get("direction_deg")):
+                error(pp, "direction_deg 必須為有限數值")
+            if t is not None:
+                if not math.isfinite(t):
+                    error(pp, "t 必須為有限數值")
+                elif prev is not None and t <= prev:
+                    error(pp, "流場表的 t 必須嚴格遞增")
+                prev = t
+    if tidal is not None:
+        tp = f"{cp}.tidal"
+        if not has_tide:
+            error(tp, "tidal 需要 environment.tide")
+        if not isinstance(tidal, dict):
+            error(f"{tp}.flood", "tidal 需要 flood")
+            error(f"{tp}.ebb", "tidal 需要 ebb")
+            return
+        for name in ("flood", "ebb"):
+            phase = tidal.get(name)
+            if not isinstance(phase, dict):
+                error(f"{tp}.{name}", f"tidal 需要 {name}")
+                continue
+            if not _is_num(phase.get("speed_kn")) or float(phase["speed_kn"]) < 0.0:
+                error(f"{tp}.{name}", "speed_kn 不可為負")
+            if not _is_num(phase.get("direction_deg")):
+                error(f"{tp}.{name}", "direction_deg 必須為有限數值")
+        w = tidal.get("slackWindow_min")
+        if w is not None and (not _is_num(w) or float(w) < 0.0):
+            error(f"{tp}.slackWindow_min", "slackWindow_min 不可為負")
 
 
 def tide_issues(tide: Any, start_time_utc: Any, error: Any) -> None:
@@ -741,6 +874,39 @@ def normalise_tide(tide: Any, start_time_utc: Any) -> dict[str, Any] | None:
     }}
 
 
+def normalise_current(cur: Any, start_time_utc: Any) -> dict[str, Any]:
+    """``environment.current`` → ``{"set", "drift", "table": [{t, speed_kn, direction_deg}] | None, "tidal": {flood, ebb, slackWindow_min} | None}``
+    (結構檢查已通過;utc 換算為相對 startTimeUtc 的秒數;slackWindow_min 未給 = 20)。"""
+    cur = cur if isinstance(cur, dict) else {}
+    out: dict[str, Any] = {
+        "set": (_num(cur, "set", 0.0, where="environment.current") or 0.0) % 360.0,
+        "drift": max(0.0, _num(cur, "drift", 0.0, where="environment.current") or 0.0),
+        "table": None,
+        "tidal": None,
+    }
+    if cur.get("table") is not None:
+        start = parse_utc(start_time_utc if isinstance(start_time_utc, str) else None)
+        points = []
+        for p in cur["table"]:
+            if p.get("t") is not None:
+                t = float(p["t"])
+            else:
+                utc = parse_utc(str(p["utc"]))
+                if utc is None or start is None:
+                    raise ValueError("environment.current.table 的 utc 需有可解析的情境 startTimeUtc")
+                t = (utc - start).total_seconds()
+            points.append({"t": t, "speed_kn": float(p["speed_kn"]), "direction_deg": float(p["direction_deg"])})
+        out["table"] = points
+    elif cur.get("tidal") is not None:
+        td = cur["tidal"]
+        out["tidal"] = {
+            "flood": {"speed_kn": float(td["flood"]["speed_kn"]), "direction_deg": float(td["flood"]["direction_deg"])},
+            "ebb": {"speed_kn": float(td["ebb"]["speed_kn"]), "direction_deg": float(td["ebb"]["direction_deg"])},
+            "slackWindow_min": float(td["slackWindow_min"]) if td.get("slackWindow_min") is not None else 20.0,
+        }
+    return out
+
+
 def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: dict[str, Any] | None = None,
                       base_directory: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """檢查必要欄位並補齊預設值(C# Scenario.Validate 相同);回傳正規化後的新 dict(角度為度、速度為節)。
@@ -842,11 +1008,14 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
             "wind": {"trueSpeed": max(0.0, _num(wind, "trueSpeed", 0.0, where="environment.wind") or 0.0),
                      "trueDir": (_num(wind, "trueDir", 0.0, where="environment.wind") or 0.0) % 360.0,
                      "gustiness": min(1.0, max(0.0, _num(wind, "gustiness", 0.0, where="environment.wind") or 0.0))},
-            "current": {"set": (_num(cur, "set", 0.0, where="environment.current") or 0.0) % 360.0,
-                        "drift": max(0.0, _num(cur, "drift", 0.0, where="environment.current") or 0.0)},
+            "current": normalise_current(cur, raw.get("startTimeUtc")),  # 結構檢查已於 structural_issues 通過
             "waterDepth": depth,
             "visibility_nm": vis,
             "tide": tide,
+            # 浪(external.normalise_waves;結構檢查已於 waves_issues 通過;MMGShip 經 external 區段取得同一份)
+            "waves": normalise_waves(env.get("waves")),
+            # 船間交互作用(external.normalise_ship_interaction;未啟用 None;目標船清單在 external["shipInteraction"]["targets"])
+            "shipInteraction": normalise_ship_interaction(env.get("shipInteraction"), raw.get("targets")),
         },
         # 情境引擎區段(只結構檢查、不模擬;數值已代入參數)
         "timeline": copy.deepcopy(raw.get("timeline") or []),
@@ -939,6 +1108,8 @@ def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
     env = sc["environment"]
     ship.set_environment(env["wind"]["trueSpeed"], env["wind"]["trueDir"], env["current"]["set"], env["current"]["drift"],
                          env["waterDepth"], gustiness=env["wind"]["gustiness"], visibility_nm=env["visibility_nm"])
+    # 時變流場(environment.current.table | tidal;current.py):以 t = 0 的模型值覆寫常數流;無模型時常數流(數值與舊版相同)
+    ship.set_current_model(current_from_scenario(env.get("current"), ship.tide))
     # 外力模組:以情境初始狀態與水深建立(拖船 initial、初始已錨泊、繫纜 initial fast、岸壁;C# Initialize)
     ship.configure_external(sc.get("external"))
 

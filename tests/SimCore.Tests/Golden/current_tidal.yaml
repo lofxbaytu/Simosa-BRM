@@ -1,0 +1,32 @@
+# 跨語言時變流場夾具情境(潮流;export_current_reference.py 產生 current_tidal.csv,C# TidalStreamTests 讀取比對):
+#   短週期調和潮(主分潮 120 s,高潮 t = 20 s、低潮 t = 80 s;次分潮 300 s 使 max_rate 為上界、比例不恰為 1)驅動潮流:
+#   漲 085° 2.5 kn、退 265° 3.0 kn、平潮窗口 0.1 min(門檻 s = sin(π·6/120) ≈ 0.156,參考週期 = 最大振幅分潮 120 s);
+#   60 s 內經歷漲(減弱)→ 平潮 → 退(增強至接近全速)→ 低潮前減弱;FSB1 滿載直航、無風。
+id: current_tidal
+name: 潮流跨語言夾具
+seed: 20261208
+startTimeUtc: "2026-12-08T05:00:00Z"
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.05 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 0
+  speed: 6
+  telegraph: SAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current:
+    set: 85                                             # 載入瞬間的常數值,t = 0 即被潮流模型覆寫
+    drift: 2.5
+    tidal:
+      flood: { speed_kn: 2.5, direction_deg: 85 }
+      ebb: { speed_kn: 3.0, direction_deg: 265 }
+      slackWindow_min: 0.1
+  waterDepth: 40
+  tide:
+    harmonic:
+      meanLevel_m: 1.0
+      constituents:
+        - { name: T1, amplitude_m: 1.0, period_s: 120, phase_deg: -60 }    # 高潮 t = 20 s(轉流 漲 → 退)
+        - { name: T2, amplitude_m: 0.05, period_s: 300, phase_deg: 40 }

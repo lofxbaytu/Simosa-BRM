@@ -196,17 +196,71 @@
         },
         "current": {
           "type": "object",
+          "description": "均勻流。set/drift 為常數流;選填 table(流場表)或 tidal(潮流)擇一時為時變流場(docs/design/scenario-engine.md 第 1.5.2 節):流向/流速由練習時間決定(確定性、不進快照/雜湊),state.currentSource 輸出 table|tidal;timeline/指令 setEnvironment current 覆寫為常數後時變停止,直到再載入情境。皆未給時行為與數值與舊版相同",
           "properties": {
             "set": {
               "type": "number",
               "minimum": 0,
               "maximum": 360,
-              "description": "流向(去向,度)"
+              "description": "流向(去向,度);有 table/tidal 時為載入瞬間的值,t = 0 即被模型覆寫"
             },
             "drift": {
               "type": "number",
               "minimum": 0,
-              "description": "流速 (kn)"
+              "description": "流速 (kn);同上"
+            },
+            "table": {
+              "type": "array",
+              "minItems": 2,
+              "description": "流場表:以東/北分量線性內插(方向跨 360° 不繞遠路),範圍外取端點;t 嚴格遞增。每點以 t(秒,相對練習開始)或 utc(ISO 8601,換算為相對情境 startTimeUtc 的秒數;此時 startTimeUtc 必填)擇一",
+              "items": {
+                "type": "object",
+                "required": [
+                  "speed_kn",
+                  "direction_deg"
+                ],
+                "properties": {
+                  "t": {
+                    "type": "number",
+                    "description": "時間(秒,自練習開始)"
+                  },
+                  "utc": {
+                    "type": "string",
+                    "description": "UTC 時刻(ISO 8601)"
+                  },
+                  "speed_kn": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "流速 (kn)"
+                  },
+                  "direction_deg": {
+                    "type": "number",
+                    "description": "流向(去向,度)"
+                  }
+                }
+              }
+            },
+            "tidal": {
+              "type": "object",
+              "required": [
+                "flood",
+                "ebb"
+              ],
+              "description": "潮流(需 environment.tide):漲/退由潮高變化率 dH/dt 的符號決定,流速 = 該相速度 × 比例;比例由 |dH/dt| / max|dH/dt| 經平潮門檻 s = sin(π·slackWindow/T_ref) 線性映射(≤ s 為平潮 0;T_ref 為調和潮最大振幅分潮週期或潮高表的 M2)",
+              "properties": {
+                "flood": {
+                  "$ref": "#/$defs/tidalCurrentPhase"
+                },
+                "ebb": {
+                  "$ref": "#/$defs/tidalCurrentPhase"
+                },
+                "slackWindow_min": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 20,
+                  "description": "平潮窗口(分;轉流前後各半個窗口視為平潮)"
+                }
+              }
             }
           }
         },
@@ -306,6 +360,27 @@
                 }
               }
             }
+          }
+        },
+        "waves": {
+          "type": "object",
+          "description": "浪(選填;docs/design/physics-waves.md):有此區段時核心以短波漸近水線反射積分計算平均二階波浪漂移力(surge/sway/yaw;強度 ∝ ρ g Hs²,隨吃水/波長與 λ/L 衰減、遭遇頻率修正;淺水時波長以有限水深色散關係求得)並輸出 state.waves;未給時零力、數值與雜湊與舊版相同。確定性(平均力無相位、無亂數);C# 與 Python 參考實作同公式。3 自由度:無一階振盪運動與橫搖",
+          "required": ["significantHeight_m", "peakPeriod_s", "direction_deg"],
+          "properties": {
+            "significantHeight_m": { "type": "number", "minimum": 0, "description": "有義波高 Hs(m)" },
+            "peakPeriod_s": { "type": "number", "exclusiveMinimum": 0, "description": "譜峰週期 Tp(s)" },
+            "direction_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "浪來向(度,氣象慣例,與風相同)" },
+            "spectrum": { "type": "string", "enum": ["pm", "jonswap"], "default": "pm", "description": "浪譜:pm(Pierson–Moskowitz)| jonswap;只影響各頻率成分的加權" },
+            "gamma": { "type": "number", "minimum": 1, "default": 3.3, "description": "JONSWAP 峰度係數 γ(pm 時忽略)" }
+          }
+        },
+        "shipInteraction": {
+          "type": "object",
+          "description": "船間交互作用(選填;docs/design/physics-ship-interaction.md):enabled 時核心以 Tuck–Newman 型細長體線源模型(Lagally 源項 ∝ U_o·U_t + 壓力梯度/附加質量項 ∝ U_t²;有限水深以海底鏡像級數)計算目標船通過/追越自船時的交互作用力(surge/sway/yaw),對每艘在自船 3 倍船長內、橫向間距 < 2(B_o + B_t) 的目標船計算並相加,輸出 state.shipInteraction,等效側向力超過 eventThreshold_t 時發 shipInteraction 事件(進入/離開各一次)。單向:目標船為運動學目標不受自船影響。未給或 enabled = false 時零力、數值與雜湊與舊版相同。確定性(純函數、無亂數);C# 與 Python 參考實作同公式(Python 的目標船為直線等速)",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "啟用(預設 false)" },
+            "coefficientScale": { "type": "number", "minimum": 0, "default": 1, "description": "整體倍率(0 = 只顯示不施力;教官調整或日後以實船經驗校正)" },
+            "eventThreshold_t": { "type": "number", "minimum": 0, "default": 3, "description": "事件門檻(t):等效側向力 max(|Y|, 4|N|/L) ≥ 門檻發進入事件,降到一半以下發離開事件;0 = 不發事件" }
           }
         },
         "seabed": {
@@ -852,6 +927,23 @@
     }
   ],
   "$defs": {
+    "tidalCurrentPhase": {
+      "type": "object",
+      "required": [
+        "speed_kn",
+        "direction_deg"
+      ],
+      "description": "潮流一相(漲或退):該相的最大流速 (kn) 與流向(去向,度)",
+      "properties": {
+        "speed_kn": {
+          "type": "number",
+          "minimum": 0
+        },
+        "direction_deg": {
+          "type": "number"
+        }
+      }
+    },
     "bodyPoint": {
       "description": "船體座標點:具名 fwd|aft|bow|stern|fwdPort|fwdStbd|midPort|midStbd|aftPort|aftStbd(以 L = 垂標間長、B = 型寬估計,見設計文件第 2.1 節)或 {x, y}(m,x 向艏、y 向右舷、原點船舯)",
       "oneOf": [
@@ -1077,6 +1169,11 @@
           "type": "number",
           "minimum": 0,
           "default": 5
+        },
+        "displacement_t": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "排水量(t;選填,只供船間交互作用:給定時方塊係數 = Δ/(ρ·loa·beam·draft) 夾在 0.35–0.95,未給時依 shipType 預設;docs/design/physics-ship-interaction.md 第 2.2 節)"
         },
         "callSign": {
           "type": "string"

@@ -77,6 +77,7 @@ export type AlertEventKind =
 export type ExternalForceEventKind =
   | 'tugCommand'
   | 'tugLineParted'
+  | 'shipInteraction'
   | 'anchorLetGo'
   | 'anchorCommand'
   | 'anchorBroughtUp'
@@ -160,6 +161,7 @@ export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'radarControl',
   'tugCommand',
   'tugLineParted',
+  'shipInteraction',
   'anchorLetGo',
   'anchorCommand',
   'anchorBroughtUp',

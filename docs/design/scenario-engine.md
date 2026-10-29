@@ -285,10 +285,100 @@ environment:
 - 結構檢查(`Scenario.StructuralIssues` 與 Python `structural_issues`,路徑 `environment.tide…`,訊息相同):`table`/`harmonic` 擇一;表 ≥ 2 點、每點 `t`/`utc` 擇一、`utc` 需情境 `startTimeUtc` 可解析、`t` 嚴格遞增、`height_m` 有限;`harmonic` ≥ 1 個分潮、`period_s > 0`、`amplitude_m ≥ 0`。`ScenarioValidator` 的初始 UKC 檢查亦以「基底 + 潮高(0)」計算。
 - Python 參考實作:`simosa_brm/tide.py` 同公式(運算順序相同),`scenario.validate_scenario` 正規化為 `{"table": [{t, height_m}]}`(utc 已換算)或 `{"harmonic": {...}}`,`MMGShip.tide` / `tide_height()` / `_effective_depth()`:淺水修正、squat、UKC、外力水深與 `state_json` 的 `waterDepth`/`tideHeight_m` 皆用有效水深(有潮汐時淺水係數每步重算)。跨語言夾具 `tests/SimCore.Tests/Golden/tide_table.{yaml,csv}`、`tide_harmonic.{yaml,csv}`(`export_tide_reference.py` 產生;C# `TideTests.GoldenTideMatchesPythonReference` 與 Python `test_tide.py` 比對到 1e-9)。
 - 情境:`E18b_tide_table.yaml` 為 E18 的潮高表版(基底 = 海圖水深 CD 7.0 m,實際潮位表「比預報低且提早退潮」,時間表無 `setEnvironment`);E18 本身與既有夾具不變。靠離泊預演範本仍以「基底 = 泊位水深 + 潮高」常數表示,日後可改為 `tide.table`。
+- 潮高變化率:`TideModel.RateAt(t)`(dH/dt,m/s;表為分段常數、範圍外 0;調和潮為解析導數)、`MaxRate`(表取各段斜率絕對值最大;調和潮 Σ A·2π/T)、`ReferencePeriodS`(調和潮取最大振幅分潮週期;表取 M2 44714.16 s),供第 1.5.2 節潮流模型使用(2026-10-29 第十八輪)。
+
+### 1.5.2 `environment.current.table` | `tidal`:時變流場(2026-10-29)
+
+> 注意:`tide.table` 的變化率 dH/dt 為分段常數(`TideTable.RateAt`),`current.tidal` 的流速/流向因此在每個表點**瞬間**切換(無漸變;相當於 `ramp_s: 0`)。要平滑變化請用 `tide.harmonic`(導數連續)或在表中多放中間點縮小每段的跳變;E06b 以此示意,跳變量見 scenario-library.md 第 3 節。
+
+選填(需求 R3「隨時間變化的流場」)。均勻流的流向(去向)與流速為練習時間 `t` 的純函數;兩種形式擇一,皆未給 = 常數流(行為與數值與舊版相同):
+
+```yaml
+environment:
+  current:
+    set: 85                      # 常數流/載入瞬間的值(有 table/tidal 時 t = 0 即被模型覆寫;保留供摘要與編輯器顯示)
+    drift: 2.5
+    table:                       # 流場表:[{t | utc, speed_kn, direction_deg}],≥ 2 點、t 嚴格遞增、utc 換算同潮高表
+      - { t: 0, speed_kn: 1.5, direction_deg: 85 }
+      - { utc: "2026-12-08T02:10:00Z", speed_kn: 2.5, direction_deg: 85 }
+      - { t: 1800, speed_kn: 0.3, direction_deg: 85 }
+  # 或
+  current:
+    set: 85
+    drift: 2.5
+    tidal:                       # 潮流:需 environment.tide
+      flood: { speed_kn: 2.5, direction_deg: 85 }
+      ebb: { speed_kn: 3.0, direction_deg: 265 }
+      slackWindow_min: 20        # 平潮窗口(分;預設 20)
+```
+
+- **流場表**:以東/北分量**向量**線性內插(方向跨 360° 不繞遠路、流速在兩點間不會憑空歸零),範圍外取端點;輸出 set = atan2(E, N)、drift = √(E²+N²)。
+- **潮流**:`rate = dH/dt`(第 1.5.1 節 `TideModel.RateAt`)≥ 0 → 漲潮向/速,否則退潮向/速;流速 = 該相速度 × scale,`ratio = |rate| / MaxRate`,
+  平潮門檻 `s = sin(π·slackWindow/T_ref)`(半日潮近似:轉流前後各半個窗口內 |dH/dt| 小於此比例;`T_ref` = 潮高模型參考週期),
+  `scale = ratio ≤ s ? 0 : (ratio − s)/(1 − s)`(連續線性映射;平潮流速 0,方向為當時相位的方向)。潮高表要表現平潮需在高/低潮附近放平段
+  (斜率小於門檻比例),否則漲退在節點處瞬間切換。
+- 核心:`Environment/CurrentModel.cs`(`CurrentTable`、`TidalCurrent`、`FromScenario`),`EnvironmentConditions.CurrentModel / CurrentOverridden / CurrentModelActive / CurrentSource / RefreshCurrent(t)`:
+  引擎於 `Initialize`、每步 `Tick++` 之後(與 `RefreshTide` 並列)與快照還原後以 `RefreshCurrent(Time)` 寫入既有 `CurrentSetRad/CurrentDriftMps`,動力學取樣、對地速度、目標船、外力與 `state.current` 仍走既有欄位。
+- **覆寫語意**:`setEnvironment current`(指令或時間表動作,含 `ramp_s` 漸變)把流改為常數後**時變停止**(`CurrentOverridden = true`;漸變自當時模型值起算;事件 `environmentChange.data.currentModelStopped = true`),直到再載入情境(`loadScenario`/`reset`);只改風/水深/能見度不影響。覆寫旗標進 `EngineSnapshot.Environment.CurrentOverridden`(只在情境有時變流場時寫出,常數流情境的快照位元不變),倒帶到覆寫前即恢復時變。
+- 確定性:流向/流速只由 `Tick` 與覆寫旗標決定,不進雜湊;紀錄/重播一致(`TidalStreamTests.OverrideAndRewindAreRecordReplayConsistent`、`E06b_NoOperatorTidalStreamTurnsFromFloodToEbb` 以 `Replayer` 驗證)。
+- 契約:`state.currentSource`(`"table" | "tidal"`;**只在時變流場且未被覆寫時輸出**,常數流省略),`state.current` 數值隨時間變化;`scenario.schema.json` `environment.current.table/tidal`、`$defs.tidalCurrentPhase`。
+- 結構檢查(`Scenario.StructuralIssues` 與 Python `current_issues`,路徑 `environment.current…`,訊息相同):table/tidal 擇一;表 ≥ 2 點、每點 `t`/`utc` 擇一、`utc` 需 `startTimeUtc`、`t` 嚴格遞增、`speed_kn ≥ 0`、`direction_deg` 有限;tidal 需 `environment.tide`、`flood`/`ebb` 皆要有且數值合法、`slackWindow_min ≥ 0`。
+- Python 參考實作:`simosa_brm/current.py` 同公式(運算順序相同),`tide.py` 的 `rate_at/max_rate/reference_period_s`,`scenario.validate_scenario` 正規化為 `current: {set, drift, table | None, tidal | None}`,`MMGShip.current_model / current_overridden / set_current_model / _refresh_current`(步末與 reset/apply_scenario),`set_environment` 給 current 即覆寫,`state_json` 的 `currentSource`。跨語言夾具 `tests/SimCore.Tests/Golden/current_table.{yaml,csv}`、`current_tidal.{yaml,csv}`(`export_current_reference.py` 產生;C# `TidalStreamTests.GoldenCurrentMatchesPythonReference` 與 Python `test_current.py` 比對到 1e-9)。
+- 情境:`E06b_tidal_stream.yaml` 為 E06 的潮流版(示意潮高表 + `current.tidal`:漲 085° 2.5 kn → T+11–13 平潮 → 退 265° 3.0 kn,時間表無 `setEnvironment`);E06 兩檔與既有夾具不變。
+- 儀表:操船台深度方塊在 `state.tideHeight_m` 存在時顯示「潮高 +x.x m」、流方塊標示來源;教官站環境面板標題顯示目前流向/流速與來源並提示「套用流會改為常數並停止時變」;情境摘要帶「(流場表)/(潮流)」。
+
+### 1.5.3 `environment.waves`:浪與平均波浪漂移力(2026-10-29)
+
+選填(設計文件 `docs/design/physics-waves.md`)。有此區段時核心以短波漸近水線反射積分計算**平均二階波浪漂移力**(surge/sway/yaw;強度 ∝ ρ g Hs²,每個浪譜成分乘 Ursell/Fujii–Takahashi 吃水反射係數、λ/L 截止與遭遇頻率修正 (1 + U_w/c)²)並加入運動方程式;3 自由度只有平均力,無一階振盪與橫搖。
+
+```yaml
+environment:
+  waves:
+    significantHeight_m: 2.0      # Hs ≥ 0
+    peakPeriod_s: 7.0             # Tp > 0
+    direction_deg: 45             # 來向 0–360(氣象慣例,與風相同)
+    spectrum: jonswap             # 選填 pm(預設)| jonswap(只影響頻率成分加權)
+    gamma: 3.3                    # 選填 ≥ 1
+```
+
+- 核心:`Physics/External/WaveDrift.cs`(`WaveDriftModel : IExternalForceField`),引擎於 `Initialize`/`Restore` 依情境重建,每步末 `UpdateLast`(步末狀態與有效水深);與拖船/錨/泊位、岸壁外力相加(無浪時路徑與舊版相同)。淺水:自船有效水深 < 深水波長/2 時波長以有限水深色散關係求得(固定 12 次 Newton 迭代)。
+- 確定性:純函數(無相位、無亂數、無跨步狀態),不進 `EngineSnapshot`;啟用時雜湊追加 8 個 int64(標記 `WAVEDRFT`、Hs、Tp、來向、峰值波長、步末 X/Y/N)。紀錄/重播一致(`WaveDriftTests.RecordReplayReproducesHashWithWaves`)。
+- 契約:`state.waves {significantHeight_m, peakPeriod_s, direction_deg, wavelength_m, spectrum, X_kN, Y_kN, N_kNm}`(**只在情境有 `waves` 時輸出**);視景以 `significantHeight_m`/`direction_deg` 畫海面(`Visual.Shared` `EnvironmentMapper`,取代由風速推得的波高)。無 `waves` 的情境:零力,所有數值、雜湊與既有夾具/黃金測試位元不變。
+- 結構檢查(`Scenario.StructuralIssues` 與 Python `waves_issues`,路徑 `environment.waves.*`、訊息相同):Hs ≥ 0 有限、Tp > 0、來向 0–360、`spectrum` pm|jonswap、`gamma ≥ 1`。
+- Python 參考實作:`external.py WaveDriftModel` 同公式同運算順序,`scenario.validate_scenario` 正規化 `environment.waves` 並經 `normalise_sections` 交給 `MMGShip.configure_external`;跨語言夾具 `tests/SimCore.Tests/Golden/waves_force_table.csv`(純函數 120 列,相對 ≤ 1e-12,實測逐位元相同)與 `waves_drift_run.{yaml,csv}`(300 s 積分,< 1%,實測 ~1e-16),`export_waves_reference.py` 產生。
+- 限制:浪在練習中固定(`setEnvironment`/時間表尚無 `waves`);無橫搖;係數為文獻量級估計(physics-waves.md 第 4、7、9 節)。
+
+### 1.5.4 `environment.shipInteraction`:船間交互作用(2026-10-29)
+
+選填、預設關閉(設計文件 `docs/design/physics-ship-interaction.md`)。`enabled: true` 時核心對每艘在自船 3 倍船長內、橫向間距 < 2(B_o + B_t) 的目標船(`targets[]`,已出現且非跟隨自船的護航目標)以 **Tuck–Newman 型細長體線源模型**計算自船受到的交互作用力(surge/sway/yaw):Lagally 源項(∝ U_o·U_t)+ 壓力梯度/附加質量項(∝ U_t²),有限水深以海底鏡像級數;單向(目標船為運動學目標不受自船影響)。
+
+```yaml
+environment:
+  shipInteraction:
+    enabled: true           # 預設 false(未啟用與無區段相同)
+    coefficientScale: 1.0   # 選填 ≥ 0(0 = 只顯示不施力)
+    eventThreshold_t: 3.0   # 選填 ≥ 0:等效側向力 max(|Y|, 4|N|/L) 的事件門檻(t);0 = 不發事件
+targets:
+  - id: OVT
+    loa: 130
+    beam: 22
+    draft: 7.5
+    displacement_t: 16490   # 選填(新增 targets[].displacement_t):Cb = Δ/(ρ·loa·beam·draft) 夾 0.35–0.95;未給依 shipType 預設
+    initial: { position: { x: -50, y: -200 }, heading: 0, speed: 12 }
+```
+
+- 核心:`Physics/External/ShipInteraction.cs`(`ShipInteractionModel : IExternalForceField`),引擎於 `Initialize`/`Restore` 依情境重建;每步 `PreStep` 取步首的目標船狀態(四階段共用),目標船推進後 `UpdateLast`(步末幾何)並檢查門檻;與拖船/錨/泊位、岸壁、浪外力最後相加(未啟用時路徑與舊版相同)。
+- 事件 `shipInteraction`(source engine、targetId、學員站可見;data `{phase: enter|exit, targetId, forceSurge_t, forceSway_t, momentYaw_tm, xi, eta, threshold_t}`):等效側向力 ≥ 門檻發進入事件,降到 0.5 倍門檻以下發離開事件(各一次;供講評)。
+- 確定性:力為純函數、無亂數;事件旗標進 `EngineSnapshot.ShipInteraction {EventActive, EventTargetId}`(只在啟用時寫入);啟用時雜湊追加 7 個 int64(標記 `SHIPINTR`、事件旗標、步末 X/Y/N/ξ/η)。快照還原、紀錄/重播一致(`ShipInteractionTests`)。
+- 契約:`state.shipInteraction {active, targetId?, forceSurge_t, forceSway_t, momentYaw_tm, xi?, eta?, targets, event}`(**只在啟用時輸出**;t、t·m)。未啟用的情境:零力,所有數值、雜湊與既有夾具/黃金測試位元不變。
+- 結構檢查(`Scenario.StructuralIssues` 與 Python `ship_interaction_issues`,路徑 `environment.shipInteraction.*`、訊息相同):`coefficientScale ≥ 0`、`eventThreshold_t ≥ 0`(有限)。
+- Python 參考實作:`external.py ShipInteractionModel` 同公式同運算順序,目標船為直線等速 `KinematicTarget`(hold、無觸發;其他行為模式不在參考實作內);`scenario.validate_scenario` 正規化 `environment.shipInteraction`(含目標清單)並經 `normalise_sections` 交給 `MMGShip.configure_external`;跨語言夾具 `tests/SimCore.Tests/Golden/interaction_force_table.csv`(純函數 432 列,相對 ≤ 1e-12,實測逐位元相同)與 `interaction_overtaking_run.{yaml,csv}`(210 s 追越積分,< 1%,實測 ~1e-15;事件 tick 相同),`export_interaction_reference.py` 產生。
+- 量級(physics-ship-interaction.md 第 4.2 節):FSB1 8 kn 被 2.1 倍排水量船以 12 kn 自 50 m 外追越,深水並行吸力 13.6 t(約 2 倍 10° 舵力)、艏搖 ±1.15 MN·m;12 m 水深 51 t。
+- 限制:單向;靜止目標對航行中自船零力;係數為文獻量級估計;教官站/儀表尚未顯示。
 
 ### 1.6 schema 變更清單
 
-- `scenario.schema.json`:`properties` 新增 `timeline`(array of `$defs.timelineItem`)、`route`(`$defs.route`)、`zones`(array of `$defs.zone`)、`briefing`(`oneOf [string, $defs.briefing]`);`environment.visibility_nm`;`environment.tide`(第 1.5.1 節;`oneOf` table | harmonic);`assessment` 擴充(第 1.3 節);`$defs` 新增 `triggerCondition`、`timelineAction`、`timelineItem`、`route`、`routeWaypoint`、`zone`、`paramRef`(`{"type":"string","pattern":"^\\$\\{params:[A-Za-z0-9_.\\-]+\\}$"}`)與 `numberOrParam`(`oneOf [number, paramRef]`)。凡可引用參數的數值欄位型別改為 `numberOrParam`(`minCpa_nm`、門檻、速限、`xtdLimit_m` 等)。
+- `scenario.schema.json`:`properties` 新增 `timeline`(array of `$defs.timelineItem`)、`route`(`$defs.route`)、`zones`(array of `$defs.zone`)、`briefing`(`oneOf [string, $defs.briefing]`);`environment.visibility_nm`;`environment.tide`(第 1.5.1 節;`oneOf` table | harmonic);`environment.current.table` / `tidal` 與 `$defs.tidalCurrentPhase`(第 1.5.2 節);`environment.waves`(第 1.5.3 節);`environment.shipInteraction` 與 `$defs.target.displacement_t`(第 1.5.4 節);`assessment` 擴充(第 1.3 節);`$defs` 新增 `triggerCondition`、`timelineAction`、`timelineItem`、`route`、`routeWaypoint`、`zone`、`paramRef`(`{"type":"string","pattern":"^\\$\\{params:[A-Za-z0-9_.\\-]+\\}$"}`)與 `numberOrParam`(`oneOf [number, paramRef]`)。凡可引用參數的數值欄位型別改為 `numberOrParam`(`minCpa_nm`、門檻、速限、`xtdLimit_m` 等)。
 - schema `examples[0]` 增補一段 `timeline`、`route`、`assessment.hardFail`,供 `ScenarioTests` 的 schema 範例測試(現有測試只檢查 title 與 example 可解析,新範例必須能被 C# 載入)。
 
 ## 2. 公司程序參數集
@@ -479,6 +569,7 @@ public sealed record TrafficEvent : SimEvent { }   // Source 固定 "traffic";Tr
 | timeline | `autopilotOverride`、`ownShipOverride`、`timeScaleChanged` | |
 | timeline / instructor | `exerciseEnded` | `data: {reason}`;之後 summary 固定 |
 | engine | `grounding` | 既有 `Grounded` 事件同時發此事件 |
+| engine | `shipInteraction` | `targetId`;`data: {phase: enter\|exit, targetId, forceSurge_t, forceSway_t, momentYaw_tm, xi, eta, threshold_t}`(船間交互作用力跨過門檻;第 1.5.4 節) |
 | assessment | `routeLegChanged` | `data: {legIndex, from, to, waypoint}` |
 | assessment | `checkpointPassed`、`reportPointPassed` | `data: {waypoint}` |
 | assessment | `xtdExceeded` / `xtdRestored` | `data: {xtd_m, limit_m, legIndex}` |
@@ -535,7 +626,7 @@ Tick ≥ EndTick:value = To,移除漸變,發 environmentRampDone
 ```
 - `ramp_s = 0` → 立即(與現行 `setEnvironment` 相同,不建立 ramp)。
 - 漸變只用整數 tick 與 double 運算,無亂數;進快照(`TimelineSnapshot.Ramps`);還原後接續。
-- 風速漸變與陣風係數相乘(`WindEffectiveSpeedMps` 既有邏輯);水深漸變改**基底**(海圖)水深,潮高另由 `environment.tide` 疊加(第 1.5.1 節;E18 仍以水深漸變近似潮比預報低,E18b 改用潮高表)。
+- 風速漸變與陣風係數相乘(`WindEffectiveSpeedMps` 既有邏輯);水深漸變改**基底**(海圖)水深,潮高另由 `environment.tide` 疊加(第 1.5.1 節;E18 仍以水深漸變近似潮比預報低,E18b 改用潮高表)。流通道的漸變或立即設定會停止時變流場(第 1.5.2 節覆寫語意;E06b 的時間表因此不含 `setEnvironment`)。
 - `setEnvironment` **指令**也接受 `ramp_s`(教官站環境面板加欄位),經 `Apply` 走同一路徑。
 
 ### 3.6 確定性、快照與雜湊
@@ -677,7 +768,7 @@ distToWp = |B − P|;brgToWp = atan2(B − P)
   "xtdLimit_m": {"type":"number"}, "distanceToWaypoint_nm": {"type":"number"}, "bearingToWaypoint_deg": {"type":"number"},
   "legCourse_deg": {"type":"number"}, "speedLimit_kn": {"type":"number"}, "complete": {"type":"boolean"} } }
 ```
-另新增 `steering: {mode: fu|nfu|autopilot|emergency, pump: "1"|"2"|"both", nfuActive?: bool}`(操舵模式,D32;`nfuActive` 只在 nfu 模式輸出)、`tideHeight_m`(潮高;只在情境有 `environment.tide` 時輸出,`waterDepth` 為有效水深;第 1.5.1 節)。
+另新增 `steering: {mode: fu|nfu|autopilot|emergency, pump: "1"|"2"|"both", nfuActive?: bool}`(操舵模式,D32;`nfuActive` 只在 nfu 模式輸出)、`tideHeight_m`(潮高;只在情境有 `environment.tide` 時輸出,`waterDepth` 為有效水深;第 1.5.1 節)、`currentSource`(`table | tidal`;只在時變流場未被覆寫時輸出,`current` 數值隨時間變化;第 1.5.2 節)、`waves {significantHeight_m, peakPeriod_s, direction_deg, wavelength_m, spectrum?, X_kN?, Y_kN?, N_kNm?}`(浪與平均漂移力;只在情境有 `environment.waves` 時輸出;第 1.5.3 節)、`shipInteraction {active, targetId?, forceSurge_t, forceSway_t, momentYaw_tm, xi?, eta?, targets, event}`(船間交互作用;只在情境啟用 `environment.shipInteraction` 時輸出;第 1.5.4 節)。
 
 `route` 同時滿足第 7.2 節 conning display 的「航跡偏差(XTD)/下一航點」最低資訊;`faults[]` 既有不變。`ContractsTests` 只檢查 required 欄位,新增皆選填 → 不受影響;Python 參考實作不輸出 `scenario`/`route`。
 
@@ -741,7 +832,7 @@ WebSocket 新增推送框(與 state 框同通道,以 `type` 區分;`ws-client.ts
 
 **目的**:讓教官不手編 YAML 也能在 30 分鐘內依範本組出「環境 + 目標船 + 2 個故障 + 評估規則」的新練習(規劃書第 9.1 節;驗收第 14 章教官第 2 列)。船上離線可用,不增加執行時相依(只用既有 `yaml` 套件)。
 
-**流程**(`src/Instruments.Web/src/lib/scenario-editor.ts`):`fromYaml(範本原文)` → `ScenarioDraft`(可序列化的純物件)→ 表單編輯 → `validateDraft(draft)` = `toScenarioObject()` / `toYaml()` + `parseScenario`(與情境面板相同的最小結構檢查)+ 編輯器檢查 → 「下載 YAML」(`<id>.yaml`)或「載入核心」(`loadScenario {args: {id, scenario}}` 內嵌物件;C# `ScenarioLoader.FromJsonElement` / Python `load_scenario_inline` 與讀檔同一路徑,參數引用、`berth.file` 參照照常解析)。範本清單取自 `instructor-app` 已載入的情境(`lib/scenario.ts` 新增 `loadScenarioSources()` 回傳 `path → YAML 原文`);套用範本後 id 自動加 `_edit` 以免紀錄檔名與範本相同。
+**流程**(`src/Instruments.Web/src/lib/scenario-editor.ts`;擴充區段的表單在 `components/instructor/scenario-editor-sections.ts`,以 `EditorHost` 介面讀寫主元件草稿):`fromYaml(範本原文)` → `ScenarioDraft`(可序列化的純物件;第十八輪起版本 2,新區段為情境物件的原樣複本 `Record`,以 `withPath` 點路徑逐鍵修改,未改的鍵完全不動)→ 表單編輯 → `validateDraft(draft)` = `toScenarioObject()` / `toYaml()` + `parseScenario`(與情境面板相同的最小結構檢查)+ 編輯器檢查 → 「下載 YAML」(`<id>.yaml`)或「載入核心」(`loadScenario {args: {id, scenario}}` 內嵌物件;C# `ScenarioLoader.FromJsonElement` / Python `load_scenario_inline` 與讀檔同一路徑,參數引用、`berth.file` 參照照常解析)。範本清單取自 `instructor-app` 已載入的情境(`lib/scenario.ts` 新增 `loadScenarioSources()` 回傳 `path → YAML 原文`);套用範本後 id 自動加 `_edit` 以免紀錄檔名與範本相同。
 
 **涵蓋欄位**(表單可改):
 
@@ -751,20 +842,25 @@ WebSocket 新增推送框(與 state 框同通道,以 `type` 區分;`ws-client.ts
 | 船與初始 | `ship.id`、`ship.loading`(範本未給時不補,維持 schema 預設 ballast)、`initial.position`(經緯度或 ENU x/y,二擇一切換)、`heading`、`speed`、`telegraph`、`rudder` |
 | 環境 | `wind.trueSpeed/trueDir/gustiness`、`current.set/drift`、`waterDepth`、`visibility_nm`(舊鍵 `visibility` 讀入後改寫為 `visibility_nm`);數值欄位可填 `${params:key}` |
 | 目標船 | 新增/刪除/編輯 `id`、`name`、`shipType`、`loa`、`beam`、`initial.position/heading/speed`、`behaviour.mode`(hold/waypoints/scripted/anchored/follow/colreg) |
-| 時間表故障 | 列出全部 `timeline[]`(id、名稱、條件摘要、動作摘要;任一項目可刪除);「新增故障」:項目 id/名稱、故障名稱(`src/Contracts/fault-catalogue.json` 列舉,只記錄者標示)、觸發(模擬時間 `{type: time, atLeast}` / 教官手動 `manual: true` / 自訂條件 YAML 物件)、階段 `phase`、`args`(YAML 物件)、`recordOnly`、給教官的 `message` 動作 |
-| 評估 | 硬性失敗:擱淺/碰撞開關(`{id: rule, rule}`),其餘規則(cpa `lessThan` nm、ukc `lessThan.metres`、zoneEntered `zoneId`、event `kind`)列出/新增/刪除;容許帶 `bands[]` 各欄(id、metric(建議清單)、direction、warn、fail(可寫 `2x`)、penalty、failPenalty)新增/刪除/編輯;`scoring.start` 與 `scoring.passMark` |
+| 時間表 | 列出全部 `timeline[]`(id、名稱、條件摘要、動作摘要;刪除、上下移);「新增故障」:項目 id/名稱、故障名稱(`src/Contracts/fault-catalogue.json` 列舉,只記錄者標示)、觸發(模擬時間 `{type: time, atLeast}` / 教官手動 `manual: true` / 自訂條件 YAML 物件)、階段 `phase`、`args`(YAML 物件)、`recordOnly`、給教官的 `message` 動作;「新增一般項目」(模擬時間 60 s + 一則教官訊息);每項可展開**逐欄編輯**(`timelineItemForm` / `patchTimelineItem` / `setTimelineTrigger`):`id`、`name`、`phase`、`visibility`、`armed`、觸發種類(時間 / 手動 / 自訂條件,條件以單行流式 YAML 編輯)、`holdFor_s`、`delay_s`,動作清單逐項改種類(schema `timelineAction` 列舉)與內容(流式 YAML,`ACTION_ARG_HINTS` 以 schema 的 args 鍵提示、`newActionValue` 給合法預設)、新增/刪除/上下移;`repeat`、`cooldown_s`、`description` 原樣保留並提示 |
+| 評估 | 硬性失敗:擱淺/碰撞開關(`{id: rule, rule}`),其餘規則(cpa `lessThan` nm、ukc `lessThan.metres`、zoneEntered `zoneId`、event `kind`)列出/新增/刪除;容許帶 `bands[]` 各欄(id、metric(建議清單)、direction、warn、fail(可寫 `2x`)、penalty、failPenalty)新增/刪除/編輯;`scoring.start` 與 `scoring.passMark`;**必要事件** `required[]` 表格(`requiredForm` / `patchRequired`):`id`、`after.event`(datalist:timelineTriggered、faultInjected、alertRaised、reportPointPassed、checkpointPassed、targetActivated、encounterStarted …)、`after.itemId/targetId/waypoint`(其餘 after 鍵保留)、`expect`(流式 YAML;datalist 列出可偵測動作名、`{acknowledge: {kind}}` 各種、`{event}`、`{any: […]}`)、`within_s`、`penalty`、`latePenaltyPer_s`,新增(以第一個時間表項目為計時起點)/刪除/上下移;**評估設定**(`assessment.settings`,`patchAssessmentSetting`):`minCpa_nm`、`ukc.min`(metres / fractionOfDraft 二擇一)、`encounter.detectionRange_nm/substantialCourseChange_deg/substantialSpeedChange_kn/cpaInterest_nm`、`manoeuvring.rotLimit_degPerMin/hardOver_deg` |
+| 航線 | `route`:勾選建立(2 個航點,第一個取初始位置)/取消移除;`name`、`xtdLimit_m`、`startLeg`;航點表格(`patchWaypoint` / `patchWaypointPosition` / `moveWaypoint`):`name`、位置(經緯度或 ENU x/y,沿用情境座標語意)、`speedLimit_kn`、`xtdLimit_m`、`arrivalRadius_m`(schema 無轉向半徑,到達半徑即航點通過判定)、`checkpoint`、`report`;新增/刪除/上下移 |
+| 區域 | `zones[]` 表格(`patchZone`):`id`、`name`、`type`(schema 列舉 noGo/speedLimit/ukcPolicy/reporting)、`speedLimit_kn`、`waterDepth_m`、`ukcMin`(metres / fractionOfDraft);多邊形頂點表格(展開「編輯頂點」;`patchZoneVertex` / `addZoneVertex` / `removeZoneVertex`,≥ 3 點、≤ 64 點檢查);新增區域為初始位置四周 ±0.01°(ENU ±500 m)的四邊形 |
+| 簡報 | 文字在基本資料;「簡報角色與附件」面板:`roles[]`(`role` datalist 常用角色、`playedBy` leader/voiceScript/instructor/trainee、`required`)、`attachments[]`(`title`、`file`)、`minParticipants`、`duration_s`;範本簡報為字串而加入角色時改為 `{text, roles}` 物件 |
+| 感測器 / 警報 / BNWAS | `sensors.magneticCompassError_deg`;`alerts.offHeading_deg/offHeadingDelay_s/headingMonitor_deg/shallowWater_m/escalate_s/silence_s`;`bnwas.mode`(off/auto/on;輸出 `"on"` 加引號)、`dormant_s`、`stage2_s`、`stage3_s`;欄位全空時整段移除 |
+| 拖船 / 錨 / 泊位 / 岸壁 | `tugs[]` 表格:`id`、`name`、`bollardPull_t`、`attach`(具名船體點 datalist 或 `x,y`)、`lineLength_m`、`modes`(push/pull 勾選)、`initial.mode/direction_deg/power_pct`(其餘 riseTime_s、connect_s … 保留);`anchors`:勾選建立,`port/starboard.length_m` / `length_shackles` / `bearing_deg`、`holdingFactor`、`dragSpeed_mps`;`berth`:勾選建立(預設第一個含 berths 的 `data/areas/*.json` 與其第一個泊位),`file`(datalist 建置時匯入的泊位檔)、`id`(datalist 該檔泊位)、`departedDistance_m`、繫纜 `lines[]` 表格(`id`、`fairlead`、`bollard`、`mbl_t`、`length_m`、`initial` stowed/fast),`definition` 原樣保留並提示;`banks`:勾選建立(預設第一個含 banks 的岸壁檔),`file`、`ids`(逗號分隔)、`scale`,情境內 `lines/definitions` 原樣保留並計數顯示 |
 
-**不涵蓋、原樣保留**(存於 `draft.raw`,輸出時只覆寫涵蓋欄位;round-trip 不遺失):`origin`、`route`、`zones`、`briefing.attachments/roles/minParticipants/duration_s`、`sensors`、`alerts`、`bnwas`、`tugs`、`anchors`、`berth`、`banks`、`environment.seabed/radar/tide`(潮汐表/調和常數只保留不編輯;及任何日後新增的環境鍵)、目標船的 `mmsi/draft/callSign/aisError/lights/trigger` 與 `behaviour` 細節(航點、腳本、錨泊參數、colreg 參數)、時間表非故障項目與既有項目的內容(只能整項刪除,不逐欄編輯)、`assessment.parameterSet/minCpa_nm/encounter/ukc/manoeuvring/required`。面板在對應區段提示「範本的 X 原樣保留」。YAML **註解不保留**(範本檔頭的設計說明在輸出檔中消失;輸出檔頭改為「由教官站情境編輯器產生;範本 <id>」)。
+**不涵蓋、原樣保留**(存於 `draft.raw` 或各區段原樣物件內,輸出時只覆寫涵蓋欄位;round-trip 不遺失):`origin`、`environment.seabed/radar/tide`(潮汐表/調和常數只保留不編輯;及任何日後新增的環境鍵)、目標船的 `mmsi/draft/callSign/aisError/lights/trigger` 與 `behaviour` 細節(航點、腳本、錨泊參數、colreg 參數)、時間表項目的 `repeat/cooldown_s/description`、必要事件 `after.legIndex/zoneId`、`assessment.parameterSet/scoring.appliesTo`、拖船的 `riseTime_s/turnRate_degPerSec/repositionSpeed_kn/push*/pull*/modeChange_s/connect_s`、繫纜的 `breakStrain/exponent/heaveRate_mPerMin/winchPull_t/pretension_t`、`berth.definition`(內嵌泊位定義)、`banks.lines/definitions`(情境內直接定義的岸壁折線)。面板在對應區段提示「保留:X」/「範本的 X 原樣保留」。YAML **註解不保留**(範本檔頭的設計說明在輸出檔中消失;輸出檔頭改為「由教官站情境編輯器產生;範本 <id>」)。
 
-**驗證**(`validateDraft`):阻止載入的 `issues` = `parseScenario` 的 issues + id 可作檔名(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)、初始位置完整(x/y 需範本有 `origin`)、目標船 id 唯一且位置完整、行為模式在列舉內、硬性失敗規則名稱/參數、zoneEntered 的區域存在、時間表條件引用的航點/目標船/區域存在、`targetControl` 引用的目標船存在、容許帶 `fail` 格式、初始 UKC ≤ 0(與靠離泊預演同判準:水深 − `maxDraft`);不阻止的 `warnings` = 未填名稱、故障名稱不在目錄、初始 UKC < 1.0 m、時間表為空。核心載入後的完整檢查(參數鍵存在、泊位參照等)仍由核心 `ScenarioValidator` 負責,被拒時 `scenarioLoadRejected` 的問題清單顯示在編輯器輸出區(`renderRejection` 共用)。
+**驗證**(`validateDraft`):阻止載入的 `issues` = `parseScenario` 的 issues + id 可作檔名(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)、初始位置完整(x/y 需範本有 `origin`)、目標船 id 唯一且位置完整、行為模式在列舉內、硬性失敗規則名稱/參數、zoneEntered 的區域存在、時間表條件引用的航點/目標船/區域存在、`targetControl` 引用的目標船存在、`arm/disarm` 引用的項目存在、`tugControl` 引用的拖船存在、`injectFault` 有名稱、容許帶 `fail` 格式、航點名稱非空且唯一、ENU 航點/頂點需 `origin` 或經緯度初始位置、`startLeg` 範圍、區域 id 唯一、頂點完整、≤ 64 點、必要事件 id 唯一且有 `within_s`、`after.itemId`(timelineTriggered/faultInjected)引用的項目 / `targetId` 目標船 / `waypoint` 航點存在、`minCpa_nm > 0`、alerts/bnwas 秒數與門檻 ≥ 0、`bnwas.mode` 列舉、`briefing.minParticipants` ≥ 1 整數、拖船 id 唯一/拖力 > 0/連接點格式/`modes` 非空且 `initial.mode` 在其中/出力 0–100、錨方位 0–360 與鏈長 ≥ 0、`holdingFactor/dragSpeed_mps > 0`、泊位需 `file` 或 `definition`、`departedDistance_m > 0`、繫纜 id 唯一/`fairlead`/`initial` fast 需 `bollard`/MBL 與長度 > 0、岸壁需 `file` 或 `lines`、`scale ≥ 0`、初始 UKC ≤ 0(與靠離泊預演同判準:水深 − `maxDraft`;情境有 `environment.tide` 時 waterDepth 為海圖水深,只警告);不阻止的 `warnings` = 未填名稱、故障名稱不在目錄、初始 UKC < 1.0 m、時間表為空、項目沒有動作、`message` 沒有 text、speedLimit/ukcPolicy 區未給對應屬性、`bnwas.dormant_s` 不在 180–720 s、`playedBy` 非建議值、繫船柱不在泊位定義、建置時匯入的 `data/areas` 找不到泊位檔/岸壁檔(核心載入時仍會解析)。核心載入後的完整檢查(參數鍵存在、泊位參照等)仍由核心 `ScenarioValidator` 負責,被拒時 `scenarioLoadRejected` 的問題清單顯示在編輯器輸出區(`renderRejection` 共用)。
 
-**YAML 輸出**(`scenarioToYaml`):`yaml` `Document` 區塊式、不折行、多行字串用 `|`;會被 YAML 1.1 解析器誤判的字串**值**一律加雙引號(`on/off/yes/no/y/n`、`null/~`、數字樣與 `1_000`/`0x`/`.inf`、時間戳 `2026-…`、`${params:…}` 參數引用、空字串),鍵不加——與 `data/scenarios` 既有寫法一致(C# `YamlJson` 只把 true/false/null/數字當非字串,PyYAML 為 1.1 語意)。`tests/scenario-editor.test.ts` 對 `data/scenarios/*.yaml` 每一份做 parse → draft → toYaml → `parseScenario` 摘要一致且 `parseYaml` 物件深相等(全部情境檔,以 import.meta.glob 列舉,數量隨情境庫變動)。
+**YAML 輸出**(`scenarioToYaml`):`yaml` `Document` 區塊式、不折行、多行字串用 `|`;會被 YAML 1.1 解析器誤判的字串**值**一律加雙引號(`on/off/yes/no/y/n`、`null/~`、數字樣與 `1_000`/`0x`/`.inf`、時間戳 `2026-…`、`${params:…}` 參數引用、空字串),鍵不加——與 `data/scenarios` 既有寫法一致(C# `YamlJson` 只把 true/false/null/數字當非字串,PyYAML 為 1.1 語意)。`tests/scenario-editor.test.ts` 對 `data/scenarios/*.yaml` 每一份做 parse → draft → toYaml → `parseScenario` 摘要一致且 `parseYaml` 物件深相等(全部情境檔,數量隨情境庫變動);`tests/scenario-editor-sections.test.ts` 再對每一份把每個擴充區段的表單值「不改值」寫回(`touchAll`:航點/頂點位置、時間表每項每欄與每個動作、必要事件、設定、拖船/錨/泊位/岸壁 …)後深相等,並逐區段測「新增一項 → YAML 結構」與驗證問題;`tests/scenario-editor-sections-panel.test.ts` 為對應面板(happy-dom)。
 
-**草稿保存**:每次修改 `saveDraft` 寫 localStorage 鍵 `simosa-brm.instructor.scenario-draft`(JSON 版本 1);掛載時 `loadDraft` 還原(版本不合或格式錯誤忽略);「清除草稿」回空白範本。瀏覽器儲存不可用時面板提示「本機儲存不可用」。
+**草稿保存**:每次修改 `saveDraft` 寫 localStorage 鍵 `simosa-brm.instructor.scenario-draft`(JSON 版本 2);掛載時 `loadDraft` 還原(版本不合或格式錯誤忽略;第十七輪的版本 1 草稿升級:已可編輯的欄位沿用,新區段由草稿的 `raw` 重建);「清除草稿」回空白範本。瀏覽器儲存不可用時面板提示「本機儲存不可用」。
 
-**表單實作注意**:事件處理一律讀 `this.draft` / `this.fault` 的即時值而非渲染時的複本(連續 change 事件不互相覆蓋);`<select>` 的值以 `data-value` 給、`updated()` 後同步(Lit 依文件順序提交,`.value` 會在動態 `<option>` 渲染前提交而失效)。
+**表單實作注意**:事件處理一律讀 `this.draft` / `this.fault` 的即時值而非渲染時的複本(連續 change 事件不互相覆蓋);`<select>` 的值以 `data-value` 給、`updated()` 後同步(Lit 依文件順序提交,`.value` 會在動態 `<option>` 渲染前提交而失效);擴充區段的渲染函式透過 `EditorHost.draft` getter 每次讀最新草稿;會丟 Error 的表單值(流式 YAML、船體座標點)以 `guard` 包住,錯誤顯示在輸出區且不改草稿;流式 YAML 以 `yaml` `Document` 的 `flow = true` 產生(`flowYaml`),讀回用同一套件解析(YAML 1.2,`on`/`yes` 仍為字串),輸出檔再由 `scenarioToYaml` 的引號規則處理。
 
-**限制**:route/zones/必要事件/語音腳本仍需手編 YAML(可先在編輯器下載,再以文字編輯器補);輸出檔要加入情境清單需放到 `data/scenarios/` 並重新建置(建置時 `import.meta.glob` 匯入);「3 位教官各 ≤30 分鐘」需實機計時(驗收第 14 章)。
+**限制**:語音腳本與訊息等動作內容以單行流式 YAML 編輯(多行文字會以引號跳脫,長腳本仍建議手編 YAML);目標船的航點/腳本/AIS 細節、`berth.definition`、`banks.lines`、時間表 `repeat` 仍需手編 YAML(可先在編輯器下載,再以文字編輯器補);航線/區域只有表格、沒有海圖點選(待 ENC);輸出檔要加入情境清單需放到 `data/scenarios/` 並重新建置(建置時 `import.meta.glob` 匯入);「3 位教官各 ≤30 分鐘」需實機計時(驗收第 14 章)。
 
 ## 7. 測試計畫
 

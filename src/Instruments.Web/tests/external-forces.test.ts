@@ -211,6 +211,11 @@ describe('事件文字、嚴重度與拒絕原因', () => {
 
   it('嚴重度:斷纜/走錨/碼頭硬接觸/碰墊過載為 alarm,剎車滑出等為 warning,其餘 info', () => {
     expect(eventSeverity(ev('tugLineParted'))).toBe('alarm');
+    // 船間交互作用(第十八輪):進入 warning、離開 info;標籤含目標與力/力矩
+    expect(eventLabel(ev('shipInteraction', { phase: 'enter', targetId: 'OVT', forceSway_t: -12.34, momentYaw_tm: 850.6, threshold_t: 3 }))).toBe('船間交互作用 OVT:側向力 -12.3 t、艏搖 +851 t·m(超過門檻)');
+    expect(eventLabel(ev('shipInteraction', { phase: 'exit', targetId: 'OVT' }))).toBe('船間交互作用結束 OVT');
+    expect(eventSeverity(ev('shipInteraction', { phase: 'enter', targetId: 'OVT' }))).toBe('warning');
+    expect(eventSeverity(ev('shipInteraction', { phase: 'exit', targetId: 'OVT' }))).toBe('info');
     expect(eventSeverity(ev('mooringLineParted'))).toBe('alarm');
     expect(eventSeverity(ev('quayContact'))).toBe('alarm');
     expect(eventSeverity(ev('fenderContact', { overload: true, normalSpeed_mps: 0.05 }))).toBe('alarm');

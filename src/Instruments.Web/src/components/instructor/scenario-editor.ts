@@ -1,8 +1,9 @@
 // 完整教官模式「情境編輯」分頁(規劃書第 9.1 節「教官依範本組出新練習(環境、目標船、2 個故障、評估規則)≤30 分鐘」;R4;第 14 章教官第 2 列):
-// 選範本(任一既有情境的 YAML 原文或空白範本)→ 編輯基本資料、船與裝載、初始狀態、環境、目標船、時間表故障、評估規則 →
+// 選範本(任一既有情境的 YAML 原文或空白範本)→ 編輯基本資料、船與裝載、初始狀態、環境、簡報角色/附件、感測器/警報/BNWAS、
+// 目標船、時間表(新增故障/一般項目、逐項編輯)、航線、區域、評估規則(硬性失敗/容許帶/必要事件/設定)、拖船/錨/泊位/岸壁 →
 // 即時以 parseScenario 與編輯器檢查顯示問題清單 → 「下載 YAML」或「載入核心」(scenario-editor-load 事件;教官站以 loadScenario args.scenario
 // 內嵌送核心,沿用 loadScenarioSummary 的樂觀切換與 scenarioLoadRejected 還原)。草稿每次修改存 localStorage(船上離線;重新整理後還原)。
-// 草稿模型與輸出見 lib/scenario-editor.ts;未被表單涵蓋的欄位原樣保留。
+// 草稿模型與輸出見 lib/scenario-editor.ts;擴充區段的表單在 scenario-editor-sections.ts;未被表單涵蓋的欄位原樣保留。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -15,6 +16,7 @@ import { HARD_FAIL_RULE_LABEL } from '../../lib/assessment.js';
 import type { ScenarioLoadRejection } from '../../lib/sim-event.js';
 import { SHIP_IDS, TELEGRAPH_POSITIONS, type LoadingCondition, type ShipId, type TelegraphPosition } from '../../types/state.js';
 import {
+  ASSESSMENT_SETTING_KEYS,
   BAND_METRICS,
   HARD_FAIL_RULES,
   PHASES,
@@ -26,6 +28,7 @@ import {
   addFaultItem,
   addHardFail,
   addTarget,
+  addTimelineItem,
   blankDraft,
   clearDraft,
   dayNightLabel,
@@ -40,7 +43,6 @@ import {
   parseObjectText,
   patchBand,
   patchTarget,
-  positionMode,
   removeBand,
   removeHardFail,
   removeTarget,
@@ -51,17 +53,28 @@ import {
   type DraftEnvironment,
   type DraftGeneral,
   type DraftInitial,
-  type DraftPosition,
   type DraftStorage,
   type DraftTarget,
   type DraftValidation,
   type FaultItemSpec,
   type NumberOrRef,
   type Patch,
-  type PositionMode,
   type ScenarioDraft,
   stripUndefined,
 } from '../../lib/scenario-editor.js';
+import {
+  checked,
+  renderAssessmentExtras,
+  renderBriefingSection,
+  renderExternalSection,
+  renderPosition,
+  renderRouteSection,
+  renderSensorsSection,
+  renderTimelineItemEditor,
+  renderZonesSection,
+  textOf,
+  type EditorHost,
+} from './scenario-editor-sections.js';
 
 /** 「載入核心」事件內容(與靠離泊預演結果相同的用法:summary 供樂觀切換,scenario 為 loadScenario args.scenario)。 */
 export interface ScenarioEditorResult {
@@ -91,14 +104,6 @@ interface FaultForm {
 interface HardFailForm {
   rule: string;
   value: string;
-}
-
-function textOf(ev: Event): string {
-  return (ev.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value;
-}
-
-function checked(ev: Event): boolean {
-  return (ev.target as HTMLInputElement).checked;
 }
 
 @customElement('brm-scenario-editor')
@@ -174,6 +179,37 @@ export class ScenarioEditor extends LitElement {
       }
       .row.band {
         grid-template-columns: auto 1fr auto 1fr auto 1fr;
+      }
+      .row.g4 {
+        grid-template-columns: auto 1fr auto 1fr;
+      }
+      .row.g2 {
+        grid-template-columns: auto 1fr;
+      }
+      .row .full {
+        grid-column: 1 / -1;
+      }
+      .row .vertices,
+      .row .actions,
+      .tl-editor .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .tl-editor {
+        margin-top: 4px;
+      }
+      .tl-editor .row.action .pair input {
+        flex: 1 1 auto;
+      }
+      .list .item .edit-body {
+        flex-basis: 100%;
+      }
+      .list .item {
+        flex-wrap: wrap;
+      }
+      fieldset.settings {
+        margin-top: 4px;
       }
       .row label {
         color: var(--ob-text-secondary);
@@ -306,8 +342,33 @@ export class ScenarioEditor extends LitElement {
   @state() private showYaml = false;
   @state() private fault: FaultForm = { id: '', name: '', fault: 'steeringGear', trigger: 'time', atLeast: '300', condition: '', args: '', recordOnly: false, phase: 'degraded', message: '' };
   @state() private hardFailForm: HardFailForm = { rule: 'cpa', value: '0.3' };
+  /** 展開中的子編輯器(時間表項目 item:<index>、區域頂點 zone:<index>) */
+  @state() private open: ReadonlySet<string> = new Set();
 
   private readonly faults = faultOptions();
+
+  /** 擴充區段(scenario-editor-sections.ts)讀寫草稿的介面;每次呼叫都讀最新的 this.draft。 */
+  private readonly host: EditorHost = this.makeHost();
+
+  private makeHost(): EditorHost {
+    const el = this;
+    return {
+      get draft() {
+        return el.draft;
+      },
+      setDraft: (d) => el.setDraft(d),
+      fail: (message) => (el.error = message),
+      isOpen: (key) => el.open.has(key),
+      toggle: (key) => el.toggleOpen(key),
+    };
+  }
+
+  private toggleOpen(key: string): void {
+    const next = new Set(this.open);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    this.open = next;
+  }
 
   /** 目前草稿(測試用) */
   get value(): ScenarioDraft {
@@ -401,19 +462,6 @@ export class ScenarioEditor extends LitElement {
     this.setDraft({ ...this.draft, environment: stripUndefined({ ...this.draft.environment, ...p }) as DraftEnvironment });
   }
 
-  private setPosition(current: () => DraftPosition, key: keyof DraftPosition, ev: Event, apply: (p: DraftPosition) => void): void {
-    const p = { ...current() };
-    const v = numberOrRefFromText(textOf(ev));
-    if (v === undefined) delete p[key];
-    else p[key] = v;
-    apply(p);
-  }
-
-  private switchPositionMode(current: () => DraftPosition, mode: PositionMode, apply: (p: DraftPosition) => void): void {
-    if (positionMode(current()) === mode) return;
-    apply(mode === 'latlon' ? { lat: 23.9, lon: 119.98 } : { x: 0, y: 0 });
-  }
-
   private num(ev: Event): NumberOrRef | undefined {
     return numberOrRefFromText(textOf(ev));
   }
@@ -447,6 +495,13 @@ export class ScenarioEditor extends LitElement {
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
     }
+  }
+
+  /** 新增一般時間表項目(模擬時間 60 s、一則教官訊息)並展開編輯。 */
+  private addGenericItem(): void {
+    const index = this.draft.timeline.length;
+    this.setDraft(addTimelineItem(this.draft));
+    if (!this.open.has(`item:${index}`)) this.toggleOpen(`item:${index}`);
   }
 
   // ------------------------------------------------------------ 評估
@@ -516,18 +571,23 @@ export class ScenarioEditor extends LitElement {
           ${this.renderGeneral()}
           ${this.renderShip()}
           ${this.renderEnvironment()}
+          ${renderBriefingSection(this.host)}
+          ${renderSensorsSection(this.host)}
         </div>
         <div class="col">
           ${this.renderTargets()}
           ${this.renderTimeline()}
+          ${renderRouteSection(this.host)}
+          ${renderZonesSection(this.host)}
         </div>
         <div class="col">
           ${this.renderAssessment()}
+          ${renderExternalSection(this.host)}
           <div class="panel output">
             <div class="panel-title"><span>驗證與輸出 VALIDATE</span><span class="zh">parseScenario + 編輯器檢查</span></div>
             <div class="issues">
               ${v.issues.length === 0
-                ? html`<div class="ok">結構檢查通過 · ${d.ship.id} ${loadingLabel(d.ship.loading ?? 'ballast')} · 目標船 ${v.summary.stats.targets} · 時間表 ${v.summary.stats.timelineItems} 項 · 評估規則 ${v.summary.stats.assessmentRules} 條 · 參數引用 ${v.summary.stats.paramRefs} 個</div>`
+                ? html`<div class="ok">結構檢查通過 · ${d.ship.id} ${loadingLabel(d.ship.loading ?? 'ballast')} · 目標船 ${v.summary.stats.targets} · 時間表 ${v.summary.stats.timelineItems} 項 · 航點 ${v.summary.stats.routeWaypoints} · 區域 ${v.summary.stats.zones} · 評估規則 ${v.summary.stats.assessmentRules} 條 · 參數引用 ${v.summary.stats.paramRefs} 個</div>`
                 : v.issues.map((i) => html`<div class="issue">✖ ${i}</div>`)}
               ${v.warnings.map((w) => html`<div class="warning">⚠ ${w}</div>`)}
             </div>
@@ -576,7 +636,7 @@ export class ScenarioEditor extends LitElement {
         <input class="name" type="text" .value=${g.name} @change=${(e: Event) => this.patchGeneral({ name: textOf(e) })} />
         <label class="full">說明</label>
         <textarea class="description full" .value=${g.description} @change=${(e: Event) => this.patchGeneral({ description: textOf(e) })}></textarea>
-        <label class="full">簡報文字(附件與角色保留範本設定)</label>
+        <label class="full">簡報文字(角色與附件在「簡報角色與附件」面板)</label>
         <textarea class="briefing full" .value=${g.briefing} @change=${(e: Event) => this.patchGeneral({ briefing: textOf(e) })}></textarea>
         <label>種子</label>
         <input class="seed" type="number" step="1" .value=${g.seed === undefined ? '' : String(g.seed)} @change=${(e: Event) => { const n = Number(textOf(e)); this.patchGeneral({ seed: textOf(e).trim() === '' || !Number.isFinite(n) ? undefined : Math.trunc(n) }); }} />
@@ -587,27 +647,6 @@ export class ScenarioEditor extends LitElement {
         <div class="full hint">${dayNightLabel(g.startTimeUtc, this.draft.initial.position.lon)}</div>
       </div>
     </div>`;
-  }
-
-  /** 位置欄位(自船與目標船共用);current 以函式取得,讓連續變更都讀到最新草稿而非渲染時的複本。 */
-  private renderPosition(current: () => DraftPosition, cls: string, apply: (p: DraftPosition) => void) {
-    const p = current();
-    const mode = positionMode(p);
-    return html`
-      <select class="${cls}-mode" data-value=${mode} @change=${(e: Event) => this.switchPositionMode(current, textOf(e) as PositionMode, apply)}>
-        <option value="latlon">經緯度</option>
-        <option value="enu">ENU x/y (m)</option>
-      </select>
-      ${mode === 'latlon'
-        ? html`<div class="pair">
-            <input class="${cls}-lat" type="number" step="0.0001" .value=${numberOrRefText(p.lat)} @change=${(e: Event) => this.setPosition(current, 'lat', e, apply)} /><span>°N</span>
-            <input class="${cls}-lon" type="number" step="0.0001" .value=${numberOrRefText(p.lon)} @change=${(e: Event) => this.setPosition(current, 'lon', e, apply)} /><span>°E</span>
-          </div>`
-        : html`<div class="pair">
-            <input class="${cls}-x" type="number" step="1" .value=${numberOrRefText(p.x)} @change=${(e: Event) => this.setPosition(current, 'x', e, apply)} /><span>x</span>
-            <input class="${cls}-y" type="number" step="1" .value=${numberOrRefText(p.y)} @change=${(e: Event) => this.setPosition(current, 'y', e, apply)} /><span>y</span>
-          </div>`}
-    `;
   }
 
   private renderShip() {
@@ -625,7 +664,7 @@ export class ScenarioEditor extends LitElement {
           ${LOADINGS.map((l) => html`<option value=${l}>${loadingLabel(l)}</option>`)}
         </select>
         <label>初始位置</label>
-        <div class="full-span pair">${this.renderPosition(() => this.draft.initial.position, 'own', (p) => this.patchInitial({ position: p }))}</div>
+        <div class="full-span pair">${renderPosition(() => this.draft.initial.position, 'own', (p) => this.patchInitial({ position: p }))}</div>
         <label>航向 (°)</label>
         <input class="heading" type="number" step="1" min="0" max="360" .value=${numberOrRefText(i.heading)} @change=${(e: Event) => this.patchInitial({ heading: this.num(e) })} />
         <label>速度 (kn)</label>
@@ -694,7 +733,7 @@ export class ScenarioEditor extends LitElement {
         ${TARGET_SHIP_TYPES.map((s) => html`<option value=${s}>${s}</option>`)}
       </select>
       <label>位置</label>
-      <div class="pair" style="grid-column: 2 / 5">${this.renderPosition(() => this.draft.targets[i]?.position ?? {}, 't-pos', (p) => patch({ position: p }))}</div>
+      <div class="pair" style="grid-column: 2 / 5">${renderPosition(() => this.draft.targets[i]?.position ?? {}, 't-pos', (p) => patch({ position: p }))}</div>
       <label>長/寬 (m)</label>
       <div class="pair">
         <input class="t-loa" type="number" step="1" .value=${numberOrRefText(t.loa)} @change=${(e: Event) => patch({ loa: this.num(e) })} />
@@ -721,7 +760,7 @@ export class ScenarioEditor extends LitElement {
     const f = this.fault;
     const def = this.faults.find((x) => x.name === f.fault);
     return html`<div class="panel timeline">
-      <div class="panel-title"><span>時間表與故障 TIMELINE</span><span class="zh">${rows.length} 項(故障 ${rows.filter((r) => r.fault).length});語音/訊息等項目保留</span></div>
+      <div class="panel-title"><span>時間表與故障 TIMELINE</span><span class="zh">${rows.length} 項(故障 ${rows.filter((r) => r.fault).length});每項可展開編輯</span></div>
       <div class="list" role="list">
         ${rows.length === 0 ? html`<div class="hint">尚無時間表項目</div>` : nothing}
         ${rows.map(
@@ -731,10 +770,15 @@ export class ScenarioEditor extends LitElement {
               <div class="sub">${r.condition} → ${r.actions}</div>
               ${r.issues.length > 0 ? html`<div class="bad">${r.issues.join('; ')}</div>` : nothing}
             </div>
-            <button class="small danger tl-remove" @click=${() => this.setDraft(removeTimelineItem(this.draft, r.index))}>刪除</button>
+            <span class="pair">
+              <button class="small tl-edit" @click=${() => this.toggleOpen(`item:${r.index}`)}>${this.open.has(`item:${r.index}`) ? '收合' : '編輯'}</button>
+              <button class="small danger tl-remove" @click=${() => this.setDraft(removeTimelineItem(this.draft, r.index))}>刪除</button>
+            </span>
+            ${this.open.has(`item:${r.index}`) ? html`<div class="edit-body">${renderTimelineItemEditor(this.host, r.index)}</div>` : nothing}
           </div>`,
         )}
       </div>
+      <div class="btn-row"><button class="add-item" @click=${() => this.addGenericItem()}>新增一般項目(訊息/語音/環境…)</button></div>
       <fieldset class="fault-form">
         <legend>新增故障(src/Contracts/fault-catalogue.json)</legend>
         <label>項目 id</label>
@@ -777,7 +821,7 @@ export class ScenarioEditor extends LitElement {
     const a = d.assessment;
     const hf = this.hardFailForm;
     const raw = (d.raw['assessment'] ?? {}) as Record<string, unknown>;
-    const kept = Object.keys(raw).filter((k) => !['hardFail', 'bands', 'scoring'].includes(k));
+    const kept = Object.keys(raw).filter((k) => !['hardFail', 'bands', 'scoring', 'required', ...ASSESSMENT_SETTING_KEYS].includes(k));
     const needsValue = hf.rule === 'cpa' || hf.rule === 'ukc' || hf.rule === 'zoneEntered' || hf.rule === 'event';
     return html`<div class="panel assessment">
       <div class="panel-title"><span>評估規則 ASSESSMENT</span><span class="zh">硬性失敗、容許帶、通過分數</span></div>
@@ -810,8 +854,9 @@ export class ScenarioEditor extends LitElement {
         <input class="score-start" type="text" inputmode="decimal" .value=${numberOrRefText(a.start)} @change=${(e: Event) => this.setDraft({ ...this.draft, assessment: this.withScore(this.draft.assessment, 'start', this.num(e)) })} />
         <label>通過分數</label>
         <input class="pass-mark" type="text" inputmode="decimal" .value=${numberOrRefText(a.passMark)} @change=${(e: Event) => this.setDraft({ ...this.draft, assessment: this.withScore(this.draft.assessment, 'passMark', this.num(e)) })} />
-        ${kept.length > 0 ? html`<div class="full hint">範本的 ${kept.join('、')} 原樣保留(必要事件等不在此編輯)</div>` : nothing}
+        ${kept.length > 0 ? html`<div class="full hint">範本的 ${kept.join('、')} 原樣保留</div>` : nothing}
       </div>
+      ${renderAssessmentExtras(this.host)}
     </div>`;
   }
 

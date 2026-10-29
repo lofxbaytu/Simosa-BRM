@@ -22,6 +22,8 @@ public sealed class ScenarioTarget
     public double Beam { get; set; } = 16.0;
     /// <summary>吃水(m)</summary>
     public double Draft { get; set; } = 5.0;
+    /// <summary>排水量(t;選填,船間交互作用用:給定時方塊係數 = Δ/(ρ·loa·beam·draft) 夾在 0.35–0.95,未給時依船型預設;docs/design/physics-ship-interaction.md 第 2.2 節)</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("displacement_t")] public double? DisplacementT { get; set; }
     public string? CallSign { get; set; }
     public string? Imo { get; set; }
     public string? Destination { get; set; }

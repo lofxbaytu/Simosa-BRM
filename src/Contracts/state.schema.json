@@ -202,6 +202,7 @@
         "set",
         "drift"
       ],
+      "description": "均勻流(情境 environment.current 為時變流場時數值隨練習時間變化;見 currentSource)",
       "properties": {
         "set": {
           "type": "number",
@@ -212,6 +213,14 @@
           "description": "kn"
         }
       }
+    },
+    "currentSource": {
+      "type": "string",
+      "enum": [
+        "table",
+        "tidal"
+      ],
+      "description": "流場來源:情境 environment.current 為流場表(table)或潮流(tidal)且未被 setEnvironment current 覆寫時輸出;常數流(含覆寫後)省略"
     },
     "loading": {
       "type": "string",
@@ -745,6 +754,37 @@
             }
           }
         }
+      }
+    },
+    "waves": {
+      "type": "object",
+      "description": "浪與平均二階波浪漂移力(情境有 environment.waves 且動力學接受外力時輸出;無 waves 的情境省略;C# 與 Python 參考實作皆輸出;docs/design/physics-waves.md 第 5 節)。視景以 significantHeight_m/direction_deg 畫海面(取代由風速推得的波高);力為船體座標:X 向艏正、Y 右舷正、N 艏向右正(與 u/v/r 相同)。3 自由度:只有平均漂移力,無一階振盪與橫搖",
+      "required": ["significantHeight_m", "peakPeriod_s", "direction_deg", "wavelength_m"],
+      "properties": {
+        "significantHeight_m": { "type": "number", "minimum": 0, "description": "有義波高 Hs(m)" },
+        "peakPeriod_s": { "type": "number", "exclusiveMinimum": 0, "description": "譜峰週期 Tp(s)" },
+        "direction_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "浪來向(度,氣象慣例,與風相同)" },
+        "wavelength_m": { "type": "number", "exclusiveMinimum": 0, "description": "峰值波長(m;自船位置的有效水深:水深 < 深水波長/2 時由有限水深色散關係求得)" },
+        "spectrum": { "type": "string", "enum": ["pm", "jonswap"], "description": "浪譜" },
+        "X_kN": { "type": "number", "description": "平均漂移力 surge(kN,向艏正;迎浪為負 = 阻力增加)" },
+        "Y_kN": { "type": "number", "description": "平均漂移力 sway(kN,右舷正;浪自右舷來時為負)" },
+        "N_kNm": { "type": "number", "description": "平均漂移力矩 yaw(kN·m,艏向右正)" }
+      }
+    },
+    "shipInteraction": {
+      "type": "object",
+      "description": "船間交互作用(情境 environment.shipInteraction.enabled 且動力學接受外力時輸出;未啟用的情境省略;C# 與 Python 參考實作皆輸出;docs/design/physics-ship-interaction.md 第 5 節)。力為船體座標:surge 向艏正、sway 右舷正(向目標為吸引)、yaw 艏向右正(與 u/v/r 相同);單位噸力(t)與 t·m",
+      "required": ["active", "forceSway_t", "momentYaw_tm"],
+      "properties": {
+        "active": { "type": "boolean", "description": "有目標船在作用範圍內(自船 3 倍船長內且橫向間距 < 2(B_o + B_t))" },
+        "targetId": { "type": "string", "description": "主要目標(等效側向力最大者;無目標在範圍內時省略)" },
+        "forceSurge_t": { "type": "number", "description": "交互作用 surge 力(t,向艏正)" },
+        "forceSway_t": { "type": "number", "description": "交互作用 sway 力(t,右舷正)" },
+        "momentYaw_tm": { "type": "number", "description": "交互作用 yaw 力矩(t·m,艏向右正)" },
+        "xi": { "type": "number", "description": "主要目標的縱向錯位 ξ = (x_t − x_o)/L(正 = 目標在前;無目標時省略)" },
+        "eta": { "type": "number", "description": "主要目標的橫向間距 η = y/L(正 = 目標在右舷;無目標時省略)" },
+        "targets": { "type": "integer", "minimum": 0, "description": "範圍內的目標數" },
+        "event": { "type": "boolean", "description": "交互作用力已超過事件門檻(shipInteraction 進入事件已發、離開未發)" }
       }
     },
     "bank": {

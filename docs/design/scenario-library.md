@@ -9,6 +9,7 @@
 | E03 | `data/scenarios/E03_restricted_visibility_strait.yaml` | FSB1 滿載 | 同 E02(同一幾何的壞能見度版本) | ≤ 60 min |
 | E04 | `data/scenarios/E04_pilot_boarding_kaohsiung.yaml` | FSB2 滿載 | 高雄南口 Charlie 引水站(`data/areas/kaohsiung-south-approach.json`) | ≤ 80 min |
 | E06 | `data/scenarios/E06_taichung_channel_flood.yaml`、`E06_taichung_channel_ebb.yaml` | FSB1 滿載 | 台中港防波堤口(`data/areas/taichung-harbour-entrance.json`) | ≤ 30 min |
+| E06b | `data/scenarios/E06b_tidal_stream.yaml`(2026-10-29) | FSB1 滿載 | 同 E06 幾何;潮汐與潮流以 `environment.tide` + `current.tidal` 表示,進港途中漲潮 → 平潮 → 退潮自動切換(scenario-engine.md 第 1.5.2 節) | ≤ 30 min |
 
 ## 1. 共同設計
 
@@ -140,6 +141,10 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 
 東北風 25 kn(蒲氏 6 級)。
 
+**變體 E06b `E06b_tidal_stream`(2026-10-29;時變流場)**:同一幾何、目標船與評估規則;流場改以 `environment.tide`(示意潮高表,相對 CD:T+8 前漲潮全速、T+8–11 斜率 42 %、T+11–13 高潮平潮平段、T+13–16 退潮 42 %、T+16 起退潮全速)+ `environment.current.tidal`(漲 085° 2.5 kn、退 265° 3.0 kn、`slackWindow_min: 20`)表示,
+核心每步由潮高變化率決定流向/流速(`state.currentSource = tidal`、`state.current` 隨時間變化、`state.tideHeight_m` 輸出);時間表**不含 `setEnvironment`**(覆寫會停止時變):degraded 改為 `tideTurning`(T+8,VTS 通報提早轉流、引水人提示偏航角反向),導燈遮蔽 +90 s,emergency 仍為距口門 0.8 nm 或 degraded 後 300 s(OUT1 `scripted` 固定退潮修正角 321°,出現時多已轉為退潮),
+潮高表的變化率為分段常數,潮流在表點**瞬間**切換:t=480 s 2.50→0.91 kn、660 s →0(平潮)、780 s 反向 1.09 kn、960 s →3.00 kn(無漸變;調和潮或更多中間點可平滑,scenario-engine.md 第 1.5.2 節)。`insideBreakwater` 只切換 OUT1 行為與提示(示意:均勻潮流場,口門內流壓不消失)。無人操作(自動舵 132° 不修正):degraded 480 s、導燈 570 s、emergency 662 s(距離觸發)、過口門 999 s、1800 s 時間到;漲潮把船壓向北側(XTD 約 −260 m),轉流後退潮把船壓回南側越過走廊,**不擱淺**(與漲潮版不同;`TidalStreamTests.E06b_NoOperatorTidalStreamTurnsFromFloodToEbb` 固定)。核心紀錄夾具 `record-E06b_tidal_stream-core.jsonl`(60 s,規則同其他夾具)。
+
 **升級**:normal(交班、MPX 已完成)→ **航段 1 degraded**(`currentIncrease`:180 s 漸變至 2.5/3.0 kn)→ 90 s 後 `leadingLightsObscured`(訊息代表導燈被遮蔽)→ **距口門 0.8 nm 或 degraded 後 300 s emergency**(`outboundInChannel`:出港船 OUT1 由 `targetControl activate` 啟動,沿中心線北側 110 m 出港,左舷對左舷)→ 過口門 `insideBreakwater`(60 s 漸變至 0.3 kn;同時以 `targetControl {behaviour}` 把 OUT1 切換為航點模式)→ 到達迴船池、擱淺或 T+30 結束。
 
 **出港船 OUT1**:流場為均勻流,`waypoints` 模式以「朝向航點」導航、不修正橫向偏移,強橫流下會被壓離設計航跡(審查發現:退潮版壓到中心線南側 +41–69 m 而與靠右的自船碰撞,漲潮版擦過北防波堤堤頭 14.6 m)。改為 `scripted` 固定對水航向 = 航跡 305° 加橫流修正角(7 kn 對水;漲潮 292°、退潮 321°,`asin(橫流/7 kn)`),對地沿中心線北側 110 m 直線出港;自船過口門(流壓消失)時切換為沿同一航跡的航點模式(弱流下偏移可忽略)。跨過 emergency 的時刻流速漸變已完成(degraded 後 180 s 漸變、emergency 最早在進入航段 1 後約 250 s),故修正角固定即可。
@@ -235,7 +240,8 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 
 - `tests/SimCore.Tests/ScenarioLibraryTests.cs`:載入/驗證(無錯誤、無警告)與設計規則、區域檔一致、各情境無人操作的三步升級與關鍵時刻、學員腳本(E02 讓路/直航/漁船群/VHF;E03 安全速度與雷達瞭望;E04 等候、質疑與登船航速兩種結果;E06 兩版以偏航角修正通過口門)必要事件 met,紀錄 → 重播雜湊/事件序列/summary 一致(重播後刪除紀錄,長情境 25 Hz 紀錄可達數百 MB)。
 - 主控程序:各情境 `--validate` 無錯誤;`--duration 900 --timescale 10` 錄製後 `--replay` 一致。
-- 核心紀錄夾具 `src/Instruments.Web/tests/fixtures/record-<id>-core.jsonl`(60 s,縮短為每 500 tick 一筆狀態);`src/Tools.Calibration/tests/test_scenario_params.py` 的 `REQUIRED_FIXTURES` 已加入五個 id。情境 YAML 或引用的參數改動後須重錄(審查修正後五個夾具已重錄,`--replay` 雜湊/事件/summary 一致)。
+- 核心紀錄夾具 `src/Instruments.Web/tests/fixtures/record-<id>-core.jsonl`(60 s,縮短為每 500 tick 一筆狀態);`src/Tools.Calibration/tests/test_scenario_params.py` 的 `REQUIRED_FIXTURES` 已加入五個 id(2026-10-29 加入 E06b)。情境 YAML 或引用的參數改動後須重錄(審查修正後五個夾具已重錄,`--replay` 雜湊/事件/summary 一致)。
+- `tests/SimCore.Tests/TidalStreamTests.cs`(2026-10-29):E06b 與 E06 幾何/評估一致、無人操作漲 → 平潮 → 退與紀錄/重播一致;時變流場模型、覆寫、結構檢查與 C#↔Python 夾具。
 - `tests/SimCore.Tests/ScenarioLibraryReviewTests.cs`:審查修正的回歸測試(第 7.1 節)。
 
 ### 7.1 審查修正(2026-10-18)

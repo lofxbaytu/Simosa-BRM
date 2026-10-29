@@ -1,7 +1,9 @@
-"""外力項參考實作:拖船、錨與錨鏈(準靜態懸鏈線)、泊位(碰墊 + 碼頭硬接觸 + 繫纜)、岸壁效應(規劃書第 6.2 節 T、A、B 項)。
+"""外力項參考實作:拖船、錨與錨鏈(準靜態懸鏈線)、泊位(碰墊 + 碼頭硬接觸 + 繫纜)、岸壁效應、平均波浪漂移力、船間交互作用
+(規劃書第 6.2 節 T、A、B、W 項與 R2 船間交互作用)。
 
-與 C# ``src/SimCore/Physics/External/`` 逐式對應(TugModel.cs、Catenary.cs、AnchorModel.cs、BerthModel.cs、BankEffect.cs、
-ExternalForceModel.cs;設計文件 docs/design/physics-tugs-anchors-mooring.md、physics-bank-effect.md 的「Python 參考實作」章節):
+與 C# ``src/SimCore/Physics/External/`` 逐式對應(TugModel.cs、Catenary.cs、AnchorModel.cs、BerthModel.cs、BankEffect.cs、WaveDrift.cs、
+ShipInteraction.cs、ExternalForceModel.cs;設計文件 docs/design/physics-tugs-anchors-mooring.md、physics-bank-effect.md、physics-waves.md、
+physics-ship-interaction.md 的「Python 參考實作」章節):
 
 - 力為船體座標 (X, Y, N)(N、N·m):x 向艏、y 向右舷、原點船舯,N 正 = 艏向右(與 MMG 相同)。
 - RK4 每個階段以該階段的狀態(位置、航向、對水速度)與步首環境取樣重新計算(``evaluate`` 為純函數);
@@ -29,6 +31,11 @@ RAD2DEG = 180.0 / math.pi
 # 雜湊標記(C# ExternalForceModel.HashMarker "EXTFORCE"、BankEffectModel.HashMarker "BANKEFCT")
 EXTERNAL_HASH_MARKER = 0x45585446_4F524345
 BANK_HASH_MARKER = 0x42414E4B_45464354
+# 波浪漂移力雜湊標記(C# WaveDriftModel.HashMarker "WAVEDRFT")
+WAVE_HASH_MARKER = 0x57415645_44524654
+# 船間交互作用雜湊標記(C# ShipInteractionModel.HashMarker "SHIPINTR")
+SHIP_INTERACTION_HASH_MARKER = 0x53484950_494E5452
+WAVE_SPECTRA = ("pm", "jonswap")
 
 # 列舉順序與 C# 相同(雜湊用索引;對外名稱 = ContractJson.EnumName 的 camelCase)
 TUG_MODES = ("standby", "push", "pull", "free", "unavailable")  # C# TugMode 的序數(雜湊);unavailable 列在最後
@@ -1808,6 +1815,687 @@ class BankEffectModel:
         return out
 
 
+# ============================================================================ 平均波浪漂移力(C# WaveDrift.cs;docs/design/physics-waves.md)
+
+# C# WaveDriftCoefficients.Default
+WAVE_DEFAULTS: dict[str, float] = {
+    "EndFullness": 0.3, "DraftFactor": 1.5, "CutoffWavelengthL": 2.0, "Components": 40, "OmegaMinRatio": 0.5, "OmegaMaxRatio": 3.0,
+    "Stations": 40, "DispersionIterations": 12, "Rho": 1025.0,
+}
+
+
+class WaveResult(NamedTuple):
+    """一次漂移力計算(船體座標 N、N·m;C# WaveDriftResult)。"""
+
+    X: float
+    Y: float
+    N: float
+    wavelength: float
+    factor: float
+    gx: float
+    gy: float
+    gn: float
+
+
+def bessel_i1(x: float) -> float:
+    """修正 Bessel 函數 I1(x):Abramowitz & Stegun 9.8.3(x < 3.75)/ 9.8.4(C# WaveDriftModel.BesselI1 同式)。"""
+    if x < 3.75:
+        t = x / 3.75
+        t2 = t * t
+        return x * (0.5 + t2 * (0.87890594 + t2 * (0.51498869 + t2 * (0.15084934 + t2 * (0.02658733 + t2 * (0.00301532 + t2 * 0.00032411))))))
+    u = 3.75 / x
+    p = 0.39894228 + u * (-0.03988024 + u * (-0.00362018 + u * (0.00163801 + u * (-0.01031555 + u * (0.02282967 + u * (-0.02895312 + u * (0.01787654 + u * (-0.00420059))))))))
+    return p * math.exp(x) / math.sqrt(x)
+
+
+def bessel_k1(x: float) -> float:
+    """修正 Bessel 函數 K1(x):A&S 9.8.7(0 < x ≤ 2)/ 9.8.8(C# WaveDriftModel.BesselK1 同式)。"""
+    if x <= 2.0:
+        h = x / 2.0
+        h2 = h * h
+        return (x * math.log(h) * bessel_i1(x) + 1.0 + h2 * (0.15443144 + h2 * (-0.67278579 + h2 * (-0.18156897 + h2 * (-0.01919402 + h2 * (-0.00110404 + h2 * (-0.00004686))))))) / x
+    s = 2.0 / x
+    p = 1.25331414 + s * (0.23498619 + s * (-0.03655620 + s * (0.01504268 + s * (-0.00780353 + s * (0.00325614 + s * (-0.00068245))))))
+    return p * math.exp(-x) / math.sqrt(x)
+
+
+def ursell_reflection(x: float) -> float:
+    """Ursell(1947)垂直障板反射係數平方 α_d = π²I1² / (π²I1² + K1²);x ≥ 3.75 以漸近式比值避免 e^x 溢位;x ≤ 0 為 0(C# UrsellReflection)。"""
+    if not x > 0.0:
+        return 0.0
+    if x >= 3.75:
+        t = 3.75 / x
+        pi1 = 0.39894228 + t * (-0.03988024 + t * (-0.00362018 + t * (0.00163801 + t * (-0.01031555 + t * (0.02282967 + t * (-0.02895312 + t * (0.01787654 + t * (-0.00420059))))))))
+        s = 2.0 / x
+        pk1 = 1.25331414 + s * (0.23498619 + s * (-0.03655620 + s * (0.01504268 + s * (-0.00780353 + s * (0.00325614 + s * (-0.00068245))))))
+        ratio = pk1 * math.exp(-2.0 * x) / (math.pi * pi1)
+    else:
+        ratio = bessel_k1(x) / (math.pi * bessel_i1(x))
+    return 1.0 / (1.0 + ratio * ratio)
+
+
+def wave_number(omega: float, depth: float, iterations: int = 12) -> float:
+    """波數 k:以 ω² = g·k·tanh(k·h) 固定次數 Newton 迭代(自深水 k0 = ω²/g 起算;深水時收斂回 k0,不以 h = λ0/2 切換分支);h ≤ 0 或無限大視為深水(C# WaveNumber)。"""
+    w2 = omega * omega
+    k0 = w2 / GRAVITY
+    if not depth > 0.0 or math.isinf(depth):
+        return k0
+    k = k0
+    for _ in range(iterations):
+        kh = k * depth
+        th = math.tanh(kh)
+        ch = math.cosh(kh)
+        f = GRAVITY * k * th - w2
+        fp = GRAVITY * (th + kh / (ch * ch))
+        k = k - f / fp
+    return k
+
+
+def peak_wavelength(peak_period_s: float, depth: float, iterations: int = 12) -> float:
+    """峰值波長(m)= 2π / k(ω_p, h)。"""
+    return TWO_PI / wave_number(TWO_PI / peak_period_s, depth, iterations)
+
+
+class WaveDriftModel:
+    """平均二階波浪漂移力(設計文件 physics-waves.md;C# WaveDriftModel 逐式對應):短波漸近水線反射積分 × 譜加權
+    (Ursell/Fujii–Takahashi 吃水反射係數、λ/L 截止、遭遇頻率修正)。純函數、無跨步狀態;``active`` 為 False 時不影響積分與雜湊。"""
+
+    HASH_LONGS = 8
+
+    def __init__(self, raw_particulars: dict[str, Any], loading: str, waves: dict[str, Any], supported: bool = True,
+                 coefficients: dict[str, float] | None = None) -> None:
+        self.supported = supported
+        c = self.c = dict(WAVE_DEFAULTS, **(coefficients or {}))
+        hull = raw_particulars["hull"]
+        lc = (raw_particulars.get("loadingConditions") or {}).get(loading) or {}
+        self.L = float(hull["lengthBetweenPerpendiculars_m"])
+        self.B = float(hull["breadth_m"])
+        self.T = float(lc["draftMean_m"] if lc.get("draftMean_m") is not None else lc["maxDraft_m"])
+        self.cb = float(lc["blockCoefficient"]) if lc.get("blockCoefficient") is not None else 0.75
+        self.hs = float(waves.get("significantHeight_m") or 0.0)
+        self.tp = float(waves.get("peakPeriod_s") or 1.0)
+        dir_deg = float(waves.get("direction_deg") or 0.0)
+        self.direction_deg = normalize_heading_deg(dir_deg)
+        self.direction = dir_deg * DEG2RAD
+        self.spectrum = str(waves.get("spectrum") or "pm").lower()
+        self.gamma = float(waves.get("gamma")) if waves.get("gamma") is not None else 3.3
+        # 浪譜成分與正規化權重(C# 建構子同一運算順序)
+        n = int(c["Components"])
+        self.omega_ratio: list[float] = []
+        weights: list[float] = []
+        total = 0.0
+        for i in range(n):
+            rr = c["OmegaMinRatio"] + (i + 0.5) * ((c["OmegaMaxRatio"] - c["OmegaMinRatio"]) / n)
+            r4 = rr * rr * rr * rr
+            f = math.exp(-1.25 / r4) / (r4 * rr)
+            if self.spectrum == "jonswap":
+                sig = 0.07 if rr <= 1.0 else 0.09
+                d = rr - 1.0
+                f *= self.gamma ** math.exp(-(d * d) / (2.0 * sig * sig))
+            self.omega_ratio.append(rr)
+            weights.append(f)
+            total += f
+        self.weight = [w / total for w in weights]
+        self.inv_celerity = [0.0] * n
+        self.factor = [0.0] * n
+        self._cached_depth = math.nan
+        self._cached_peak_wavelength = 0.0
+        # 水線站(右舷,艉→艏)與艏艉平面長度
+        e = c["EndFullness"]
+        cw = (1.0 + 2.0 * self.cb) / 3.0
+        le = min(0.5 * self.L, max(0.1 * self.L, 1.5 * (1.0 - cw) * self.L / (1.0 - e)))
+        self.entrance_length = le
+        lp = self.L - 2.0 * le
+        m = int(c["Stations"])
+        self.segments: list[tuple[float, float, float, float]] = []
+        for j in range(m):
+            xa = -0.5 * self.L + j * (self.L / m)
+            xb = -0.5 * self.L + (j + 1) * (self.L / m)
+            self.segments.append((xa, self._half_breadth(xa, lp, le, e), xb, self._half_breadth(xb, lp, le, e)))
+        self.face_length = 2.0 * self._half_breadth(0.5 * self.L, lp, le, e)
+        self.last = WaveResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    def _half_breadth(self, x: float, lp: float, le: float, e: float) -> float:
+        ax = abs(x)
+        if ax <= 0.5 * lp:
+            return 0.5 * self.B
+        s = (ax - 0.5 * lp) / le
+        return 0.5 * self.B * (e + (1.0 - e) * (1.0 - s * s))
+
+    @property
+    def active(self) -> bool:
+        return self.supported
+
+    def update_last(self, k: Kin, depth: float) -> None:
+        self.last = self.compute(k, depth)
+
+    def evaluate(self, k: Kin, env: Env) -> tuple[float, float, float]:
+        r = self.compute(k, env.depth)
+        return (r.X, r.Y, r.N)
+
+    def _ensure_depth(self, depth: float) -> None:
+        if depth == self._cached_depth:
+            return
+        self._cached_depth = depth
+        c = self.c
+        it = int(c["DispersionIterations"])
+        omega_p = TWO_PI / self.tp
+        for i in range(len(self.weight)):
+            omega = omega_p * self.omega_ratio[i]
+            k = wave_number(omega, depth, it)
+            self.inv_celerity[i] = k / omega
+            lam = TWO_PI / k
+            ad = ursell_reflection(c["DraftFactor"] * k * self.T)
+            rl = lam / (c["CutoffWavelengthL"] * self.L)
+            rl2 = rl * rl
+            dl = 1.0 / (1.0 + rl2 * rl2)
+            self.factor[i] = ad * dl
+        self._cached_peak_wavelength = TWO_PI / wave_number(omega_p, depth, it)
+
+    def compute(self, k: Kin, depth: float) -> WaveResult:
+        """χ = 來向 − 航向;K = Σ w·α_d·D_L·max(0, 1 + U_w·k/ω)²;G = Σ_{n·d>0} (n·d)²(−n)dl 與力矩;F = ρ g Hs²/16·K·G(C# Compute)。"""
+        self._ensure_depth(depth)
+        chi = wrap_rad_pi(self.direction - k.psi)
+        dx = math.cos(chi)
+        dy = math.sin(chi)
+        uw = k.u * dx + k.v * dy
+        kk = 0.0
+        for i in range(len(self.weight)):
+            sp = 1.0 + uw * self.inv_celerity[i]
+            if sp < 0.0:
+                sp = 0.0
+            kk += self.weight[i] * self.factor[i] * (sp * sp)
+        gx = gy = gn = 0.0
+        for xa, ya, xb, yb in self.segments:
+            dxs = xb - xa
+            dys = yb - ya
+            ln = math.sqrt(dxs * dxs + dys * dys)
+            nx = -dys / ln
+            ny = dxs / ln
+            mx = 0.5 * (xa + xb)
+            my = 0.5 * (ya + yb)
+            cs = nx * dx + ny * dy
+            if cs > 0.0:
+                p = cs * cs * ln
+                fx = -p * nx
+                fy = -p * ny
+                gx += fx
+                gy += fy
+                gn += mx * fy - my * fx
+            cp = nx * dx - ny * dy
+            if cp > 0.0:
+                p = cp * cp * ln
+                fx = -p * nx
+                fy = p * ny
+                gx += fx
+                gy += fy
+                gn += mx * fy + my * fx
+        if dx > 0.0:
+            gx += -(dx * dx * self.face_length)
+        elif dx < 0.0:
+            gx += dx * dx * self.face_length
+        q = self.c["Rho"] * GRAVITY * self.hs * self.hs / 16.0 * kk
+        return WaveResult(q * gx, q * gy, q * gn, self._cached_peak_wavelength, kk, gx, gy, gn)
+
+    def hash_bytes(self) -> bytes:
+        r = self.last
+        return struct.pack("<qddddddd", WAVE_HASH_MARKER, self.hs, self.tp, self.direction, r.wavelength, r.X, r.Y, r.N)
+
+    def state(self) -> dict[str, Any]:
+        """state.waves(m、s、度、kN、kN·m;C# WaveDriftModel.State)。"""
+        r = self.last
+        return {"significantHeight_m": self.hs, "peakPeriod_s": self.tp, "direction_deg": self.direction_deg, "wavelength_m": r.wavelength,
+                "spectrum": self.spectrum, "X_kN": r.X / 1000.0, "Y_kN": r.Y / 1000.0, "N_kNm": r.N / 1000.0}
+
+
+def normalise_waves(raw_waves: Any) -> dict[str, Any] | None:
+    """``environment.waves`` → 正規化 dict(結構檢查已於 scenario.waves_issues 通過):數值轉 float、spectrum 小寫、補 gamma 預設;非物件 → None。"""
+    if not isinstance(raw_waves, dict):
+        return None
+    return {
+        "significantHeight_m": float(raw_waves.get("significantHeight_m") or 0.0),
+        "peakPeriod_s": float(raw_waves.get("peakPeriod_s") or 0.0),
+        "direction_deg": float(raw_waves.get("direction_deg") or 0.0),
+        "spectrum": str(raw_waves.get("spectrum") or "pm").lower(),
+        "gamma": float(raw_waves["gamma"]) if raw_waves.get("gamma") is not None else 3.3,
+    }
+
+
+# ============================================================================ 船間交互作用(C# ShipInteraction.cs;docs/design/physics-ship-interaction.md)
+
+# C# ShipInteractionCoefficients.Default
+SHIP_INTERACTION_DEFAULTS: dict[str, float] = {
+    "Stations": 16, "Images": 6, "DeepDepthM": 1000.0, "Rho": 1025.0, "MidshipCoefficient": 0.98, "SwayAddedMassRatio": 0.8,
+    "CoreFactor": 0.25, "RangeLengths": 3.0, "LateralBeams": 2.0, "TaperStart": 0.8, "EventHysteresis": 0.5, "MinCb": 0.35, "MaxCb": 0.95,
+}
+# C# ScenarioShipInteraction.DefaultEventThresholdT
+DEFAULT_EVENT_THRESHOLD_T = 3.0
+# C# TargetHullDefaults.DefaultCb(依船型的方塊係數預設;其他船型 0.65)
+TARGET_CB_DEFAULTS: dict[str, float] = {
+    "tanker": 0.82, "cargo": 0.72, "passenger": 0.62, "fishing": 0.55, "tug": 0.55, "pilot": 0.50, "sar": 0.50, "pleasure": 0.45, "hsc": 0.45, "sailing": 0.40,
+}
+
+
+def target_default_cb(ship_type: Any) -> float:
+    return TARGET_CB_DEFAULTS.get(str(ship_type or "cargo").lower(), 0.65)
+
+
+def target_draft(spec: dict[str, Any]) -> float:
+    """目標船吃水:情境值(> 0),否則 0.3·B(最少 0.5 m;C# TargetHullDefaults.Draft)。"""
+    draft = float(spec["draft"]) if spec.get("draft") is not None else 5.0
+    beam = float(spec["beam"]) if spec.get("beam") is not None else 16.0
+    return draft if draft > 0.0 else max(0.5, 0.3 * beam)
+
+
+def target_block_coefficient(spec: dict[str, Any], rho: float, min_cb: float = 0.35, max_cb: float = 0.95) -> float:
+    """目標船方塊係數:displacement_t 給定時 Δ/(ρ·L·B·T) 夾在 [0.35, 0.95],否則依船型預設(C# TargetHullDefaults.BlockCoefficient)。"""
+    disp = spec.get("displacement_t")
+    if disp is not None and float(disp) > 0.0:
+        loa = float(spec["loa"]) if spec.get("loa") is not None else 100.0
+        beam = float(spec["beam"]) if spec.get("beam") is not None else 16.0
+        vol = loa * beam * target_draft(spec)
+        if vol > 0.0:
+            v = float(disp) * 1000.0 / (rho * vol)
+            return min_cb if v < min_cb else (max_cb if v > max_cb else v)
+    return target_default_cb(spec.get("shipType"))
+
+
+class HullProfile(NamedTuple):
+    """剖面積曲線的離散(C# HullProfile):x[i] 站位、a[i] = −S'(x_i)·Δx(艏正 = 源)、s[i] = S(x_i)·Δx。"""
+
+    L: float
+    le: float
+    am: float
+    x: list[float]
+    a: list[float]
+    s: list[float]
+
+
+def hull_profile(l: float, b: float, t: float, cb: float, c: dict[str, float]) -> HullProfile:
+    """平行中體 + 拋物線進流/去流段(C# HullProfile.Build 同一運算順序)。"""
+    cp = min(cb / c["MidshipCoefficient"], 0.98)
+    le = min(0.5 * l, max(0.1 * l, 1.5 * (1.0 - cp) * l))
+    am = cb * b * t / (1.0 - (2.0 / 3.0) * (le / l))
+    lp = l - 2.0 * le
+    n = int(c["Stations"])
+    xs: list[float] = []
+    a: list[float] = []
+    s: list[float] = []
+    dx = l / n
+    for j in range(n):
+        x = -0.5 * l + (j + 0.5) * dx
+        ax = abs(x)
+        if ax <= 0.5 * lp:
+            sx = am
+            ds = 0.0
+        else:
+            q = (ax - 0.5 * lp) / le
+            sx = am * (1.0 - q * q)
+            ds = -2.0 * am * q / le * (1.0 if x > 0.0 else -1.0)
+        xs.append(x)
+        a.append(-ds * dx)
+        s.append(sx * dx)
+    return HullProfile(l, le, am, xs, a, s)
+
+
+class InteractionTarget(NamedTuple):
+    """交互作用看到的目標船(C# InteractionTarget):ENU 船舯位置、航向(弧度)、對水速度(m/s)、船長/船寬/吃水、方塊係數。"""
+
+    id: str
+    x: float
+    y: float
+    psi: float
+    speed: float
+    L: float
+    B: float
+    T: float
+    cb: float
+
+
+class InteractionResult(NamedTuple):
+    """一次交互作用計算(船體座標 N、N·m;C# ShipInteractionResult)。"""
+
+    X: float
+    Y: float
+    N: float
+    active: bool
+    target_id: str | None
+    xi: float
+    eta: float
+    count: int
+
+
+INTERACTION_ZERO = InteractionResult(0.0, 0.0, 0.0, False, None, 0.0, 0.0, 0)
+
+
+class KinematicTarget:
+    """Python 參考實作的目標船:直線等速(C# TargetShip hold 模式、無觸發、無 COLREG 的 Integrate 路徑逐式相同:
+    航向/航速指令 = 初始值 → 迴轉率與航速不變,位置含均勻流)。C# 的其他行為模式(航點、腳本、錨泊、跟隨、COLREG)不在參考實作內。"""
+
+    def __init__(self, spec: dict[str, Any], ltp: Any, rho: float, min_cb: float, max_cb: float) -> None:
+        self.id = str(spec.get("id") or "")
+        init = spec.get("initial") if isinstance(spec.get("initial"), dict) else {}
+        pos = init.get("position") if isinstance(init.get("position"), dict) else {}
+        if pos.get("x") is not None and pos.get("y") is not None:
+            self.x, self.y = float(pos["x"]), float(pos["y"])
+        elif pos.get("lat") is not None and pos.get("lon") is not None and ltp is not None:
+            self.x, self.y = ltp.to_local(float(pos["lat"]), float(pos["lon"]))
+        else:
+            self.x, self.y = 0.0, 0.0
+        heading = float(init.get("heading") or 0.0)
+        self.psi = _normalize_heading_rad(heading * DEG2RAD)
+        self.speed = max(0.0, float(init.get("speed") or 0.0) * KN_TO_MPS)
+        self.L = float(spec["loa"]) if spec.get("loa") is not None else 100.0
+        self.B = float(spec["beam"]) if spec.get("beam") is not None else 16.0
+        self.T = target_draft(spec)
+        self.cb = target_block_coefficient(spec, rho, min_cb, max_cb)
+
+    def advance(self, current_e: float, current_n: float, dt: float) -> None:
+        """C# TargetShip.Integrate(hold):R 與 Speed 不變,VelE = Speed·sin ψ + 流,X += VelE·dt。"""
+        vel_e = self.speed * math.sin(self.psi) + current_e
+        vel_n = self.speed * math.cos(self.psi) + current_n
+        self.x += vel_e * dt
+        self.y += vel_n * dt
+
+    def kin(self) -> InteractionTarget:
+        return InteractionTarget(self.id, self.x, self.y, self.psi, self.speed, self.L, self.B, self.T, self.cb)
+
+
+def _normalize_heading_rad(a: float) -> float:
+    """C# Units.NormalizeHeadingRad:[0, 2π)。"""
+    if math.isnan(a) or math.isinf(a):
+        return 0.0
+    a = math.fmod(a, TWO_PI)
+    if a < 0.0:
+        a += TWO_PI
+    if a >= TWO_PI:
+        a -= TWO_PI
+    return a
+
+
+def interaction_taper(q: float, start: float) -> float:
+    """範圍漸減(C# ShipInteractionModel.Taper):q ≤ start 為 1,start–1 之間 smoothstep 降到 0。"""
+    if q <= start:
+        return 1.0
+    if q >= 1.0:
+        return 0.0
+    p = (q - start) / (1.0 - start)
+    return 1.0 - p * p * (3.0 - 2.0 * p)
+
+
+def interaction_kernel(r2: float, h: float, deep: bool, images: int) -> tuple[float, float]:
+    """線源核 G(r²) = Σ_k (r² + (2kh)²)^{−3/2} + 尾項,與 dG/d(r²)(C# ShipInteractionModel.Kernel 同一運算順序)。"""
+    if deep:
+        g = r2 ** -1.5
+        return g, -1.5 * g / r2
+    gs = 0.0
+    dgs = 0.0
+    for k in range(-images, images + 1):
+        z = 2.0 * k * h
+        q = r2 + z * z
+        p = q ** -1.5
+        gs += p
+        dgs += -1.5 * p / q
+    s0 = (2.0 * images + 1.0) * h
+    q0 = r2 + s0 * s0
+    sq = math.sqrt(q0)
+    tail = (1.0 - s0 / sq) / (h * r2)
+    dtail = (0.5 * s0 / (q0 * sq)) / (h * r2) - (1.0 - s0 / sq) / (h * r2 * r2)
+    return gs + tail, dgs + dtail
+
+
+class ShipInteractionModel:
+    """船間交互作用(設計文件 physics-ship-interaction.md;C# ShipInteractionModel 逐式對應):Tuck–Newman 型細長體線源模型,
+    自船受力 = Lagally 源項(∝ U_o·U_t)+ 壓力梯度/附加質量項(∝ U_t²),有限水深以海底鏡像級數;單向(目標船不受自船影響)。
+    ``targets`` 為直線等速目標(KinematicTarget),於 ``post_step`` 推進(C# 在自船 RK4 之後推進目標船)。``active`` 為 False 時不影響積分與雜湊。"""
+
+    HASH_LONGS = 7
+
+    def __init__(self, raw_particulars: dict[str, Any], loading: str, cfg: dict[str, Any], ltp: Any = None, supported: bool = True,
+                 coefficients: dict[str, float] | None = None) -> None:
+        self.supported = supported
+        self.enabled = bool(cfg.get("enabled"))
+        c = self.c = dict(SHIP_INTERACTION_DEFAULTS, **(coefficients or {}))
+        self.scale = 1.0 if cfg.get("coefficientScale") is None else float(cfg["coefficientScale"])
+        thr = cfg.get("eventThreshold_t")
+        self.event_threshold = (DEFAULT_EVENT_THRESHOLD_T if thr is None else float(thr)) * TONNE_FORCE
+        hull = raw_particulars["hull"]
+        lc = (raw_particulars.get("loadingConditions") or {}).get(loading) or {}
+        self.L = float(hull["lengthBetweenPerpendiculars_m"])
+        self.B = float(hull["breadth_m"])
+        self.T = float(lc["draftMean_m"] if lc.get("draftMean_m") is not None else lc["maxDraft_m"])
+        self.cb = float(lc["blockCoefficient"]) if lc.get("blockCoefficient") is not None else 0.75
+        self.own = hull_profile(self.L, self.B, self.T, self.cb, c)
+        self.targets: list[KinematicTarget] = [KinematicTarget(t, ltp, c["Rho"], c["MinCb"], c["MaxCb"]) for t in (cfg.get("targets") or [])]
+        self._kins: list[InteractionTarget] = [t.kin() for t in self.targets]
+        self.last = INTERACTION_ZERO
+        self.event_active = False
+        self.event_target_id: str | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.supported and self.enabled
+
+    # ------------------------------------------------------------------ 目標船
+
+    def pre_step(self) -> None:
+        """步首:本步四個 RK4 階段共用的目標狀態(C# PreStep)。"""
+        self._kins = [t.kin() for t in self.targets]
+
+    def advance_targets(self, env: Env, dt: float) -> None:
+        """步末:目標船推進一步(C# TrafficManager.Step 的 hold 路徑;均勻流取步首取樣)。"""
+        for t in self.targets:
+            t.advance(env.current_e, env.current_n, dt)
+
+    def refresh(self, k: Kin, depth: float) -> None:
+        """還原後:以目前狀態重算步末結果,事件狀態不變(C# Refresh)。"""
+        self._kins = [t.kin() for t in self.targets]
+        self.last = self.compute(k, depth, self._kins)
+
+    def update_last(self, k: Kin, depth: float) -> str | None:
+        """步末:重算 ``last`` 並回傳事件轉換 "enter" | "exit" | None(C# UpdateLast)。"""
+        self._kins = [t.kin() for t in self.targets]
+        self.last = self.compute(k, depth, self._kins)
+        return self._update_event(self.last)
+
+    def post_step(self, k: Kin, env: Env, dt: float, events: list[dict[str, Any]]) -> None:
+        """步末(C# Advance:目標船推進 → UpdateLast → 事件):推進目標、重算、超過/離開門檻時加入 shipInteraction 事件。"""
+        self.advance_targets(env, dt)
+        transition = self.update_last(k, env.depth)
+        if transition is not None:
+            events.append(self.event(transition))
+
+    def equivalent_force(self, r: InteractionResult) -> float:
+        return max(abs(r.Y), 4.0 * abs(r.N) / self.L)
+
+    def _update_event(self, r: InteractionResult) -> str | None:
+        f = self.equivalent_force(r)
+        if not self.event_active:
+            if self.event_threshold > 0.0 and f >= self.event_threshold and r.target_id is not None:
+                self.event_active = True
+                self.event_target_id = r.target_id
+                return "enter"
+            return None
+        if f < self.c["EventHysteresis"] * self.event_threshold or r.target_id is None:
+            self.event_active = False
+            return "exit"
+        return None
+
+    def event(self, transition: str) -> dict[str, Any]:
+        """shipInteraction 事件(C# RaiseInteractionTransition 的 data 欄位;itemId 無、targetId = 主要目標)。"""
+        r = self.last
+        enter = transition == "enter"
+        target_id = r.target_id if enter else self.event_target_id
+        data = {
+            "phase": "enter" if enter else "exit", "targetId": target_id, "forceSurge_t": r.X / TONNE_FORCE, "forceSway_t": r.Y / TONNE_FORCE,
+            "momentYaw_tm": r.N / TONNE_FORCE, "xi": r.xi, "eta": r.eta, "threshold_t": self.event_threshold / TONNE_FORCE,
+        }
+        message = (f"船間交互作用:{target_id} 側向力 {r.Y / TONNE_FORCE:+.1f} t、艏搖 {r.N / TONNE_FORCE:+.0f} t·m(超過門檻)" if enter
+                   else f"船間交互作用結束:{target_id}")
+        return {"kind": "shipInteraction", "itemId": None, "targetId": target_id, "message": message, "data": data}
+
+    def restore_event(self, active: bool, target_id: str | None) -> None:
+        self.event_active = active
+        self.event_target_id = target_id
+
+    # ------------------------------------------------------------------ 力
+
+    def evaluate(self, k: Kin, env: Env) -> tuple[float, float, float]:
+        r = self.compute(k, env.depth, self._kins)
+        return (r.X, r.Y, r.N)
+
+    def compute(self, k: Kin, depth: float, targets: list[InteractionTarget]) -> InteractionResult:
+        """交互作用力(設計文件第 3 節;C# Compute 同一累加順序)。"""
+        c = self.c
+        tx = ty = tn = 0.0
+        count = 0
+        best: str | None = None
+        best_f = -1.0
+        best_xi = best_eta = 0.0
+        xl = c["RangeLengths"] * self.L
+        h = depth
+        deep = not (h > 0.0) or math.isinf(h) or h >= c["DeepDepthM"]
+        images = int(c["Images"])
+        sn = math.sin(k.psi)
+        cs = math.cos(k.psi)
+        ox, oa, os_ = self.own.x, self.own.a, self.own.s
+        for t in targets:
+            de = t.x - k.x
+            dn = t.y - k.y
+            dx = de * sn + dn * cs
+            dy = de * cs - dn * sn
+            yl = c["LateralBeams"] * (self.B + t.B)
+            ax = abs(dx)
+            ay = abs(dy)
+            if ax >= xl or ay >= yl:
+                continue
+            count += 1
+            w = interaction_taper(ax / xl, c["TaperStart"]) * interaction_taper(ay / yl, c["TaperStart"])
+            xi = dx / self.L
+            eta = dy / self.L
+            beta = t.psi - k.psi
+            cb = math.cos(beta)
+            sb = math.sin(beta)
+            tgt = hull_profile(t.L, t.B, t.T, t.cb, c)
+            delta = c["CoreFactor"] * (self.B + t.B)
+            delta2 = delta * delta
+            uo = k.u
+            ut = t.speed
+            lag = -c["Rho"] * uo * ut / TWO_PI
+            fk = -c["Rho"] * ut * ut / TWO_PI
+            fk_y = fk * (1.0 + c["SwayAddedMassRatio"])
+            x = y = nn = 0.0
+            px, pa = tgt.x, tgt.a
+            for i in range(len(ox)):
+                xi0 = ox[i]
+                ux = uy = dux = duy = 0.0
+                for j in range(len(px)):
+                    sj = px[j]
+                    qx = dx + sj * cb
+                    qy = dy + sj * sb
+                    rx = xi0 - qx
+                    ry = 0.0 - qy
+                    r2 = rx * rx + ry * ry + delta2
+                    g, dg = interaction_kernel(r2, h, deep, images)
+                    m = pa[j]
+                    ux += m * rx * g
+                    uy += m * ry * g
+                    rt = rx * cb + ry * sb
+                    dux += m * (cb * g + rx * dg * 2.0 * rt)
+                    duy += m * (sb * g + ry * dg * 2.0 * rt)
+                fx = lag * oa[i] * ux + fk * os_[i] * dux
+                fy = lag * oa[i] * uy + fk_y * os_[i] * duy
+                x += fx
+                y += fy
+                nn += xi0 * fy
+            ws = w * self.scale
+            xk = x * ws
+            yk = y * ws
+            nk = nn * ws
+            tx += xk
+            ty += yk
+            tn += nk
+            f = max(abs(yk), 4.0 * abs(nk) / self.L)
+            if f > best_f:
+                best_f = f
+                best = t.id
+                best_xi = xi
+                best_eta = eta
+        return InteractionResult(tx, ty, tn, count > 0, best, best_xi, best_eta, count)
+
+    # ------------------------------------------------------------------ 雜湊 / 狀態
+
+    def hash_bytes(self) -> bytes:
+        r = self.last
+        return struct.pack("<qqddddd", SHIP_INTERACTION_HASH_MARKER, 1 if self.event_active else 0, r.X, r.Y, r.N, r.xi, r.eta)
+
+    def state(self) -> dict[str, Any]:
+        """state.shipInteraction(t、t·m;C# ShipInteractionModel.State;targetId/xi/eta 無目標時省略)。"""
+        r = self.last
+        out: dict[str, Any] = {"active": r.active}
+        if r.target_id is not None:
+            out["targetId"] = r.target_id
+        out["forceSurge_t"] = r.X / TONNE_FORCE
+        out["forceSway_t"] = r.Y / TONNE_FORCE
+        out["momentYaw_tm"] = r.N / TONNE_FORCE
+        if r.active:
+            out["xi"] = r.xi
+            out["eta"] = r.eta
+        out["targets"] = r.count
+        out["event"] = self.event_active
+        return out
+
+
+def normalise_ship_interaction(raw_si: Any, raw_targets: Any) -> dict[str, Any] | None:
+    """``environment.shipInteraction`` + ``targets[]`` → 正規化 dict(結構檢查已於 scenario.ship_interaction_issues 通過):
+    enabled 轉 bool、倍率/門檻轉 float(None = 預設);目標船只取 hold 模式(或未指定模式)且無觸發條件者(Python 參考實作的直線等速目標;
+    其他模式的目標與 C# 交通模組的行為不在參考實作內,略過)。非物件或未啟用 → None(與無區段相同)。"""
+    if not isinstance(raw_si, dict) or not bool(raw_si.get("enabled")):
+        return None
+    targets: list[dict[str, Any]] = []
+    for t in raw_targets if isinstance(raw_targets, list) else []:
+        if not isinstance(t, dict):
+            continue
+        beh = t.get("behaviour") if isinstance(t.get("behaviour"), dict) else {}
+        mode = str(beh.get("mode") or "hold").lower()
+        trig = t.get("trigger") if isinstance(t.get("trigger"), dict) else None
+        if mode != "hold" or (trig is not None and str(trig.get("type") or "none").lower() != "none"):
+            continue
+        # C# TargetShip 以 behaviour.maxSpeed(未給時 loa ≥ 50 m 為 20 kn、否則 30 kn)夾限航速令,初速超過者會指數衰減到上限;
+        # 參考實作為直線等速,故初速超過上限的目標不在參考範圍(physics-ship-interaction.md 第 9 節)
+        loa = _num(t.get("loa"))
+        max_kn = _num(beh.get("maxSpeed"))
+        if max_kn is None:
+            max_kn = 20.0 if (loa if loa is not None else 100.0) >= 50.0 else 30.0
+        init_t = t.get("initial") if isinstance(t.get("initial"), dict) else {}
+        if (_num(init_t.get("speed")) or 0.0) > max_kn:
+            continue
+        targets.append({
+            "id": "" if t.get("id") is None else str(t["id"]),
+            "shipType": str(t.get("shipType") or "cargo"),
+            "loa": _num(t.get("loa")), "beam": _num(t.get("beam")), "draft": _num(t.get("draft")), "displacement_t": _num(t.get("displacement_t")),
+            "initial": copy_initial(t.get("initial")),
+        })
+    return {
+        "enabled": True,
+        "coefficientScale": _num(raw_si.get("coefficientScale")),
+        "eventThreshold_t": _num(raw_si.get("eventThreshold_t")),
+        "targets": targets,
+    }
+
+
+def copy_initial(init: Any) -> dict[str, Any]:
+    """目標船 initial {position{x,y|lat,lon}, heading, speed} 的淺拷貝(數值轉 float)。"""
+    if not isinstance(init, dict):
+        return {}
+    pos = init.get("position") if isinstance(init.get("position"), dict) else {}
+    return {
+        "position": {key: _num(pos.get(key)) for key in ("x", "y", "lat", "lon")},
+        "heading": _num(init.get("heading")) or 0.0,
+        "speed": _num(init.get("speed")) or 0.0,
+    }
+
+
 # ============================================================================ 情境區段(C# ScenarioExternalForces / ScenarioBanks)
 
 TUG_DEFAULTS: dict[str, Any] = {
@@ -1895,10 +2583,14 @@ def load_banks(path: str | os.PathLike[str], ids: list[str] | None) -> list[dict
 
 def normalise_sections(raw: dict[str, Any], base_directory: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """情境的 tugs / anchors / berth / banks / environment.seabed → 補 C# 預設值的正規化 dict(berth.file、banks.file 於此解析並內嵌)。"""
-    out: dict[str, Any] = {"tugs": None, "anchors": None, "berth": None, "banks": None, "seabed": None}
+    out: dict[str, Any] = {"tugs": None, "anchors": None, "berth": None, "banks": None, "seabed": None, "waves": None, "shipInteraction": None}
     env = raw.get("environment") if isinstance(raw.get("environment"), dict) else {}
     if env.get("seabed") is not None:
         out["seabed"] = str(env["seabed"])
+    # 浪(environment.waves;WaveDriftModel):與其他外力區段一起交給 MMGShip.configure_external
+    out["waves"] = normalise_waves(env.get("waves"))
+    # 船間交互作用(environment.shipInteraction + targets[];ShipInteractionModel):未啟用 → None
+    out["shipInteraction"] = normalise_ship_interaction(env.get("shipInteraction"), raw.get("targets"))
     tugs = raw.get("tugs")
     if isinstance(tugs, list):
         norm = []

@@ -55,6 +55,8 @@ public sealed record EngineSnapshot
     /// 只在情境使用外力時寫入;缺此欄位時還原為情境初始外力狀態(拖船依 initial、錨收存或初始已錨泊、繫纜依 initial)。
     /// </summary>
     public Physics.External.ExternalForceSnapshot? External { get; init; }
+    /// <summary>船間交互作用事件狀態(只在情境啟用 environment.shipInteraction 時寫入;缺此欄位時還原為未進入門檻;力為純函數,還原後重算)</summary>
+    public Physics.External.ShipInteractionSnapshot? ShipInteraction { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
     public required string StateHash { get; init; }
 
@@ -84,7 +86,9 @@ public sealed record EnvironmentSnapshot(
     double WindTrueSpeedMps, double WindTrueDirFromRad, double Gustiness, double GustFactor,
     double CurrentSetRad, double CurrentDriftMps,
     /// <summary>常數水深;null 表示使用 callback 水深(還原時沿用現有提供者)</summary>
-    double? ConstantDepth);
+    double? ConstantDepth,
+    /// <summary>時變流場是否已被 setEnvironment current 覆寫為常數(只在情境有 current.table|tidal 時寫出;null = 無時變流場,舊快照亦為 null)</summary>
+    bool? CurrentOverridden = null);
 
 public sealed record AutopilotSnapshot(bool Enabled, double HeadingRad, double RotLimitDegPerMin);
 

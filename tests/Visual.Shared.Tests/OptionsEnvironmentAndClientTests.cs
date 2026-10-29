@@ -99,6 +99,36 @@ public class EnvironmentMapperTests
     }
 
     [Fact]
+    public void StateWavesOverrideWindDerivedWaveHeightAndDirection()
+    {
+        // 情境有 environment.waves(state.waves)時:波高取核心的 Hs、浪向 = 來向 + 180°;海況與其他欄位維持由風/雷達環境推得
+        var s = SmokeSequence.Frame(0); // 10 kn 風自 225° → 無 waves 時海況 2.5、波高 0.9 m、浪向 045
+        var plain = EnvironmentMapper.Build(s, null, DayNightMode.Day, null);
+        Assert.Equal(EnvironmentMapper.WaveHeightFromSeaState(2.5), plain.WaveHeightM);
+        Assert.Equal(45, plain.WaveDirectionDeg);
+        var withWaves = s with
+        {
+            Waves = new SimCore.Physics.External.WaveDriftState
+            {
+                SignificantHeightM = 2.4, PeakPeriodS = 7.0, DirectionDeg = 300.0, WavelengthM = 76.5, Spectrum = "jonswap", XKN = -5.0, YKN = 120.0, NKNm = 800.0,
+            },
+        };
+        var look = EnvironmentMapper.Build(withWaves, null, DayNightMode.Day, null);
+        Assert.Equal(2.4, look.WaveHeightM);
+        Assert.Equal(120.0, look.WaveDirectionDeg);            // 來向 300 → 去向 120
+        Assert.Equal(plain.SeaState, look.SeaState);           // 海況仍由風速推得(雷達環境可覆寫)
+        Assert.Equal(plain.WindSpeedKn, look.WindSpeedKn);
+        // 平靜海面(Hs 0)與來向 360 的正規化
+        var calm = EnvironmentMapper.Build(s with { Waves = new SimCore.Physics.External.WaveDriftState { SignificantHeightM = 0.0, PeakPeriodS = 5.0, DirectionDeg = 360.0, WavelengthM = 39.0 } }, null, DayNightMode.Day, null);
+        Assert.Equal(0.0, calm.WaveHeightM);
+        Assert.Equal(180.0, calm.WaveDirectionDeg);
+        // 舊核心/Python 狀態(無 waves 欄位)解析後維持舊行為
+        var parsed = ContractJson.Deserialize<OwnShipState>(ContractJson.Serialize(s))!;
+        Assert.Null(parsed.Waves);
+        Assert.Equal(plain.WaveHeightM, EnvironmentMapper.Build(parsed, null, DayNightMode.Day, null).WaveHeightM);
+    }
+
+    [Fact]
     public void ManualDayNightModes()
     {
         var s = SmokeSequence.Frame(0);

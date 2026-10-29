@@ -19,9 +19,9 @@
 | 段 | 條文摘要 | 本系統對應(模組/情境/文件) | 狀態 | 缺項/備註 |
 |---|---|---|---|---|
 | 1.1 | 適合選定的目標與訓練任務 | 用途定為內部 BRM 複訓、船舶熟悉、靠離泊預演(規劃書第 1.4、8.0 節);情境庫 E01–E22、F01–F03 對應 A-II/1、A-II/2、A-VIII/2 與 1.22/1.39(第 8.1 節「對應法規」欄);`docs/訓練/BRM-課程大綱.md` | 部分 | 情境與課程大綱已有;適合性須由試行課程(第 14 章「課程」)確認 → 需實機 |
-| 1.2 | 以符合訓練目標的實體擬真程度模擬船上設備的操作能力,含能力、限制與可能誤差 | 儀器頁 `src/Instruments.Web/`、感測器真值/指示值與故障 `src/SimCore/Sensors/`、雷達/ARPA `src/Sensors.Radar/`、故障目錄 `src/Contracts/fault-catalogue.json`(R1);自船動態 `src/SimCore/Physics/`(R2) | 部分 | 同 R1:ECDIS(OpenCPN 整合/自建 S-52/ENC 管理)、磁羅經、VHF/DSC、機艙操作模式未實作;同 R2:浪、船間交互作用、橫搖未實作 |
+| 1.2 | 以符合訓練目標的實體擬真程度模擬船上設備的操作能力,含能力、限制與可能誤差 | 儀器頁 `src/Instruments.Web/`、感測器真值/指示值與故障 `src/SimCore/Sensors/`、雷達/ARPA `src/Sensors.Radar/`、故障目錄 `src/Contracts/fault-catalogue.json`(R1);自船動態 `src/SimCore/Physics/`(R2) | 部分 | 同 R1:ECDIS(OpenCPN 整合/自建 S-52/ENC 管理)、磁羅經、VHF/DSC、機艙操作模式未實作;同 R2:浪只有平均漂移力(`Physics/External/WaveDrift.cs`;一階振盪與橫搖未實作)、船間交互作用為單向細長體線源模型(`Physics/External/ShipInteraction.cs`;係數為文獻量級估計) |
 | 1.3 | 足夠的行為擬真度使學員能習得符合訓練目標的技能 | MMG 3 自由度模型以 FSB1 試俥校正(`build/calibration/FSB1/validation.full.md`;23/26 在公差內),FSB2 以海報值;淺水/squat/岸壁/側推趨勢由自動測試固定 | 部分 / 需實機 | FSB2 試俥報告與兩船壓載實測待取得;船長/引水人主觀評價 ≥4/5 需實機(第 14 章物理) |
-| 1.4 | 可控制的操作環境,能產生各種情況,含與訓練目標相關的緊急、危險或異常情況 | 情境引擎 `src/SimCore/Scenario/`(時間表、觸發、動作、環境漸變)、交通/COLREG `src/SimCore/Traffic/`、故障注入 `src/SimCore/Engine/`;E07–E12、E19 緊急情境 | 已實作 | 時變流場與浪為 R3 缺項,不影響本段的「可控制」要件 |
+| 1.4 | 可控制的操作環境,能產生各種情況,含與訓練目標相關的緊急、危險或異常情況 | 情境引擎 `src/SimCore/Scenario/`(時間表、觸發、動作、環境漸變)、交通/COLREG `src/SimCore/Traffic/`、故障注入 `src/SimCore/Engine/`;E07–E12、E19 緊急情境 | 已實作 | 時變流場(`TidalStreamTests`)與浪的平均漂移力(`WaveDriftTests`)已實作;浪的一階振盪/橫搖為 R2/R3 缺項,不影響本段的「可控制」要件 |
 | 1.5 | 學員與設備、模擬環境及教官互動的介面 | 操船台/儀器頁、雷達頁、視景 `src/Visual.Godot/`;教官站 `instructor.html`;VHF/對講 | 部分 | VHF/對講(Mumble)與角色扮演語音未實作;船上以語音腳本代替(第 9.1 節) |
 | 1.6 | 教官能控制、監看並記錄練習以利講評 | 教官站執行控制、事件注入、BRM 快速標記 `src/lib/brm-markers.ts`、學員操作紀錄;核心紀錄/重播 `src/SimCore/Recording/`、`?mode=replay`;講評報告 `report.html` | 部分 | 聲音/影像擷取(OBS/Mumble)未實作;紀錄未簽章(R6) |
 
@@ -96,8 +96,8 @@
 | 項目 | Class A 要求摘要 | 本系統對應 | 狀態 | 缺項/備註 |
 |---|---|---|---|---|
 | 自由度 | 6 自由度水動力模型 | MMG 3 自由度 `src/SimCore/Physics/Mmg/` | 未實作 | 規劃書第 6.2 節預留 4 自由度橫搖;6 自由度不在範圍 |
-| 開闊水域環境力 | 風、浪、潮流、海流對船體的作用 | 風、流(均勻)、淺水 `src/SimCore/Environment/` | 部分 | 浪譜/浪漂力未實作(R2) |
-| 受限水域 | 淺水效應、岸壁效應、船間交互作用、剪切流 | 淺水附加質量/阻尼(Kijima)、squat(ICORELS)、岸壁 `BankEffect.cs` | 部分 | 船間交互作用未實作;岸壁係數為文獻估計(`docs/design/physics-bank-effect.md`) |
+| 開闊水域環境力 | 風、浪、潮流、海流對船體的作用 | 風、流(均勻;可隨時間變化:流場表/潮流 `Environment/CurrentModel.cs`)、淺水 `src/SimCore/Environment/`;浪:情境 `environment.waves`(Hs/Tp/來向/PM 或 JONSWAP 譜)→ 平均二階漂移力 surge/sway/yaw `Physics/External/WaveDrift.cs`(`WaveDriftTests`,C#↔Python 夾具) | 已實作 | 浪只有平均漂移力(無一階振盪/橫搖),係數為文獻量級估計(`docs/design/physics-waves.md`);浪在練習中固定 |
+| 受限水域 | 淺水效應、岸壁效應、船間交互作用、剪切流 | 淺水附加質量/阻尼(Kijima)、squat(ICORELS)、岸壁 `BankEffect.cs`、船間交互作用 `ShipInteraction.cs`(情境 `environment.shipInteraction`;Tuck–Newman 型細長體線源模型,有限水深鏡像級數;`ShipInteractionTests`,C#↔Python 夾具) | 部分 | 船間交互作用為單向(目標船不受自船影響)、係數為文獻量級估計(`docs/design/physics-ship-interaction.md`);岸壁係數為文獻估計(`docs/design/physics-bank-effect.md`);剪切流(空間變化流場)未實作 |
 | 推進與操縱 | 主機/螺槳/舵/側推含動態響應與限制 | 四象限螺槳、舵機速率(單/雙泵)、側推隨速度衰減 `ActuatorModel.cs` | 已實作 | — |
 | 拖船、錨、繫纜 | 拖船力/位置、錨與鏈張力、繫纜 | `Physics/External/*`(`TugTests`、`AnchorTests`、`BerthTests`) | 已實作 | — |
 | 故障模式 | 主機、舵機、電力等故障 | 故障目錄與注入(`EngineStartFailureTests`、`BlackoutScenarioTests`) | 已實作 | — |
@@ -121,8 +121,8 @@
 | 日夜與光照 | 日夜循環、月光、背景岸燈 | `state.utc`、日夜(`EnvironmentUtcTests`);月球位置/月相/月光照度與夜間環境光 `Visual.Shared/Env/MoonModel.cs`、`EnvironmentMapper`(`MoonModelTests`、`EnvironmentMoonlightTests`)、Godot 月光 `WeatherNode`;E16 岸燈 | 已實作 / 需實機 | 月光與夜間環境光的亮度係數需實機(暗室、內顯筆電)確認(`docs/design/visual-client.md` 第 11 節) |
 | 能見度與降水 | 能見度可變、霧區、雨/雪與雷達雜波 | 能見度/雨區/環境漸變(`EnvironmentRampTests`) | 已實作 | — |
 | 風 | 風速/風向含陣風與時間剖面 | 風與陣風、風向轉變(E13、E14、E17) | 已實作 | — |
-| 浪與湧浪 | 浪譜、湧浪方向 | — | 未實作 | R2/R3 缺項 |
-| 潮流場 | 依海圖隨時間變化的流場 | 均勻流;E06 以漲/退潮兩檔表示 | 部分 | 時變流場未實作(R3) |
+| 浪與湧浪 | 浪譜、湧浪方向 | 情境 `environment.waves {significantHeight_m, peakPeriod_s, direction_deg, spectrum: pm / jonswap, gamma}`:譜加權的平均漂移力、淺水波長(有限水深色散)、`state.waves`(視景海面波高/浪向取自此)`Physics/External/WaveDrift.cs`、`Visual.Shared/Env/EnvironmentMapper.cs` | 部分 | 平均漂移力已實作;一階振盪運動、橫搖、方向擴散與雷達海雜波連動未實作(R2/R3) |
+| 潮流場 | 依海圖隨時間變化的流場 | 時變均勻流:情境 `environment.current.table`(流場表,向量內插)或 `current.tidal`(由 `environment.tide` 的潮高變化率決定漲/退/平潮)`src/SimCore/Environment/CurrentModel.cs`,每步刷新、`state.current` 隨時間變化、`state.currentSource`,`setEnvironment current` 覆寫後時變停止;E06b 潮流情境(漲 → 平潮 → 退自動切換;`TidalStreamTests`:模型、覆寫/倒帶、紀錄/重播、C#↔Python 夾具 `Golden/current_*.csv`、E06b 無人操作;Python `test_current`) | 已實作 | 空間均勻(無依海圖位置變化的流場網格);E06 兩檔仍以常數流 + 漸變表示(夾具不變) |
 | 潮高 | 潮高隨時間變化影響 UKC | 情境 `environment.tide`(潮高表線性內插或調和潮)`src/SimCore/Environment/TideModel.cs`:有效水深 = 海圖水深(含區域覆寫)+ 潮高(t),UKC/squat/擱淺/警報與 `summary.ukc` 皆用有效水深,`state.tideHeight_m` 輸出;E18b 潮高表情境(`TideTests`:內插/端點、快照還原、C#↔Python 夾具 `Golden/tide_*.csv`、E18b 紀錄/重播;Python `test_tide`) | 已實作 | E18 原檔仍以水深漸變近似(夾具不變);潮高為情境給定的表/調和式,無潮汐資料庫 |
 
 ### 4.4 視景
@@ -179,9 +179,11 @@
 |---|---|---|---|---|---|---|
 | A-I/12 第 1 部分(第 1–4 段) | 16 | 6 | 8 | 1 | 1 | 1(1.3) |
 | A-I/12 第 2 部分(第 5–8 段) | 15 | 5 | 10 | 0 | 0 | 2(7.2、7.5) |
-| DNV Class A 功能清單 | 42 | 15 | 16 | 6 | 3 | 3 |
+| DNV Class A 功能清單 | 47 | 21 | 16 | 4 | 3 | 4 |
 
-A-I/12 的「未實作」只有 ARPA 排除區(4.3,不列入 D5 等級);其餘差距集中在聲音/影像擷取、VHF 角色扮演、簡報的規劃時間/同儕評估結構,以及須以試行課程驗證的評估程序。DNV Class A 的 6 自由度、浪、船間交互作用、240° 視野與實體駕駛台為桌面配置的結構性差距,對應規劃書第 4.2 節「可認證等級為 Class C/S」的判斷。
+> 計數規則:依第 4 節各表「狀態」欄逐列點算(「已實作 / 需實機」計入已實作並同時計入需實機欄;「不適用 / 未實作」計入不適用);更新任一列狀態時須重新點算本表。
+
+A-I/12 的「未實作」只有 ARPA 排除區(4.3,不列入 D5 等級);其餘差距集中在聲音/影像擷取、VHF 角色扮演、簡報的規劃時間/同儕評估結構,以及須以試行課程驗證的評估程序。DNV Class A 的 6 自由度(含浪的一階振盪與橫搖;平均浪漂移力已實作)、雙向船間交互作用(單向模型已實作)、240° 視野與實體駕駛台為桌面配置的結構性差距,對應規劃書第 4.2 節「可認證等級為 Class C/S」的判斷。
 
 ## 6. 待核准事項(ASSUMED)
 

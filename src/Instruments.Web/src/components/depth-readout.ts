@@ -1,4 +1,4 @@
-// 水深/UKC:龍骨下水深為主,附水深、squat、吃水;UKC 低於警報門檻或擱淺時用紅色警報。
+// 水深/UKC:龍骨下水深為主,附水深、潮高(情境有潮汐時)、squat、吃水;UKC 低於警報門檻或擱淺時用紅色警報。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
@@ -31,6 +31,8 @@ export class DepthReadout extends LitElement {
 
   @property({ type: Number }) ukc = 0;
   @property({ type: Number }) waterDepth: number | undefined = undefined;
+  /** 潮高 (m;state.tideHeight_m,情境有 environment.tide 時才有;undefined 時不顯示該列) */
+  @property({ type: Number }) tideHeight: number | undefined = undefined;
   @property({ type: Number }) squat: number | undefined = undefined;
   @property({ type: Number }) draftFore: number | undefined = undefined;
   @property({ type: Number }) draftAft: number | undefined = undefined;
@@ -56,12 +58,22 @@ export class DepthReadout extends LitElement {
         </div>
         <div class="rows">
           <div class="row"><span class="label">水深</span><span>${formatMeters(this.waterDepth)}</span></div>
+          ${this.tideHeight !== undefined && Number.isFinite(this.tideHeight)
+            ? html`<div class="row tide"><span class="label">潮高</span><span>${formatTide(this.tideHeight)}</span></div>`
+            : nothing}
           <div class="row"><span class="label">Squat</span><span>${formatMeters(this.squat, 2)}</span></div>
           <div class="row"><span class="label">吃水 F/A</span><span>${formatMeters(this.draftFore)} / ${formatMeters(this.draftAft)}</span></div>
         </div>
       </div>
     `;
   }
+}
+
+/** 潮高帶正負號(相對海圖基準面):+1.9 m、−0.3 m、0.0 m */
+export function formatTide(h: number): string {
+  const r = Math.round(h * 10) / 10;
+  const sign = r > 0 ? '+' : r < 0 ? '−' : '';
+  return `${sign}${Math.abs(r).toFixed(1)} m`;
 }
 
 declare global {

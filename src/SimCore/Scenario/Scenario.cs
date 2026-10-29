@@ -313,6 +313,73 @@ public sealed class Scenario
                 }
             }
         }
+        // 時變流場(environment.current.table | tidal;情境引擎設計第 1.5.2 節):擇一;表 ≥ 2 點、t/utc 擇一且嚴格遞增、速度非負;
+        // tidal 需 environment.tide、flood/ebb 皆要有。與 Python current_issues 一致(路徑與訊息相同)
+        {
+            const string cp = "environment.current";
+            var cur = Environment.Current;
+            if (cur.Table is not null && cur.Tidal is not null) Error(cp, "current 的 table 與 tidal 只能擇一");
+            if (cur.Table is { } table)
+            {
+                if (table.Count < 2) Error($"{cp}.table", "流場表至少需要 2 點");
+                var startOk = Engine.SimulationEngine.TryParseUtc(StartTimeUtc, out var start);
+                double? prev = null;
+                for (var i = 0; i < table.Count; i++)
+                {
+                    var p = table[i];
+                    var pp = $"{cp}.table[{i}]";
+                    double? t = null;
+                    if (p.T is not null && p.Utc is not null) Error(pp, "表點的 t 與 utc 只能擇一");
+                    else if (p.T is { } given) t = given;
+                    else if (p.Utc is { } utcText)
+                    {
+                        if (!Engine.SimulationEngine.TryParseUtc(utcText, out var utc)) Error(pp, $"utc 無法解析:{utcText}");
+                        else if (!startOk) Error(pp, "表點以 utc 指定時情境必須有可解析的 startTimeUtc");
+                        else t = (utc - start).TotalSeconds;
+                    }
+                    else Error(pp, "表點需要 t 或 utc");
+                    if (!(p.SpeedKn >= 0) || !double.IsFinite(p.SpeedKn)) Error(pp, "speed_kn 不可為負");
+                    if (!double.IsFinite(p.DirectionDeg)) Error(pp, "direction_deg 必須為有限數值");
+                    if (t is { } tv)
+                    {
+                        if (!double.IsFinite(tv)) Error(pp, "t 必須為有限數值");
+                        else if (prev is { } pv && tv <= pv) Error(pp, "流場表的 t 必須嚴格遞增");
+                        prev = tv;
+                    }
+                }
+            }
+            if (cur.Tidal is { } tidal)
+            {
+                var tp2 = $"{cp}.tidal";
+                if (Environment.Tide is null) Error(tp2, "tidal 需要 environment.tide");
+                void CheckPhase(ScenarioCurrentPhase? phase, string name)
+                {
+                    if (phase is null) { Error($"{tp2}.{name}", $"tidal 需要 {name}"); return; }
+                    if (!(phase.SpeedKn >= 0) || !double.IsFinite(phase.SpeedKn)) Error($"{tp2}.{name}", "speed_kn 不可為負");
+                    if (!double.IsFinite(phase.DirectionDeg)) Error($"{tp2}.{name}", "direction_deg 必須為有限數值");
+                }
+                CheckPhase(tidal.Flood, "flood");
+                CheckPhase(tidal.Ebb, "ebb");
+                if (tidal.SlackWindowMin is { } w && (!(w >= 0) || !double.IsFinite(w))) Error($"{tp2}.slackWindow_min", "slackWindow_min 不可為負");
+            }
+        }
+        // 浪(environment.waves;設計文件 physics-waves.md 第 2 節):Hs ≥ 0、Tp > 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1。與 Python waves_issues 一致
+        if (Environment.Waves is { } wv)
+        {
+            const string wp = "environment.waves";
+            if (wv.SignificantHeightM is not { } hs || !double.IsFinite(hs) || hs < 0) Error($"{wp}.significantHeight_m", "significantHeight_m 必須為 ≥ 0 的有限數值");
+            if (wv.PeakPeriodS is not { } tpk || !double.IsFinite(tpk) || tpk <= 0) Error($"{wp}.peakPeriod_s", "peakPeriod_s 必須為正");
+            if (wv.DirectionDeg is not { } dir || !double.IsFinite(dir) || dir < 0 || dir > 360) Error($"{wp}.direction_deg", "direction_deg 須在 0–360(來向)");
+            if (wv.Spectrum is { } spec && spec.ToLowerInvariant() is not ("pm" or "jonswap")) Error($"{wp}.spectrum", $"spectrum 須為 pm | jonswap:{spec}");
+            if (wv.Gamma is { } g && (!double.IsFinite(g) || g < 1)) Error($"{wp}.gamma", "gamma 必須 ≥ 1");
+        }
+        // 船間交互作用(environment.shipInteraction;設計文件 physics-ship-interaction.md 第 2 節):coefficientScale ≥ 0、eventThreshold_t ≥ 0(皆有限)。與 Python ship_interaction_issues 一致
+        if (Environment.ShipInteraction is { } si)
+        {
+            const string sp = "environment.shipInteraction";
+            if (si.CoefficientScale is { } scale && (!double.IsFinite(scale) || scale < 0)) Error($"{sp}.coefficientScale", "coefficientScale 必須為 ≥ 0 的有限數值");
+            if (si.EventThresholdT is { } thr && (!double.IsFinite(thr) || thr < 0)) Error($"{sp}.eventThreshold_t", "eventThreshold_t 必須為 ≥ 0 的有限數值");
+        }
         return issues;
     }
 
@@ -487,6 +554,44 @@ public sealed class ScenarioEnvironment
     /// table(線性內插,範圍外取端點)或 harmonic(mean + Σ A·cos(2πt/T + φ))擇一;未給時潮高恆為 0,數值與舊版相同。
     /// </summary>
     public ScenarioTide? Tide { get; set; }
+    /// <summary>
+    /// 浪(選填;設計文件 physics-waves.md):有義波高、譜峰週期、來向(氣象慣例)、浪譜(pm | jonswap)與 γ。
+    /// 有此區段時核心計算平均二階波浪漂移力(surge/sway/yaw)並輸出 state.waves;未給時零力、輸出與雜湊與舊版相同。
+    /// </summary>
+    public ScenarioWaves? Waves { get; set; }
+    /// <summary>
+    /// 船間交互作用(選填;設計文件 physics-ship-interaction.md):enabled 時核心計算目標船通過/追越時的流體交互作用力(surge/sway/yaw;
+    /// Tuck–Newman 型細長體線源模型,單向)並輸出 state.shipInteraction、超過門檻時發 shipInteraction 事件;未給或 enabled = false 時零力、輸出與雜湊與舊版相同。
+    /// </summary>
+    public ScenarioShipInteraction? ShipInteraction { get; set; }
+}
+
+/// <summary>情境船間交互作用設定(<see cref="Scenario.StructuralIssues"/> 檢查:coefficientScale ≥ 0、eventThreshold_t ≥ 0)。</summary>
+public sealed class ScenarioShipInteraction
+{
+    /// <summary>事件門檻預設(t):等效側向力 max(|Y|, 4|N|/L) ≥ 門檻時發 shipInteraction 進入事件,降到一半以下發離開事件</summary>
+    public const double DefaultEventThresholdT = 3.0;
+    /// <summary>啟用(預設 false:有區段但未啟用與無區段相同)</summary>
+    public bool Enabled { get; set; }
+    /// <summary>整體倍率(≥ 0;預設 1;0 = 只顯示不施力)</summary>
+    public double? CoefficientScale { get; set; }
+    /// <summary>事件門檻(t,≥ 0;預設 3;0 = 不發事件)</summary>
+    [JsonPropertyName("eventThreshold_t")] public double? EventThresholdT { get; set; }
+}
+
+/// <summary>情境浪設定(<see cref="Scenario.StructuralIssues"/> 檢查:Hs ≥ 0、Tp &gt; 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1)。</summary>
+public sealed class ScenarioWaves
+{
+    /// <summary>有義波高 Hs(m,≥ 0)</summary>
+    [JsonPropertyName("significantHeight_m")] public double? SignificantHeightM { get; set; }
+    /// <summary>譜峰週期 Tp(s,&gt; 0)</summary>
+    [JsonPropertyName("peakPeriod_s")] public double? PeakPeriodS { get; set; }
+    /// <summary>浪來向(度,0–360;氣象慣例,與風相同)</summary>
+    [JsonPropertyName("direction_deg")] public double? DirectionDeg { get; set; }
+    /// <summary>浪譜 pm(Pierson–Moskowitz,預設)| jonswap</summary>
+    public string? Spectrum { get; set; }
+    /// <summary>JONSWAP 峰度係數 γ(預設 3.3;pm 時忽略)</summary>
+    public double? Gamma { get; set; }
 }
 
 /// <summary>情境潮汐設定:<see cref="Table"/> 與 <see cref="Harmonic"/> 擇一(<see cref="Scenario.StructuralIssues"/> 檢查)。</summary>
@@ -546,8 +651,41 @@ public sealed class ScenarioWind
 
 public sealed class ScenarioCurrent
 {
-    /// <summary>流向(去向,度)</summary>
+    /// <summary>流向(去向,度);有 <see cref="Table"/>/<see cref="Tidal"/> 時為載入瞬間的常數值,t = 0 即被模型覆寫(保留供摘要/編輯器顯示)</summary>
     public double Set { get; set; }
-    /// <summary>流速(kn)</summary>
+    /// <summary>流速(kn);同上</summary>
     public double Drift { get; set; }
+    /// <summary>
+    /// 流場表(選填;情境引擎設計第 1.5.2 節):[{t | utc, speed_kn, direction_deg}],以東/北分量線性內插(範圍外取端點);≥ 2 點、t 嚴格遞增。
+    /// 與 <see cref="Tidal"/> 擇一;皆未給 = 常數流(數值與舊版相同)。
+    /// </summary>
+    public List<ScenarioCurrentPoint>? Table { get; set; }
+    /// <summary>潮流(選填):由 environment.tide 的 dH/dt 符號決定漲/退、|dH/dt| 相對最大值縮放流速;需 environment.tide。</summary>
+    public ScenarioTidalCurrent? Tidal { get; set; }
+}
+
+/// <summary>流場表的一點:t(秒,相對練習開始)或 utc(ISO 8601,換算為相對情境 startTimeUtc 的秒數)擇一;speed_kn 流速、direction_deg 流向(去向)。</summary>
+public sealed class ScenarioCurrentPoint
+{
+    public double? T { get; set; }
+    public string? Utc { get; set; }
+    [JsonPropertyName("speed_kn")] public double SpeedKn { get; set; }
+    [JsonPropertyName("direction_deg")] public double DirectionDeg { get; set; }
+}
+
+/// <summary>潮流設定:漲潮/退潮的流向(去向)與最大流速,平潮窗口(分;預設 20)。</summary>
+public sealed class ScenarioTidalCurrent
+{
+    public const double DefaultSlackWindowMin = 20.0;
+    public ScenarioCurrentPhase? Flood { get; set; }
+    public ScenarioCurrentPhase? Ebb { get; set; }
+    /// <summary>平潮窗口(分;轉流前後各半個窗口視為平潮;未給 = 20)</summary>
+    [JsonPropertyName("slackWindow_min")] public double? SlackWindowMin { get; set; }
+}
+
+/// <summary>潮流一相(漲或退)的流速(kn,該相的最大值)與流向(去向,度)。</summary>
+public sealed class ScenarioCurrentPhase
+{
+    [JsonPropertyName("speed_kn")] public double SpeedKn { get; set; }
+    [JsonPropertyName("direction_deg")] public double DirectionDeg { get; set; }
 }

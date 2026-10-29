@@ -16,10 +16,18 @@ public sealed class EnvironmentConditions
     public double Gustiness { get; set; }
     /// <summary>目前陣風係數(1 = 平均風)</summary>
     public double GustFactor { get; set; } = 1.0;
-    /// <summary>流向(去向,弧度)</summary>
+    /// <summary>流向(去向,弧度);時變流場(<see cref="CurrentModel"/>)啟用時由 <see cref="RefreshCurrent"/> 每步覆寫</summary>
     public double CurrentSetRad { get; set; }
-    /// <summary>流速(m/s)</summary>
+    /// <summary>流速(m/s);同上</summary>
     public double CurrentDriftMps { get; set; }
+    /// <summary>時變流場模型(情境 environment.current.table | tidal;null = 常數流,數值與舊版完全相同;情境引擎設計第 1.5.2 節)</summary>
+    public CurrentModel? CurrentModel { get; set; }
+    /// <summary>`setEnvironment current` 覆寫為常數後為 true:時變停止(進快照,倒帶到覆寫前會恢復時變),直到再載入情境</summary>
+    public bool CurrentOverridden { get; set; }
+    /// <summary>時變流場是否正在驅動流向/流速</summary>
+    public bool CurrentModelActive => CurrentModel is not null && !CurrentOverridden;
+    /// <summary>state.currentSource("table" | "tidal");常數流(含覆寫後)為 null → 省略</summary>
+    public string? CurrentSource => CurrentModelActive ? CurrentModel!.Source : null;
     /// <summary>基底水深(海圖水深;常數或 zones 覆寫;setEnvironment waterDepth 漸變改此值)</summary>
     public IDepthProvider Depth { get; set; } = new ConstantDepth(50.0);
     /// <summary>潮高模型(情境 environment.tide;null = 無潮汐,潮高恆為 0 且數值與舊版完全相同)</summary>
@@ -36,6 +44,15 @@ public sealed class EnvironmentConditions
 
     /// <summary>以練習時間 t(秒)更新潮高(無 Tide 時 0)。</summary>
     public void RefreshTide(double t) => TideHeightM = Tide?.HeightAt(t) ?? 0.0;
+
+    /// <summary>以練習時間 t(秒)更新時變流場的流向/流速;常數流或已覆寫時不動既有值(位元不變)。</summary>
+    public void RefreshCurrent(double t)
+    {
+        if (!CurrentModelActive) return;
+        var (set, drift) = CurrentModel!.At(t);
+        CurrentSetRad = set;
+        CurrentDriftMps = drift;
+    }
 
     /// <summary>在指定位置取樣,供動力學模型使用(水深為有效水深:基底 + 潮高)。</summary>
     public EnvironmentSample SampleAt(double xEast, double yNorth)

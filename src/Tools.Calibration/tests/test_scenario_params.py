@@ -53,6 +53,7 @@ REQUIRED_FIXTURES = {
     "E05_pilot_traffic",
     "E06_taichung_channel_ebb",
     "E06_taichung_channel_flood",
+    "E06b_tidal_stream",
     "E07_steering_failure",
     "E08_gyro_failure",
     "E09_blackout",

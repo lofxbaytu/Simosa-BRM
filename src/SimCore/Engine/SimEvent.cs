@@ -93,6 +93,11 @@ public static class SimEventKinds
     public const string Grounding = "grounding";
     /// <summary>自動舵因故障/航向無效自動脫開(data {reason: autopilotFailure|headingInvalid, fault});模式回 fu、舵停在原處</summary>
     public const string AutopilotTripped = "autopilotTripped";
+    /// <summary>
+    /// 船間交互作用力跨過門檻(source engine、targetId = 主要目標;data {phase: enter|exit, targetId, forceSurge_t, forceSway_t, momentYaw_tm, xi, eta, threshold_t};
+    /// 設計文件 physics-ship-interaction.md 第 5 節):進入與離開各發一次,供講評
+    /// </summary>
+    public const string ShipInteraction = "shipInteraction";
     // 警報管理(BAM,MSC.302(87);itemId = 警報 id;data {id, priority, category, source, state, count, raisedAt_s, ackTime_s?, silencedUntil_s?, …})
     /// <summary>警報成立(data.repeat:rectifiedUnacknowledged 期間再成立)</summary>
     public const string AlertRaised = "alertRaised";
