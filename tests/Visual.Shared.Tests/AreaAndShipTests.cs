@@ -311,6 +311,22 @@ public class ViewDefinitionTests
         Assert.True(top.EyeUp >= 300);
     }
 
+    [Fact]
+    public void BridgeWingAndAftViewsFollowShipRollButOverviewDoesNot()
+    {
+        var h = HullParameters.FromParticulars(ShipParticulars.LoadFromDataRoot(TestPaths.Root, "FSB1"), LoadingCondition.Full);
+        foreach (var kind in new[] { ViewKind.Bridge, ViewKind.PortWing, ViewKind.StbdWing, ViewKind.Aft })
+        {
+            var v = ViewDefinition.For(kind, h);
+            Assert.True(v.FollowsRoll, kind.ToString());
+            Assert.Equal(-3.5, v.CameraRollDeg(-3.5));
+            Assert.Equal(0.0, v.CameraRollDeg(0.0));
+        }
+        var top = ViewDefinition.For(ViewKind.Overview, h);
+        Assert.False(top.FollowsRoll);
+        Assert.Equal(0.0, top.CameraRollDeg(12.0));
+    }
+
     [Theory]
     [InlineData("bridge", ViewKind.Bridge)]
     [InlineData("portWing", ViewKind.PortWing)]

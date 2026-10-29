@@ -790,6 +790,17 @@
         "event": { "type": "boolean", "description": "交互作用力已超過事件門檻(shipInteraction 進入事件已發、離開未發)" }
       }
     },
+    "roll": {
+      "type": "object",
+      "description": "橫搖(情境 ship.roll.enabled 時輸出;未啟用的情境省略,其他欄位與雜湊不變)。解耦的 1 自由度線性橫搖:φ'' + 2ζω φ' + ω² φ = ω²(φ_turn + φ_wind) + 浪激勵,不回饋到 3 自由度運動;φ_turn 為迴轉離心傾角(右轉向外 = 左傾)、φ_wind 為風傾等效靜傾角;浪激勵相位由情境種子產生一次(進快照)。視景相機(駕駛台/翼橋/艉視;觀察者隨船傾)與操船台傾斜儀據此顯示。角度右傾正",
+      "required": ["angle_deg", "rate_degps", "naturalPeriod_s", "staticHeel_deg"],
+      "properties": {
+        "angle_deg": { "type": "number", "description": "橫搖角(度,右傾正)" },
+        "rate_degps": { "type": "number", "description": "橫搖角速度(度/秒,右傾方向正)" },
+        "naturalPeriod_s": { "type": "number", "exclusiveMinimum": 0, "description": "自然橫搖週期(秒;情境給定或依 GM 與船寬估計 T = 2·0.4·B/√GM)" },
+        "staticHeel_deg": { "type": "number", "description": "靜傾角(度,右傾正;迴轉離心與風傾的等效靜傾;動態橫搖 = angle_deg − staticHeel_deg)" }
+      }
+    },
     "bank": {
       "type": "object",
       "description": "岸壁效應(情境有 banks 區段且動力學接受外力時輸出;C# 與 Python 參考實作皆輸出;docs/design/physics-bank-effect.md 第 5 節)。力為船體座標:Y 右舷正、N 艏向右正(與 u/v/r 相同)",

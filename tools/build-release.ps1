@@ -3,7 +3,8 @@
   發行組裝(Windows,win-x64;Linux/容器版為 build-release.sh,參數相同):規劃書第 5.4–5.5 節、第 11.2 節、第 12.1 節 M4 交付。
 .DESCRIPTION
   1) dotnet build SimosaBRM.sln -c Release;2) 網頁 pnpm build;3) dotnet publish(framework-dependent,需 .NET 8 執行階段):
-     SimCore.Host → app\simcore、Sensors.Radar.Host → app\radar、simosa-web → app\web-server、simosa-pkg → tools\updater
+     SimCore.Host → app\simcore、Sensors.Radar.Host → app\radar、simosa-web → app\web-server、simosa-pkg → tools\updater、
+     WebView2 殼 Shell.WebView2 → app\shell\SimosaBRM.Shell.exe(win-x64;需 .NET 8 Desktop Runtime 與 WebView2 Runtime,docs\ops\安裝與啟動.md 第 4.5 節)
      (simosa-pkg 放在 app\ 之外:套用軟體更新包時 app\ 整個被替換,執行中的更新工具不可位於其中;docs\design\packaging-sync.md 第 5 節;
       Gateway.Nmea 為類別庫隨 SimCore.Host 發布;Python 校正工具不打包,附說明於 docs\);
   4) 網頁 → app\web、啟動腳本 → app\launch、data\(排除 ships\*\confidential\)、contracts\、docs\、config\ 範例;
@@ -80,7 +81,21 @@ Publish 'src\SimCore.Host\SimCore.Host.csproj' (Join-Path $outDir 'app\simcore')
 Publish 'src\Sensors.Radar.Host\Sensors.Radar.Host.csproj' (Join-Path $outDir 'app\radar')
 Publish 'tools\launch\StaticWeb\StaticWeb.csproj' (Join-Path $outDir 'app\web-server')
 Publish 'src\Tools.Packaging.Cli\Tools.Packaging.Cli.csproj' (Join-Path $outDir 'tools\updater')
+# WebView2 操船台外殼(src\Shell.WebView2,net8.0-windows WinForms):win-x64 發布 app\shell\SimosaBRM.Shell.exe;其他 RID 只在步驟 1 建置、不發布
+if ($Rid -eq 'win-x64') {
+    Publish 'src\Shell.WebView2\Shell.WebView2.csproj' (Join-Path $outDir 'app\shell')
+    $components.Add("shell=$Version=app/shell=WebView2 殼 SimosaBRM.Shell.exe(需 .NET 8 Desktop Runtime 與 WebView2 Runtime;docs/ops/安裝與啟動.md 第 4.5 節;實機需 Windows 驗證)")
+} else {
+    Note "WebView2 外殼未發布可執行檔($Rid 非 Windows;步驟 1 已建置 src\Shell.WebView2 確認可編譯)"; $components.Add("shell=$Version==略過:非 win-x64(僅建置,未發布)")
+}
 Get-ChildItem -Recurse -File -Include '*.pdb' (Join-Path $outDir 'app'), (Join-Path $outDir 'tools') | Remove-Item
+# WebView2 Runtime 離線安裝檔的放置位置(岸上下載,不在儲存庫;外殼偵測不到 Runtime 時顯示此路徑)
+New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'tools\webview2') | Out-Null
+@"
+WebView2 Runtime 離線安裝檔放這裡:MicrosoftEdgeWebView2RuntimeInstallerX64.exe(Evergreen Standalone Installer x64,岸上自 Microsoft 下載;不要用需要網際網路的 Bootstrapper)。
+船上以系統管理員執行:MicrosoftEdgeWebView2RuntimeInstallerX64.exe /silent /install;步驟與版次登錄見 docs\ops\安裝與啟動.md 第 4.5 節。
+app\shell\SimosaBRM.Shell.exe(WebView2 操船台外殼)偵測不到 Runtime 時會顯示本路徑;Windows 11 多半已內建 Runtime,LTSC/精簡映像可能沒有。
+"@ | Set-Content -Path (Join-Path $outDir 'tools\webview2\README.txt') -Encoding UTF8
 $pkgDll = Join-Path $outDir 'tools\updater\simosa-pkg.dll'
 function Pkg([string[]]$a) { & dotnet $pkgDll @a; if ($LASTEXITCODE -ne 0) { throw "simosa-pkg $($a[0]) 失敗(結束碼 $LASTEXITCODE)" } }
 $components.AddRange([string[]]@("simcore=$Version=app/simcore", "radar=$Version=app/radar", "web-server=$Version=app/web-server", "simosa-pkg=$Version=tools/updater", "gateway-nmea=$Version=app/simcore=類別庫,隨 SimCore.Host 發布"))
@@ -126,6 +141,7 @@ app\simcore      SimCore.Host(50 Hz 核心、WebSocket 8765、UDP 多播、NMEA)
 app\web          網頁:index.html 儀器、instructor.html 教官站(?mode=simple 簡化教官模式)、radar.html、report.html
 app\web-server   simosa-web 靜態網頁伺服                                  app\launch       start-ship-laptop / start-instructor-laptop / stop-all
 app\visual       Godot 視景匯出檔(有匯出範本時)                           tools\updater    simosa-pkg(更新包、紀錄包、直連同步;放在 app\ 之外)
+app\shell        WebView2 操船台外殼 SimosaBRM.Shell.exe(start-ship-laptop.ps1 -Shell)   tools\webview2   WebView2 Runtime 離線安裝檔放置處(README.txt)
 data\            船模、情境、區域、參數集、視景對照(不含 ships\*\confidential)   contracts\       JSON Schema   config\  設定範例(無金鑰)
 docs\            規劃書、設計文件、ops\安裝與啟動.md、驗收\需求追溯表.md     packages\        簽章更新包(開發金鑰簽章,僅供測試)
 manifest.json    發行清單(每檔 SHA-256):安裝前 simosa-pkg release verify --dir <本目錄>

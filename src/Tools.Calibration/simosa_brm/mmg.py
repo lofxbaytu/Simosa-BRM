@@ -39,6 +39,7 @@ from .current import CurrentModel
 from .external import BankEffectModel, Env, ExternalForceModel, Kin, ShipInteractionModel, WaveDriftModel, normalize_heading_deg
 from .particulars import GRAVITY, KN_TO_MPS, ShipParticulars
 from .propeller import PropellerModel
+from .roll import RollModel
 
 TWO_PI = 2.0 * math.pi
 DEG = math.pi / 180.0
@@ -285,6 +286,9 @@ class MMGShip:
         # 含直線等速目標船);None = 未啟用
         self.interaction: ShipInteractionModel | None = None
         self.external_events: deque[dict[str, Any]] = deque(maxlen=1000)
+        # 解耦 1 自由度橫搖(roll.py;情境 ship.roll,經 configure_roll);None = 未啟用(state 無 roll、雜湊不追加,數值與舊版相同)
+        self.roll_config: dict[str, Any] | None = None
+        self.roll: RollModel | None = None
         self._build_external()
 
     @property
@@ -550,6 +554,7 @@ class MMGShip:
         快照深拷貝模型,還原即回到快照當時的浪。"""
         if waves is None:
             self.waves = None
+            self._sync_roll_waves()
             return
         if not isinstance(waves, dict):
             raise ValueError("invalidWaves")
@@ -584,11 +589,13 @@ class MMGShip:
             raise ValueError("invalidWaves")
         if hs == 0.0:
             self.waves = None
+            self._sync_roll_waves()
             return
         settings = {"significantHeight_m": hs, "peakPeriod_s": tp, "direction_deg": normalize_heading_deg(direction),  # type: ignore[arg-type]
                     "spectrum": spectrum, "gamma": gamma if gamma is not None else 3.3}
         self.waves = WaveDriftModel(self.sp.raw, self.sp.loading.name, settings)
         self.waves.update_last(self._kin(), self._water_depth_or_inf())
+        self._sync_roll_waves()
 
     def reset(self, x: float = 0.0, y: float = 0.0, heading_deg: float = 0.0, speed_kn: float = 0.0,
               rpm: float | None = None, telegraph: str | None = None) -> None:
@@ -621,6 +628,30 @@ class MMGShip:
         self._n_tau = self.n_tau
         # 外力模組回到情境初始(拖船 initial、錨收存或初始已錨泊、繫纜 initial;C# Initialize 的 CreateExternal / CreateBank)
         self._build_external()
+        # 橫搖回到初始(φ = 0、相位由種子重抽;C# Initialize 的 RollModel.Create)
+        self._build_roll()
+
+    # ------------------------------------------------------------------
+    # 橫搖(解耦 1 自由度;roll.py)
+    # ------------------------------------------------------------------
+    def configure_roll(self, cfg: dict[str, Any] | None) -> None:
+        """設定情境的 ``ship.roll``(``roll.normalise_roll`` 的結果;None 或 enabled False = 未啟用)並以目前種子重建模型。"""
+        self.roll_config = dict(cfg) if isinstance(cfg, dict) else None
+        self._build_roll()
+
+    def _build_roll(self) -> None:
+        """依 ``roll_config`` 與目前種子建立橫搖模型(C# RollModel.Create + SetWaves(目前浪設定));未啟用為 None。"""
+        cfg = self.roll_config
+        if cfg and cfg.get("enabled"):
+            self.roll = RollModel(self.sp.raw, self.sp.loading.name, cfg, seed=self.seed)
+            self.roll.set_waves_from(self.waves)
+        else:
+            self.roll = None
+
+    def _sync_roll_waves(self) -> None:
+        """浪設定改變後同步橫搖的浪激勵成分(C# SetWaves 的 _roll?.SetWaves);Hs 於每步取 ``self.waves.hs``。"""
+        if self.roll is not None:
+            self.roll.set_waves_from(self.waves)
 
     # ------------------------------------------------------------------
     # 外力(拖船 / 錨 / 泊位 / 岸壁;external.py)
@@ -664,6 +695,9 @@ class MMGShip:
         self.interaction = ShipInteractionModel(self.sp.raw, load, si, self.ltp) if isinstance(si, dict) and si.get("enabled") else None
         if self.interaction is not None and self.interaction.active:
             self.interaction.refresh(k, depth)
+        # 橫搖的浪激勵成分跟著情境浪設定(__init__ 時尚無 roll 屬性 → 略過)
+        if getattr(self, "roll", None) is not None:
+            self._sync_roll_waves()
 
     def configure_external(self, sections: dict[str, Any] | None) -> None:
         """設定情境的外力區段(``external.normalise_sections`` 的結果;None = 無)並以目前狀態重建模組。"""
@@ -928,6 +962,8 @@ class MMGShip:
             "interaction": copy.deepcopy(self.interaction),
             # 時變流場是否已被 setEnvironment 常數覆寫(C# EngineSnapshot.Environment.CurrentOverridden;倒帶到覆寫前即恢復時變)
             "current_overridden": self.current_overridden,
+            # 橫搖(φ、φ'、相位與浪激勵成分;C# EngineSnapshot.Roll;未啟用為 None)
+            "roll": copy.deepcopy(self.roll),
         }
 
     def restore(self, snap: dict[str, Any]) -> None:
@@ -951,6 +987,10 @@ class MMGShip:
             self.interaction = copy.deepcopy(snap.get("interaction"))
         else:  # 舊快照:外力模組回到初始
             self._build_external()
+        if "roll" in snap:
+            self.roll = copy.deepcopy(snap["roll"])
+        else:  # 舊快照:橫搖回到初始(C# 缺 Roll 欄位時相同)
+            self._build_roll()
 
     # ------------------------------------------------------------------
     # 穩態輔助
@@ -1282,6 +1322,13 @@ class MMGShip:
         thruster_failed = FAULT_BOW_THRUSTER in self.faults
         self._autopilot()
         self._engine_logic(engine_failed)
+        if self.roll is not None:
+            # 橫搖(C# Advance:3-DOF RK4 之前,以步首狀態、步首環境取樣(含陣風的風、自船位置的流)與目前 Hs 推進;不回饋 3-DOF)
+            w_eff = self.env.wind_speed * self.gust_factor
+            wind_e = -w_eff * math.sin(self.env.wind_dir_from)
+            wind_n = -w_eff * math.cos(self.env.wind_dir_from)
+            cur_e, cur_n = self.env.current_en
+            self.roll.step(self._kin(), wind_e, wind_n, cur_e, cur_n, self.waves.hs if self.waves is not None else 0.0, t0, self.dt)
         if self.aground:
             s.u = s.v = s.r = 0.0
             s.t += self.dt
@@ -1436,6 +1483,9 @@ class MMGShip:
         # 船間交互作用:啟用時追加(C# ShipInteractionModel.WriteHash;未啟用的情境雜湊不變)
         if self.interaction is not None and self.interaction.active:
             payload += self.interaction.hash_bytes()
+        # 橫搖:情境啟用 ship.roll 時追加(C# RollModel.WriteHash;未啟用的情境雜湊不變)
+        if self.roll is not None:
+            payload += self.roll.hash_bytes()
         return hashlib.sha256(payload).hexdigest()
 
     def set_start_utc(self, iso_or_none: str | None) -> datetime:
@@ -1528,6 +1578,8 @@ class MMGShip:
             out["waves"] = self.waves.state()
         if self.interaction is not None and self.interaction.active:
             out["shipInteraction"] = self.interaction.state()
+        if self.roll is not None:
+            out["roll"] = self.roll.state()
         return out
 
 

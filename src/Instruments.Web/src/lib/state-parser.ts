@@ -11,6 +11,7 @@ import {
   type LoadingCondition,
   type OwnShipState,
   type Position,
+  type RollState,
   type RouteStatus,
   type ScenarioStatus,
   type ShipId,
@@ -312,7 +313,23 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
   if (isRecord(raw['shipInteraction'])) state.shipInteraction = parseShipInteraction(raw['shipInteraction'], issues);
   else if (raw['shipInteraction'] !== undefined && raw['shipInteraction'] !== null) issues.push('shipInteraction');
 
+  // 橫搖(state.roll;情境 ship.roll.enabled 時才有,省略時不記問題、不繼承前一幀)
+  if (isRecord(raw['roll'])) state.roll = parseRoll(raw['roll'], issues);
+  else if (raw['roll'] !== undefined && raw['roll'] !== null) issues.push('roll');
+
   return { state, issues };
+}
+
+/** 解析 state.roll:四個欄位皆必填,缺少或型別錯誤以 0 補上並記入 issues(naturalPeriod_s 非正時記入 issues 並以 0 表示未知)。 */
+export function parseRoll(r: Record<string, unknown>, issues: string[]): RollState {
+  const period = num(r, 'naturalPeriod_s', 0, issues, 'roll.naturalPeriod_s');
+  if (period <= 0 && !issues.includes('roll.naturalPeriod_s')) issues.push('roll.naturalPeriod_s');
+  return {
+    angle_deg: num(r, 'angle_deg', 0, issues, 'roll.angle_deg'),
+    rate_degps: num(r, 'rate_degps', 0, issues, 'roll.rate_degps'),
+    naturalPeriod_s: Math.max(0, period),
+    staticHeel_deg: num(r, 'staticHeel_deg', 0, issues, 'roll.staticHeel_deg'),
+  };
 }
 
 /** 解析 state.waves:必填欄位缺少或型別錯誤以 0 補上並記入 issues;來向正規化至 0–360;spectrum 不明時省略並記入 issues。 */

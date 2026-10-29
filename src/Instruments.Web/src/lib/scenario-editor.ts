@@ -5,12 +5,15 @@
 // 環境(風、流、水深、能見度)、目標船(id/船名/船型/尺寸/初始位置/航向/速度/行為模式)、時間表(新增故障項目、新增一般項目、
 // 逐項編輯 id/名稱/階段/觸發/動作與其參數、上下移、刪除)、評估(硬性失敗/容許帶/評分、必要事件、minCpa/encounter/ukc/manoeuvring)、
 // 航線(航點表格、檢查點、走廊/速限/到達半徑)、區域(型別、屬性、多邊形頂點)、簡報(角色、附件、最少人數、時長)、
-// sensors/alerts/bnwas、拖船/錨/泊位(file 參照與繫纜)/岸壁(file 參照與倍率;lines/definitions 原樣保留)。
-// 其餘欄位(origin、environment.seabed/radar/tide(潮汐只保留不編輯)、目標船的 AIS/行為細節/trigger、assessment.parameterSet、
+// sensors/alerts/bnwas、拖船/錨/泊位(file 參照與繫纜)/岸壁(file 參照與倍率;lines/definitions 原樣保留)、
+// 環境進階(第二十輪;草稿版本 3):environment.tide(潮高表或調和分潮表)、environment.waves(Hs/Tp/來向/浪譜/γ)、
+// environment.current 的 table / tidal / field(流場表、潮流、空間網格:grid 參數與 u/v 陣列文字區塊)、environment.shipInteraction、ship.roll(橫搖契約)。
+// 其餘欄位(origin、environment.seabed/radar、目標船的 AIS/行為細節/trigger、assessment.parameterSet、
 // 時間表項目的 repeat/cooldown_s/description、berth.definition、banks.lines/definitions …)原樣保留在 draft.raw 或各區段的原樣物件內,
 // 輸出時覆寫涵蓋欄位、不遺失其餘資料(設計文件 docs/design/scenario-engine.md 第 6.1 節)。
-// 新區段(route、zones、briefing、sensors、alerts、bnwas、assessment.required/settings、tugs、anchors、berth、banks)在草稿裡是情境物件的
-// 原樣複本(Record),以 withPath 點路徑逐鍵修改:未改的鍵完全不動,round-trip 與既有情境檔深相等(tests/scenario-editor.test.ts)。
+// 新區段(route、zones、briefing、sensors、alerts、bnwas、assessment.required/settings、tugs、anchors、berth、banks、tide、waves、currentModel、
+// shipInteraction、roll)在草稿裡是情境物件的原樣複本(Record),以 withPath 點路徑逐鍵修改:未改的鍵完全不動,round-trip 與既有情境檔深相等
+// (tests/scenario-editor.test.ts、scenario-editor-sections.test.ts、scenario-editor-environment.test.ts)。
 // 輸出 YAML 以 yaml Document 產生:會被 YAML 1.1 解析器誤判的字串(on/off/yes/no、時間戳、數字樣、參數引用)一律加雙引號,
 // 與 data/scenarios 既有寫法一致(C# YamlJson 只把 true/false/null/數字當非字串;Python 參考實作以 PyYAML 讀檔)。YAML 註解不保留。
 
@@ -117,7 +120,7 @@ export interface DraftAssessment {
 export type RawSection = Record<string, unknown>;
 
 export interface ScenarioDraft {
-  version: 2;
+  version: 3;
   /** 範本來源(情境 id;'' = 空白範本;顯示與 YAML 註解用) */
   template: string;
   general: DraftGeneral;
@@ -148,11 +151,21 @@ export interface ScenarioDraft {
   berth: RawSection | null;
   /** 岸壁(file/ids/scale;lines/definitions 原樣保留);null = 無區段 */
   banks: RawSection | null;
+  /** 潮汐(environment.tide 原樣:{table: [{t | utc, height_m}]} 或 {harmonic: {meanLevel_m, constituents[]}});null = 無潮汐(潮高恆為 0) */
+  tide: RawSection | null;
+  /** 浪(environment.waves 原樣:significantHeight_m/peakPeriod_s/direction_deg/spectrum/gamma);null = 無浪 */
+  waves: RawSection | null;
+  /** 流場模型:environment.current 的 table / tidal / field 鍵原樣(常數 set/drift 在 environment);空物件 = 常數流 */
+  currentModel: RawSection;
+  /** 船間交互作用(environment.shipInteraction 原樣:enabled/coefficientScale/eventThreshold_t);null = 無區段(= 關閉) */
+  shipInteraction: RawSection | null;
+  /** 橫搖(ship.roll 原樣:enabled/naturalPeriod_s/dampingRatio/windHeelGain/turnHeelGain/waveGain);null = 無區段(= 關閉) */
+  roll: RawSection | null;
   /** 範本的完整情境物件(未涵蓋欄位由此保留;toScenarioObject 以草稿覆寫涵蓋欄位) */
   raw: Record<string, unknown>;
 }
 
-export const DRAFT_VERSION = 2;
+export const DRAFT_VERSION = 3;
 
 // ------------------------------------------------------------------ 共用
 
@@ -308,8 +321,11 @@ export function fromScenarioObject(obj: Record<string, unknown>, template = ''):
   const briefingExtra: RawSection = isRecord(briefing) ? clone(briefing) : {};
   delete briefingExtra['text'];
 
+  const currentModel: RawSection = {};
+  for (const k of CURRENT_MODEL_KEYS) if (current[k] !== undefined) currentModel[k] = clone(current[k]);
+
   return {
-    version: 2,
+    version: 3,
     template,
     general,
     ship,
@@ -328,6 +344,11 @@ export function fromScenarioObject(obj: Record<string, unknown>, template = ''):
     anchors: sectionOf(obj['anchors']),
     berth: sectionOf(obj['berth']),
     banks: sectionOf(obj['banks']),
+    tide: sectionOf(envRaw['tide']),
+    waves: sectionOf(envRaw['waves']),
+    currentModel,
+    shipInteraction: sectionOf(envRaw['shipInteraction']),
+    roll: sectionOf(shipRaw['roll']),
     raw: clone(obj),
   };
 }
@@ -449,6 +470,7 @@ export function toScenarioObject(draft: ScenarioDraft): Record<string, unknown> 
   const ship = recordOf(out['ship']);
   ship['id'] = draft.ship.id;
   setOrDelete(ship, 'loading', draft.ship.loading);
+  setOrDelete(ship, 'roll', nonEmpty(draft.roll));
   out['ship'] = ship;
 
   const init = recordOf(out['initial']);
@@ -462,10 +484,18 @@ export function toScenarioObject(draft: ScenarioDraft): Record<string, unknown> 
   const e = draft.environment;
   const env = recordOf(out['environment']);
   setOrDelete(env, 'wind', subObject(env['wind'], { trueSpeed: e.windSpeed, trueDir: e.windDir, gustiness: e.gustiness }));
-  setOrDelete(env, 'current', subObject(env['current'], { set: e.currentSet, drift: e.currentDrift }));
+  // 流:常數 set/drift 來自環境表單,table / tidal / field 來自流場模型區段(其餘鍵原樣)
+  const current = recordOf(env['current']);
+  setOrDelete(current, 'set', e.currentSet);
+  setOrDelete(current, 'drift', e.currentDrift);
+  for (const k of CURRENT_MODEL_KEYS) setOrDelete(current, k, draft.currentModel[k] === undefined ? undefined : clone(draft.currentModel[k]));
+  setOrDelete(env, 'current', Object.keys(current).length > 0 ? current : undefined);
   setOrDelete(env, 'waterDepth', e.waterDepth);
   delete env['visibility'];
   setOrDelete(env, 'visibility_nm', e.visibility_nm);
+  setOrDelete(env, 'tide', nonEmpty(draft.tide));
+  setOrDelete(env, 'waves', nonEmpty(draft.waves));
+  setOrDelete(env, 'shipInteraction', nonEmpty(draft.shipInteraction));
   out['environment'] = env;
 
   if (draft.targets.length > 0 || 'targets' in out) out['targets'] = draft.targets.map(targetToObject);
@@ -1509,6 +1539,599 @@ export function bankLineCount(banks: RawSection | null): number {
   return lines + defs;
 }
 
+// ------------------------------------------------------------------ 環境進階:潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖(第二十輪)
+
+export type TideMode = 'none' | 'table' | 'harmonic';
+export const TIDE_MODES: readonly TideMode[] = ['none', 'table', 'harmonic'] as const;
+export const TIDE_MODE_LABEL: Readonly<Record<TideMode, string>> = { none: '無潮汐', table: '潮高表', harmonic: '調和潮' };
+/** M2 分潮週期(秒;scenario.schema.json 說明值) */
+export const M2_PERIOD_S = 44714;
+/** 常見分潮(名稱、週期秒;新增分潮時依序取未用的) */
+export const CONSTITUENT_SUGGESTIONS: ReadonlyArray<readonly [name: string, period_s: number]> = [
+  ['M2', 44714],
+  ['S2', 43200],
+  ['N2', 45570],
+  ['K1', 86164],
+  ['O1', 92950],
+] as const;
+
+/** 時間表點(潮高表 / 流場表)的時間鍵:t(秒,相對練習開始)或 utc(ISO 8601);每點二擇一,整張表以第一個點的寫法為準。 */
+export type TablePointTimeKey = 't' | 'utc';
+
+export function tablePointTimeKey(points: readonly RawSection[]): TablePointTimeKey {
+  const first = points[0];
+  return first !== undefined && first['utc'] !== undefined && first['t'] === undefined ? 'utc' : 't';
+}
+
+/** UTC 文字 → 毫秒;無法解析回 undefined。 */
+function parseUtcMs(text: unknown): number | undefined {
+  if (typeof text !== 'string' || text.trim() === '') return undefined;
+  const ms = new Date(text).getTime();
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+/** 毫秒 → 情境檔慣用的 UTC 文字(秒整數時不帶毫秒:2026-07-07T06:30:00Z)。 */
+export function utcText(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.000Z$/, 'Z');
+}
+
+/** 改表點欄位:t / utc 互斥(設其一時刪另一);其他鍵空值刪鍵。 */
+function patchTablePoint(points: readonly RawSection[], index: number, key: string, value: unknown): RawSection[] {
+  return points.map((p, i) => {
+    if (i !== index) return p;
+    const o = { ...p };
+    if (key === 't' || key === 'utc') {
+      delete o['t'];
+      delete o['utc'];
+    }
+    setOrDelete(o, key, value);
+    return o;
+  });
+}
+
+/** 新表點:複製最後一點、時間往後 1 小時(t + 3600 或 utc + 1 h);無表點時 t = 0。 */
+function nextTablePoint(points: readonly RawSection[], defaults: RawSection): RawSection {
+  const last = points[points.length - 1];
+  const o: RawSection = { ...defaults, ...(last ? clone(last) : {}) };
+  const lastUtc = parseUtcMs(last?.['utc']);
+  if (last && last['t'] === undefined && lastUtc !== undefined) {
+    o['utc'] = utcText(lastUtc + 3600_000);
+    delete o['t'];
+  } else {
+    const t = typeof last?.['t'] === 'number' ? last['t'] : -3600;
+    o['t'] = t + 3600;
+    delete o['utc'];
+  }
+  return o;
+}
+
+/** 表點時間寫法切換(t ↔ utc;需情境 startTimeUtc 可解析,否則丟 Error);非數值 t 或無法解析的 utc 原樣保留。 */
+function convertTablePoints(points: readonly RawSection[], key: TablePointTimeKey, startTimeUtc: string | undefined): RawSection[] {
+  const start = parseUtcMs(startTimeUtc);
+  if (start === undefined) throw new Error('切換 t / UTC 寫法需先在基本資料填入可解析的開始時刻 startTimeUtc');
+  return points.map((p) => {
+    const o = { ...p };
+    if (key === 'utc' && typeof o['t'] === 'number') {
+      o['utc'] = utcText(start + o['t'] * 1000);
+      delete o['t'];
+    } else if (key === 't') {
+      const ms = parseUtcMs(o['utc']);
+      if (ms !== undefined && o['t'] === undefined) {
+        o['t'] = Math.round((ms - start) / 1000);
+        delete o['utc'];
+      }
+    }
+    return o;
+  });
+}
+
+export function tideMode(draft: ScenarioDraft): TideMode {
+  const t = draft.tide;
+  if (!t) return 'none';
+  if ('table' in t) return 'table';
+  if ('harmonic' in t) return 'harmonic';
+  return 'none';
+}
+
+/** 切換潮汐模式:none 移除整段;table 建立 2 點(t 0 / 3600 s、潮高 0);harmonic 建立 M2 一個分潮。已是該模式時不變;切換時另一種寫法不保留。 */
+export function setTideMode(draft: ScenarioDraft, mode: TideMode): ScenarioDraft {
+  if (mode === tideMode(draft)) return draft;
+  if (mode === 'none') return { ...draft, tide: null };
+  if (mode === 'table')
+    return {
+      ...draft,
+      tide: {
+        table: [
+          { t: 0, height_m: 0 },
+          { t: 3600, height_m: 0 },
+        ],
+      },
+    };
+  return { ...draft, tide: { harmonic: { meanLevel_m: 0, constituents: [{ name: 'M2', amplitude_m: 1, period_s: M2_PERIOD_S, phase_deg: 0 }] } } };
+}
+
+export function tidePoints(draft: ScenarioDraft): RawSection[] {
+  const t = draft.tide?.['table'];
+  return Array.isArray(t) ? t.filter(isRecord) : [];
+}
+
+function setTidePoints(draft: ScenarioDraft, table: RawSection[]): ScenarioDraft {
+  return { ...draft, tide: { ...recordOf(draft.tide), table } };
+}
+
+export function addTidePoint(draft: ScenarioDraft): ScenarioDraft {
+  const points = tidePoints(draft);
+  return setTidePoints(draft, [...points, nextTablePoint(points, { height_m: 0 })]);
+}
+
+export function removeTidePoint(draft: ScenarioDraft, index: number): ScenarioDraft {
+  return setTidePoints(draft, removeAt(tidePoints(draft), index));
+}
+
+/** 改潮高表點(t / utc 互斥、height_m;空值刪鍵)。 */
+export function patchTidePoint(draft: ScenarioDraft, index: number, key: 't' | 'utc' | 'height_m', value: unknown): ScenarioDraft {
+  return setTidePoints(draft, patchTablePoint(tidePoints(draft), index, key, value));
+}
+
+/** 潮高表的時間寫法切換(t ↔ utc;需 startTimeUtc,否則丟 Error)。 */
+export function setTideTimeKey(draft: ScenarioDraft, key: TablePointTimeKey): ScenarioDraft {
+  return setTidePoints(draft, convertTablePoints(tidePoints(draft), key, draft.general.startTimeUtc));
+}
+
+/** 改潮汐鍵(harmonic.meanLevel_m 等;空值刪鍵)。 */
+export function patchTide(draft: ScenarioDraft, path: string, value: unknown): ScenarioDraft {
+  return { ...draft, tide: withPath(draft.tide, path, value) };
+}
+
+export function tideConstituents(draft: ScenarioDraft): RawSection[] {
+  const c = getPath(draft.tide, 'harmonic.constituents');
+  return Array.isArray(c) ? c.filter(isRecord) : [];
+}
+
+function setTideConstituents(draft: ScenarioDraft, constituents: RawSection[]): ScenarioDraft {
+  return { ...draft, tide: { ...recordOf(draft.tide), harmonic: { ...recordOf(draft.tide?.['harmonic']), constituents } } };
+}
+
+/** 新分潮:依 CONSTITUENT_SUGGESTIONS 取第一個未用的名稱與週期,振幅 0.5 m、相位 0。 */
+export function addTideConstituent(draft: ScenarioDraft): ScenarioDraft {
+  const list = tideConstituents(draft);
+  const used = new Set(list.map((c) => str(c['name'])));
+  const pick = CONSTITUENT_SUGGESTIONS.find(([n]) => !used.has(n)) ?? CONSTITUENT_SUGGESTIONS[0]!;
+  return setTideConstituents(draft, [...list, { name: pick[0], amplitude_m: 0.5, period_s: pick[1], phase_deg: 0 }]);
+}
+
+export function removeTideConstituent(draft: ScenarioDraft, index: number): ScenarioDraft {
+  return setTideConstituents(draft, removeAt(tideConstituents(draft), index));
+}
+
+/** 改分潮欄位(name、amplitude_m、period_s、phase_deg;空值刪鍵)。 */
+export function patchTideConstituent(draft: ScenarioDraft, index: number, key: string, value: unknown): ScenarioDraft {
+  return setTideConstituents(draft, patchAt(tideConstituents(draft), index, key, value));
+}
+
+export const WAVE_SPECTRUM_OPTIONS: readonly string[] = ['pm', 'jonswap'] as const;
+
+/** 建立浪區段(Hs 1 m、Tp 7 s、來向取環境表單的風向,否則 0;浪譜預設 pm 不寫)或移除整段。 */
+export function setWavesEnabled(draft: ScenarioDraft, on: boolean): ScenarioDraft {
+  if (!on) return { ...draft, waves: null };
+  if (draft.waves) return draft;
+  const dir = typeof draft.environment.windDir === 'number' ? draft.environment.windDir : 0;
+  return { ...draft, waves: { significantHeight_m: 1, peakPeriod_s: 7, direction_deg: dir } };
+}
+
+/** 改浪欄位(significantHeight_m、peakPeriod_s、direction_deg、spectrum、gamma;空值刪鍵;全空時區段仍在,驗證會要求必填欄位)。 */
+export function patchWaves(draft: ScenarioDraft, path: string, value: unknown): ScenarioDraft {
+  return { ...draft, waves: withPath(draft.waves, path, value) };
+}
+
+export type CurrentTimeModel = 'none' | 'table' | 'tidal';
+export const CURRENT_TIME_MODELS: readonly CurrentTimeModel[] = ['none', 'table', 'tidal'] as const;
+export const CURRENT_TIME_MODEL_LABEL: Readonly<Record<CurrentTimeModel, string>> = { none: '常數流(set/drift)', table: '流場表(隨時間)', tidal: '潮流(隨潮高變化率;需潮汐)' };
+/** environment.current 中屬於流場模型的鍵(其餘 set/drift 在環境表單) */
+export const CURRENT_MODEL_KEYS: readonly string[] = ['table', 'tidal', 'field'] as const;
+export const FIELD_OUTSIDE_OPTIONS: readonly string[] = ['edge', 'zero'] as const;
+export const FIELD_TIME_SCALE_OPTIONS: readonly string[] = ['none', 'tidal', 'table'] as const;
+export const FIELD_GRID_FIELDS: ReadonlyArray<readonly [key: string, label: string, integer: boolean]> = [
+  ['x0', 'x0 (m)', false],
+  ['y0', 'y0 (m)', false],
+  ['dx', 'dx (m)', false],
+  ['dy', 'dy (m)', false],
+  ['nx', 'nx', true],
+  ['ny', 'ny', true],
+] as const;
+
+export function currentTimeModel(draft: ScenarioDraft): CurrentTimeModel {
+  const m = draft.currentModel;
+  if ('table' in m) return 'table';
+  if ('tidal' in m) return 'tidal';
+  return 'none';
+}
+
+/**
+ * 切換時變模型:none 移除 table 與 tidal;table 建立 2 點(t 0 / 3600 s,流速/流向取環境表單的常數流);
+ * tidal 建立 flood(常數流向)/ ebb(反向)各同流速與 slackWindow_min 20。field 不受影響。
+ */
+export function setCurrentTimeModel(draft: ScenarioDraft, mode: CurrentTimeModel): ScenarioDraft {
+  if (mode === currentTimeModel(draft)) return draft;
+  const m = { ...draft.currentModel };
+  delete m['table'];
+  delete m['tidal'];
+  const set = typeof draft.environment.currentSet === 'number' ? draft.environment.currentSet : 0;
+  const drift = typeof draft.environment.currentDrift === 'number' ? draft.environment.currentDrift : 1;
+  if (mode === 'table')
+    m['table'] = [
+      { t: 0, speed_kn: drift, direction_deg: set },
+      { t: 3600, speed_kn: drift, direction_deg: set },
+    ];
+  else if (mode === 'tidal') m['tidal'] = { flood: { speed_kn: drift, direction_deg: set }, ebb: { speed_kn: drift, direction_deg: (set + 180) % 360 }, slackWindow_min: 20 };
+  return { ...draft, currentModel: m };
+}
+
+export function currentTablePoints(draft: ScenarioDraft): RawSection[] {
+  const t = draft.currentModel['table'];
+  return Array.isArray(t) ? t.filter(isRecord) : [];
+}
+
+function setCurrentTablePoints(draft: ScenarioDraft, table: RawSection[]): ScenarioDraft {
+  return { ...draft, currentModel: { ...draft.currentModel, table } };
+}
+
+export function addCurrentTablePoint(draft: ScenarioDraft): ScenarioDraft {
+  const points = currentTablePoints(draft);
+  const set = typeof draft.environment.currentSet === 'number' ? draft.environment.currentSet : 0;
+  const drift = typeof draft.environment.currentDrift === 'number' ? draft.environment.currentDrift : 1;
+  return setCurrentTablePoints(draft, [...points, nextTablePoint(points, { speed_kn: drift, direction_deg: set })]);
+}
+
+export function removeCurrentTablePoint(draft: ScenarioDraft, index: number): ScenarioDraft {
+  return setCurrentTablePoints(draft, removeAt(currentTablePoints(draft), index));
+}
+
+/** 改流場表點(t / utc 互斥、speed_kn、direction_deg;空值刪鍵)。 */
+export function patchCurrentTablePoint(draft: ScenarioDraft, index: number, key: 't' | 'utc' | 'speed_kn' | 'direction_deg', value: unknown): ScenarioDraft {
+  return setCurrentTablePoints(draft, patchTablePoint(currentTablePoints(draft), index, key, value));
+}
+
+/** 流場表的時間寫法切換(t ↔ utc;需 startTimeUtc,否則丟 Error)。 */
+export function setCurrentTableTimeKey(draft: ScenarioDraft, key: TablePointTimeKey): ScenarioDraft {
+  return setCurrentTablePoints(draft, convertTablePoints(currentTablePoints(draft), key, draft.general.startTimeUtc));
+}
+
+/** 改流場模型鍵(tidal.flood.speed_kn、tidal.ebb.direction_deg、tidal.slackWindow_min、field.grid.dx、field.outside、field.timeScale …;空值刪鍵)。 */
+export function patchCurrentModel(draft: ScenarioDraft, path: string, value: unknown): ScenarioDraft {
+  return { ...draft, currentModel: withPath(draft.currentModel, path, value) };
+}
+
+export function currentField(draft: ScenarioDraft): RawSection | null {
+  const f = draft.currentModel['field'];
+  return isRecord(f) ? f : null;
+}
+
+/** 建立空間流場(3 × 3 網格、格距 1000 m、以原點為中心、u/v 全 0)或移除 field。 */
+export function setCurrentFieldEnabled(draft: ScenarioDraft, on: boolean): ScenarioDraft {
+  if (!on) {
+    const m = { ...draft.currentModel };
+    delete m['field'];
+    return { ...draft, currentModel: m };
+  }
+  if (currentField(draft)) return draft;
+  const zeros = () => [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  return { ...draft, currentModel: { ...draft.currentModel, field: { grid: { x0: -1000, y0: -1000, dx: 1000, dy: 1000, nx: 3, ny: 3 }, u_kn: zeros(), v_kn: zeros() } } };
+}
+
+/** 網格陣列 → 文字區塊:每列(y 索引 j)一行、同一行內 x 索引 i 以空白分隔(u_kn[j][i] 對應節點 (x0 + i·dx, y0 + j·dy))。 */
+export function fieldArrayText(rows: unknown): string {
+  if (!Array.isArray(rows)) return '';
+  return rows.map((r) => (Array.isArray(r) ? r.map((v) => String(v)).join(' ') : String(r))).join('\n');
+}
+
+/** 文字區塊 → 網格陣列:每行一列,以空白或逗號分隔;空行略過;非數值丟 Error;全空回 []。 */
+export function parseFieldArrayText(text: string): number[][] {
+  const rows: number[][] = [];
+  text.split(/\r?\n/).forEach((line, li) => {
+    const s = line.trim();
+    if (s === '') return;
+    rows.push(
+      s.split(/[\s,]+/).map((tok) => {
+        const n = Number(tok);
+        if (tok === '' || !Number.isFinite(n)) throw new Error(`流場陣列第 ${li + 1} 行的「${tok}」不是數值`);
+        return n;
+      }),
+    );
+  });
+  return rows;
+}
+
+/** 設定 u_kn / v_kn 陣列(由 parseFieldArrayText 得到)。 */
+export function setCurrentFieldArray(draft: ScenarioDraft, key: 'u_kn' | 'v_kn', rows: number[][]): ScenarioDraft {
+  return patchCurrentModel(draft, `field.${key}`, rows);
+}
+
+/** 數值欄位的檢查用讀取:數字回自身、參數引用回 'ref'(略過數值規則)、其他(缺、字串、布林)回 undefined。 */
+function numericOf(v: unknown): number | 'ref' | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (isParamRef(v)) return 'ref';
+  return undefined;
+}
+
+/**
+ * 空間流場的結構檢查(與核心 Scenario.StructuralIssues 的規則與訊息一致):grid 必填且 dx/dy > 0、nx/ny ≥ 2 的整數;
+ * u_kn/v_kn 為 ny 列 × nx 行的有限數值;outside ∈ edge|zero;timeScale ∈ none|tidal|table 且對應模型存在。
+ */
+export function currentFieldIssues(field: RawSection, model: RawSection = {}, path = 'environment.current.field'): string[] {
+  const issues: string[] = [];
+  let nx = 0;
+  let ny = 0;
+  const grid = field['grid'];
+  if (!isRecord(grid)) issues.push(`${path} field 需要 grid`);
+  else {
+    if (numericOf(grid['x0']) === undefined || numericOf(grid['y0']) === undefined) issues.push(`${path}.grid x0/y0 必須為有限數值`);
+    const dx = numericOf(grid['dx']);
+    const dy = numericOf(grid['dy']);
+    if (dx === undefined || (dx !== 'ref' && dx <= 0)) issues.push(`${path}.grid dx 必須為正`);
+    if (dy === undefined || (dy !== 'ref' && dy <= 0)) issues.push(`${path}.grid dy 必須為正`);
+    const gnx = grid['nx'];
+    const gny = grid['ny'];
+    if (typeof gnx !== 'number' || !Number.isInteger(gnx) || gnx < 2) issues.push(`${path}.grid nx 必須為 ≥ 2 的整數`);
+    else nx = gnx;
+    if (typeof gny !== 'number' || !Number.isInteger(gny) || gny < 2) issues.push(`${path}.grid ny 必須為 ≥ 2 的整數`);
+    else ny = gny;
+  }
+  for (const name of ['u_kn', 'v_kn'] as const) {
+    const rows = field[name];
+    if (!Array.isArray(rows)) {
+      issues.push(`${path} field 需要 ${name}`);
+      continue;
+    }
+    if (nx < 2 || ny < 2) continue; // 格數錯誤時不再逐列檢查(訊息已足夠)
+    if (rows.length !== ny) {
+      issues.push(`${path} ${name} 須有 ny = ${ny} 列(得到 ${rows.length})`);
+      continue;
+    }
+    rows.forEach((row, j) => {
+      if (!Array.isArray(row) || row.length !== nx) {
+        issues.push(`${path}.${name}[${j}] ${name} 每列須有 nx = ${nx} 個值(得到 ${Array.isArray(row) ? row.length : 0})`);
+        return;
+      }
+      row.forEach((v, i) => {
+        if (typeof v !== 'number' || !Number.isFinite(v)) issues.push(`${path}.${name}[${j}][${i}] ${name} 的值必須為有限數值`);
+      });
+    });
+  }
+  const outside = field['outside'];
+  if (outside !== undefined && !FIELD_OUTSIDE_OPTIONS.includes(str(outside).toLowerCase())) issues.push(`${path} outside 須為 edge | zero:${str(outside)}`);
+  const ts = field['timeScale'];
+  if (ts !== undefined) {
+    const tsl = str(ts).toLowerCase();
+    if (!FIELD_TIME_SCALE_OPTIONS.includes(tsl)) issues.push(`${path} timeScale 須為 none | tidal | table:${str(ts)}`);
+    else if (tsl === 'tidal' && !isRecord(model['tidal'])) issues.push(`${path} timeScale tidal 需要 current.tidal`);
+    else if (tsl === 'table' && !Array.isArray(model['table'])) issues.push(`${path} timeScale table 需要 current.table`);
+  }
+  return issues;
+}
+
+export const SHIP_INTERACTION_FIELDS: ReadonlyArray<readonly [key: string, label: string, hint: string]> = [
+  ['coefficientScale', '整體倍率', '預設 1;0 = 只顯示不施力'],
+  ['eventThreshold_t', '事件門檻 (t)', '預設 3;0 = 不發事件'],
+] as const;
+
+export function shipInteractionEnabled(draft: ScenarioDraft): boolean {
+  return draft.shipInteraction?.['enabled'] === true;
+}
+
+/** 只有 enabled 鍵(或空)時關閉 = 移除整段;有其他參數時保留並寫 enabled: false。 */
+function disabledSection(section: RawSection | null): RawSection | null {
+  if (!section) return null;
+  return Object.keys(section).some((k) => k !== 'enabled') ? { ...section, enabled: false } : null;
+}
+
+/** 啟用 = enabled: true(保留其他參數);關閉 = 只有 enabled 時移除整段,否則 enabled: false(與未給相同:零力、雜湊不變)。 */
+export function setShipInteractionEnabled(draft: ScenarioDraft, on: boolean): ScenarioDraft {
+  return { ...draft, shipInteraction: on ? withPath(draft.shipInteraction, 'enabled', true) : disabledSection(draft.shipInteraction) };
+}
+
+/** 改船間交互作用欄位(coefficientScale、eventThreshold_t;空值刪鍵;刪到只剩空物件時區段移除)。 */
+export function patchShipInteraction(draft: ScenarioDraft, path: string, value: unknown): ScenarioDraft {
+  const next = withPath(draft.shipInteraction, path, value);
+  return { ...draft, shipInteraction: Object.keys(next).length > 0 ? next : null };
+}
+
+/** 橫搖契約(ship.roll;docs/design/scenario-engine.md 第 1.5 節、state.schema.json roll):選填、預設關閉。 */
+export const ROLL_FIELDS: ReadonlyArray<readonly [key: string, label: string, hint: string]> = [
+  ['naturalPeriod_s', '自然週期 (s)', '未給 = 依 GM 與船寬估計'],
+  ['dampingRatio', '阻尼比 ζ', '預設 0.08(0–1 之間,不含)'],
+  ['windHeelGain', '風傾增益', '預設 1'],
+  ['turnHeelGain', '迴轉傾增益', '預設 1'],
+  ['waveGain', '浪激勵增益', '預設 1'],
+] as const;
+export const ROLL_DEFAULTS = { dampingRatio: 0.08, windHeelGain: 1, turnHeelGain: 1, waveGain: 1, gm_m: 1.2 } as const;
+
+export function rollEnabled(draft: ScenarioDraft): boolean {
+  return draft.roll?.['enabled'] === true;
+}
+
+/** 啟用 = enabled: true(保留其他參數);關閉 = 只有 enabled 時移除整段,否則 enabled: false(與未給相同:不輸出 state.roll、雜湊不變)。 */
+export function setRollEnabled(draft: ScenarioDraft, on: boolean): ScenarioDraft {
+  return { ...draft, roll: on ? withPath(draft.roll, 'enabled', true) : disabledSection(draft.roll) };
+}
+
+/** 改橫搖欄位(naturalPeriod_s、dampingRatio、windHeelGain、turnHeelGain、waveGain;空值刪鍵;刪到只剩空物件時區段移除)。 */
+export function patchRoll(draft: ScenarioDraft, path: string, value: unknown): ScenarioDraft {
+  const next = withPath(draft.roll, path, value);
+  return { ...draft, roll: Object.keys(next).length > 0 ? next : null };
+}
+
+/** Weiss 公式估計自然橫搖週期 T = 2·0.4·B/√GM(秒;與核心未給 naturalPeriod_s 時的估計相同);B 或 GM 非正時回 0。 */
+export function estimateRollPeriod(breadth_m: number, gm_m: number = ROLL_DEFAULTS.gm_m): number {
+  if (!(breadth_m > 0) || !(gm_m > 0)) return 0;
+  return (2 * 0.4 * breadth_m) / Math.sqrt(gm_m);
+}
+
+/** 草稿的船與裝載狀態對應的自然週期估計(particulars 的船寬與 GM;GM 無資料時取預設 1.2 m)與所用參數。 */
+export function rollPeriodEstimate(draft: ScenarioDraft): { period_s: number; breadth_m: number; gm_m: number; gmFromParticulars: boolean } {
+  const cfg = getShipConfig(draft.ship.id);
+  const gm = cfg.gm_m?.[draft.ship.loading ?? 'ballast'];
+  const gm_m = gm ?? ROLL_DEFAULTS.gm_m;
+  return { period_s: Math.round(estimateRollPeriod(cfg.breadth_m, gm_m) * 10) / 10, breadth_m: cfg.breadth_m, gm_m, gmFromParticulars: gm !== undefined };
+}
+
+/** 潮高表 / 流場表的共同檢查:至少 2 點、每點 t 或 utc 擇一、utc 需 startTimeUtc、t 嚴格遞增;perPoint 檢查各表的數值欄位。 */
+function checkTimeTable(points: readonly RawSection[], path: string, minMessage: string, orderMessage: string, startTimeUtc: string | undefined, issues: string[], perPoint: (p: RawSection, pp: string) => void): void {
+  if (points.length < 2) issues.push(`${path} ${minMessage}`);
+  const startMs = parseUtcMs(startTimeUtc);
+  let prev: number | undefined;
+  points.forEach((p, i) => {
+    const pp = `${path}[${i}]`;
+    let t: number | undefined;
+    if (p['t'] !== undefined && p['utc'] !== undefined) issues.push(`${pp} 表點的 t 與 utc 只能擇一`);
+    else if (p['t'] !== undefined) {
+      const n = numericOf(p['t']);
+      if (n === undefined) issues.push(`${pp} t 必須為有限數值`);
+      else if (n !== 'ref') t = n;
+    } else if (p['utc'] !== undefined) {
+      const ms = parseUtcMs(p['utc']);
+      if (ms === undefined) issues.push(`${pp} utc 無法解析:${str(p['utc'])}`);
+      else if (startMs === undefined) issues.push(`${pp} 表點以 utc 指定時情境必須有可解析的 startTimeUtc`);
+      else t = (ms - startMs) / 1000;
+    } else issues.push(`${pp} 表點需要 t 或 utc`);
+    perPoint(p, pp);
+    if (t !== undefined) {
+      if (prev !== undefined && t <= prev) issues.push(`${pp} ${orderMessage}`);
+      prev = t;
+    }
+  });
+}
+
+/**
+ * 環境進階區段的檢查(與核心 Scenario.StructuralIssues / Python structural_issues 相同的規則與訊息,路徑在前):
+ * tide table ≥ 2 點、t/utc 擇一且嚴格遞增、utc 需 startTimeUtc、height_m 有限;harmonic ≥ 1 分潮、period_s > 0、amplitude_m ≥ 0;
+ * current table/tidal 擇一、流場表 ≥ 2 點且 speed_kn ≥ 0、tidal 需 tide 與 flood/ebb、slackWindow_min ≥ 0、field 尺寸(currentFieldIssues);
+ * waves Hs ≥ 0、Tp > 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1;shipInteraction coefficientScale/eventThreshold_t ≥ 0;
+ * ship.roll naturalPeriod_s > 0、0 < dampingRatio < 1、增益 ≥ 0(未給週期為提醒,附 Weiss 估計)。
+ */
+export function validateEnvironmentExtras(draft: ScenarioDraft): { issues: string[]; warnings: string[] } {
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  const start = draft.general.startTimeUtc;
+
+  if (draft.tide) {
+    const tp = 'environment.tide';
+    const hasTable = draft.tide['table'] !== undefined;
+    const hasHarmonic = draft.tide['harmonic'] !== undefined;
+    if (hasTable === hasHarmonic) issues.push(`${tp} tide 需為 table 或 harmonic 擇一`);
+    if (hasTable) {
+      checkTimeTable(tidePoints(draft), `${tp}.table`, '潮高表至少需要 2 點', '潮高表的 t 必須嚴格遞增', start, issues, (p, pp) => {
+        if (numericOf(p['height_m']) === undefined) issues.push(`${pp} height_m 必須為有限數值`);
+      });
+    }
+    if (hasHarmonic) {
+      const h = recordOf(draft.tide['harmonic']);
+      if (h['meanLevel_m'] !== undefined && numericOf(h['meanLevel_m']) === undefined) issues.push(`${tp}.harmonic meanLevel_m 必須為有限數值`);
+      const list = tideConstituents(draft);
+      if (list.length === 0) issues.push(`${tp}.harmonic.constituents 調和潮至少需要 1 個分潮`);
+      list.forEach((c, i) => {
+        const cp = `${tp}.harmonic.constituents[${i}]`;
+        const period = numericOf(c['period_s']);
+        if (period === undefined || (period !== 'ref' && period <= 0)) issues.push(`${cp} period_s 必須為正`);
+        const amp = numericOf(c['amplitude_m']);
+        if (amp === undefined || (amp !== 'ref' && amp < 0)) issues.push(`${cp} amplitude_m 不可為負`);
+        if (c['phase_deg'] !== undefined && numericOf(c['phase_deg']) === undefined) issues.push(`${cp} phase_deg 必須為有限數值`);
+      });
+    }
+  }
+
+  {
+    const cp = 'environment.current';
+    const m = draft.currentModel;
+    if (m['table'] !== undefined && m['tidal'] !== undefined) issues.push(`${cp} current 的 table 與 tidal 只能擇一`);
+    if (m['table'] !== undefined) {
+      checkTimeTable(currentTablePoints(draft), `${cp}.table`, '流場表至少需要 2 點', '流場表的 t 必須嚴格遞增', start, issues, (p, pp) => {
+        const speed = numericOf(p['speed_kn']);
+        if (speed === undefined || (speed !== 'ref' && speed < 0)) issues.push(`${pp} speed_kn 不可為負`);
+        if (numericOf(p['direction_deg']) === undefined) issues.push(`${pp} direction_deg 必須為有限數值`);
+      });
+    }
+    if (m['tidal'] !== undefined) {
+      const tp2 = `${cp}.tidal`;
+      const tidal = recordOf(m['tidal']);
+      if (!draft.tide) issues.push(`${tp2} tidal 需要 environment.tide`);
+      for (const name of ['flood', 'ebb']) {
+        const phase = tidal[name];
+        if (!isRecord(phase)) {
+          issues.push(`${tp2}.${name} tidal 需要 ${name}`);
+          continue;
+        }
+        const speed = numericOf(phase['speed_kn']);
+        if (speed === undefined || (speed !== 'ref' && speed < 0)) issues.push(`${tp2}.${name} speed_kn 不可為負`);
+        if (numericOf(phase['direction_deg']) === undefined) issues.push(`${tp2}.${name} direction_deg 必須為有限數值`);
+      }
+      const w = tidal['slackWindow_min'];
+      if (w !== undefined) {
+        const n = numericOf(w);
+        if (n === undefined || (n !== 'ref' && n < 0)) issues.push(`${tp2}.slackWindow_min slackWindow_min 不可為負`);
+      }
+    }
+    const field = currentField(draft);
+    if (field) issues.push(...currentFieldIssues(field, m));
+    else if (m['field'] !== undefined) issues.push(`${cp}.field field 需為物件`);
+  }
+
+  if (draft.waves) {
+    const wp = 'environment.waves';
+    const w = draft.waves;
+    const hs = numericOf(w['significantHeight_m']);
+    if (hs === undefined || (hs !== 'ref' && hs < 0)) issues.push(`${wp} significantHeight_m 必須為 ≥ 0 的有限數值`);
+    const tpk = numericOf(w['peakPeriod_s']);
+    if (tpk === undefined || (tpk !== 'ref' && tpk <= 0)) issues.push(`${wp} peakPeriod_s 必須為正`);
+    const dir = numericOf(w['direction_deg']);
+    if (dir === undefined || (dir !== 'ref' && (dir < 0 || dir > 360))) issues.push(`${wp} direction_deg 須在 0–360(來向)`);
+    if (w['spectrum'] !== undefined && !WAVE_SPECTRUM_OPTIONS.includes(str(w['spectrum']).toLowerCase())) issues.push(`${wp} spectrum 須為 pm | jonswap:${str(w['spectrum'])}`);
+    if (w['gamma'] !== undefined) {
+      const g = numericOf(w['gamma']);
+      if (g === undefined || (g !== 'ref' && g < 1)) issues.push(`${wp} gamma 必須 ≥ 1`);
+    }
+  }
+
+  if (draft.shipInteraction) {
+    const sp = 'environment.shipInteraction';
+    const s = draft.shipInteraction;
+    if (s['enabled'] !== undefined && typeof s['enabled'] !== 'boolean') issues.push(`${sp} enabled 須為布林值`);
+    for (const [key] of SHIP_INTERACTION_FIELDS) {
+      if (s[key] === undefined) continue;
+      const n = numericOf(s[key]);
+      if (n === undefined || (n !== 'ref' && n < 0)) issues.push(`${sp} ${key} 必須為 ≥ 0 的有限數值`);
+    }
+  }
+
+  if (draft.roll) {
+    const rp = 'ship.roll';
+    const r = draft.roll;
+    if (r['enabled'] !== undefined && typeof r['enabled'] !== 'boolean') issues.push(`${rp} enabled 須為布林值`);
+    if (r['naturalPeriod_s'] !== undefined) {
+      const period = numericOf(r['naturalPeriod_s']);
+      if (period === undefined || (period !== 'ref' && period <= 0)) issues.push(`${rp} naturalPeriod_s 必須為正`);
+    }
+    if (r['dampingRatio'] !== undefined) {
+      const zeta = numericOf(r['dampingRatio']);
+      if (zeta === undefined || (zeta !== 'ref' && (zeta <= 0 || zeta >= 1))) issues.push(`${rp} dampingRatio 須在 0–1 之間(不含)`);
+    }
+    for (const key of ['windHeelGain', 'turnHeelGain', 'waveGain']) {
+      if (r[key] === undefined) continue;
+      const n = numericOf(r[key]);
+      if (n === undefined || (n !== 'ref' && n < 0)) issues.push(`${rp} ${key} 必須為 ≥ 0 的有限數值`);
+    }
+    if (r['enabled'] === true && r['naturalPeriod_s'] === undefined) {
+      const est = rollPeriodEstimate(draft);
+      warnings.push(`${rp} 未給 naturalPeriod_s:核心依 GM 與船寬估計(T = 0.8·B/√GM ≈ ${est.period_s} s;B ${est.breadth_m} m、GM ${est.gm_m} m${est.gmFromParticulars ? '' : ' 預設'})`);
+    }
+  }
+  return { issues, warnings };
+}
+
 // ------------------------------------------------------------------ 驗證
 
 export interface DraftValidation {
@@ -1775,12 +2398,17 @@ export function validateDraft(draft: ScenarioDraft, catalogue: readonly FaultDef
     const draftMax = maxDraft(getShipConfig(draft.ship.id), draft.ship.loading ?? 'ballast');
     const ukc = Math.round((depth - draftMax) * 100) / 100;
     // 有 environment.tide 時 waterDepth 為海圖水深,有效水深另加潮高(第十七輪潮汐模型),靜態檢查只能提醒
-    const tide = isRecord(recordOf(draft.raw['environment'])['tide']);
+    const tide = draft.tide !== null;
     if (ukc <= 0 && !tide) issues.push(`初始 UKC ${ukc} m ≤ 0(水深 ${depth} m − 最大吃水 ${draftMax} m;核心載入即擱淺、硬性失敗),請提高水深或改裝載狀態`);
     else if (ukc <= 0) warnings.push(`初始 UKC ${ukc} m ≤ 0 以海圖水深 ${depth} m 計(情境有 environment.tide,有效水深另加潮高;核心載入時判定)`);
     else if (ukc < UKC_MINIMUM_M) warnings.push(`初始 UKC ${ukc} m 低於公司 UKC 下限 ${UKC_MINIMUM_M} m(最大吃水 ${draftMax} m,未計 squat)`);
   }
   if (summary.stats.timelineItems === 0) warnings.push('時間表沒有項目(無故障、語音與結束條件;練習由教官手動結束)');
+
+  // 環境進階(潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖):與核心 Scenario.StructuralIssues 相同的規則與訊息
+  const extras = validateEnvironmentExtras(draft);
+  issues.push(...extras.issues);
+  warnings.push(...extras.warnings);
   return { scenario, yaml, summary, issues, warnings };
 }
 
@@ -1835,7 +2463,9 @@ export function loadDraft(storage: DraftStorage | null = defaultStorage()): Scen
     const v: unknown = JSON.parse(text);
     if (!isRecord(v) || !isRecord(v['general']) || !isRecord(v['raw']) || !Array.isArray(v['targets']) || !Array.isArray(v['timeline']) || !isRecord(v['assessment'])) return null;
     if (v['version'] === 1) return migrateDraftV1(v);
-    if (v['version'] !== DRAFT_VERSION || !Array.isArray(v['zones']) || !isRecord(v['briefing']) || !Array.isArray(v['tugs'])) return null;
+    if (!Array.isArray(v['zones']) || !isRecord(v['briefing']) || !Array.isArray(v['tugs'])) return null;
+    if (v['version'] === 2) return migrateDraftV2(v);
+    if (v['version'] !== DRAFT_VERSION || !isRecord(v['currentModel']) || !('tide' in v) || !('waves' in v) || !('shipInteraction' in v) || !('roll' in v)) return null;
     return v as unknown as ScenarioDraft;
   } catch {
     return null;
@@ -1858,6 +2488,16 @@ function migrateDraftV1(v: Record<string, unknown>): ScenarioDraft {
   if (pass !== undefined) assessment.passMark = pass;
   else delete assessment.passMark;
   return { ...base, general: old.general, ship: old.ship, initial: old.initial, environment: old.environment, targets: old.targets, timeline: old.timeline, assessment };
+}
+
+/**
+ * 第十八、十九輪(版本 2)草稿升級:環境進階區段(tide / waves / currentModel / shipInteraction / roll)當時不可編輯、仍以範本 raw 為準,由 raw 重建;
+ * 其餘已可編輯的區段沿用舊草稿。
+ */
+function migrateDraftV2(v: Record<string, unknown>): ScenarioDraft {
+  const old = v as unknown as ScenarioDraft;
+  const base = fromScenarioObject(old.raw, typeof v['template'] === 'string' ? v['template'] : '');
+  return { ...old, version: 3, tide: base.tide, waves: base.waves, currentModel: base.currentModel, shipInteraction: base.shipInteraction, roll: base.roll };
 }
 
 export function clearDraft(storage: DraftStorage | null = defaultStorage()): void {

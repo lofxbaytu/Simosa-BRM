@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    WebView2 外殼的可測邏輯(規劃書第 5.2 節 Instruments「WebView2 殼」、第 5.5 節「WebView2 採固定版本隨應用程式散布」、第 11.2 節 Instruments.Shell):
+    命令列參數 → 網址組合(?station=、?ws=、?mode=)、WebView2 Runtime 偵測結果 → 中文說明、頁面載入失敗的重試退避、使用者資料夾位置。
+    純 net8.0、不依賴 Windows 或 WebView2 套件,tests/Shell.Core.Tests 在 Linux 可跑;Shell.WebView2(net8.0-windows、WinForms)以 ProjectReference 引用。
+  -->
+  <PropertyGroup>
+    <RootNamespace>SimosaBRM.Shell.Core</RootNamespace>
+    <AssemblyName>SimosaBRM.Shell.Core</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

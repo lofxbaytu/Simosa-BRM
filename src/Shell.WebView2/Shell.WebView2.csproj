@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    WebView2 操船台外殼(規劃書第 5.2 節 Instruments「WebView2 殼」、第 5.4 節兩螢幕配置 D6、第 5.5 節「WebView2 採固定版本隨應用程式散布」、
+    第 11.2 節 Instruments.Shell;需求 R1、R13):Windows 10/11 船上筆電以單一桌面程式全螢幕(kiosk)開啟操船台/教官站/雷達/報告站網頁,不需瀏覽器。
+    net8.0-windows + WinForms;EnableWindowsTargeting 讓 Linux 容器可建置(不能執行);NuGet Microsoft.Web.WebView2 固定版號(隨軟體更新包更新)。
+    可測邏輯在 ../Shell.Core(參數 → 網址、Runtime 偵測訊息、重試退避、路徑),本專案只有 WinForms 視窗與 WebView2 接線。
+    發行:tools/build-release.ps1 → app/shell/(framework-dependent,需 .NET 8 Desktop Runtime 與 WebView2 Runtime;docs/ops/安裝與啟動.md 第 4.5 節)。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>SimosaBRM.Shell.App</RootNamespace>
+    <AssemblyName>SimosaBRM.Shell</AssemblyName>
+    <RollForward>Major</RollForward>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <SelfContained>false</SelfContained>
+    <!-- 單一 exe 名稱固定(start-ship-laptop.ps1 -Shell 以 app\shell\SimosaBRM.Shell.exe 找);不產生 .pdb 以外的多餘檔 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 固定版號:升版時同步更新 docs/ops/安裝與啟動.md 第 4.5 節的 Runtime 最低版本 -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3351.48" />
+    <ProjectReference Include="../Shell.Core/Shell.Core.csproj" />
+  </ItemGroup>
+  <!-- 套件的 Common.targets 無條件加入 WPF 組件(Microsoft.Web.WebView2.Wpf.dll,參考 WindowsBase 5.0);本專案只用 WinForms,移除它以免 MSB3277 衝突警告與多餘的發布檔 -->
+  <Target Name="DropWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+</Project>

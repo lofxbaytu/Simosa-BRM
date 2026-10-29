@@ -1,6 +1,7 @@
 // 情境編輯器的擴充區段(規劃書第 9.1 節;R4;設計文件 docs/design/scenario-engine.md 第 6.1 節):航線、區域、時間表項目逐項編輯、
-// 簡報角色/附件、感測器/警報/BNWAS、評估必要事件與設定、拖船/錨/泊位/岸壁。以純函式渲染,透過 EditorHost 讀寫 <brm-scenario-editor> 的草稿,
-// 樣式沿用主元件(模板渲染在同一個 shadow root)。草稿模型與各區段的修改函式見 lib/scenario-editor.ts(原樣物件 + 點路徑修改,未改的鍵不動)。
+// 簡報角色/附件、感測器/警報/BNWAS、評估必要事件與設定、拖船/錨/泊位/岸壁、環境進階(潮汐 / 浪 / 流場模型(表、潮流、空間網格)/ 船間交互作用 / 橫搖)。
+// 以純函式渲染,透過 EditorHost 讀寫 <brm-scenario-editor> 的草稿,樣式沿用主元件(模板渲染在同一個 shadow root)。
+// 草稿模型與各區段的修改函式見 lib/scenario-editor.ts(原樣物件 + 點路徑修改,未改的鍵不動)。
 
 import { html, nothing, type TemplateResult } from 'lit';
 import {
@@ -12,7 +13,56 @@ import {
   BNWAS_FIELDS,
   BNWAS_MODES,
   BODY_POINTS,
+  CONSTITUENT_SUGGESTIONS,
+  CURRENT_TIME_MODELS,
+  CURRENT_TIME_MODEL_LABEL,
   ENCOUNTER_FIELDS,
+  FIELD_GRID_FIELDS,
+  FIELD_OUTSIDE_OPTIONS,
+  FIELD_TIME_SCALE_OPTIONS,
+  ROLL_FIELDS,
+  SHIP_INTERACTION_FIELDS,
+  TIDE_MODES,
+  TIDE_MODE_LABEL,
+  WAVE_SPECTRUM_OPTIONS,
+  addCurrentTablePoint,
+  addTideConstituent,
+  addTidePoint,
+  currentField,
+  currentFieldIssues,
+  currentTablePoints,
+  currentTimeModel,
+  fieldArrayText,
+  parseFieldArrayText,
+  patchCurrentModel,
+  patchCurrentTablePoint,
+  patchRoll,
+  patchShipInteraction,
+  patchTide,
+  patchTideConstituent,
+  patchTidePoint,
+  patchWaves,
+  removeCurrentTablePoint,
+  removeTideConstituent,
+  removeTidePoint,
+  rollEnabled,
+  rollPeriodEstimate,
+  setCurrentFieldArray,
+  setCurrentFieldEnabled,
+  setCurrentTableTimeKey,
+  setCurrentTimeModel,
+  setRollEnabled,
+  setShipInteractionEnabled,
+  setTideMode,
+  setTideTimeKey,
+  setWavesEnabled,
+  shipInteractionEnabled,
+  tablePointTimeKey,
+  tideConstituents,
+  tideMode,
+  tidePoints,
+  type CurrentTimeModel,
+  type TideMode,
   LINE_INITIAL_STATES,
   MANOEUVRING_FIELDS,
   PHASES,
@@ -727,6 +777,237 @@ function renderBanks(h: EditorHost): TemplateResult {
           ${numInput('banks-scale', b['scale'], (v) => h.setDraft(patchBanks(h.draft, 'scale', v)), '預設 1;0 = 只顯示距離')}
           <div class="full hint">${bankLineCount(b) > 0 ? `情境內直接定義的岸壁 lines/definitions ${bankLineCount(b)} 段原樣保留(不在此編輯)` : '岸壁幾何取自岸壁檔;情境內 lines 需手編 YAML'}</div>
         `
+      : nothing}
+  </fieldset>`;
+}
+
+// ------------------------------------------------------------------ 環境進階:潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖(第二十輪)
+
+/** 環境進階面板:environment.tide、environment.waves、environment.current 的 table / tidal / field、environment.shipInteraction、ship.roll(皆選填、預設關閉)。 */
+export function renderEnvironmentExtras(h: EditorHost): TemplateResult {
+  return html`<div class="panel environment-extras">
+    <div class="panel-title"><span>環境進階 ENVIRONMENT+</span><span class="zh">潮汐 · 浪 · 時變/空間流場 · 船間交互作用 · 橫搖(皆選填、預設關閉)</span></div>
+    ${renderTide(h)}
+    ${renderWaves(h)}
+    ${renderCurrentModel(h)}
+    ${renderShipInteraction(h)}
+    ${renderRoll(h)}
+  </div>`;
+}
+
+/** 表點的時間欄位(t 秒或 UTC 時刻;整張表以第一個點的寫法為準)。 */
+function renderTimeCell(cls: string, p: RawSection, key: 't' | 'utc', onChange: (k: 't' | 'utc', v: unknown) => void): TemplateResult {
+  return key === 'utc'
+    ? html`<input class="${cls}-utc" type="text" placeholder="2026-07-07T06:30:00Z" .value=${txt(p['utc'])} @change=${(e: Event) => onChange('utc', textOf(e).trim())} />`
+    : numInput(`${cls}-t`, p['t'], (v) => onChange('t', v));
+}
+
+function renderTide(h: EditorHost): TemplateResult {
+  const mode = tideMode(h.draft);
+  return html`<fieldset class="tide">
+    <legend>潮汐 environment.tide(有效水深 = 水深 + 潮高;潮流與流場網格的 tidal 時間縮放需要它)</legend>
+    <label>模式</label>
+    <select class="tide-mode" data-value=${mode} @change=${(e: Event) => h.setDraft(setTideMode(h.draft, textOf(e) as TideMode))}>
+      ${TIDE_MODES.map((m) => html`<option value=${m}>${TIDE_MODE_LABEL[m]}</option>`)}
+    </select>
+    ${mode === 'table' ? renderTideTable(h) : mode === 'harmonic' ? renderHarmonic(h) : html`<span class="hint">無潮汐:潮高恆為 0(數值與舊版相同)</span>`}
+  </fieldset>`;
+}
+
+function renderTideTable(h: EditorHost): TemplateResult {
+  const points = tidePoints(h.draft);
+  const key = tablePointTimeKey(points);
+  return html`<div class="full">
+    ${points.map(
+      (p, i) => html`<div class="row g4 tide-point" data-index=${i}>
+        <label>#${i + 1} ${key === 'utc' ? 'UTC' : 't (s)'}</label>
+        ${renderTimeCell('tp', p, key, (k, v) => h.setDraft(patchTidePoint(h.draft, i, k, v)))}
+        <label>潮高 (m)</label>
+        <div class="pair">
+          ${numInput('tp-h', p['height_m'], (v) => h.setDraft(patchTidePoint(h.draft, i, 'height_m', v)))}
+          <button class="small danger tp-remove" @click=${() => h.setDraft(removeTidePoint(h.draft, i))}>✕</button>
+        </div>
+      </div>`,
+    )}
+    <div class="btn-row">
+      <button class="small add-tide-point" @click=${() => h.setDraft(addTidePoint(h.draft))}>新增表點</button>
+      <button class="small tide-time-key" @click=${() => guard(h, () => h.setDraft(setTideTimeKey(h.draft, key === 'utc' ? 't' : 'utc')))}>${key === 'utc' ? '改用 t(秒)' : '改用 UTC 時刻'}</button>
+    </div>
+    <div class="hint">線性內插、範圍外取端點;t 需嚴格遞增(相對練習開始的秒數,可為負);UTC 寫法需基本資料的開始時刻 startTimeUtc</div>
+  </div>`;
+}
+
+function renderHarmonic(h: EditorHost): TemplateResult {
+  const list = tideConstituents(h.draft);
+  const mean = (h.draft.tide?.['harmonic'] as RawSection | undefined)?.['meanLevel_m'];
+  return html`<label>平均水位 (m)</label>
+    ${numInput('tide-mean', mean, (v) => h.setDraft(patchTide(h.draft, 'harmonic.meanLevel_m', v)), '預設 0')}
+    <datalist id="constituent-names">${CONSTITUENT_SUGGESTIONS.map(([n, p]) => html`<option value=${n}>${p} s</option>`)}</datalist>
+    <div class="full">
+      ${list.map(
+        (c, i) => html`<div class="row g4 constituent" data-index=${i}>
+          <label>分潮 / 振幅 (m)</label>
+          <div class="pair">
+            <input class="tc-name" type="text" list="constituent-names" .value=${txt(c['name'])} @change=${(e: Event) => h.setDraft(patchTideConstituent(h.draft, i, 'name', textOf(e).trim()))} />
+            ${numInput('tc-amp', c['amplitude_m'], (v) => h.setDraft(patchTideConstituent(h.draft, i, 'amplitude_m', v)))}
+          </div>
+          <label>週期 (s) / 相位 (°)</label>
+          <div class="pair">
+            ${numInput('tc-period', c['period_s'], (v) => h.setDraft(patchTideConstituent(h.draft, i, 'period_s', v)), 'M2 44714')}
+            ${numInput('tc-phase', c['phase_deg'], (v) => h.setDraft(patchTideConstituent(h.draft, i, 'phase_deg', v)), '0')}
+            <button class="small danger tc-remove" @click=${() => h.setDraft(removeTideConstituent(h.draft, i))}>✕</button>
+          </div>
+        </div>`,
+      )}
+      <div class="btn-row"><button class="small add-constituent" @click=${() => h.setDraft(addTideConstituent(h.draft))}>新增分潮</button></div>
+      <div class="hint">高度 = 平均水位 + Σ 振幅·cos(2π·t/週期 + 相位);t 為相對練習開始的秒數</div>
+    </div>`;
+}
+
+function renderWaves(h: EditorHost): TemplateResult {
+  const w = h.draft.waves;
+  const kept = w ? Object.keys(w).filter((k) => !['significantHeight_m', 'peakPeriod_s', 'direction_deg', 'spectrum', 'gamma'].includes(k)) : [];
+  return html`<fieldset class="waves">
+    <legend>浪 environment.waves(平均漂移力、雷達海況、視景海面、橫搖激勵)</legend>
+    <label class="full pair"><input class="waves-enabled" type="checkbox" .checked=${w !== null} @change=${(e: Event) => h.setDraft(setWavesEnabled(h.draft, checked(e)))} /><span>${w ? `有浪:Hs ${txt(w['significantHeight_m']) || '?'} m / Tp ${txt(w['peakPeriod_s']) || '?'} s / ${txt(w['direction_deg']) || '?'}°` : '無浪(零力;練習中仍可由教官站 setEnvironment waves 建立)'}</span></label>
+    ${w
+      ? html`
+          <label>Hs (m) / Tp (s)</label>
+          <div class="pair">
+            ${numInput('wv-hs', w['significantHeight_m'], (v) => h.setDraft(patchWaves(h.draft, 'significantHeight_m', v)), '≥ 0')}
+            ${numInput('wv-tp', w['peakPeriod_s'], (v) => h.setDraft(patchWaves(h.draft, 'peakPeriod_s', v)), '> 0')}
+          </div>
+          <label>來向 (°)</label>
+          ${numInput('wv-dir', w['direction_deg'], (v) => h.setDraft(patchWaves(h.draft, 'direction_deg', v)), '0–360,氣象慣例')}
+          <label>浪譜 / γ</label>
+          <div class="pair">
+            <select class="wv-spectrum" data-value=${txt(w['spectrum'])} @change=${(e: Event) => h.setDraft(patchWaves(h.draft, 'spectrum', textOf(e)))}>
+              <option value="">(預設 pm)</option>
+              ${WAVE_SPECTRUM_OPTIONS.map((s) => html`<option value=${s}>${s === 'pm' ? 'PM' : 'JONSWAP'}</option>`)}
+              ${w['spectrum'] !== undefined && !WAVE_SPECTRUM_OPTIONS.includes(txt(w['spectrum']).toLowerCase()) ? html`<option value=${txt(w['spectrum'])}>${txt(w['spectrum'])}(未知)</option>` : nothing}
+            </select>
+            ${numInput('wv-gamma', w['gamma'], (v) => h.setDraft(patchWaves(h.draft, 'gamma', v)), 'JONSWAP γ 預設 3.3')}
+          </div>
+          ${kept.length > 0 ? html`<div class="full hint">保留:${kept.join('、')}</div>` : nothing}
+        `
+      : nothing}
+  </fieldset>`;
+}
+
+function renderCurrentModel(h: EditorHost): TemplateResult {
+  const d = h.draft;
+  const mode = currentTimeModel(d);
+  const field = currentField(d);
+  return html`<fieldset class="current-model">
+    <legend>流場模型 environment.current(常數流向/流速在「環境」面板;時變與空間網格在此)</legend>
+    <label>時變</label>
+    <select class="cur-model" data-value=${mode} @change=${(e: Event) => h.setDraft(setCurrentTimeModel(h.draft, textOf(e) as CurrentTimeModel))}>
+      ${CURRENT_TIME_MODELS.map((m) => html`<option value=${m}>${CURRENT_TIME_MODEL_LABEL[m]}</option>`)}
+    </select>
+    ${mode === 'table' ? renderCurrentTable(h) : mode === 'tidal' ? renderTidal(h) : html`<span class="hint">流不隨時間變化(教官站可練習中覆寫)</span>`}
+    <label class="full pair"><input class="field-enabled" type="checkbox" .checked=${field !== null} @change=${(e: Event) => h.setDraft(setCurrentFieldEnabled(h.draft, checked(e)))} /><span>${field ? '空間變化流場 field(規則網格,雙線性內插;可與上列時變模型並存作時間縮放)' : '無空間網格(均勻流)'}</span></label>
+    ${field ? renderField(h, field) : nothing}
+  </fieldset>`;
+}
+
+function renderCurrentTable(h: EditorHost): TemplateResult {
+  const points = currentTablePoints(h.draft);
+  const key = tablePointTimeKey(points);
+  return html`<div class="full">
+    ${points.map(
+      (p, i) => html`<div class="row g4 current-point" data-index=${i}>
+        <label>#${i + 1} ${key === 'utc' ? 'UTC' : 't (s)'}</label>
+        ${renderTimeCell('cp', p, key, (k, v) => h.setDraft(patchCurrentTablePoint(h.draft, i, k, v)))}
+        <label>流速 (kn) / 流向 (°)</label>
+        <div class="pair">
+          ${numInput('cp-speed', p['speed_kn'], (v) => h.setDraft(patchCurrentTablePoint(h.draft, i, 'speed_kn', v)))}
+          ${numInput('cp-dir', p['direction_deg'], (v) => h.setDraft(patchCurrentTablePoint(h.draft, i, 'direction_deg', v)))}
+          <button class="small danger cp-remove" @click=${() => h.setDraft(removeCurrentTablePoint(h.draft, i))}>✕</button>
+        </div>
+      </div>`,
+    )}
+    <div class="btn-row">
+      <button class="small add-current-point" @click=${() => h.setDraft(addCurrentTablePoint(h.draft))}>新增表點</button>
+      <button class="small current-time-key" @click=${() => guard(h, () => h.setDraft(setCurrentTableTimeKey(h.draft, key === 'utc' ? 't' : 'utc')))}>${key === 'utc' ? '改用 t(秒)' : '改用 UTC 時刻'}</button>
+    </div>
+    <div class="hint">東/北分量線性內插(方向跨 360° 不繞遠路)、範圍外取端點;t 需嚴格遞增;流向為去向</div>
+  </div>`;
+}
+
+function renderTidal(h: EditorHost): TemplateResult {
+  const tidal = isRecord(h.draft.currentModel['tidal']) ? h.draft.currentModel['tidal'] : {};
+  const phase = (name: string) => (isRecord(tidal[name]) ? (tidal[name] as RawSection) : {});
+  return html`${['flood', 'ebb'].map(
+      (name) => html`<label>${name === 'flood' ? '漲潮流' : '退潮流'} 流速 (kn) / 流向 (°)</label>
+        <div class="pair">
+          ${numInput(`ctd-${name}-speed`, phase(name)['speed_kn'], (v) => h.setDraft(patchCurrentModel(h.draft, `tidal.${name}.speed_kn`, v)))}
+          ${numInput(`ctd-${name}-dir`, phase(name)['direction_deg'], (v) => h.setDraft(patchCurrentModel(h.draft, `tidal.${name}.direction_deg`, v)))}
+        </div>`,
+    )}
+    <label>平潮窗口 (min)</label>
+    ${numInput('ctd-slack', tidal['slackWindow_min'], (v) => h.setDraft(patchCurrentModel(h.draft, 'tidal.slackWindow_min', v)), '預設 20')}
+    <div class="full hint">漲/退由潮高變化率 dH/dt 的符號決定(需上方潮汐),流速 = 該相最大流速 × |dH/dt| / max|dH/dt|(平潮窗口內為 0)</div>`;
+}
+
+function renderField(h: EditorHost, field: RawSection): TemplateResult {
+  const grid = isRecord(field['grid']) ? field['grid'] : {};
+  const issues = currentFieldIssues(field, h.draft.currentModel);
+  const nx = typeof grid['nx'] === 'number' ? grid['nx'] : '?';
+  const ny = typeof grid['ny'] === 'number' ? grid['ny'] : '?';
+  const setArray = (key: 'u_kn' | 'v_kn', text: string) => guard(h, () => h.setDraft(setCurrentFieldArray(h.draft, key, parseFieldArrayText(text))));
+  return html`<div class="full field">
+    <div class="row g4 field-grid">
+      ${FIELD_GRID_FIELDS.map(
+        ([key, label, integer]) => html`<label>${label}</label>
+          ${integer
+            ? html`<input class="fg-${key}" type="number" step="1" min="2" .value=${txt(grid[key])} @change=${(e: Event) => h.setDraft(patchCurrentModel(h.draft, `field.grid.${key}`, intFromText(textOf(e))))} />`
+            : numInput(`fg-${key}`, grid[key], (v) => h.setDraft(patchCurrentModel(h.draft, `field.grid.${key}`, v)))}`,
+      )}
+      <label>格外 / 時間縮放</label>
+      <div class="pair">
+        <select class="fg-outside" data-value=${txt(field['outside'])} @change=${(e: Event) => h.setDraft(patchCurrentModel(h.draft, 'field.outside', textOf(e)))}>
+          <option value="">(預設 edge)</option>
+          ${FIELD_OUTSIDE_OPTIONS.map((o) => html`<option value=${o}>${o === 'edge' ? 'edge 取邊緣值' : 'zero 取 0'}</option>`)}
+        </select>
+        <select class="fg-timescale" data-value=${txt(field['timeScale'])} @change=${(e: Event) => h.setDraft(patchCurrentModel(h.draft, 'field.timeScale', textOf(e)))}>
+          <option value="">(預設 none)</option>
+          ${FIELD_TIME_SCALE_OPTIONS.map((o) => html`<option value=${o}>${o === 'none' ? 'none 不縮放' : o === 'tidal' ? 'tidal 依潮流比例' : 'table 依流場表比例'}</option>`)}
+        </select>
+      </div>
+      <label class="full">東向分量 u_kn(${ny} 列 × ${nx} 行,每列一行、空白分隔;第 j 行第 i 個 = 節點 (x0 + i·dx, y0 + j·dy))</label>
+      <textarea class="full fg-u" rows="4" .value=${fieldArrayText(field['u_kn'])} @change=${(e: Event) => setArray('u_kn', textOf(e))}></textarea>
+      <label class="full">北向分量 v_kn(排列同 u_kn)</label>
+      <textarea class="full fg-v" rows="4" .value=${fieldArrayText(field['v_kn'])} @change=${(e: Event) => setArray('v_kn', textOf(e))}></textarea>
+      <div class="full hint field-issues ${issues.length > 0 ? 'bad' : 'ok'}">${issues.length > 0 ? issues.map((i) => html`<div>✖ ${i}</div>`) : `尺寸正確:u_kn / v_kn 各 ${ny} 列 × ${nx} 行`}</div>
+    </div>
+  </div>`;
+}
+
+function renderShipInteraction(h: EditorHost): TemplateResult {
+  const s = h.draft.shipInteraction;
+  const on = shipInteractionEnabled(h.draft);
+  const kept = s ? Object.keys(s).filter((k) => !['enabled', ...SHIP_INTERACTION_FIELDS.map((f) => f[0])].includes(k)) : [];
+  return html`<fieldset class="ship-interaction">
+    <legend>船間交互作用 environment.shipInteraction(hold 目標船通過/追越的吸引力與艏搖力矩)</legend>
+    <label class="full pair"><input class="si-enabled" type="checkbox" .checked=${on} @change=${(e: Event) => h.setDraft(setShipInteractionEnabled(h.draft, checked(e)))} /><span>${on ? '啟用(state.shipInteraction、超門檻發事件)' : s ? '有區段但未啟用(enabled: false)' : '未啟用(零力、雜湊不變)'}</span></label>
+    ${s
+      ? html`${SHIP_INTERACTION_FIELDS.map(([key, label, hint]) => html`<label>${label}</label>${numInput(`si-${key}`, s[key], (v) => h.setDraft(patchShipInteraction(h.draft, key, v)), hint)}`)}
+          ${kept.length > 0 ? html`<div class="full hint">保留:${kept.join('、')}</div>` : nothing}`
+      : nothing}
+  </fieldset>`;
+}
+
+function renderRoll(h: EditorHost): TemplateResult {
+  const r = h.draft.roll;
+  const on = rollEnabled(h.draft);
+  const est = rollPeriodEstimate(h.draft);
+  const kept = r ? Object.keys(r).filter((k) => !['enabled', ...ROLL_FIELDS.map((f) => f[0])].includes(k)) : [];
+  return html`<fieldset class="roll">
+    <legend>橫搖 ship.roll(解耦 1 自由度:迴轉/風傾靜傾 + 浪激勵;視景相機與傾斜儀)</legend>
+    <label class="full pair"><input class="roll-enabled" type="checkbox" .checked=${on} @change=${(e: Event) => h.setDraft(setRollEnabled(h.draft, checked(e)))} /><span>${on ? '啟用(state.roll、雜湊追加 ROLLDOF1)' : r ? '有區段但未啟用(enabled: false)' : '未啟用(無橫搖,與舊版相同)'}</span></label>
+    ${r
+      ? html`${ROLL_FIELDS.map(([key, label, hint]) => html`<label>${label}</label>${numInput(`roll-${key}`, r[key], (v) => h.setDraft(patchRoll(h.draft, key, v)), key === 'naturalPeriod_s' ? `估計 ${est.period_s} s` : hint)}`)}
+          <div class="full hint">自然週期未給時核心以 Weiss 公式 T = 0.8·B/√GM 估計 ≈ ${est.period_s} s(${h.draft.ship.id} B ${est.breadth_m} m、GM ${est.gm_m} m${est.gmFromParticulars ? '' : ' 預設'});迴轉離心傾角右轉向外(左傾)、風傾依側面積與風速平方,角度右傾正${kept.length > 0 ? `;保留:${kept.join('、')}` : ''}</div>`
       : nothing}
   </fieldset>`;
 }

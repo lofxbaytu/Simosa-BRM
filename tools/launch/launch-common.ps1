@@ -166,3 +166,40 @@ function Open-LaunchPages([string]$BaseUrl, $Pages, [hashtable]$Subst) {
         try { Start-Process $url } catch { Write-Warning "無法開啟瀏覽器:$url" }
     }
 }
+
+# 找 WebView2 操船台外殼(發行版 app\shell\SimosaBRM.Shell.exe → 開發建置 build\bin\Shell.WebView2\Release|Debug\net8.0-windows\[win-x64\]);找不到回 $null
+function Find-LaunchShellExe([string]$Root) {
+    $candidates = @(
+        (Join-Path $Root 'app\shell\SimosaBRM.Shell.exe'),
+        (Join-Path $Root 'build\bin\Shell.WebView2\Release\net8.0-windows\win-x64\SimosaBRM.Shell.exe'),
+        (Join-Path $Root 'build\bin\Shell.WebView2\Release\net8.0-windows\SimosaBRM.Shell.exe'),
+        (Join-Path $Root 'build\bin\Shell.WebView2\Debug\net8.0-windows\win-x64\SimosaBRM.Shell.exe'),
+        (Join-Path $Root 'build\bin\Shell.WebView2\Debug\net8.0-windows\SimosaBRM.Shell.exe')
+    )
+    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+    return $null
+}
+
+# 以 WebView2 外殼開啟網頁(每頁一個全螢幕 kiosk 程序;PID 記入 simosa.pids,stop-all.ps1 一併結束;docs\ops\安裝與啟動.md 第 4.5 節)。
+# $Monitors:與 $Pages 同序的螢幕索引(0 起算;省略或 $null 時由外殼用主螢幕);找不到外殼 exe 時退回預設瀏覽器。
+function Start-LaunchShellPages([string]$Exe, [string]$BaseUrl, $Pages, [hashtable]$Subst, [string]$WorkDir, [string]$LogDir, $Monitors = $null) {
+    if (-not $Exe -or -not (Test-Path $Exe)) {
+        Write-Warning '找不到 WebView2 外殼(app\shell\SimosaBRM.Shell.exe 或 build\bin\Shell.WebView2\…),改用預設瀏覽器'
+        Open-LaunchPages $BaseUrl $Pages $Subst
+        return
+    }
+    $i = 0
+    foreach ($p in @($Pages)) {
+        $u = [string]$p
+        foreach ($k in $Subst.Keys) { $u = $u.Replace('{' + $k + '}', [string]$Subst[$k]) }
+        $url = "$BaseUrl/$u"
+        $name = 'shell-' + ($u -replace '\.html.*$', '' -replace '[^A-Za-z0-9_-]', '_')
+        if ($name -eq 'shell-') { $name = "shell-$i" }
+        # --no-close-confirm:stop-all.ps1 以 CloseMainWindow 結束外殼時不彈確認對話框(否則會等到逾時被強制結束)
+        $shellArgs = @('--url', $url, '--kiosk', '--no-close-confirm')
+        if ($null -ne $Monitors -and $i -lt @($Monitors).Count -and $null -ne @($Monitors)[$i]) { $shellArgs += @('--monitor', "$(@($Monitors)[$i])") }
+        Write-Host "  外殼 $url"
+        Start-LaunchProcess -Name $name -Log (Join-Path $LogDir "$name.log") -File $Exe -Arguments $shellArgs -WorkDir $WorkDir -Window | Out-Null
+        $i++
+    }
+}

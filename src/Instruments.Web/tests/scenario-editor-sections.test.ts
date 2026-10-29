@@ -26,6 +26,23 @@ import {
   addWaypoint,
   addZone,
   addZoneVertex,
+  currentField,
+  currentTablePoints,
+  fieldArrayText,
+  parseFieldArrayText,
+  patchCurrentModel,
+  patchCurrentTablePoint,
+  patchRoll,
+  patchShipInteraction,
+  patchTide,
+  patchTideConstituent,
+  patchTidePoint,
+  patchWaves,
+  setCurrentFieldArray,
+  setRollEnabled,
+  setShipInteractionEnabled,
+  tideConstituents,
+  tidePoints,
   areaFileChoices,
   areaIds,
   berthLines,
@@ -230,6 +247,34 @@ function touchAll(d0: ScenarioDraft): ScenarioDraft {
   // 岸壁
   const banks = d.banks;
   if (banks) for (const k of ['file', 'ids', 'scale']) if (banks[k] !== undefined) d = patchBanks(d, k, same(banks, k));
+  // 環境進階(第二十輪):潮汐表點 / 分潮、浪、流場表點 / 潮流 / 網格(含陣列文字往返)、船間交互作用、橫搖
+  tidePoints(d).forEach((p, i) => {
+    for (const k of ['t', 'utc', 'height_m'] as const) if (p[k] !== undefined) d = patchTidePoint(d, i, k, same(p, k));
+  });
+  if (getPath(d.tide, 'harmonic.meanLevel_m') !== undefined) d = patchTide(d, 'harmonic.meanLevel_m', getPath(d.tide, 'harmonic.meanLevel_m'));
+  tideConstituents(d).forEach((c, i) => {
+    for (const k of ['name', 'amplitude_m', 'period_s', 'phase_deg']) if (c[k] !== undefined) d = patchTideConstituent(d, i, k, same(c, k));
+  });
+  const waves = d.waves;
+  if (waves) for (const k of ['significantHeight_m', 'peakPeriod_s', 'direction_deg', 'spectrum', 'gamma']) if (waves[k] !== undefined) d = patchWaves(d, k, same(waves, k));
+  currentTablePoints(d).forEach((p, i) => {
+    for (const k of ['t', 'utc', 'speed_kn', 'direction_deg'] as const) if (p[k] !== undefined) d = patchCurrentTablePoint(d, i, k, same(p, k));
+  });
+  for (const path of ['tidal.flood.speed_kn', 'tidal.flood.direction_deg', 'tidal.ebb.speed_kn', 'tidal.ebb.direction_deg', 'tidal.slackWindow_min']) if (getPath(d.currentModel, path) !== undefined) d = patchCurrentModel(d, path, getPath(d.currentModel, path));
+  const field = currentField(d);
+  if (field) {
+    for (const k of ['x0', 'y0', 'dx', 'dy', 'nx', 'ny']) if (getPath(field, `grid.${k}`) !== undefined) d = patchCurrentModel(d, `field.grid.${k}`, getPath(field, `grid.${k}`));
+    for (const k of ['outside', 'timeScale']) if (field[k] !== undefined) d = patchCurrentModel(d, `field.${k}`, same(field, k));
+    for (const k of ['u_kn', 'v_kn'] as const) if (field[k] !== undefined) d = setCurrentFieldArray(d, k, parseFieldArrayText(fieldArrayText(field[k])));
+  }
+  if (d.shipInteraction) {
+    d = setShipInteractionEnabled(d, d.shipInteraction['enabled'] === true);
+    for (const k of ['coefficientScale', 'eventThreshold_t']) if (d.shipInteraction?.[k] !== undefined) d = patchShipInteraction(d, k, same(d.shipInteraction, k));
+  }
+  if (d.roll) {
+    d = setRollEnabled(d, d.roll['enabled'] === true);
+    for (const k of ['naturalPeriod_s', 'dampingRatio', 'windHeelGain', 'turnHeelGain', 'waveGain']) if (d.roll?.[k] !== undefined) d = patchRoll(d, k, same(d.roll, k));
+  }
   return d;
 }
 
@@ -820,14 +865,14 @@ describe('工具函式與草稿版本', () => {
     const storage = new MemoryStorage();
     storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(v1));
     const back = loadDraft(storage)!;
-    expect(back.version).toBe(2);
+    expect(back.version).toBe(3);
     expect(back.general.name).toBe('舊草稿');
     expect(back.tugs.map((t) => t['id'])).toEqual(['TG1', 'TG2']);
     expect(back.zones).toHaveLength(1);
     expect(back.assessment.required).toHaveLength(v2.assessment.required.length);
     expect(back.assessment.passMark).toBe(70);
     expect(parseYaml(toYaml(back))).toEqual({ ...parseYaml(text), name: '舊草稿', assessment: { ...(parseYaml(text) as RawSection)['assessment'] as RawSection, scoring: { start: 100, passMark: 70 } } });
-    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v2, version: 3 }));
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v2, version: 4 }));
     expect(loadDraft(storage)).toBeNull();
     storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v2, zones: undefined }));
     expect(loadDraft(storage)).toBeNull();

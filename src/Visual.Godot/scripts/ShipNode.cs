@@ -60,10 +60,12 @@ public partial class ShipNode : Node3D
         _lights.Configure(Hull, category);
     }
 
-    public void SetPose(double east, double north, double headingDeg)
+    /// <summary>位置與艏向;rollDeg 為橫搖(度,右傾正;繞艏艉軸、以水線中心線為軸,右舷下沉),目標船與無 state.roll 時為 0(姿態與原本相同)。</summary>
+    public void SetPose(double east, double north, double headingDeg, double rollDeg = 0.0)
     {
         Position = new Vector3((float)east, 0f, (float)-north);
-        Rotation = new Vector3(0f, (float)SceneCoordinates.HeadingToYawRad(headingDeg), 0f);
+        if (rollDeg == 0.0) Rotation = new Vector3(0f, (float)SceneCoordinates.HeadingToYawRad(headingDeg), 0f);
+        else Basis = new Basis(Vector3.Up, (float)SceneCoordinates.HeadingToYawRad(headingDeg)) * new Basis(Vector3.Back, -Mathf.DegToRad((float)rollDeg));
     }
 
     /// <summary>依距離切換 LOD 與可見;回傳是否可見。</summary>

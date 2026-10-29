@@ -66,6 +66,7 @@ import {
   checked,
   renderAssessmentExtras,
   renderBriefingSection,
+  renderEnvironmentExtras,
   renderExternalSection,
   renderPosition,
   renderRouteSection,
@@ -571,6 +572,7 @@ export class ScenarioEditor extends LitElement {
           ${this.renderGeneral()}
           ${this.renderShip()}
           ${this.renderEnvironment()}
+          ${renderEnvironmentExtras(this.host)}
           ${renderBriefingSection(this.host)}
           ${renderSensorsSection(this.host)}
         </div>
@@ -683,7 +685,8 @@ export class ScenarioEditor extends LitElement {
   private renderEnvironment() {
     const e = this.draft.environment;
     const raw = (this.draft.raw['environment'] ?? {}) as Record<string, unknown>;
-    const kept = Object.keys(raw).filter((k) => !['wind', 'current', 'waterDepth', 'visibility_nm', 'visibility'].includes(k));
+    // tide / waves / shipInteraction 與 current 的 table / tidal / field 在「環境進階」面板編輯
+    const kept = Object.keys(raw).filter((k) => !['wind', 'current', 'waterDepth', 'visibility_nm', 'visibility', 'tide', 'waves', 'shipInteraction'].includes(k));
     return html`<div class="panel environment">
       <div class="panel-title"><span>環境</span><span class="zh">風向為來向、流向為去向;數值可用參數引用</span></div>
       <div class="form">

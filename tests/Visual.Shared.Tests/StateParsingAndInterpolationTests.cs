@@ -35,6 +35,35 @@ public class StateFrameParserTests
         Assert.NotNull(s.RadarEnvironment);
         Assert.Single(s.RadarEnvironment!.RainAreas);
         Assert.Equal(6.0, s.VisibilityNm);
+        // 橫搖(state.roll;煙霧序列每幀帶示意橫搖)
+        Assert.NotNull(s.Roll);
+        Assert.Equal(SmokeSequence.SmokeRollPeriodS, s.Roll!.NaturalPeriodS);
+        Assert.Equal(SmokeSequence.SmokeRollStaticHeelDeg, s.Roll.StaticHeelDeg);
+    }
+
+    [Fact]
+    public void StateWithoutRollParsesWithNullRollAndZeroPose()
+    {
+        // 無 roll 的狀態幀(未啟用橫搖的情境、舊核心):Roll 為 null、姿態橫搖 0(視景畫面與未實作橫搖前相同)
+        var json = ContractJson.Serialize(SmokeSequence.Frame(3) with { Roll = null });
+        Assert.DoesNotContain("\"roll\"", json);
+        var s = StateFrameParser.TryParseState(json)!;
+        Assert.Null(s.Roll);
+        var pose = StateInterpolator.PoseOf(s);
+        Assert.Equal(0.0, pose.RollDeg);
+        Assert.Equal(0.0, pose.RollRateDegps);
+    }
+
+    [Fact]
+    public void RollBlockParsesAllFourFields()
+    {
+        var json = ContractJson.Serialize(SmokeSequence.Frame(0) with { Roll = new RollState { AngleDeg = -4.25, RateDegps = 1.5, NaturalPeriodS = 11.2, StaticHeelDeg = -1.0 } });
+        var s = StateFrameParser.TryParseState(json)!;
+        Assert.Equal(-4.25, s.Roll!.AngleDeg);
+        Assert.Equal(1.5, s.Roll.RateDegps);
+        Assert.Equal(11.2, s.Roll.NaturalPeriodS);
+        Assert.Equal(-1.0, s.Roll.StaticHeelDeg);
+        Assert.Equal(-4.25, StateInterpolator.PoseOf(s).RollDeg);
     }
 
     [Fact]
@@ -230,6 +259,76 @@ public class StateInterpolatorTests
         Assert.InRange(d, 41.0, 41.3); // 8 kn ≈ 4.115 m/s × 10 s
         Assert.True(b.Pos.X > a.Pos.X && b.Pos.Y > a.Pos.Y);
         Assert.Equal(4, b.Targets!.Count);
+    }
+}
+
+/// <summary>橫搖(state.roll)的插值與外推:角度走最短弧、角速度線性、無 roll 時為 0。</summary>
+public class RollInterpolationTests
+{
+    private static OwnShipState Frame(double t, double? rollDeg, double rate = 0)
+        => SmokeSequence.Frame(0) with
+        {
+            T = t,
+            Tick = (long)(t * 50),
+            Roll = rollDeg is { } a ? new RollState { AngleDeg = a, RateDegps = rate, NaturalPeriodS = 9, StaticHeelDeg = 0.5 } : null,
+            RadarEnvironment = null,
+        };
+
+    [Fact]
+    public void InterpolatesRollAngleAndRateBetweenFrames()
+    {
+        var it = new StateInterpolator { DelaySeconds = 0.0 };
+        it.Push(Frame(0.00, -5, 2), 100.00);
+        it.Push(Frame(0.04, 5, 4), 100.04);
+        it.Push(Frame(0.08, 7, 0), 100.08);
+        var s = it.Sample(100.02)!;
+        Assert.InRange(s.Own.RollDeg, -0.01, 0.01);
+        Assert.InRange(s.Own.RollRateDegps, 2.99, 3.01);
+        Assert.False(s.Extrapolating);
+    }
+
+    [Fact]
+    public void RollLerpTakesShortestArcAndKeepsSign()
+    {
+        Assert.InRange(StateInterpolator.LerpAngle(-3, 3, 0.5), -0.01, 0.01);
+        Assert.InRange(StateInterpolator.LerpAngle(-30, -20, 0.25), -27.51, -27.49);
+        var wrapped = StateInterpolator.LerpAngle(170, -170, 0.5); // 不會經過 0
+        Assert.True(Math.Abs(Math.Abs(wrapped) - 180) < 0.01);
+    }
+
+    [Fact]
+    public void ExtrapolationAdvancesRollByRate()
+    {
+        var it = new StateInterpolator { DelaySeconds = 0.0, MaxExtrapolationSeconds = 0.25 };
+        it.Push(Frame(0.00, 1.0, 2.0), 100.00);
+        it.Push(Frame(0.04, 1.08, 2.0), 100.04);
+        var s = it.Sample(100.14)!; // 0.1 s 超前
+        Assert.True(s.Extrapolating);
+        Assert.InRange(s.Own.RollDeg, 1.08 + 0.2 - 0.01, 1.08 + 0.2 + 0.01);
+        var p = StateInterpolator.Extrapolate(new Pose(0, 0, 0, 0, 0), 0, 1.0);
+        Assert.Equal(0.0, p.RollDeg); // 無橫搖:不變
+    }
+
+    [Fact]
+    public void FramesWithoutRollGiveZeroRollEverywhere()
+    {
+        var it = new StateInterpolator { DelaySeconds = 0.0 };
+        it.Push(Frame(0.00, null), 100.00);
+        it.Push(Frame(0.04, null), 100.04);
+        Assert.Equal(0.0, it.Sample(100.02)!.Own.RollDeg);
+        Assert.Equal(0.0, it.Sample(100.10)!.Own.RollDeg);
+        foreach (var (_, pose) in it.Sample(100.02)!.Targets) Assert.Equal(0.0, pose.RollDeg);
+    }
+
+    [Fact]
+    public void SmokeRollIsBoundedSinusoidWithStaticHeel()
+    {
+        var a = SmokeSequence.SmokeRoll(0);
+        Assert.Equal(SmokeSequence.SmokeRollStaticHeelDeg, a.AngleDeg, 9);
+        var quarter = SmokeSequence.SmokeRoll(SmokeSequence.SmokeRollPeriodS / 4);
+        Assert.InRange(quarter.AngleDeg, SmokeSequence.SmokeRollStaticHeelDeg + SmokeSequence.SmokeRollAmplitudeDeg - 1e-9, SmokeSequence.SmokeRollStaticHeelDeg + SmokeSequence.SmokeRollAmplitudeDeg + 1e-9);
+        Assert.InRange(quarter.RateDegps, -1e-9, 1e-9);
+        for (var k = 0; k < 250; k++) Assert.InRange(Math.Abs(SmokeSequence.Frame(k).Roll!.AngleDeg), 0, SmokeSequence.SmokeRollStaticHeelDeg + SmokeSequence.SmokeRollAmplitudeDeg + 1e-9);
     }
 }
 

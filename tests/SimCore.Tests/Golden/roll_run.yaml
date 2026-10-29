@@ -1,0 +1,11 @@
+# 由 export_roll_reference.py 產生(請勿手改):FSB1 滿載 10 kn、ship.roll 預設、真風 25 kn 自 060、Hs 2 m / Tp 9 s 自 120 JONSWAP、水深 30 m,50 s 右舵 20°、150 s 正舵(300 s)
+id: roll_run
+seed: 3
+ship: { id: FSB1, loading: full, roll: { enabled: true } }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 10, telegraph: FAH }
+environment:
+  wind: { trueSpeed: 25, trueDir: 60, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 30
+  waves: { significantHeight_m: 2.0, peakPeriod_s: 9.0, direction_deg: 120, spectrum: jonswap, gamma: 3.3 }

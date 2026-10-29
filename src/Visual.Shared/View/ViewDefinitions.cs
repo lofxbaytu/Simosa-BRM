@@ -31,6 +31,15 @@ public sealed record ViewDefinition
     /// <summary>true = 不隨艏向旋轉(鳥瞰北向上)</summary>
     public bool FixedNorthUp { get; init; }
 
+    /// <summary>
+    /// 觀察者隨船傾(駕駛台/翼橋/艉視:眼位固定在船上,船右傾時畫面地平線向左傾斜);鳥瞰固定於自船上方、不隨船傾。
+    /// state.roll 不存在時橫搖為 0,畫面與未實作橫搖前相同。
+    /// </summary>
+    public bool FollowsRoll => !FixedNorthUp;
+
+    /// <summary>此視角要套用到相機的船體橫搖角(度,右傾正;不隨船傾的視角為 0)。</summary>
+    public double CameraRollDeg(double shipRollDeg) => FollowsRoll ? shipRollDeg : 0.0;
+
     public static ViewDefinition For(ViewKind kind, HullParameters hull)
     {
         var eye = hull.EyeHeightAboveWater;

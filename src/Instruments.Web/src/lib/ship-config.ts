@@ -45,6 +45,8 @@ export interface ShipDisplayConfig {
    * 壓載艉傾時差距可達 1–2 m)。intermediate 依核心 GetLoading 以 full/ballast 各分量平均後再取最大。
    */
   draftMax_m: Readonly<Record<LoadingCondition, number>>;
+  /** 各裝載狀態的 GM (m;particulars loadingConditions.*.gm_m;無資料的裝載狀態省略,intermediate 無資料時取 full/ballast 平均;情境編輯器估計橫搖自然週期用) */
+  gm_m?: Readonly<Partial<Record<LoadingCondition, number>>>;
   /** 錨具(particulars anchors;錨鏈孔位置顯示錨鏈、示範模式的錨;無資料時省略) */
   anchors?: ShipAnchorConfig;
 }
@@ -181,6 +183,18 @@ export function maxDraft(cfg: ShipDisplayConfig, loading: LoadingCondition): num
   return cfg.draftMax_m[loading];
 }
 
+/** 各裝載狀態的 GM(particulars gm_m;null/缺值略過;intermediate 無資料時取 full/ballast 平均);全無資料回 undefined。 */
+function gmFrom(p: Particulars): Partial<Record<LoadingCondition, number>> | undefined {
+  const lc = p.loadingConditions as Record<string, { gm_m?: number | null } | undefined>;
+  const out: Partial<Record<LoadingCondition, number>> = {};
+  for (const k of ['full', 'ballast', 'intermediate'] as const) {
+    const v = lc[k]?.gm_m;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[k] = v;
+  }
+  if (out.full !== undefined && out.ballast !== undefined && out.intermediate === undefined) out.intermediate = Math.round(((out.full + out.ballast) / 2) * 100) / 100;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function fromParticulars(p: Particulars): ShipDisplayConfig {
   const rudderMax = p.rudder.maxAngle_deg;
   const normalMax = (p.rudder as { normalMaxAngle_deg?: number }).normalMaxAngle_deg ?? rudderMax;
@@ -205,6 +219,8 @@ function fromParticulars(p: Particulars): ShipDisplayConfig {
   };
   const anchors = anchorsFrom(p);
   if (anchors) cfg.anchors = anchors;
+  const gm = gmFrom(p);
+  if (gm) cfg.gm_m = gm;
   return cfg;
 }
 

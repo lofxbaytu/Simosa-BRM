@@ -424,6 +424,16 @@ public sealed class Scenario
             if (si.CoefficientScale is { } scale && (!double.IsFinite(scale) || scale < 0)) Error($"{sp}.coefficientScale", "coefficientScale 必須為 ≥ 0 的有限數值");
             if (si.EventThresholdT is { } thr && (!double.IsFinite(thr) || thr < 0)) Error($"{sp}.eventThreshold_t", "eventThreshold_t 必須為 ≥ 0 的有限數值");
         }
+        // 橫搖(ship.roll;設計文件 physics-roll.md 第 2 節):naturalPeriod_s > 0、0 < dampingRatio < 1、各 gain ≥ 0(皆有限;enabled 與否都檢查)。與 Python roll_issues 一致
+        if (Ship.Roll is { } roll)
+        {
+            const string rp = "ship.roll";
+            if (roll.NaturalPeriodS is { } tn && (!double.IsFinite(tn) || tn <= 0)) Error($"{rp}.naturalPeriod_s", "naturalPeriod_s 必須為正");
+            if (roll.DampingRatio is { } zeta && (!double.IsFinite(zeta) || zeta <= 0 || zeta >= 1)) Error($"{rp}.dampingRatio", "dampingRatio 須在 0–1 之間(不含)");
+            if (roll.WindHeelGain is { } wg && (!double.IsFinite(wg) || wg < 0)) Error($"{rp}.windHeelGain", "windHeelGain 必須為 ≥ 0 的有限數值");
+            if (roll.TurnHeelGain is { } tg && (!double.IsFinite(tg) || tg < 0)) Error($"{rp}.turnHeelGain", "turnHeelGain 必須為 ≥ 0 的有限數值");
+            if (roll.WaveGain is { } vg && (!double.IsFinite(vg) || vg < 0)) Error($"{rp}.waveGain", "waveGain 必須為 ≥ 0 的有限數值");
+        }
         return issues;
     }
 
@@ -571,6 +581,28 @@ public sealed class ScenarioShip
     /// <summary>FSB1 / FSB2</summary>
     public string Id { get; set; } = "FSB1";
     public LoadingCondition Loading { get; set; } = LoadingCondition.Ballast;
+    /// <summary>
+    /// 解耦 1 自由度橫搖(選填、預設關閉;設計文件 docs/design/physics-roll.md):enabled 時核心以線性橫搖方程式計算迴轉/風傾靜傾與浪激勵橫搖,
+    /// 輸出 state.roll、雜湊追加 ROLLDOF1 區塊;不回饋到 3 自由度運動。未給或 enabled = false 時與舊版逐位元相同。
+    /// </summary>
+    public ScenarioRoll? Roll { get; set; }
+}
+
+/// <summary>情境橫搖設定(<see cref="Scenario.StructuralIssues"/> 檢查:naturalPeriod_s &gt; 0、0 &lt; dampingRatio &lt; 1、各 gain ≥ 0;Python roll_issues 同路徑與訊息)。</summary>
+public sealed class ScenarioRoll
+{
+    /// <summary>啟用(預設 false:有區段但未啟用與無區段相同)</summary>
+    public bool Enabled { get; set; }
+    /// <summary>自然橫搖週期(s,&gt; 0;未給時依 GM 與船寬估計 T = 2·0.4·B/√GM,GM 取 particulars 或預設 1.2 m)</summary>
+    [JsonPropertyName("naturalPeriod_s")] public double? NaturalPeriodS { get; set; }
+    /// <summary>阻尼比 ζ(0–1 之間,不含;預設 0.08)</summary>
+    public double? DampingRatio { get; set; }
+    /// <summary>風傾倍率(≥ 0;預設 1)</summary>
+    public double? WindHeelGain { get; set; }
+    /// <summary>迴轉傾倍率(≥ 0;預設 1)</summary>
+    public double? TurnHeelGain { get; set; }
+    /// <summary>浪激勵倍率(≥ 0;預設 1)</summary>
+    public double? WaveGain { get; set; }
 }
 
 public sealed class GeoPoint

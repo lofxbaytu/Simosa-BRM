@@ -110,6 +110,9 @@ public sealed class SimulationEngine
     // 船間交互作用(設計文件 docs/design/physics-ship-interaction.md);情境 environment.shipInteraction.enabled 時建立,Initialize/Restore 時依情境重建
     // (力為純函數;跨步狀態只有事件旗標,進快照)
     private ShipInteractionModel? _interaction;
+    // 解耦 1 自由度橫搖(設計文件 docs/design/physics-roll.md);情境 ship.roll.enabled 時建立,Initialize/Restore 時依情境重建
+    // (不回饋 3-DOF;相位由獨立的 DeterministicRandom(情境種子)抽取,引擎的陣風亂數序列與運動不受啟用影響;φ、φ'、相位進快照)
+    private RollModel? _roll;
     private RadarEnvironmentState? _radarEnvironment;
     // state.radarEnvironment 廣播關鍵幀(只影響廣播/紀錄內容,不進快照與雜湊):載入/重設/倒帶後第一幀與之後每秒一次帶出,
     // 其他幀省略(內容練習中不變;雷達服務視省略為不變,時間倒退或情境切換時清除)。避免 25 Hz 每幀重複整份雨區定義
@@ -206,6 +209,8 @@ public sealed class SimulationEngine
     public ScenarioWaves? WaveSettings => _waveSettings;
     /// <summary>船間交互作用(情境未啟用 environment.shipInteraction 時 null;<see cref="ShipInteractionModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
     public ShipInteractionModel? ShipInteraction => _interaction;
+    /// <summary>解耦 1 自由度橫搖(情境未啟用 ship.roll 時 null;不影響 3-DOF 積分,啟用時雜湊追加 ROLLDOF1 區塊並輸出 state.roll)</summary>
+    public RollModel? Roll => _roll;
     /// <summary>自動舵可啟用:無 autopilotFailure,且電羅經未失效(指示航向有效)</summary>
     public bool AutopilotAvailable => !_faults.Contains(FaultNames.AutopilotFailure) && !_faults.Contains(FaultNames.GyroFailure);
 
@@ -444,6 +449,9 @@ public sealed class SimulationEngine
         _waves = CreateWaves();
         Environment.WaveHeightM = _waves?.SignificantHeightM ?? 0.0;
         _interaction = CreateInteraction();
+        // 橫搖:情境 ship.roll.enabled 時建立(φ = 0、相位由種子抽取),浪激勵的頻率成分依目前浪設定
+        _roll = RollModel.Create(Ship, Loading, sc);
+        _roll?.SetWaves(_waveSettings);
         // 雷達環境:只來自情境、練習中不變(不進快照與雜湊;重播由紀錄 header 的情境重建;廣播只在關鍵幀帶出)
         _radarEnvironment = ScenarioRadarEnvironmentBuilder.Build(sc, _projection);
         _radarEnvironmentPending = true;
@@ -489,6 +497,8 @@ public sealed class SimulationEngine
         _waves = CreateWaves();
         Environment.WaveHeightM = _waves?.SignificantHeightM ?? settings?.SignificantHeightM ?? 0.0;
         RefreshWaves();
+        // 橫搖的浪激勵成分(Tp/來向/浪譜)跟著變;Hs 於每步取模型目前值(漸變中為插值)
+        _roll?.SetWaves(settings);
     }
 
     /// <summary>
@@ -1590,6 +1600,8 @@ public sealed class SimulationEngine
         if (_act.LastStartOutcome != StartOutcome.None) OnStartOutcome(_act.LastStartOutcome);
 
         var sample = Environment.SampleAt(Motion.X, Motion.Y);
+        // 橫搖(解耦;情境啟用 ship.roll 時):以步首狀態、步首環境取樣與目前 Hs(漸變中為插值;無浪 0)推進 φ、φ',不影響下面的 3-DOF 積分
+        _roll?.Step(Motion, sample, _waves?.SignificantHeightM ?? 0.0, t, Options.Dt);
         // 外力(拖船/錨/碰墊/繫纜):只在情境使用時走含外力的積分(未使用時位元與舊版相同)
         // 岸壁效應:情境有 banks 時與外力模組相加(螺槳載荷取步首轉速,四階段共用);兩者皆未使用時走舊積分多載
         var external = _external.Active;
@@ -1715,6 +1727,9 @@ public sealed class SimulationEngine
         // 船間交互作用只在情境啟用且動力學接受外力時追加(未使用者雜湊與舊版相同)
         var hashInteraction = _interaction is { Active: true };
         if (hashInteraction) size += ShipInteractionModel.HashLongs * 8;
+        // 橫搖只在情境啟用 ship.roll 時追加(未啟用者雜湊與舊版相同)
+        var hashRoll = _roll is not null;
+        if (hashRoll) size += RollModel.HashLongs * 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
@@ -1774,6 +1789,7 @@ public sealed class SimulationEngine
         if (hashBank) o += _bank!.WriteHash(buf[o..]);
         if (hashWaves) o += _waves!.WriteHash(buf[o..]);
         if (hashInteraction) o += _interaction!.WriteHash(buf[o..]);
+        if (hashRoll) o += _roll!.WriteHash(buf[o..]);
         SHA256.HashData(buf[..o], _hash);
     }
 
@@ -1819,6 +1835,8 @@ public sealed class SimulationEngine
         ShipInteraction = _interaction is { Active: true } ? _interaction.CreateSnapshot() : null,
         // 浪:只在 setEnvironment waves 變更後寫出(情境原設定不寫,既有快照位元不變;Hs 為目前值,漸變在 Timeline.Ramps)
         Waves = _wavesOverridden ? WaveSnapshotOf() : null,
+        // 橫搖:只在情境啟用 ship.roll 時寫出(φ、φ'、相位;未啟用的快照位元不變)
+        Roll = _roll?.CreateSnapshot(),
         Phase = Phase,
         VisibilityNm = Environment.VisibilityNm,
         StateHash = StateHash,
@@ -1889,6 +1907,10 @@ public sealed class SimulationEngine
         // 船間交互作用:力為純函數、事件旗標依快照(舊快照或未啟用者為未進入),目標船還原後重算步末結果(RefreshInteraction)
         _interaction = CreateInteraction();
         if (s.ShipInteraction is { } sis) _interaction?.RestoreEvent(sis.EventActive, sis.EventTargetId);
+        // 橫搖:依情境重建(相位由種子抽取、φ = 0),浪激勵成分依還原後的浪設定,再以快照覆寫 φ、φ' 與相位(舊快照缺此欄位即為初始)
+        _roll = RollModel.Create(Ship, Loading, Scenario);
+        _roll?.SetWaves(_waveSettings);
+        if (s.Roll is { } rs) _roll?.Restore(rs);
 
         Tick = s.Tick;
         _radarEnvironmentPending = true;
@@ -2195,6 +2217,7 @@ public sealed class SimulationEngine
             Bank = _bank is { Active: true } bank ? bank.State() : null,
             Waves = _waves is { Active: true } waves ? waves.State() : null,
             ShipInteraction = _interaction is { Active: true } inter ? inter.State() : null,
+            Roll = _roll?.State(),
             RadarEnvironment = includeRadarEnvironment ? _radarEnvironment : null,
         };
     }

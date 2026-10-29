@@ -200,6 +200,21 @@ export interface ShipInteractionState {
   event?: boolean;
 }
 
+/**
+ * 橫搖(state.schema.json roll;情境 ship.roll.enabled 時才有):解耦的 1 自由度線性橫搖,不回饋到 3 自由度運動。
+ * 角度右傾正;staticHeel_deg 為迴轉離心與風傾的等效靜傾,動態橫搖 = angle_deg − staticHeel_deg。
+ */
+export interface RollState {
+  /** 橫搖角(度,右傾正) */
+  angle_deg: number;
+  /** 橫搖角速度(度/秒,右傾方向正) */
+  rate_degps: number;
+  /** 自然橫搖週期(s) */
+  naturalPeriod_s: number;
+  /** 靜傾角(度,右傾正) */
+  staticHeel_deg: number;
+}
+
 export interface OwnShipState {
   /** 模擬時間(秒,自練習開始) */
   t: number;
@@ -277,4 +292,6 @@ export interface OwnShipState {
   waves?: WaveState;
   /** 船間交互作用(情境 environment.shipInteraction.enabled 時才有) */
   shipInteraction?: ShipInteractionState;
+  /** 橫搖(情境 ship.roll.enabled 時才有;無則操船台不放傾斜儀、視景不套用相機橫滾) */
+  roll?: RollState;
 }

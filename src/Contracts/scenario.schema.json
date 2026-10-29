@@ -58,6 +58,18 @@
             "intermediate"
           ],
           "default": "ballast"
+        },
+        "roll": {
+          "type": "object",
+          "description": "解耦 1 自由度橫搖(選填、預設關閉;docs/design/physics-roll.md):enabled 時核心以線性橫搖方程式 φ'' + 2ζω φ' + ω² φ = ω²(φ_turn + φ_wind) + 浪激勵 計算橫搖(φ_turn 迴轉離心傾角 −atan(v_c·r/g)·turnHeelGain,右轉向外 = 左傾;φ_wind 風傾力矩等效靜傾角(側面積、視風速平方、GM)·windHeelGain;浪激勵為 environment.waves 的有效波斜率,5 個浪譜成分的正弦和,相位由情境種子產生一次並進快照,遭遇頻率由船在波場中移動自然產生),輸出 state.roll、雜湊追加 ROLLDOF1 區塊。不回饋到 3 自由度運動(u/v/r/x/y/ψ 與未啟用時逐位元相同)。未給或 enabled = false 時 state.roll 省略、數值與雜湊與舊版相同。C# 與 Python 參考實作同公式(夾具 tests/SimCore.Tests/Golden/roll_run.csv)",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "啟用(預設 false)" },
+            "naturalPeriod_s": { "type": "number", "exclusiveMinimum": 0, "description": "自然橫搖週期(s);未給時依 GM 與船寬估計 T = 2·0.4·B/√GM(Weiss 公式;GM 取 particulars loadingConditions.<loading>.gm_m,無則預設 1.2 m)" },
+            "dampingRatio": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.08, "description": "阻尼比 ζ(0–1 之間,不含)" },
+            "windHeelGain": { "type": "number", "minimum": 0, "default": 1, "description": "風傾倍率(0 = 無風傾)" },
+            "turnHeelGain": { "type": "number", "minimum": 0, "default": 1, "description": "迴轉傾倍率(0 = 無迴轉傾;物理上約為 (KG − T/2)/GM,FSB1 滿載約 1.4)" },
+            "waveGain": { "type": "number", "minimum": 0, "default": 1, "description": "浪激勵倍率(0 = 無浪激勵;有效波斜率係數)" }
+          }
         }
       }
     },

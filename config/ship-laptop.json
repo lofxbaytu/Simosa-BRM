@@ -36,9 +36,11 @@
     "areas": "data/areas"
   },
   "web": {
-    "$comment": "靜態網頁(app/web)由 app/web-server/simosa-web 提供;openPages 於 Windows 以預設瀏覽器(或 WebView2 殼)開啟",
+    "$comment": "靜態網頁(app/web)由 app/web-server/simosa-web 提供;openPages 於 Windows 以預設瀏覽器開啟。shell=true(或 start-ship-laptop.ps1 -Shell)改以 WebView2 操船台外殼 app/shell/SimosaBRM.Shell.exe 每頁一個 kiosk 全螢幕程序開啟(找不到外殼時退回瀏覽器);shellMonitors 為各頁的螢幕索引(0 起算,與 openPages 同序;docs/ops/安裝與啟動.md 第 4.5 節)",
     "enabled": true,
     "bind": "0.0.0.0",
+    "shell": false,
+    "shellMonitors": [0, 0, 0],
     "openPages": [
       "index.html?station=bridge",
       "instructor.html?mode=simple",

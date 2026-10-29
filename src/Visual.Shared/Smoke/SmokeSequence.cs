@@ -12,9 +12,27 @@ namespace SimosaBRM.Visual.Shared.Smoke;
 /// 自第 <see cref="BerthSegmentStartFrame"/> 幀(t = 2 s)起另帶示意泊位 <see cref="SmokeBerthId"/> 與四條繫纜
 /// (正常/黃/紅/斷纜各一;泊位幾何由 <see cref="SmokeBerthArea"/> 給出、沿自船航跡左舷 22 m,船仍直線前進 — 只驗證繫纜節點,非物理)。
 /// 每幀亦帶 utc(2026-05-05T22:30:00Z + t,高雄當地 06:30,日出前後)供日夜自動模式驗證。
+/// 每幀另帶示意橫搖 <see cref="SmokeRoll"/>(靜傾 0.5° + 振幅 3°、週期 9 s 的正弦)驗證相機/船體橫搖與 HUD;非物理。
 /// </summary>
 public static class SmokeSequence
 {
+    public const double SmokeRollStaticHeelDeg = 0.5;
+    public const double SmokeRollAmplitudeDeg = 3.0;
+    public const double SmokeRollPeriodS = 9.0;
+
+    /// <summary>示意橫搖:φ = 靜傾 + A·sin(2πt/T),角速度為其導數(度/秒)。</summary>
+    public static RollState SmokeRoll(double t)
+    {
+        var w = 2 * Math.PI / SmokeRollPeriodS;
+        return new RollState
+        {
+            AngleDeg = SmokeRollStaticHeelDeg + SmokeRollAmplitudeDeg * Math.Sin(w * t),
+            RateDegps = SmokeRollAmplitudeDeg * w * Math.Cos(w * t),
+            NaturalPeriodS = SmokeRollPeriodS,
+            StaticHeelDeg = SmokeRollStaticHeelDeg,
+        };
+    }
+
     public const double OriginLat = 22.53;
     public const double OriginLon = 120.24;
     public const double Hz = 25.0;
@@ -79,6 +97,7 @@ public static class SmokeSequence
                 new AnchorStatusState { Side = "starboard", Status = "stowed", LengthM = 0, TensionT = 0, OnBottomM = 0 },
             },
             Berth = index >= BerthSegmentStartFrame ? SmokeBerth() : null,
+            Roll = SmokeRoll(t),
             RadarEnvironment = withRadarEnvironment ? new RadarEnvironmentState
             {
                 RainAreas = new[]

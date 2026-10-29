@@ -3,8 +3,11 @@ using SimosaBRM.SimCore.Scenario;
 
 namespace SimosaBRM.Visual.Shared.State;
 
-/// <summary>插值後的一個物體姿態(ENU 公尺、航向度)。</summary>
-public readonly record struct Pose(double East, double North, double HeadingDeg, double SogKn, double CogDeg);
+/// <summary>
+/// 插值後的一個物體姿態(ENU 公尺、航向度)。RollDeg 為橫搖角(度,右傾正;state.roll 不存在時 0)、
+/// RollRateDegps 為橫搖角速度(度/秒;外推用);目標船無橫搖,兩者為 0。
+/// </summary>
+public readonly record struct Pose(double East, double North, double HeadingDeg, double SogKn, double CogDeg, double RollDeg = 0.0, double RollRateDegps = 0.0);
 
 /// <summary>某一顯示幀要畫的全部內容:自船姿態、目標船姿態(含原始 TargetState)、最後一幀的其餘資料。</summary>
 public sealed class VisualSample
@@ -199,7 +202,7 @@ public sealed class StateInterpolator
         return _targetBuffer;
     }
 
-    public static Pose PoseOf(OwnShipState s) => new(s.Pos.X, s.Pos.Y, s.Heading, s.Sog, s.Cog);
+    public static Pose PoseOf(OwnShipState s) => new(s.Pos.X, s.Pos.Y, s.Heading, s.Sog, s.Cog, s.Roll?.AngleDeg ?? 0.0, s.Roll?.RateDegps ?? 0.0);
     public static Pose PoseOf(TargetState t) => new(t.Pos.X, t.Pos.Y, t.Heading, t.Sog, t.Cog);
 
     public static Pose Lerp(OwnShipState a, OwnShipState b, double f) => Lerp(PoseOf(a), PoseOf(b), f);
@@ -212,14 +215,20 @@ public sealed class StateInterpolator
             a.North + (b.North - a.North) * f,
             LerpHeading(a.HeadingDeg, b.HeadingDeg, f),
             a.SogKn + (b.SogKn - a.SogKn) * f,
-            LerpHeading(a.CogDeg, b.CogDeg, f));
+            LerpHeading(a.CogDeg, b.CogDeg, f),
+            LerpAngle(a.RollDeg, b.RollDeg, f),
+            a.RollRateDegps + (b.RollRateDegps - a.RollRateDegps) * f);
     }
 
     /// <summary>航向插值走最短弧(359 → 1 不會轉一整圈)。</summary>
     public static double LerpHeading(double a, double b, double f)
         => Units.NormalizeHeadingDeg(a + Units.WrapDeg180(b - a) * f);
 
-    /// <summary>以 COG/SOG 與 ROT(度/分)外推 dt 秒。</summary>
+    /// <summary>帶號角度(橫搖角,−180..180)插值走最短弧;結果保持帶號(右傾正)。</summary>
+    public static double LerpAngle(double a, double b, double f)
+        => Units.WrapDeg180(a + Units.WrapDeg180(b - a) * f);
+
+    /// <summary>以 COG/SOG 與 ROT(度/分)外推 dt 秒;橫搖以角速度線性外推(最多 MaxExtrapolationSeconds,誤差遠小於一個週期)。</summary>
     public static Pose Extrapolate(Pose p, double rotDegPerMin, double dt)
     {
         if (dt <= 0) return p;
@@ -230,6 +239,7 @@ public sealed class StateInterpolator
             East = p.East + v * Math.Sin(c) * dt,
             North = p.North + v * Math.Cos(c) * dt,
             HeadingDeg = Units.NormalizeHeadingDeg(p.HeadingDeg + rotDegPerMin / 60.0 * dt),
+            RollDeg = Units.WrapDeg180(p.RollDeg + p.RollRateDegps * dt),
         };
     }
 }

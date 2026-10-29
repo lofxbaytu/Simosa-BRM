@@ -97,8 +97,26 @@ public sealed record OwnShipState
     [JsonPropertyName("waves")] public Physics.External.WaveDriftState? Waves { get; init; }
     /// <summary>船間交互作用(只在情境 environment.shipInteraction.enabled 且動力學接受外力時輸出;docs/design/physics-ship-interaction.md 第 5 節)</summary>
     [JsonPropertyName("shipInteraction")] public Physics.External.ShipInteractionState? ShipInteraction { get; init; }
+    /// <summary>橫搖(解耦 1 自由度線性模型;只在情境 ship.roll.enabled 時輸出,無則省略且其他欄位不變;視景相機與傾斜儀據此顯示)</summary>
+    [JsonPropertyName("roll")] public RollState? Roll { get; init; }
     /// <summary>雷達環境(情境 environment.radar 換算為 ENU;情境未給時省略;docs/design/radar-arpa.md 第 2.1 節)</summary>
     [JsonPropertyName("radarEnvironment")] public SimosaBRM.SimCore.Scenario.RadarEnvironmentState? RadarEnvironment { get; init; }
+}
+
+/// <summary>
+/// 橫搖狀態(state.schema.json <c>roll</c>;情境 <c>ship.roll.enabled</c> 時輸出):角度右傾正(度)、角速度(度/秒)、
+/// 自然週期(秒)、靜傾角(迴轉離心 + 風傾的等效靜傾,右傾正;動態 = angle_deg − staticHeel_deg)。
+/// </summary>
+public sealed record RollState
+{
+    /// <summary>橫搖角(度,右傾正)</summary>
+    [JsonPropertyName("angle_deg")] public required double AngleDeg { get; init; }
+    /// <summary>橫搖角速度(度/秒,右傾方向正)</summary>
+    [JsonPropertyName("rate_degps")] public required double RateDegps { get; init; }
+    /// <summary>自然橫搖週期(秒)</summary>
+    [JsonPropertyName("naturalPeriod_s")] public required double NaturalPeriodS { get; init; }
+    /// <summary>靜傾角(度,右傾正;迴轉與風傾的等效靜傾)</summary>
+    [JsonPropertyName("staticHeel_deg")] public required double StaticHeelDeg { get; init; }
 }
 
 /// <summary>真值區塊(state.schema.json <c>truth</c>)。</summary>

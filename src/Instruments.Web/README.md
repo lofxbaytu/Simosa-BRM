@@ -4,7 +4,7 @@
 
 | 頁面 | 用途 |
 |---|---|
-| `index.html` | 駕駛台儀器與操船台(規劃書第 7 章第一版 conning 顯示與操船台);船上筆電以瀏覽器全螢幕顯示,之後包進 WebView2 殼(`src/Instruments.Shell`) |
+| `index.html` | 駕駛台儀器與操船台(規劃書第 7 章第一版 conning 顯示與操船台);船上筆電以瀏覽器全螢幕顯示,或以 WebView2 殼 `src/Shell.WebView2`(`start-ship-laptop.ps1 -Shell`;kiosk,docs/ops/安裝與啟動.md 第 4.5 節)顯示 |
 | `instructor.html` | 教官站(第 9.1 節;訪船船長直連時用)、船上簡化教官模式(`?mode=simple`)與重播檢視(`?mode=replay`,第 9.2 節講評站雛型),見下方「教官站」一節 |
 | `report.html` | 講評報告、行為標記評估表、個人訓練紀錄、課程班次紀錄與教官/證書(第 8.2、8.4、9.1、9.2 節;列印 / 另存 PDF、JSON/CSV 匯出),見下方「講評報告頁」一節 |
 

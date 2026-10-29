@@ -46,6 +46,7 @@ from . import paths
 from .external import normalise_sections, normalise_ship_interaction, normalise_waves
 from .external import structural_issues as external_structural_issues
 from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship, parse_utc
+from .roll import normalise_roll
 from .depth import depth_zones_from_scenario
 from .tide import tide_from_scenario
 from .current import current_from_scenario
@@ -656,7 +657,34 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
     # ---- 船間交互作用(environment.shipInteraction;C# 在浪之後檢查)
     if isinstance(env, dict) and env.get("shipInteraction") is not None:
         ship_interaction_issues(env.get("shipInteraction"), error)
+    # ---- 橫搖(ship.roll;C# 在船間交互作用之後檢查)
+    ship = raw.get("ship")
+    if isinstance(ship, dict) and ship.get("roll") is not None:
+        roll_issues(ship.get("roll"), error)
     return issues
+
+
+def roll_issues(roll: Any, error: Any) -> None:
+    """``ship.roll`` 的結構檢查(C# Scenario.StructuralIssues 的橫搖段;路徑與訊息相同;docs/design/physics-roll.md 第 2 節):
+    naturalPeriod_s > 0、0 < dampingRatio < 1、windHeelGain / turnHeelGain / waveGain ≥ 0(皆有限;enabled 與否都檢查)。
+    非物件:C# 於反序列化即拒絕,此處以 ``ship.roll`` 一條錯誤表示。"""
+    rp = "ship.roll"
+    if not isinstance(roll, dict):
+        error(rp, "roll 須為物件")
+        return
+    en = roll.get("enabled")
+    if en is not None and not isinstance(en, bool):
+        error(f"{rp}.enabled", "enabled 須為布林值")  # C# 於反序列化即拒絕;與網頁編輯器訊息相同
+    tn = roll.get("naturalPeriod_s")
+    if tn is not None and (not _is_num(tn) or not math.isfinite(tn) or float(tn) <= 0.0):
+        error(f"{rp}.naturalPeriod_s", "naturalPeriod_s 必須為正")
+    zeta = roll.get("dampingRatio")
+    if zeta is not None and (not _is_num(zeta) or not math.isfinite(zeta) or float(zeta) <= 0.0 or float(zeta) >= 1.0):
+        error(f"{rp}.dampingRatio", "dampingRatio 須在 0–1 之間(不含)")
+    for key in ("windHeelGain", "turnHeelGain", "waveGain"):
+        g = roll.get(key)
+        if g is not None and (not _is_num(g) or not math.isfinite(g) or float(g) < 0.0):
+            error(f"{rp}.{key}", f"{key} 必須為 ≥ 0 的有限數值")
 
 
 def ship_interaction_issues(si: Any, error: Any) -> None:
@@ -1132,7 +1160,8 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         "seed": int(seed_raw),
         "startTimeUtc": str(raw["startTimeUtc"]) if raw.get("startTimeUtc") is not None else None,
         "timeScale": ts,
-        "ship": {"id": ship_id, "loading": loading},
+        # 橫搖(roll.normalise_roll;結構檢查已於 roll_issues 通過;未給 None):apply_scenario 交給 MMGShip.configure_roll
+        "ship": {"id": ship_id, "loading": loading, "roll": normalise_roll(ship.get("roll"))},
         "origin": origin,
         "initial": {"lat": lat, "lon": lon, "x": x, "y": y, "heading": heading % 360.0, "speed": speed,
                     "telegraph": telegraph, "rpm": rpm, "rudder": rudder},
@@ -1250,6 +1279,8 @@ def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
     ship.set_depth_zones(depth_zones_from_scenario(sc.get("depthZones")))
     # 外力模組:以情境初始狀態與水深建立(拖船 initial、初始已錨泊、繫纜 initial fast、岸壁;C# Initialize)
     ship.configure_external(sc.get("external"))
+    # 橫搖(ship.roll;roll.py):外力/浪之後建立,浪激勵成分取情境浪設定、相位由情境種子抽取(C# Initialize 的 RollModel.Create + SetWaves)
+    ship.configure_roll(sc["ship"].get("roll"))
 
 
 def ship_from_scenario(sc: dict[str, Any], dt: float = 0.02, coeffs: dict[str, Any] | None = None,

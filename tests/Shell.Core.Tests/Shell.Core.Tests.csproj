@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- WebView2 外殼可測邏輯的測試(規劃書第 5.2 節「WebView2 殼」;R1/R13):參數 → 網址、Runtime 訊息、重試退避、路徑;純 net8.0,Linux 可跑 -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>SimosaBRM.Shell.Core.Tests</RootNamespace>
+    <AssemblyName>SimosaBRM.Shell.Core.Tests</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Shell.Core/Shell.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -62,6 +62,8 @@ public sealed record EngineSnapshot
     /// 缺此欄位時還原為情境 environment.waves。Enabled = false 表示已關閉;SignificantHeightM 為快照當下的 Hs(漸變中為插值),進行中的 Hs 漸變在 Timeline.Ramps。
     /// </summary>
     public WaveSnapshot? Waves { get; init; }
+    /// <summary>橫搖(φ、φ'、浪激勵相位;只在情境啟用 ship.roll 時寫入;缺此欄位時還原為初始:φ = 0、相位由種子重抽;設計文件 physics-roll.md)</summary>
+    public Physics.RollSnapshot? Roll { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
     public required string StateHash { get; init; }
 

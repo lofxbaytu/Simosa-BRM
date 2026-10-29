@@ -10,16 +10,19 @@
 .PARAMETER Scenario   覆寫預設情境(例如 data\scenarios\E05_pilot_traffic.yaml)
 .PARAMETER Duration   模擬秒數到達後 SimCore 自動結束並一併結束其他程序(煙霧測試)
 .PARAMETER NoWait     啟動後即返回(預設前景等待 Ctrl+C;之後以 stop-all.ps1 結束:先寫停止檔讓核心寫完紀錄 footer,逾時才強制結束)
+.PARAMETER Shell      以 WebView2 操船台外殼(app\shell\SimosaBRM.Shell.exe;kiosk 全螢幕,每個 web.openPages 一個程序)開啟網頁,取代預設瀏覽器;
+                      config 的 web.shell=true 同義;找不到外殼時退回瀏覽器(docs\ops\安裝與啟動.md 第 4.5 節)
 .EXAMPLE
   .\start-ship-laptop.ps1
   .\start-ship-laptop.ps1 -Scenario data\scenarios\E05_pilot_traffic.yaml -Duration 60 -NoVisual
+  .\start-ship-laptop.ps1 -Shell
 #>
 [CmdletBinding()]
 param(
     [string]$Config = 'config\ship-laptop.json',
     [string]$Scenario,
     [double]$Duration = 0,
-    [switch]$NoVisual, [switch]$NoWeb, [switch]$NoRadar, [switch]$NoSync, [switch]$NoBrowser, [switch]$NoWait, [switch]$CheckOnly
+    [switch]$NoVisual, [switch]$NoWeb, [switch]$NoRadar, [switch]$NoSync, [switch]$NoBrowser, [switch]$NoWait, [switch]$CheckOnly, [switch]$Shell
 )
 . (Join-Path $PSScriptRoot 'launch-common.ps1')
 $root = Get-LaunchRoot
@@ -49,10 +52,14 @@ $webDll = $null; if (-not $NoWeb -and (Get-Cfg $cfg 'web.enabled' $true)) { $web
 $pkgDll = $null; if (-not $NoSync -and (Get-Cfg $cfg 'sync.enabled' $true)) { $pkgDll = Find-LaunchDll 'simosa-pkg' 'Tools.Packaging.Cli' 'simosa-pkg.dll' $root; if (-not $pkgDll) { Write-Warning '找不到 simosa-pkg,略過同步服務' } }
 $webDir = $null
 foreach ($d in @((Join-Path $root 'app\web'), (Join-Path $root 'build\web\instruments'))) { if (Test-Path (Join-Path $d 'index.html')) { $webDir = $d; break } }
+# WebView2 外殼(-Shell 或 config web.shell=true;預設仍為瀏覽器)
+$useShell = $Shell -or [bool](Get-Cfg $cfg 'web.shell' $false)
+$shellExe = $null; if ($useShell) { $shellExe = Find-LaunchShellExe $root; if (-not $shellExe) { Write-Warning '找不到 WebView2 外殼 app\shell\SimosaBRM.Shell.exe,改用預設瀏覽器' } }
 
 if ($CheckOnly) {
     Write-Host "SimCore.Host:$hostDll"; Write-Host "雷達:$(if ($radarDll) { $radarDll } else { '略過' })"
     Write-Host "網頁:$(if ($webDll) { $webDll } else { '略過' }) ← $(if ($webDir) { $webDir } else { '(找不到 app\web)' })"; Write-Host "同步:$(if ($pkgDll) { $pkgDll } else { '略過' })"
+    Write-Host "外殼:$(if ($shellExe) { $shellExe } elseif ($useShell) { '(找不到,將用瀏覽器)' } else { '未啟用(-Shell 或 web.shell=true)' })"
     return
 }
 
@@ -99,7 +106,11 @@ try {
     if ($webDll -and $webDir) {
         $webProc = Start-LaunchProcess -Name 'web' -Log (Join-Path $logDir 'web.log') -File 'dotnet' -Arguments @($webDll, '--root', $webDir, '--port', $webPort, '--bind', (Get-Cfg $cfg 'web.bind' '0.0.0.0')) -WorkDir $root
         if (-not (Wait-LaunchTcp '127.0.0.1' $webPort 10 -Process $webProc)) { Write-Warning "simosa-web 未開啟埠 $webPort 或已結束,見 $logs\web.log" }
-        if (-not $NoBrowser) { Open-LaunchPages "http://127.0.0.1:$webPort" (Get-Cfg $cfg 'web.openPages' @()) @{ ship = $shipIp; stateWs = $wsPort; radarWs = $radarPort } }
+        if (-not $NoBrowser) {
+            $subst = @{ ship = $shipIp; stateWs = $wsPort; radarWs = $radarPort }
+            if ($shellExe) { Start-LaunchShellPages $shellExe "http://127.0.0.1:$webPort" (Get-Cfg $cfg 'web.openPages' @()) $subst $root $logDir (Get-Cfg $cfg 'web.shellMonitors' $null) }
+            else { Open-LaunchPages "http://127.0.0.1:$webPort" (Get-Cfg $cfg 'web.openPages' @()) $subst }
+        }
     } elseif ($webDll) { Write-Warning '找不到網頁目錄(app\web 或 build\web\instruments),略過' }
 
     # 4) 視景:每個 views[] 一個程序(docs\design\visual-client.md 第 7 節)

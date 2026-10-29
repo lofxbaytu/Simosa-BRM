@@ -29,14 +29,14 @@ SimCore.Host ──ws 8765 (state 25 Hz, event, assessment)──▶ Visual.Shar
 | 元件 | 位置 | 職責 |
 |---|---|---|
 | `Net/StateClient` | Visual.Shared | ClientWebSocket 訂閱;斷線以 0.5 → 5 s 退避自動重連;不走系統代理;事件框只記 kind 供 HUD |
-| `State/StateFrameParser` | Visual.Shared | 分辨 state / event / assessment 框;以 `ContractJson` 反序列化 `OwnShipState`(含 targets/tugs/anchors/berth/truth/sensors/alerts/radarEnvironment);壞框不丟例外 |
-| `State/StateInterpolator` | Visual.Shared | 第 4 節 |
+| `State/StateFrameParser` | Visual.Shared | 分辨 state / event / assessment 框;以 `ContractJson` 反序列化 `OwnShipState`(含 targets/tugs/anchors/berth/truth/sensors/alerts/radarEnvironment/roll);壞框不丟例外 |
+| `State/StateInterpolator` | Visual.Shared | 第 4 節(含 `state.roll` 橫搖角最短弧插值與角速度外推) |
 | `State/OriginSolver` | Visual.Shared | 由狀態幀的 lat/lon 與 ENU x/y 反推情境原點(迭代 4 次,1e-8°),區域資料據此投影 |
-| `Scene/SceneCoordinates` | Visual.Shared | 第 3 節座標換算 |
+| `Scene/SceneCoordinates` | Visual.Shared | 第 3 節座標換算;橫搖的船體橫剖面旋轉 `HeelOffset`、觀察者隨船傾的橫滾/俯仰分量 `ObserverHeelComponents`(第 4 節「橫搖視角」) |
 | `Quality/*` | Visual.Shared | 等級參數、硬體偵測、自動降級、持久化 |
 | `Area/*` | Visual.Shared | 區域檔載入、擠出幾何(耳切法三角化)、情境 → 區域對照 |
 | `Ship/*` | Visual.Shared | particulars → 船體參數、程序化船體/上層建築/艏樓/桅網格(完整與低面數) |
-| `View/*` | Visual.Shared | 視角定義(眼位、偏航、FOV)、啟動參數解析 |
+| `View/*` | Visual.Shared | 視角定義(眼位、偏航、FOV、是否隨船橫搖 `FollowsRoll`)、啟動參數解析 |
 | `Env/EnvironmentMapper` | Visual.Shared | 能見度 → 霧、風 → 海況/波高、雨區 → 雨、日夜/太陽位置、月光與夜空亮度(`Env/MoonModel`:月球位置/月相/照度) |
 | `Smoke/*` | Visual.Shared | 無頭煙霧測試的假狀態序列與報告 |
 | `scripts/Main.cs` | Visual.Godot | 啟動流程、每幀更新、品質套用、煙霧模式 |
@@ -44,7 +44,7 @@ SimCore.Host ──ws 8765 (state 25 Hz, event, assessment)──▶ Visual.Shar
 | `scripts/WeatherNode.cs` | Visual.Godot | 天空、太陽、霧、雨粒子 |
 | `scripts/ShipNode.cs`、`NavLights.cs`、`TargetShipsNode.cs`、`TugsAndAnchorsNode.cs` | Visual.Godot | 自船、目標船(含 LOD)、航行燈、拖船與纜線、錨鏈 |
 | `scripts/HarbourNode.cs` | Visual.Godot | 港口幾何、碰墊/繫船柱、導燈、水域示意線 |
-| `scripts/CameraRig.cs`、`HudLayer.cs` | Visual.Godot | 視角切換與環視、HUD 與品質 UI |
+| `scripts/CameraRig.cs`、`HudLayer.cs` | Visual.Godot | 視角切換與環視、相機隨船橫搖(`HeeledBasis`)、HUD(含橫搖/靜傾/週期)與品質 UI |
 
 ## 3. 座標系
 
@@ -58,10 +58,16 @@ SimCore.Host ──ws 8765 (state 25 Hz, event, assessment)──▶ Visual.Shar
 
 ## 4. 狀態契約與時間平滑
 
-- 狀態幀:`src/Contracts/state.schema.json`(C# 型別 `SimCore.Contracts.OwnShipState`)。視景使用:`t`、`utc`(選填;日夜,見下)、`pos`、`heading`、`cog`、`sog`、`rot`、`rudder`、`rpm`、`telegraph`、`wind`、`visibility_nm`、`flags`、`targets[]`(`pos/heading/cog/sog/rot/loa/beam/draft/shipType/lights/aisOn`;**AIS 關閉者仍畫**,視景是「眼睛看到的」)、`tugs[]`(`pos/mode/status/direction_deg/lineParted`)、`anchors[]`(`side/status/position`)、`berth`(`id`、`lines[]{id, status, tension_t, mbl_t, bollardId}` → 繫纜;碰墊/繫船柱位置來自區域檔)、`radarEnvironment`(雨區;**只在關鍵幀帶出**,插值器保留最後一次、時間倒退時清除)、`scenario.id`(查區域對照)。`truth/sensors/alerts` 可解析但視景不顯示(學員端不應看到真值)。
+- 狀態幀:`src/Contracts/state.schema.json`(C# 型別 `SimCore.Contracts.OwnShipState`)。視景使用:`t`、`utc`(選填;日夜,見下)、`pos`、`heading`、`cog`、`sog`、`rot`、`rudder`、`rpm`、`telegraph`、`wind`、`visibility_nm`、`flags`、`targets[]`(`pos/heading/cog/sog/rot/loa/beam/draft/shipType/lights/aisOn`;**AIS 關閉者仍畫**,視景是「眼睛看到的」)、`tugs[]`(`pos/mode/status/direction_deg/lineParted`)、`anchors[]`(`side/status/position`)、`berth`(`id`、`lines[]{id, status, tension_t, mbl_t, bollardId}` → 繫纜;碰墊/繫船柱位置來自區域檔)、`radarEnvironment`(雨區;**只在關鍵幀帶出**,插值器保留最後一次、時間倒退時清除)、`scenario.id`(查區域對照)、`roll`(橫搖,選填;見下「橫搖視角」)。`truth/sensors/alerts` 可解析但視景不顯示(學員端不應看到真值)。
 - 事件框 `{"type":"event", "event":{"kind":…}}` 與 `{"type":"assessment"}` 只記最近事件 kind 於 HUD。
 - **插值/外推**(`StateInterpolator`):保留最近 8 幀的 (t, 到達牆鐘);速率 = Δt/Δ牆鐘(即時 1、凍結 0、timescale 10 → 10);顯示時間 = 最新 t + 速率 × (now − 到達 − 0.08 s 緩衝);落在兩幀間線性插值(航向走最短弧);超出最新幀以 COG/SOG/ROT 外推最多 0.25 s,之後凍結並標示 `Stalled`;t 倒退(重設/倒帶/重播)或前跳 > 5 s(快照還原)清空歷史。目標船以 id 配對插值,只在單側者取最新幀。
   - **成批到達**(啟動第一幀、網路停頓後 TCP 一次送達數幀、GC 卡頓):同牆鐘(間隔 ≤ 2 ms)到達的幀不含速率資訊,速率改以「有效間隔的中位數 × 間隔數」作 Δ牆鐘下限(有效間隔不到一半時沿用前值;沒有成批幀時直接用最舊/最新兩幀),避免估到 2–3 倍;顯示時間另外保證單調不減(暫停而非倒退;Reset 例外)。凍結(Δt = 0)直接判為速率 0。測試:`StateInterpolatorTests`、`StateInterpolatorBurstTests`。
+- **橫搖視角**(`state.roll`;情境 `ship.roll.enabled` 時核心輸出 `{angle_deg 右傾正, rate_degps, naturalPeriod_s, staticHeel_deg}`,契約 `state.schema.json roll`;核心為解耦的 1 自由度線性橫搖,見 `docs/design/physics-roll.md`):
+  - **觀察者隨船傾**:駕駛台/左右翼橋/艉視的眼位固定在船上,相機姿態 = Ry(−艏向)·Rz(−橫搖)·Ry(−視角偏航)·Rx(俯仰)(`CameraRig.HeeledBasis`;橫搖 0 時與原本的 Euler 寫法逐位元相同)。右傾 φ 為繞船體艏艉軸、右舷下沉:前視時畫面地平線向左傾斜(右側海面升高),艉視(偏航 180°)自動反號,翼橋側視時右傾部分化為下俯(`SceneCoordinates.ObserverHeelComponents`:橫滾 φ·cos yaw、俯仰 −φ·sin yaw)。眼位亦隨船傾偏移(`BodyToWorldOffset(…, rollDeg)`:高於水線的點往右舷移 up·sin φ、右舷側點下沉)。鳥瞰固定於自船上方,不隨船傾(`ViewDefinition.FollowsRoll = false`)。
+  - **船體**:自船節點以水線中心線為軸套用同一橫搖(`ShipNode.SetPose(…, rollDeg)`),艉視/鳥瞰可見船體傾側;目標船無橫搖。橫搖軸取水線中心線為近似(實際重心略高於或低於水線,差異在視覺上不可辨)。
+  - **插值**:`Pose.RollDeg / RollRateDegps`;兩幀之間橫搖角走最短弧(`StateInterpolator.LerpAngle`,帶號)、角速度線性;超出最新幀以角速度線性外推(最多 0.25 s,遠小於一個週期)。無 `roll` 的狀態幀(未啟用橫搖的情境、舊核心)一律 0:相機、船體與 HUD 與未實作橫搖前完全相同。
+  - **HUD**:第一行附「橫搖 ±x.x°(靜傾 ±y.y° T z.z s)」;低品質一樣套用相機橫搖(只多一次矩陣乘法,無額外繪製成本)。煙霧序列每幀帶示意橫搖(靜傾 0.5° + 振幅 3°、週期 9 s)驗證此路徑。
+  - 測試:`RollInterpolationTests`(插值/最短弧/外推/無 roll 為 0/煙霧橫搖有界)、`SceneRollTests`(右傾幾何、0 時逐位元不變、艉視反號與翼橋俯仰分量)、`ViewDefinitionTests.BridgeWingAndAftViewsFollowShipRollButOverviewDoesNot`、`StateFrameParserTests`(roll 區塊解析與省略)。
 - **UTC 與日夜**:核心 `state.utc`(ISO 8601,毫秒,Z)= 練習開始 UTC + `t`;開始時刻為情境 `startTimeUtc`,未給時為主控程序載入情境的實際時鐘(`EngineOptions.Clock`;引擎寫回情境,紀錄標頭因此帶有它、重播沿用而非現在時間;不進雜湊)。`--daynight=auto` 時 `EnvironmentMapper` 優先用 `state.utc` 算太陽高度,無(舊核心、未設時鐘)或不可解析時退回 `--start-utc` + 模擬秒數,兩者皆無為白天;day/dusk/night 固定。測試:`EnvironmentUtcTests`;核心端 `StateUtcTests`(含重播一致、雜湊不變)。
 - **月光與夜間光照**(`MoonModel` 純函數、`EnvironmentMapper.MoonLookFor`;Godot `WeatherNode` 套用):
   - 月球位置:Schlyter「How to compute planetary positions」的月球軌道根數 + 主要攝動(黃經 12 項、黃緯 5 項、距離 2 項),黃道 → 赤道 → 地平,含視差修正;高度/方位誤差約 ±0.5°(需求 ±1°,只作光照方向與是否在地平線上)。月相 = 日月真黃經離角 ε 的照明比例 (1 − cos ε)/2;月齡由黃經差推得。只依 UTC 與自船經緯度,確定性。
@@ -131,7 +137,7 @@ Godot 預設把編輯器設定、匯出範本、`user://`(紀錄、快取)寫到
 
 ## 9. 建置、測試與無頭驗證
 
-- **Visual.Shared**:在 `SimosaBRM.sln` 內,`dotnet build SimosaBRM.sln -c Release && dotnet test SimosaBRM.sln -c Release --no-build`(CI 的 .NET 工作自動涵蓋;`tests/Visual.Shared.Tests` 157 個測試:解析、插值/外推(含成批到達)、座標、拖船姿態、繫纜呈現、state.utc 日夜、月球位置/月相與夜間月光、品質偵測與遲滯、暖機再偵測、啟動渲染器、持久化、區域幾何與三角化、船模參數與網格繞向、視角、啟動參數、環境對應、太陽位置、煙霧報告、WebSocket 連線/重連(本機 HttpListener))。
+- **Visual.Shared**:在 `SimosaBRM.sln` 內,`dotnet build SimosaBRM.sln -c Release && dotnet test SimosaBRM.sln -c Release --no-build`(CI 的 .NET 工作自動涵蓋;`tests/Visual.Shared.Tests` 170 個測試:解析(含 roll)、插值/外推(含成批到達、橫搖最短弧)、座標(含橫搖幾何)、拖船姿態、繫纜呈現、state.utc 日夜、月球位置/月相與夜間月光、品質偵測與遲滯、暖機再偵測、啟動渲染器、持久化、區域幾何與三角化、船模參數與網格繞向、視角、啟動參數、環境對應、太陽位置、煙霧報告、WebSocket 連線/重連(本機 HttpListener))。
 - **Visual.Godot**:不在 sln(無 Godot 的 CI 不建置)。`dotnet build src/Visual.Godot/Visual.Godot.csproj`(Godot.NET.Sdk 4.5.1 自 nuget.org)→ `.godot/mono/temp/bin/Debug/SimosaBRM.Visual.Godot.dll`。Godot 從 `Debug` 載入,故 Godot 執行前用 Debug 建置(或在編輯器按 Build)。
 - **無頭煙霧驗證**:`tools/visual-headless-check.sh --godot <Godot> [--frames 200] [--quality low]`(Windows `.ps1`):dotnet build → `--headless --import` → `--headless -- --smoke=N`:載入 E05 示意區域(`kaohsiung-approach`、`kaohsiung-south-approach`)與假狀態序列(`SmokeSequence`:自船 045/8 kn、4 艘目標、拖船、雨區關鍵幀每秒一次、每幀帶 `utc`;**t ≥ 2 s 起帶示意泊位 `SMOKE-BERTH` 與四條繫纜**(正常/黃/紅/斷纜各一;泊位幾何 `SmokeSequence.SmokeBerthArea()` 沿航跡左舷 22 m,Main 於煙霧模式併入港口幾何,船仍直線前進),每幀記錄處理時間、節點數、畫出的目標數、自船位置/SOG、受力與畫出的繫纜數(`mooringLinesInState/Drawn`)到 `build/visual/smoke.json`。煙霧時鐘固定每顯示幀 1/60 s(N 幀 = N/60 s 模擬時間,與主機幀距無關)。`ok`(與幀數無關;`--smoke=30` 亦可)= 有幀、每幀節點 > 0、港口網格 > 0、顯示時間單調不減且有前進、無 `ERROR` 開頭備註;模擬前進 ≥ 0.5 s 時再檢查自船位移 ≈ SOG × Δt(0.5–1.5 倍);最後一幀狀態有受力繫纜時必須有畫出的繫纜(本容器實測:最後幀受力 3 / 畫出 3,節點 119 → 120);失敗原因附在 `notes`(「ok 失敗:…」);結束碼 0/1。測試:`SmokeReportCriteriaTests`。
 - **本容器實跑結果(2026-10-22,Godot 4.5.1 .NET headless,無 GPU)**:200 幀、111 個節點、2 個區域 2 個網格 44 三角形、自船 340 三角形、畫出目標 2/4(其餘超出低品質 3.5 nm 繪製距離)、平均 0.15 ms、最大 12.55 ms(第一幀建立幾何),`ok=true`,結束碼 0。headless 幀時間只證明功能與無例外,**不代表內顯機幀率**。
@@ -166,3 +172,4 @@ Godot 預設把編輯器設定、匯出範本、`user://`(紀錄、快取)寫到
 8. 內顯機實測幀率尚未進行(第 10 節步驟);headless 數據只證明功能。
 9. 多視窗同步:各程序獨立平滑,未做跨程序幀鎖;若日後改多投影(Class B)需另做同步。
 10. Godot 編輯器自含模式需手動放 `_sc_`;`tools/setup-windows.ps1` 尚未自動化 Godot 下載(船上離線,不可連網)。
+11. 橫搖(第 4 節):只套用相機/船體的橫滾,無縱搖與升沉(核心只有 1 自由度橫搖);橫搖軸取水線中心線;海面不隨橫搖改變(海面為世界固定);橫搖量與畫面傾斜的主觀合理性(暈眩感、翼橋側視的俯仰分量)需實機觀察,必要時以情境 `ship.roll` 的增益調整。

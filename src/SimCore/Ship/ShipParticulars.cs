@@ -84,6 +84,7 @@ public sealed class ShipParticulars
             DraftAft_m = Avg(f.DraftAft_m, b.DraftAft_m),
             DraftMean_m = Avg(f.DraftMean_m, b.DraftMean_m),
             BlockCoefficient = Avg(f.BlockCoefficient, b.BlockCoefficient),
+            Gm_m = Avg(f.Gm_m, b.Gm_m), // 橫搖模型用(與情境編輯器 ship-config.ts 的中間狀態 GM 估計一致)
             Source = "estimated: average of full and ballast",
         };
     }

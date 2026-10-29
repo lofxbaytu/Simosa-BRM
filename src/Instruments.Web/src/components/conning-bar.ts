@@ -1,6 +1,7 @@
 // 上排 conning 條:把各儀器方塊排成一列(1920 寬一列;窄於 1500 時折成兩列)。
 // 核心有航線狀態(state.route)或能見度時加一格航線/能見度方塊(規劃書第 7.2 節 XTD/下一航點);
-// 有浪(state.waves)或船間交互作用(state.shipInteraction)時再加一格 SEA 方塊(physics-waves.md 第 5 節)。
+// 有浪(state.waves)或船間交互作用(state.shipInteraction)時再加一格 SEA 方塊(physics-waves.md 第 5 節);
+// 有橫搖(state.roll;情境 ship.roll.enabled)時再加一格傾斜儀 HEEL 方塊(inclinometer.ts),無 roll 時版面與原本相同。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
@@ -19,6 +20,7 @@ import './current-readout.js';
 import './clock-readout.js';
 import './route-readout.js';
 import './sea-readout.js';
+import './inclinometer.js';
 
 @customElement('brm-conning-bar')
 export class ConningBar extends LitElement {
@@ -46,6 +48,19 @@ export class ConningBar extends LitElement {
       /* 單列 12 格(1920 寬每格約 150 px;窄於 1500 折成兩列 × 6 格) */
       grid-template-columns: 1.4fr 1fr 1.1fr 1.4fr 1.3fr 1fr 1.2fr 1.5fr 1.5fr 1.5fr 1.4fr 1.1fr;
     }
+    .bar.with-roll {
+      /* 單列 11 格:傾斜儀接在流之後 */
+      grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.2fr 1.5fr;
+    }
+    .bar.with-route.with-roll,
+    .bar.with-sea.with-roll {
+      /* 單列 12 格 */
+      grid-template-columns: 1.4fr 1fr 1.1fr 1.4fr 1.3fr 1fr 1.2fr 1.5fr 1.5fr 1.2fr 1.4fr 1.1fr;
+    }
+    .bar.with-route.with-sea.with-roll {
+      /* 單列 13 格(1920 寬每格約 140 px) */
+      grid-template-columns: 1.3fr 1fr 1fr 1.3fr 1.2fr 1fr 1.1fr 1.4fr 1.4fr 1.4fr 1.2fr 1.3fr 1fr;
+    }
     @media (max-width: 1500px) {
       .bar,
       .bar.with-route,
@@ -53,6 +68,14 @@ export class ConningBar extends LitElement {
       .bar.with-route.with-sea {
         /* 兩列 × 6 格:第二列為 UKC / 風 / 流 / (浪) / 時間 / 航線,第 2 欄(ROT / 風)略加寬 */
         grid-template-columns: 1.6fr 1.1fr 1.2fr 1.7fr 1.4fr 1.1fr;
+        grid-template-rows: 1fr 1fr;
+      }
+      .bar.with-roll,
+      .bar.with-route.with-roll,
+      .bar.with-sea.with-roll,
+      .bar.with-route.with-sea.with-roll {
+        /* 有傾斜儀時兩列 × 7 格 */
+        grid-template-columns: 1.5fr 1.1fr 1.2fr 1.6fr 1.4fr 1.1fr 1.2fr;
         grid-template-rows: 1fr 1fr;
       }
     }
@@ -72,10 +95,11 @@ export class ConningBar extends LitElement {
     const headingSuspect = this.noData || this.issues.includes('heading');
     const withRoute = s.route !== undefined || s.visibility_nm !== undefined;
     const withSea = s.waves !== undefined || s.shipInteraction !== undefined;
+    const withRoll = s.roll !== undefined;
     // 感測器有效性(sensors-alerts.md 第 2.1 節):無效時各方塊標「無效」並淡化保持的最後值
     const sen = s.sensors;
     return html`
-      <div class="bar ${withRoute ? 'with-route' : ''} ${withSea ? 'with-sea' : ''}">
+      <div class="bar ${withRoute ? 'with-route' : ''} ${withSea ? 'with-sea' : ''} ${withRoll ? 'with-roll' : ''}">
         <brm-heading .heading=${s.heading} .setHeading=${this.setHeading} .cog=${s.cog} .suspect=${headingSuspect} .invalid=${sen ? !sen.headingValid : false}></brm-heading>
         <brm-rot .rot=${s.rot} .range=${30}></brm-rot>
         <brm-speed .stw=${s.stw} .sog=${s.sog} .cog=${s.cog} .drift=${s.drift} .stwInvalid=${sen ? !sen.stwValid : false} .gnssInvalid=${sen ? !sen.positionValid : false}></brm-speed>
@@ -104,6 +128,7 @@ export class ConningBar extends LitElement {
         <brm-wind .trueDir=${s.wind.trueDir} .trueSpeed=${s.wind.trueSpeed} .relDir=${s.wind.relDir} .relSpeed=${s.wind.relSpeed} .heading=${s.heading}></brm-wind>
         <brm-current .set=${s.current.set} .drift=${s.current.drift} .heading=${s.heading} .source=${s.currentSource}></brm-current>
         ${withSea ? html`<brm-sea .waves=${s.waves} .interaction=${s.shipInteraction} .heading=${s.heading}></brm-sea>` : ''}
+        ${withRoll ? html`<brm-inclinometer .roll=${s.roll}></brm-inclinometer>` : ''}
         <brm-clock .simTime=${s.t} .tick=${s.tick} .lat=${s.pos.lat} .lon=${s.pos.lon} .frozen=${s.flags?.frozen ?? false} .posInvalid=${sen ? !sen.positionValid : false}></brm-clock>
         ${withRoute ? html`<brm-route .route=${s.route} .visibility=${s.visibility_nm}></brm-route>` : ''}
       </div>
