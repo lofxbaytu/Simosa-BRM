@@ -1,0 +1,49 @@
+# 跨語言空間變化流場夾具情境(field + timeScale tidal;export_current_reference.py 產生 current_field.csv,C# CurrentFieldTests 讀取比對):
+#   5 × 4 規則網格(x ∈ [−200, 200]、y ∈ [−100, 200],格距 100 m)的東/北分量(kn),u 隨 x、y 增加、v 隨 x、y 減少(右下角 v 為負);
+#   格外取最近邊緣值(outside: edge);以 current_tidal.yaml 相同的短週期調和潮驅動的潮流(漲 085° 2.5 kn、退 265° 3.0 kn、平潮窗口 0.1 min)
+#   作為流速比例來源:k(t) = 潮流當下流速 / max(2.5, 3.0) kn,方向永遠取場的向量(退潮時場不反向);
+#   FSB1 滿載 6 kn 直航北上、無風,60 s 內自 (0, 0) 穿越 y = 100 的格線並隨東向流漂移(流由位置與 t 共同決定)。
+#   CSV 另含 kind = point 的直接取樣列(角點、格中、格外、平潮/中退時刻),不經船模。
+id: current_field
+name: 空間變化流場跨語言夾具
+seed: 20261208
+startTimeUtc: "2026-12-08T05:00:00Z"
+ship: { id: FSB1, loading: full }
+origin: { lat: 23.80, lon: 120.05 }
+initial:
+  position: { x: 0, y: 0 }
+  heading: 0
+  speed: 6
+  telegraph: SAH
+  rudder: 0
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current:
+    set: 85                                             # 載入瞬間的常數值,t = 0 即被場覆寫(自船位置 (0, 0) 的值)
+    drift: 2.5
+    tidal:                                              # 只作為 field.timeScale 的流速比例來源(方向不使用)
+      flood: { speed_kn: 2.5, direction_deg: 85 }
+      ebb: { speed_kn: 3.0, direction_deg: 265 }
+      slackWindow_min: 0.1
+    field:
+      grid: { x0: -200, y0: -100, dx: 100, dy: 100, nx: 5, ny: 4 }
+      #        x = -200   -100     0    100    200
+      u_kn:
+        - [ 0.0,  0.5,  1.0,  1.5,  2.0 ]              # y = -100(j = 0)
+        - [ 0.2,  0.7,  1.2,  1.7,  2.2 ]              # y = 0
+        - [ 0.4,  0.9,  1.4,  1.9,  2.4 ]              # y = 100
+        - [ 0.6,  1.1,  1.6,  2.1,  2.6 ]              # y = 200(j = 3)
+      v_kn:
+        - [ 1.0,  0.8,  0.6,  0.4,  0.2 ]
+        - [ 0.9,  0.7,  0.5,  0.3,  0.1 ]
+        - [ 0.8,  0.6,  0.4,  0.2,  0.0 ]
+        - [ 0.7,  0.5,  0.3,  0.1, -0.1 ]
+      outside: edge
+      timeScale: tidal
+  waterDepth: 40
+  tide:
+    harmonic:
+      meanLevel_m: 1.0
+      constituents:
+        - { name: T1, amplitude_m: 1.0, period_s: 120, phase_deg: -60 }    # 高潮 t = 20 s(轉流 漲 → 退,場流速比例過 0)
+        - { name: T2, amplitude_m: 0.05, period_s: 300, phase_deg: 40 }

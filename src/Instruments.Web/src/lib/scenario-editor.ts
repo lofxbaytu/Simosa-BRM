@@ -1115,7 +1115,7 @@ export function addTimelineItem(draft: ScenarioDraft, item: RawSection = newTime
 export const ACTION_ARG_HINTS: Readonly<Record<TimelineActionKind, string>> = {
   injectFault: '故障名稱,或 { name, args?, recordOnly? }',
   clearFault: '故障名稱,或 all',
-  setEnvironment: '{ wind: { trueSpeed, trueDir, gustiness }, current: { set, drift }, waterDepth, visibility_nm, ramp_s }',
+  setEnvironment: '{ wind: { trueSpeed, trueDir, gustiness }, current: { set, drift }, waterDepth, visibility_nm, waves: { significantHeight_m, peakPeriod_s, direction_deg, spectrum?, gamma? } | null, ramp_s }',
   targetControl: '{ targetId, heading?, speed?, release?, position?, waypoints?, aisOn?, behaviour?, colreg?, activate?, remove? }',
   voiceScript: '{ role, channel: bridge|vhfPort|vhf16|phone, text?, file?, lang?, durationEstimate_s? }',
   message: '{ to: instructor|all, text, severity: info|warning|alarm }',

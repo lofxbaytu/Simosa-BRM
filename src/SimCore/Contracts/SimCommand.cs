@@ -160,6 +160,32 @@ public sealed record SimCommand
         return new() { Type = SimCommandType.SetEnvironment, Args = Obj(new { wind, current, waterDepth, visibility_nm = visibilityNm, ramp_s = rampS }) };
     }
 
+    /// <summary>
+    /// 設定/變更浪(setEnvironment args.waves;設計文件 physics-waves.md「練習中變更」):缺的欄位核心沿用目前值(無浪時 peakPeriod_s 與 direction_deg 必填),
+    /// significantHeight_m = 0 為關閉;<paramref name="rampS"/> 只對 Hs 線性漸變(其餘立即)。
+    /// </summary>
+    public static SimCommand SetWaves(double? significantHeightM = null, double? peakPeriodS = null, double? directionDeg = null, string? spectrum = null, double? gamma = null, double? rampS = null)
+        => new()
+        {
+            Type = SimCommandType.SetEnvironment,
+            Args = Obj(new { waves = new { significantHeight_m = significantHeightM, peakPeriod_s = peakPeriodS, direction_deg = directionDeg, spectrum, gamma }, ramp_s = rampS }),
+        };
+
+    /// <summary>關閉浪(args.waves = null);<paramref name="rampS"/> &gt; 0 時 Hs 先漸變到 0 再關閉。</summary>
+    public static SimCommand ClearWaves(double? rampS = null)
+        => new()
+        {
+            Type = SimCommandType.SetEnvironment,
+            Args = RawJson(rampS is { } r && r > 0 ? $"{{\"waves\":null,\"ramp_s\":{r.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}" : "{\"waves\":null}"),
+        };
+
+    /// <summary>以 JSON 文字建立 args(需明確寫出 null 值時用;Obj 會省略 null 屬性)。</summary>
+    public static JsonElement RawJson(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
+
     /// <summary>injectFault 的故障名稱:value 字串,或 args.name(物件形式)。</summary>
     public string? FaultName()
     {

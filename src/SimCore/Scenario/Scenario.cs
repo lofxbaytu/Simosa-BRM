@@ -142,6 +142,9 @@ public sealed class Scenario
                     case "tugControl":
                         CheckTugControlAction(act, ap, Error);
                         break;
+                    case "setEnvironment":
+                        CheckSetEnvironmentAction(act, ap, Error);
+                        break;
                     case "phase":
                         if (string.IsNullOrWhiteSpace(act.AsString())) Error(ap, "phase 缺少階段名稱");
                         break;
@@ -314,7 +317,7 @@ public sealed class Scenario
             }
         }
         // 時變流場(environment.current.table | tidal;情境引擎設計第 1.5.2 節):擇一;表 ≥ 2 點、t/utc 擇一且嚴格遞增、速度非負;
-        // tidal 需 environment.tide、flood/ebb 皆要有。與 Python current_issues 一致(路徑與訊息相同)
+        // tidal 需 environment.tide、flood/ebb 皆要有;空間變化流場 field 可與其一並存(見下)。與 Python current_issues 一致(路徑與訊息相同)
         {
             const string cp = "environment.current";
             var cur = Environment.Current;
@@ -362,6 +365,47 @@ public sealed class Scenario
                 CheckPhase(tidal.Ebb, "ebb");
                 if (tidal.SlackWindowMin is { } w && (!(w >= 0) || !double.IsFinite(w))) Error($"{tp2}.slackWindow_min", "slackWindow_min 不可為負");
             }
+            // 空間變化流場(environment.current.field):grid 必填且 dx/dy > 0、nx/ny ≥ 2;u_kn/v_kn 為 ny 列 × nx 行的有限數值;
+            // outside ∈ edge|zero;timeScale ∈ none|tidal|table 且對應模型存在。與 Python current_issues 一致(路徑與訊息相同)
+            if (cur.Field is { } field)
+            {
+                var fp = $"{cp}.field";
+                int nx = 0, ny = 0;
+                if (field.Grid is not { } grid) Error($"{fp}.grid", "field 需要 grid");
+                else
+                {
+                    if (!double.IsFinite(grid.X0) || !double.IsFinite(grid.Y0)) Error($"{fp}.grid", "x0/y0 必須為有限數值");
+                    if (!(grid.Dx > 0) || !double.IsFinite(grid.Dx)) Error($"{fp}.grid", "dx 必須為正");
+                    if (!(grid.Dy > 0) || !double.IsFinite(grid.Dy)) Error($"{fp}.grid", "dy 必須為正");
+                    if (grid.Nx < 2) Error($"{fp}.grid", "nx 必須為 ≥ 2 的整數");
+                    if (grid.Ny < 2) Error($"{fp}.grid", "ny 必須為 ≥ 2 的整數");
+                    nx = grid.Nx;
+                    ny = grid.Ny;
+                }
+                void CheckArray(List<List<double>>? rows, string name)
+                {
+                    if (rows is null) { Error($"{fp}.{name}", $"field 需要 {name}"); return; }
+                    if (nx < 2 || ny < 2) return;   // 格數錯誤時不再逐列檢查(訊息已足夠)
+                    if (rows.Count != ny) { Error($"{fp}.{name}", $"{name} 須有 ny = {ny} 列(得到 {rows.Count})"); return; }
+                    for (var j = 0; j < rows.Count; j++)
+                    {
+                        var row = rows[j];
+                        if (row is null || row.Count != nx) { Error($"{fp}.{name}[{j}]", $"{name} 每列須有 nx = {nx} 個值(得到 {row?.Count ?? 0})"); continue; }
+                        for (var i = 0; i < row.Count; i++)
+                            if (!double.IsFinite(row[i])) Error($"{fp}.{name}[{j}][{i}]", $"{name} 的值必須為有限數值");
+                    }
+                }
+                CheckArray(field.UKn, "u_kn");
+                CheckArray(field.VKn, "v_kn");
+                if (field.Outside is { } outside && outside.ToLowerInvariant() is not ("edge" or "zero")) Error($"{fp}.outside", $"outside 須為 edge | zero:{outside}");
+                if (field.TimeScale is { } ts)
+                {
+                    var tsl = ts.ToLowerInvariant();
+                    if (tsl is not ("none" or "tidal" or "table")) Error($"{fp}.timeScale", $"timeScale 須為 none | tidal | table:{ts}");
+                    else if (tsl == "tidal" && cur.Tidal is null) Error($"{fp}.timeScale", "timeScale tidal 需要 current.tidal");
+                    else if (tsl == "table" && cur.Table is null) Error($"{fp}.timeScale", "timeScale table 需要 current.table");
+                }
+            }
         }
         // 浪(environment.waves;設計文件 physics-waves.md 第 2 節):Hs ≥ 0、Tp > 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1。與 Python waves_issues 一致
         if (Environment.Waves is { } wv)
@@ -389,6 +433,31 @@ public sealed class Scenario
     /// </summary>
     internal static bool ItemIdRefersToTimeline(string? eventKind)
         => eventKind is null || !(eventKind.StartsWith("alert", StringComparison.Ordinal) || eventKind.StartsWith("bnwas", StringComparison.Ordinal));
+
+    /// <summary>
+    /// 時間表 setEnvironment 動作(與指令相同 args;設計文件 physics-waves.md「練習中變更」):須為物件;waves 為 null(關閉)或物件,欄位皆選填,
+    /// 給了就檢查(Hs ≥ 0 有限、Tp &gt; 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1;訊息與 environment.waves 相同)。與 Python set_environment_action_issues 一致。
+    /// </summary>
+    private static void CheckSetEnvironmentAction(TimelineAction act, string path, Action<string, string> error)
+    {
+        if (act.Payload.ValueKind != JsonValueKind.Object)
+        {
+            error(path, "setEnvironment 須為物件");
+            return;
+        }
+        if (!act.Payload.TryGetProperty("waves", out var wv) || wv.ValueKind == JsonValueKind.Null) return;
+        var wp = $"{path}.setEnvironment.waves";
+        if (wv.ValueKind != JsonValueKind.Object)
+        {
+            error(wp, "setEnvironment.waves 須為物件或 null");
+            return;
+        }
+        if (wv.TryGetProperty("significantHeight_m", out var hs) && (SimCommand.AsDouble(hs) is not { } h || !double.IsFinite(h) || h < 0)) error($"{wp}.significantHeight_m", "significantHeight_m 必須為 ≥ 0 的有限數值");
+        if (wv.TryGetProperty("peakPeriod_s", out var tp) && (SimCommand.AsDouble(tp) is not { } t || !double.IsFinite(t) || t <= 0)) error($"{wp}.peakPeriod_s", "peakPeriod_s 必須為正");
+        if (wv.TryGetProperty("direction_deg", out var dir) && (SimCommand.AsDouble(dir) is not { } d || !double.IsFinite(d) || d < 0 || d > 360)) error($"{wp}.direction_deg", "direction_deg 須在 0–360(來向)");
+        if (wv.TryGetProperty("spectrum", out var sp) && (sp.ValueKind != JsonValueKind.String || sp.GetString()!.ToLowerInvariant() is not ("pm" or "jonswap"))) error($"{wp}.spectrum", $"spectrum 須為 pm | jonswap:{sp}");
+        if (wv.TryGetProperty("gamma", out var g) && (SimCommand.AsDouble(g) is not { } gv || !double.IsFinite(gv) || gv < 1)) error($"{wp}.gamma", "gamma 必須 ≥ 1");
+    }
 
     /// <summary>時間表 tugControl 動作(與指令相同 args):id 須為情境 tugs[].id,mode/power_pct/direction_deg 須合法。</summary>
     private void CheckTugControlAction(TimelineAction act, string path, Action<string, string> error)
@@ -662,6 +731,40 @@ public sealed class ScenarioCurrent
     public List<ScenarioCurrentPoint>? Table { get; set; }
     /// <summary>潮流(選填):由 environment.tide 的 dH/dt 符號決定漲/退、|dH/dt| 相對最大值縮放流速;需 environment.tide。</summary>
     public ScenarioTidalCurrent? Tidal { get; set; }
+    /// <summary>
+    /// 空間變化流場(選填;情境引擎設計第 1.5.2 節):規則網格上的東/北分量(kn)以雙線性內插,可與 <see cref="Table"/>/<see cref="Tidal"/> 並存
+    /// (有 field 時流由場決定,table/tidal 只作為 timeScale 的流速比例來源)。未給時行為與數值與舊版相同。
+    /// </summary>
+    public ScenarioCurrentField? Field { get; set; }
+}
+
+/// <summary>
+/// 空間變化流場:grid(本地 ENU 公尺,原點與情境座標語意相同)、u_kn/v_kn(東向/北向分量,kn;外層列為 y 索引 j、內層行為 x 索引 i,
+/// 即 u_kn[j][i] 對應點 (x0 + i·dx, y0 + j·dy))、outside(格外:edge 取最近邊緣值 | zero 取 0;預設 edge)、
+/// timeScale(none | tidal | table;預設 none;tidal/table 時整個場乘以該模型的流速比例,方向取場的向量)。
+/// </summary>
+public sealed class ScenarioCurrentField
+{
+    public const string DefaultOutside = "edge";
+    public const string DefaultTimeScale = "none";
+    public ScenarioCurrentGrid? Grid { get; set; }
+    [JsonPropertyName("u_kn")] public List<List<double>>? UKn { get; set; }
+    [JsonPropertyName("v_kn")] public List<List<double>>? VKn { get; set; }
+    /// <summary>格外取值:edge | zero(未給 = edge)</summary>
+    public string? Outside { get; set; }
+    /// <summary>時間縮放:none | tidal | table(未給 = none;tidal 需 current.tidal、table 需 current.table)</summary>
+    public string? TimeScale { get; set; }
+}
+
+/// <summary>流場網格:原點 (x0, y0)、格距 dx/dy(m,> 0)、格數 nx/ny(≥ 2);節點 (x0 + i·dx, y0 + j·dy),i ∈ [0, nx)、j ∈ [0, ny)。</summary>
+public sealed class ScenarioCurrentGrid
+{
+    public double X0 { get; set; }
+    public double Y0 { get; set; }
+    public double Dx { get; set; }
+    public double Dy { get; set; }
+    public int Nx { get; set; }
+    public int Ny { get; set; }
 }
 
 /// <summary>流場表的一點:t(秒,相對練習開始)或 utc(ISO 8601,換算為相對情境 startTimeUtc 的秒數)擇一;speed_kn 流速、direction_deg 流向(去向)。</summary>

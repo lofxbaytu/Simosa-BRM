@@ -66,12 +66,18 @@ export interface Current {
   drift: number;
 }
 
-/** 流場來源(state.currentSource;設計文件第 1.5.2 節):流場表 table、潮流 tidal;常數流(含被 setEnvironment 覆寫後)省略 */
-export type CurrentSource = 'table' | 'tidal';
+/** 流場來源(state.currentSource;設計文件第 1.5.2 節):流場表 table、潮流 tidal、空間網格 field(timeScale 為 tidal/table 時 field+tidal / field+table);常數流(含被 setEnvironment 覆寫後)省略 */
+export type CurrentSource = 'table' | 'tidal' | 'field' | 'field+tidal' | 'field+table';
 
-export const CURRENT_SOURCES: readonly CurrentSource[] = ['table', 'tidal'] as const;
+export const CURRENT_SOURCES: readonly CurrentSource[] = ['table', 'tidal', 'field', 'field+tidal', 'field+table'] as const;
 
-export const CURRENT_SOURCE_LABELS: Readonly<Record<CurrentSource, string>> = { table: '流場表', tidal: '潮流' };
+export const CURRENT_SOURCE_LABELS: Readonly<Record<CurrentSource, string>> = {
+  table: '流場表',
+  tidal: '潮流',
+  field: '流場網格',
+  'field+tidal': '流場網格·潮流',
+  'field+table': '流場網格·流場表',
+};
 
 export interface Thruster {
   /** 指令 −1 至 1(右推正) */
@@ -141,6 +147,57 @@ export interface SteeringStatus {
   pump: SteeringPump;
   /** nfu 模式時舵是否正被推動(direction port/starboard 中);其他模式省略 */
   nfuActive?: boolean;
+}
+
+/** 浪譜 */
+export type WaveSpectrum = 'pm' | 'jonswap';
+
+export const WAVE_SPECTRA: readonly WaveSpectrum[] = ['pm', 'jonswap'] as const;
+
+export const WAVE_SPECTRUM_LABELS: Readonly<Record<WaveSpectrum, string>> = { pm: 'PM', jonswap: 'JONSWAP' };
+
+/**
+ * 浪與平均漂移力(state.schema.json waves;docs/design/physics-waves.md 第 5 節):情境有 environment.waves 或練習中以
+ * setEnvironment waves 設定時才有;力為船體座標(X 向艏正、Y 右舷正、N 艏向右正)。
+ */
+export interface WaveState {
+  /** 有義波高 Hs (m;漸變中為當下值) */
+  significantHeight_m: number;
+  /** 譜峰週期 Tp (s) */
+  peakPeriod_s: number;
+  /** 浪來向(度,氣象慣例,與風相同) */
+  direction_deg: number;
+  /** 峰值波長 (m;自船位置的有效水深) */
+  wavelength_m: number;
+  spectrum?: WaveSpectrum;
+  /** 平均漂移力 surge (kN,向艏正) */
+  X_kN?: number;
+  /** 平均漂移力 sway (kN,右舷正) */
+  Y_kN?: number;
+  /** 平均漂移力矩 yaw (kN·m,艏向右正) */
+  N_kNm?: number;
+}
+
+/**
+ * 船間交互作用(state.schema.json shipInteraction;docs/design/physics-ship-interaction.md 第 5 節):情境 environment.shipInteraction.enabled 時才有;
+ * 力為船體座標、單位噸力(t)與 t·m;event 為已超過事件門檻(shipInteraction 進入事件已發、離開未發)。
+ */
+export interface ShipInteractionState {
+  /** 有目標船在作用範圍內 */
+  active: boolean;
+  /** 主要目標(等效側向力最大者;無目標時省略) */
+  targetId?: string;
+  forceSurge_t?: number;
+  forceSway_t: number;
+  momentYaw_tm: number;
+  /** 主要目標的縱向錯位 ξ = (x_t − x_o)/L(正 = 目標在前) */
+  xi?: number;
+  /** 主要目標的橫向間距 η = y/L(正 = 目標在右舷) */
+  eta?: number;
+  /** 範圍內的目標數 */
+  targets?: number;
+  /** 已超過事件門檻(儀表以警示色顯示) */
+  event?: boolean;
 }
 
 export interface OwnShipState {
@@ -216,4 +273,8 @@ export interface OwnShipState {
   anchors?: AnchorState[];
   /** 泊位(情境有 berth 時才有):碰墊接觸、碼頭硬接觸、繫纜 */
   berth?: BerthState;
+  /** 浪與平均漂移力(情境有 environment.waves 或練習中 setEnvironment waves 時才有;關閉後省略) */
+  waves?: WaveState;
+  /** 船間交互作用(情境 environment.shipInteraction.enabled 時才有) */
+  shipInteraction?: ShipInteractionState;
 }

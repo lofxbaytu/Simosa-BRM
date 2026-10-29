@@ -57,6 +57,11 @@ public sealed record EngineSnapshot
     public Physics.External.ExternalForceSnapshot? External { get; init; }
     /// <summary>船間交互作用事件狀態(只在情境啟用 environment.shipInteraction 時寫入;缺此欄位時還原為未進入門檻;力為純函數,還原後重算)</summary>
     public Physics.External.ShipInteractionSnapshot? ShipInteraction { get; init; }
+    /// <summary>
+    /// 練習中以 setEnvironment waves 變更後的浪設定(設計文件 physics-waves.md「練習中變更」):只在變更後寫入(情境原設定不寫,舊快照與無變更者位元不變);
+    /// 缺此欄位時還原為情境 environment.waves。Enabled = false 表示已關閉;SignificantHeightM 為快照當下的 Hs(漸變中為插值),進行中的 Hs 漸變在 Timeline.Ramps。
+    /// </summary>
+    public WaveSnapshot? Waves { get; init; }
     /// <summary>狀態鏈雜湊(hex)</summary>
     public required string StateHash { get; init; }
 
@@ -94,3 +99,6 @@ public sealed record AutopilotSnapshot(bool Enabled, double HeadingRad, double R
 
 /// <summary>操舵模式:mode、泵("1"|"2"|"both")、NFU 推動方向(−1 左、0 停、+1 右)。</summary>
 public sealed record SteeringSnapshot(SteeringMode Mode, string Pump, int NfuDirection);
+
+/// <summary>setEnvironment waves 變更後的浪設定(<see cref="EngineSnapshot.Waves"/>):Enabled = false 為已關閉(其餘欄位為 0/預設)。</summary>
+public sealed record WaveSnapshot(bool Enabled, double SignificantHeightM, double PeakPeriodS, double DirectionDeg, string Spectrum, double Gamma);

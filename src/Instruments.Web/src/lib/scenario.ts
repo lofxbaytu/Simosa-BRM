@@ -13,8 +13,8 @@ const LOADINGS: readonly LoadingCondition[] = ['full', 'ballast', 'intermediate'
 
 export interface ScenarioEnvironment {
   wind?: { trueSpeed?: number; trueDir?: number; gustiness?: number };
-  /** 常數流 set/drift;時變流場(設計文件第 1.5.2 節)時 source 為 table(流場表)或 tidal(潮流),set/drift 為載入瞬間的值 */
-  current?: { set?: number; drift?: number; source?: 'table' | 'tidal' };
+  /** 常數流 set/drift;時變流場(設計文件第 1.5.2 節)時 source 為 table(流場表)或 tidal(潮流),空間網格時 field(與 table/tidal 並存時 field+table / field+tidal),set/drift 為載入瞬間的值 */
+  current?: { set?: number; drift?: number; source?: 'table' | 'tidal' | 'field' | 'field+tidal' | 'field+table' };
   waterDepth?: number;
   /** 能見度 (nm);無物理效果,核心保存/漸變/廣播(設計文件第 1.5 節) */
   visibility_nm?: number;
@@ -177,6 +177,8 @@ export function parseScenario(yamlText: string, path = ''): ScenarioSummary {
     if (drift !== undefined) current.drift = drift;
     if (Array.isArray(c['table'])) current.source = 'table';
     else if (isRecord(c['tidal'])) current.source = 'tidal';
+    // 空間網格(field)可與 table/tidal 並存(後者只作為 timeScale 來源):來源標為 field / field+table / field+tidal
+    if (isRecord(c['field'])) current.source = current.source ? `field+${current.source}` : 'field';
     environment.current = current;
   }
   const depth = optNumber(env['waterDepth']);
@@ -256,7 +258,8 @@ export function environmentSummary(env: ScenarioEnvironment): string {
     parts.push(s);
   } else parts.push('無風');
   const c = env.current;
-  const source = c?.source === 'table' ? '(流場表)' : c?.source === 'tidal' ? '(潮流)' : '';
+  const source =
+    c?.source === 'table' ? '(流場表)' : c?.source === 'tidal' ? '(潮流)' : c?.source === 'field' ? '(流場網格)' : c?.source === 'field+table' ? '(流場網格·流場表)' : c?.source === 'field+tidal' ? '(流場網格·潮流)' : '';
   if (c && (c.drift || c.source)) parts.push(`流 ${c.set !== undefined ? Math.round(c.set).toString().padStart(3, '0') + '°' : '?'}/${c.drift ?? '?'} kn${source}`);
   else parts.push('無流');
   parts.push(env.waterDepth !== undefined ? `水深 ${env.waterDepth} m` : '水深未定');

@@ -120,6 +120,23 @@ public sealed class VideoGrid
         _ => 8,
     };
 
+    /// <summary>
+    /// 海況(Douglas)由有義波高 Hs(m)推估(docs/design/radar-arpa.md 第 2.1 節;核心 state.waves 存在且情境/教官未明示海況時用):
+    /// Hs ≤ 0 → 0(平靜無波);&lt; 0.1 → 1;&lt; 0.5 → 2;&lt; 1.25 → 3;&lt; 2.5 → 4;&lt; 4 → 5;&lt; 6 → 6;&lt; 9 → 7;≥ 9 → 8(海雜波表上限)。
+    /// </summary>
+    public static double SeaStateFromWaveHeight(double hsM) => hsM switch
+    {
+        <= 0 => 0,
+        < 0.1 => 1,
+        < 0.5 => 2,
+        < 1.25 => 3,
+        < 2.5 => 4,
+        < 4 => 5,
+        < 6 => 6,
+        < 9 => 7,
+        _ => 8,
+    };
+
     /// <summary>海雜波 1 nm 處的參考訊雜比(dB;X 頻、中脈衝、1°)依海況 0–8。</summary>
     private static readonly double[] SeaRefDb = { double.NegativeInfinity, 5, 12, 18, 23, 27, 30, 33, 35 };
 

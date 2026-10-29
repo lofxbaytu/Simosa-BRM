@@ -47,7 +47,7 @@ environment:
 - 結構檢查(`Scenario.StructuralIssues` 與 Python `scenario.waves_issues`,路徑 `environment.waves.*`、訊息相同):`significantHeight_m` 為 ≥ 0 的有限數值、
   `peakPeriod_s > 0`、`direction_deg` 在 0–360、`spectrum` 為 `pm | jonswap`(不分大小寫)、`gamma ≥ 1`。缺 `significantHeight_m` / `peakPeriod_s` / `direction_deg` 皆為錯誤。
 - 無 `waves` 區段:不建立模型,零力、`state.waves` 省略、雜湊不追加區塊(所有既有情境、夾具與黃金測試不變)。
-- 浪在練習中固定(不隨 `setEnvironment` 或時間表改變;第 9 節後續)。
+- 練習中可由 `setEnvironment` 的 `waves`(教官指令或時間表動作)變更或關閉,Hs 可漸變(第 6.1 節);`reset` / 載入情境回到情境設定。
 
 ## 3. 模型
 
@@ -124,7 +124,7 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
 
 | 欄位 | 單位 | 說明 |
 |---|---|---|
-| `significantHeight_m` | m | Hs(情境值) |
+| `significantHeight_m` | m | Hs(情境值,或 `setEnvironment waves` 變更後的目前值;Hs 漸變中為當下插值) |
 | `peakPeriod_s` | s | Tp(情境值) |
 | `direction_deg` | 度 | 來向(0–360;360 正規化為 0) |
 | `wavelength_m` | m | 峰值波長(自船位置的有效水深;淺水時較短) |
@@ -133,6 +133,12 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
 
 視景(`EnvironmentMapper`):有 `state.waves` 時海面波高取 `significantHeight_m`、浪向 = `direction_deg` + 180°(去向),取代由風速推得的海況波高與風向推得的浪向;
 海況等級(Douglas)仍由風速/雷達環境決定。無 `waves` 時行為與舊版相同(Python/舊核心狀態亦然)。
+
+雷達(`Sensors.Radar`;`radar-arpa.md` 第 2.1 節):情境 `environment.radar.seaState` 或教官指令未明示海況時,海雜波的海況由 `state.waves.significantHeight_m` 依 Douglas 海況表推估
+(`VideoGrid.SeaStateFromWaveHeight`:0.1 / 0.5 / 1.25 / 2.5 / 4 / 6 / 9 m 分界),無 `waves` 時仍依真風速;明示時維持明示值。
+
+儀表(`src/Instruments.Web`):操船台 conning 條在 `state.waves` 或 `state.shipInteraction` 存在時加一格 SEA 方塊(`components/sea-readout.ts`):Hs / Tp、來向與相對來向(艏向上的箭頭,與風相同慣例)、浪譜;
+船間交互作用啟用時另列主要目標與側向力 / 艏搖力矩(t、t·m),`event` 為 true(超過門檻)時以警示色。`types/state.ts` `WaveState` / `ShipInteractionState`,`lib/state-parser.ts` 解析(型別錯誤記 issues;關閉浪後省略、不繼承前一幀)。
 
 ## 6. 引擎接線與確定性
 
@@ -147,6 +153,36 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
 - **快照**:純函數、無跨步狀態,`EngineSnapshot` 不需新欄位;還原時依情境重建並以還原後的狀態重算步末結果,續跑雜湊與連續執行逐位元相同
   (`SnapshotRestoreContinuesBitIdentical`);紀錄/重播雜湊與事件序列一致(`RecordReplayReproducesHashWithWaves`)。
 - 對稱性(`PortStarboardMirrorSymmetry`、`HeadAndFollowingSeasGiveNoSwayOrYaw`):來向鏡像且 v 反號時 X 相同、Y/N 反號;迎浪/順浪時 Y = N = 0。
+
+### 6.1 練習中變更(`setEnvironment` args.waves;教官指令與時間表動作共用)
+
+`command.schema.json` / `scenario.schema.json`(`timelineAction.setEnvironment`):
+
+```yaml
+- setEnvironment: { waves: { significantHeight_m: 2.5, peakPeriod_s: 8, direction_deg: 45, spectrum: jonswap }, ramp_s: 120 }   # 建立或更新
+- setEnvironment: { waves: { direction_deg: 180 } }      # 部分更新:缺的欄位沿用目前值(Hs 取模型目前值)
+- setEnvironment: { waves: null }                        # 關閉(significantHeight_m: 0 亦為關閉);ramp_s > 0 時 Hs 先漸變到 0 再移除
+```
+
+- 語意(`SimulationEngine.ParseWavesArg` / `ApplyWaves`;Python `MMGShip.set_waves`):`waves` 缺省 = 不變;`null` 或 Hs = 0 = 關閉(模型移除:零力、`state.waves` 省略、
+  雜湊不再追加區塊);物件 = 與目前設定合併後檢查(Hs ≥ 0 有限、Tp > 0、來向有限並正規化到 0–360、`spectrum` pm|jonswap、`gamma` ≥ 1;無浪時 `peakPeriod_s` 與
+  `direction_deg` 必填),不合法 → `commandRejected {command: setEnvironment, reason: invalidWaves}`、浪不變,其他環境欄位照常套用。
+- 漸變:`ramp_s > 0` 時只有 Hs 走線性漸變(通道 `RampChannel.WaveHeight`,`RampSet` 把插值寫在 `EnvironmentConditions.WaveHeightM`,引擎每步於漸變套用後
+  `WaveDriftModel.SetSignificantHeight`;Tp / 來向 / 浪譜 / γ 立即生效 —— 模型以目前 Hs 重建,譜權重與水線幾何重算);完成發 `environmentRampDone {channel: waveHeight}`。
+  自無浪加浪時自 0 起算;關閉時漸變到 0 完成後移除模型。Hs 只是力的強度 ∝ Hs²:以目前 Hs 重建模型與 `SetSignificantHeight` 逐位元相同。
+- 事件:`environmentChange` 的 data 加 `waves`(原 args)與 `changes.waves {from, to}`(各為 `{significantHeight_m, peakPeriod_s, direction_deg, spectrum, gamma}` 或 null)。
+- 確定性與紀錄:指令寫 `input` 行即可重播(`WaveEnvironmentCommandTests.RecordReplayReproducesHashWithWaveCommands`);雜湊透過既有浪區塊(Hs/Tp/來向)自然改變,
+  無浪情境以指令在 tick 0 設定與情境相同的浪 → 運動與雜湊與情境自帶浪逐位元相同(`CommandAddsWavesToScenarioWithoutWavesBitIdenticalToScenarioWaves`)。
+- 快照:`EngineSnapshot.Waves`(`WaveSnapshot {enabled, significantHeightM(當下值), peakPeriodS, directionDeg, spectrum, gamma}`)**只在變更後寫出**(情境原設定不寫,
+  既有快照位元不變);還原時有此欄位依它重建(`enabled = false` = 已關閉),沒有則回到情境 `environment.waves`(倒帶到變更前即恢復情境浪);進行中的 Hs 漸變在
+  `Timeline.Ramps`,漸變中途還原續跑逐位元相同(`SnapshotMidRampRestoresBitIdentical…`)。`Reset` / `loadScenario` 清除變更。
+- 動力學不接受外力時(`Active = false`):設定照常記錄(快照/事件)但不施力、不輸出 `state.waves`、雜湊不追加(`UnsupportedDynamicsIgnoreWaveCommands…`)。
+- 結構檢查(時間表動作;`Scenario.CheckSetEnvironmentAction` 與 Python `set_environment_action_issues`,路徑 `timeline[i].actions[j].setEnvironment.waves.*`、訊息與
+  `environment.waves` 相同):`setEnvironment` 須為物件;`waves` 須為物件或 null;給了的欄位 Hs ≥ 0、Tp > 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1。
+- Python 參考實作(`MMGShip.set_environment(waves=…)` / `set_waves`、`server.py` setEnvironment):同語意、立即生效(無漸變,`ramp_s` 忽略;ack detail 註明);不合法時
+  ack `ok=false`、detail `拒絕(invalidWaves)`,其他欄位已套用。
+- 教官站環境面板(`components/instructor/environment-panel.ts`):標題顯示目前 Hs / Tp / 來向(浪譜),Hs / Tp / 來向 / 浪譜「套用」送 `setEnvironment { waves }`(漸變秒數附
+  `ramp_s`),「關閉」送 `{ waves: null }`;`lib/instructor-command.ts` `setWavesCommand` / `clearWavesCommand` / `waveArgs`。事件列(`lib/sim-event.ts`)顯示「浪 Hs … / 浪關閉」。
 
 ## 7. 適用範圍與外推限制
 
@@ -165,19 +201,27 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
   淺水波長(色散殘差 < 1e-9、深水收斂回 k0)、Bessel/Ursell 表值、無浪不變(含 Hs = 0 位元相同)、引擎施力與 `state.waves` JSON 往返、與拖船相加、
   快照還原位元相同、紀錄/重播、結構檢查 9 例與預設值、跨語言夾具。
 - Visual.Shared `OptionsEnvironmentAndClientTests.StateWavesOverrideWindDerivedWaveHeightAndDirection`。
-- Python `src/Tools.Calibration/tests/test_waves.py`(29 項):同上各項的 Python 版、`normalise_sections`/`validate_scenario` 帶出 `waves`、快照/還原/`reset`/`configure_external(None)`、夾具可重現。
+- Python `src/Tools.Calibration/tests/test_waves.py`(40 項):同上各項的 Python 版、`normalise_sections`/`validate_scenario` 帶出 `waves`、快照/還原/`reset`/`configure_external(None)`、夾具可重現;
+  練習中變更(11 項):指令加浪與情境浪逐位元相同、部分更新/關閉/不合法、快照/還原/`reset`、伺服器 ack 與拒絕、時間表結構檢查(與 C# 同路徑/訊息)。
+- C# `tests/SimCore.Tests/WaveEnvironmentCommandTests.cs`(21 項;第 6.1 節):指令加浪逐位元相同、部分更新與關閉、不合法 7 例(其他欄位照常)、Hs 漸變與漸變到 0 關閉、
+  快照(變更後才寫、漸變中途還原、倒帶恢復情境浪、關閉快照、`reset`)、紀錄/重播、時間表動作、結構檢查 7 例、不接受外力的動力學。
+- Sensors.Radar `WaveSeaStateTests`(17 項):Douglas 分界表、`RadarScene.WaveHeightM`、浪驅動海雜波與練習中變更/關閉、明示海況優先。
+- vitest `src/Instruments.Web/tests/waves-sea.test.ts`(7 項):`state.waves` / `shipInteraction` 解析、指令形狀、SEA 方塊與 conning 條、教官站環境面板、事件列。
 
 ## 9. 已知限制與後續
 
-1. 浪在練習中固定:`setEnvironment` 與時間表尚無 `waves` 參數(後續可比照風/流加入與漸變;需同步 Python 與雜湊)。
+1. 練習中變更只有 Hs 漸變,Tp / 來向 / 浪譜為階躍(來向可比照風向以最短弧漸變,但模型需每步重算譜權重;後續視需要加入);Python 參考實作無漸變。
 2. 無一階振盪與橫搖(規劃書第 6.2 節預留 4 自由度);儀表/視景不呈現搖晃,只有平均漂移。
 3. 係數為估計;待模型試驗或實船漂移紀錄校正(`EndFullness`、`CutoffWavelengthL`)。
-4. 浪與流、浪與淺水的波高變化、方向擴散(directional spreading)未納入;雷達海雜波仍依風速/`radar.seaState`,未與 `waves` 連動。
+4. 浪與流、浪與淺水的波高變化、方向擴散(directional spreading)未納入;雷達海雜波只取 Hs 推 Douglas 海況(不含 Tp / 來向的方位調制;教官/情境明示海況優先)。
+5. 視景海況等級(Douglas)仍由風速/雷達環境決定,只有波高/浪向取自 `state.waves`。
 
 ## 10. Python 參考實作(`simosa_brm/external.py` `WaveDriftModel`)
 
 - 與 C# 逐式對應、同運算順序:譜權重、水線站、`wave_number`(固定 12 次 Newton)、`ursell_reflection`/`bessel_i1`/`bessel_k1`(同一組 A&S 多項式)、
   `compute`(K 與 G 的累加順序相同)、`hash_bytes`(`struct.pack("<qddddddd", …)`)、`state()`。
+- 練習中變更:`MMGShip.set_waves(waves)`(`set_environment(waves=…)`;第 6.1 節):None / Hs 0 關閉、dict 合併目前值後檢查並重建模型(來向正規化),不合法 `ValueError("invalidWaves")`;
+  立即生效(無漸變);`snapshot()` 深拷貝模型、`reset` / `apply_scenario` 回到情境設定。
 - 接線:`scenario.validate_scenario` → `environment.waves` 正規化(`external.normalise_waves`),同時由 `normalise_sections` 放進 `external["waves"]`,
   `MMGShip.configure_external` / `_build_external` 建立 `ship.waves`;`step` 的外力場相加順序與 C# 相同;步末 `update_last`;`state_hash` 追加區塊;
   `state_json` 輸出 `waves`;快照/還原含 `waves`。

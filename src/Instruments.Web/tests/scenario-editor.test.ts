@@ -103,6 +103,25 @@ describe('草稿 round-trip(data/scenarios 全部情境)', () => {
     expect(env).toEqual({ waterDepth: 10, tide: { table: [{ t: 0, height_m: 1.2 }] }, visibility_nm: 3 });
   });
 
+  it('environment.current.field(空間變化流場;第十九輪)與 table/tidal 一樣原樣保留、不被環境表單的 set/drift 覆寫', () => {
+    const text =
+      'id: T\nship: { id: FSB1 }\ninitial: { position: { lat: 23, lon: 120 }, heading: 0 }\nenvironment:\n  waterDepth: 10\n  current:\n    set: 45\n    drift: 1\n    tidal:\n      flood: { speed_kn: 2, direction_deg: 85 }\n      ebb: { speed_kn: 2, direction_deg: 265 }\n    field:\n      grid: { x0: -200, y0: -100, dx: 100, dy: 100, nx: 3, ny: 2 }\n      u_kn: [[0, 0.5, 1], [0.2, 0.7, 1.2]]\n      v_kn: [[1, 0.8, 0.6], [0.9, 0.7, 0.5]]\n      outside: zero\n      timeScale: tidal\n  tide: { table: [{ t: 0, height_m: 1.2 }] }\n';
+    const original = (parseYaml(text) as { environment: { current: Record<string, unknown> } }).environment.current;
+    const d = fromYaml(text, 'T');
+    expect(d.environment.currentSet).toBe(45);
+    expect(d.environment.currentDrift).toBe(1);
+    // 不改動 → round-trip 深相等
+    expect(parseYaml(toYaml(d))).toEqual(parseYaml(text));
+    // 改 set/drift → field/tidal 原樣保留,只有 set/drift 改變
+    const env = toScenarioObject({ ...d, environment: { ...d.environment, currentSet: 100, currentDrift: 0.5 } })['environment'] as Record<string, unknown>;
+    const current = env['current'] as Record<string, unknown>;
+    expect(current['field']).toEqual(original['field']);
+    expect(current['tidal']).toEqual(original['tidal']);
+    expect(current['set']).toBe(100);
+    expect(current['drift']).toBe(0.5);
+    expect(parseScenario(toYaml(d), 'T').environment.current?.source).toBe('field+tidal');
+  });
+
   it('E07:草稿讀出環境、目標船、時間表與評估的涵蓋欄位', () => {
     const d = fromYaml(readFileSync(path.join(scenarioDir, 'E07_steering_failure.yaml'), 'utf-8'), 'E07_steering_failure');
     expect(d.general.id).toBe('E07_steering_failure');

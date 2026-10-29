@@ -39,6 +39,8 @@ public sealed class RadarScene
     public bool PositionValid { get; init; } = true;
     public double WindSpeedKn { get; init; }
     public double WindFromDeg { get; init; }
+    /// <summary>核心浪場的有義波高(state.waves.significantHeight_m;情境無 environment.waves 或舊核心時 null):海況未由情境/教官明示時據以推估(Douglas),否則依真風速</summary>
+    public double? WaveHeightM { get; init; }
     public IReadOnlyList<string> Faults { get; init; } = Array.Empty<string>();
     public IReadOnlyList<SceneTarget> Targets { get; init; } = Array.Empty<SceneTarget>();
     /// <summary>原始目標真值(主控程式比對 ARPA 誤差用;學員端不輸出)</summary>
@@ -90,6 +92,7 @@ public sealed class RadarScene
             PositionValid = s.Sensors?.PositionValid ?? true,
             WindSpeedKn = s.Wind.TrueSpeed,
             WindFromDeg = s.Wind.TrueDir,
+            WaveHeightM = s.Waves?.SignificantHeightM,
             Faults = s.Faults ?? Array.Empty<string>(),
             Targets = targets,
             TruthTargets = s.Targets,

@@ -14,9 +14,13 @@ import {
   type RouteStatus,
   type ScenarioStatus,
   type ShipId,
+  type ShipInteractionState,
   type StateFlags,
   type TelegraphPosition,
   type Thruster,
+  WAVE_SPECTRA,
+  type WaveSpectrum,
+  type WaveState,
   type Wind,
 } from '../types/state.js';
 import type { TargetAisReport, TargetState } from '../types/target.js';
@@ -302,7 +306,53 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
   // 拖船、錨、泊位(docs/design/physics-tugs-anchors-mooring.md 第 5 節;C# SimCore 才有,省略時不記問題)
   applyExternalForceBlocks(raw, state, issues);
 
+  // 浪與船間交互作用(physics-waves.md 第 5 節、physics-ship-interaction.md 第 5 節;情境有該區段時才有,省略時不記問題;關閉浪後省略 → 不繼承前一幀)
+  if (isRecord(raw['waves'])) state.waves = parseWaves(raw['waves'], issues);
+  else if (raw['waves'] !== undefined && raw['waves'] !== null) issues.push('waves');
+  if (isRecord(raw['shipInteraction'])) state.shipInteraction = parseShipInteraction(raw['shipInteraction'], issues);
+  else if (raw['shipInteraction'] !== undefined && raw['shipInteraction'] !== null) issues.push('shipInteraction');
+
   return { state, issues };
+}
+
+/** 解析 state.waves:必填欄位缺少或型別錯誤以 0 補上並記入 issues;來向正規化至 0–360;spectrum 不明時省略並記入 issues。 */
+export function parseWaves(w: Record<string, unknown>, issues: string[]): WaveState {
+  const out: WaveState = {
+    significantHeight_m: Math.max(0, num(w, 'significantHeight_m', 0, issues, 'waves.significantHeight_m')),
+    peakPeriod_s: num(w, 'peakPeriod_s', 0, issues, 'waves.peakPeriod_s'),
+    direction_deg: normalizeHeading(num(w, 'direction_deg', 0, issues, 'waves.direction_deg')),
+    wavelength_m: num(w, 'wavelength_m', 0, issues, 'waves.wavelength_m'),
+  };
+  const spectrum = w['spectrum'];
+  if (typeof spectrum === 'string' && (WAVE_SPECTRA as readonly string[]).includes(spectrum.toLowerCase())) out.spectrum = spectrum.toLowerCase() as WaveSpectrum;
+  else if (spectrum !== undefined && spectrum !== null) issues.push('waves.spectrum');
+  for (const key of ['X_kN', 'Y_kN', 'N_kNm'] as const) {
+    const v = optNum(w, key, issues, `waves.${key}`);
+    if (v !== undefined) out[key] = v;
+  }
+  return out;
+}
+
+/** 解析 state.shipInteraction:active/forceSway_t/momentYaw_tm 必填(缺少以 false/0 補上並記入 issues),其餘選填。 */
+export function parseShipInteraction(si: Record<string, unknown>, issues: string[]): ShipInteractionState {
+  const active = si['active'];
+  if (typeof active !== 'boolean') issues.push('shipInteraction.active');
+  const out: ShipInteractionState = {
+    active: active === true,
+    forceSway_t: num(si, 'forceSway_t', 0, issues, 'shipInteraction.forceSway_t'),
+    momentYaw_tm: num(si, 'momentYaw_tm', 0, issues, 'shipInteraction.momentYaw_tm'),
+  };
+  if (typeof si['targetId'] === 'string' && si['targetId']) out.targetId = si['targetId'];
+  else if (si['targetId'] !== undefined && si['targetId'] !== null) issues.push('shipInteraction.targetId');
+  for (const key of ['forceSurge_t', 'xi', 'eta'] as const) {
+    const v = optNum(si, key, issues, `shipInteraction.${key}`);
+    if (v !== undefined) out[key] = v;
+  }
+  const targets = optNum(si, 'targets', issues, 'shipInteraction.targets');
+  if (targets !== undefined) out.targets = Math.max(0, Math.trunc(targets));
+  if (typeof si['event'] === 'boolean') out.event = si['event'];
+  else if (si['event'] !== undefined && si['event'] !== null) issues.push('shipInteraction.event');
+  return out;
 }
 
 const TARGET_REQUIRED_NUMS = ['loa', 'beam', 'sog', 'rot', 'range_nm', 'cpa_nm', 'tcpa_min'] as const;

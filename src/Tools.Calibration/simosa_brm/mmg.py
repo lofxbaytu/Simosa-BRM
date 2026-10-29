@@ -35,7 +35,7 @@ from collections import deque
 from .coefficients import r0_prime
 from .tide import TideModel
 from .current import CurrentModel
-from .external import BankEffectModel, Env, ExternalForceModel, Kin, ShipInteractionModel, WaveDriftModel
+from .external import BankEffectModel, Env, ExternalForceModel, Kin, ShipInteractionModel, WaveDriftModel, normalize_heading_deg
 from .particulars import GRAVITY, KN_TO_MPS, ShipParticulars
 from .propeller import PropellerModel
 
@@ -262,8 +262,8 @@ class MMGShip:
         self.start_utc: datetime | None = None
         # 潮高模型(情境 environment.tide;tide.py):有效水深 = env.water_depth(基底)+ 潮高(tick·dt);None = 無潮汐(數值與舊版相同)
         self.tide: TideModel | None = None
-        # 時變流場(情境 environment.current.table | tidal;current.py):每步以 tick·dt 的模型值覆寫 env.current_set/current_speed;
-        # None = 常數流(數值與舊版相同);set_environment 給 current 後 current_overridden = True(時變停止,直到 apply_scenario)
+        # 時變/空間變化流場(情境 environment.current.table | tidal | field;current.py):每步以 tick·dt 與自船位置的模型值覆寫
+        # env.current_set/current_speed;None = 常數流(數值與舊版相同);set_environment 給 current 後 current_overridden = True(停止,直到 apply_scenario)
         self.current_model: CurrentModel | None = None
         self.current_overridden = False
         self._eng_mode = "stopped"  # stopped | run | reversing | starting
@@ -457,9 +457,22 @@ class MMGShip:
         return self.current_model is not None and not self.current_overridden
 
     @property
+    def current_field_active(self) -> bool:
+        """空間變化流場(field)是否正在驅動(C# EnvironmentConditions.CurrentFieldActive):此時 env.current_* 為自船位置的值。"""
+        return self.current_model_active and bool(self.current_model.spatially_varying)
+
+    @property
     def current_source(self) -> str | None:
-        """state.currentSource("table" | "tidal");常數流(含覆寫後)None → 省略。"""
+        """state.currentSource("table" | "tidal" | "field" | "field+tidal" | "field+table");常數流(含覆寫後)None → 省略。"""
         return self.current_model.source if self.current_model_active else None
+
+    def current_en_at(self, t: float, x: float, y: float) -> tuple[float, float]:
+        """練習時間 t、位置 (x, y) 的流向量(東, 北 m/s;C# EnvironmentConditions.CurrentVectorAt):空間流場啟用時由場取樣
+        (set/drift → 分量,與自船 ``_refresh_current`` 同一路徑),否則為目前的均勻流(``env.current_en``,與 t、位置無關)。"""
+        if self.current_field_active:
+            set_rad, drift = self.current_model.at(t, x, y)
+            return drift * math.sin(set_rad), drift * math.cos(set_rad)
+        return self.env.current_en
 
     def set_current_model(self, model: CurrentModel | None) -> None:
         """設定時變流場模型(apply_scenario;None = 常數流)並清除覆寫旗標、以目前 tick 的模型值覆寫流向/流速。"""
@@ -468,10 +481,11 @@ class MMGShip:
         self._refresh_current()
 
     def _refresh_current(self) -> None:
-        """以 tick·dt 的模型值覆寫 env.current_set/current_speed(C# RefreshCurrent:Initialize、每步 Tick++ 之後與還原後);常數流或已覆寫時不動。"""
+        """以 tick·dt 與自船位置的模型值覆寫 env.current_set/current_speed(C# RefreshCurrent:Initialize、每步 Tick++ 之後與還原後;
+        均勻模型忽略位置);常數流或已覆寫時不動。"""
         if not self.current_model_active:
             return
-        set_rad, drift = self.current_model.at(self.state.tick * self.dt)
+        set_rad, drift = self.current_model.at(self.state.tick * self.dt, self.state.x, self.state.y)
         self.env.current_set = set_rad
         self.env.current_speed = drift
 
@@ -481,9 +495,10 @@ class MMGShip:
     def set_environment(self, wind_speed_kn: float | None = None, wind_dir_deg: float | None = None,
                         current_set_deg: float | None = None, current_drift_kn: float | None = None,
                         water_depth_m: float | None | str = "keep", gustiness: float | None = None,
-                        visibility_nm: float | None | str = "keep") -> None:
+                        visibility_nm: float | None | str = "keep", waves: Any = "keep") -> None:
         """部分更新環境(None = 不變;水深與能見度以 ``"keep"`` 表示不變、None 表示深水 / 未指定)。
-        風速、流速不為負,角度正規化到 [0, 360),陣風強度夾到 [0, 1](與 C# ApplyEnvironment 相同)。"""
+        風速、流速不為負,角度正規化到 [0, 360),陣風強度夾到 [0, 1](與 C# ApplyEnvironment 相同)。
+        ``waves``:``"keep"`` 不變;None 關閉;dict 建立/更新(:meth:`set_waves`;不合法時 ValueError,其他欄位已套用)。"""
         if wind_speed_kn is not None:
             self.env.wind_speed = max(0.0, float(wind_speed_kn)) * KN_TO_MPS
         if wind_dir_deg is not None:
@@ -501,6 +516,57 @@ class MMGShip:
         if visibility_nm != "keep":
             self.env.visibility_nm = None if visibility_nm is None else max(0.0, float(visibility_nm))
         self._update_shallow()
+        if not (isinstance(waves, str) and waves == "keep"):
+            self.set_waves(waves)
+
+    def set_waves(self, waves: dict[str, Any] | None) -> None:
+        """練習中變更浪(setEnvironment args.waves;C# ApplyEnvironment 的 ParseWavesArg / ApplyWaves、設計文件 physics-waves.md「練習中變更」):
+        None 或 significantHeight_m = 0 → 關閉(``self.waves = None``:零力、state 不再輸出 waves、雜湊不再追加區塊);dict → 與目前設定合併
+        (缺的欄位沿用目前值,來向正規化到 [0, 360);無浪時 peakPeriod_s 與 direction_deg 必填)並檢查(Hs ≥ 0 有限、Tp > 0、來向有限、
+        spectrum pm|jonswap、gamma ≥ 1),不合法時 ``ValueError("invalidWaves")`` 且狀態不變(C# 發 commandRejected invalidWaves)。
+        立即生效(Python 參考實作無漸變;C# 的 ramp_s 只對 Hs 線性漸變);``reset`` / ``apply_scenario`` 回到情境設定(``_build_external``);
+        快照深拷貝模型,還原即回到快照當時的浪。"""
+        if waves is None:
+            self.waves = None
+            return
+        if not isinstance(waves, dict):
+            raise ValueError("invalidWaves")
+        cur = self.waves
+
+        def pick(key: str, fallback: float | None) -> float | None:
+            if key not in waves:
+                return fallback
+            v = waves[key]
+            if v is None or isinstance(v, bool):
+                return math.nan
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return math.nan
+
+        hs = pick("significantHeight_m", cur.hs if cur is not None else None)
+        tp = pick("peakPeriod_s", cur.tp if cur is not None else None)
+        direction = pick("direction_deg", cur.direction_deg if cur is not None else None)
+        gamma = pick("gamma", cur.gamma if cur is not None else None)
+        spectrum: str | None
+        if "spectrum" in waves:
+            spectrum = waves["spectrum"].strip().lower() if isinstance(waves["spectrum"], str) else None
+        else:
+            spectrum = cur.spectrum if cur is not None else "pm"
+        ok = (hs is not None and math.isfinite(hs) and hs >= 0.0
+              and tp is not None and math.isfinite(tp) and tp > 0.0
+              and direction is not None and math.isfinite(direction)
+              and spectrum in ("pm", "jonswap")
+              and (gamma is None or (math.isfinite(gamma) and gamma >= 1.0)))
+        if not ok:
+            raise ValueError("invalidWaves")
+        if hs == 0.0:
+            self.waves = None
+            return
+        settings = {"significantHeight_m": hs, "peakPeriod_s": tp, "direction_deg": normalize_heading_deg(direction),  # type: ignore[arg-type]
+                    "spectrum": spectrum, "gamma": gamma if gamma is not None else 3.3}
+        self.waves = WaveDriftModel(self.sp.raw, self.sp.loading.name, settings)
+        self.waves.update_last(self._kin(), self._water_depth_or_inf())
 
     def reset(self, x: float = 0.0, y: float = 0.0, heading_deg: float = 0.0, speed_kn: float = 0.0,
               rpm: float | None = None, telegraph: str | None = None) -> None:
@@ -1177,6 +1243,7 @@ class MMGShip:
         if self.ctl.frozen:
             return
         s = self.state
+        t0 = s.tick * self.dt  # 步首練習時間(C# Advance 的 t;空間變化流場的目標船取流用)
         # 潮汐:淺水修正以步首(tick·dt)的有效水深重算(C# 每步由 EnvironmentSample 取樣,無潮汐時係數不變)
         if self.tide is not None:
             self._update_shallow()
@@ -1281,7 +1348,9 @@ class MMGShip:
         if interaction is not None:
             # 目標船推進(C# TrafficManager.Step 在自船之後)→ 步末結果 → 門檻事件(C# RaiseInteractionTransition)
             events_si: list[dict[str, Any]] = []
-            interaction.post_step(self._kin(), Env(env_s.current_e, env_s.current_n, self._water_depth_or_inf()), dt, events_si)
+            # 空間變化流場:目標船以自身位置、步首時刻 t0 取流(C# TrafficManager.Step 的 currentAt);均勻流時 None(位元與舊版相同)
+            interaction.post_step(self._kin(), Env(env_s.current_e, env_s.current_n, self._water_depth_or_inf()), dt, events_si,
+                                  current_at=(lambda x, y: self.current_en_at(t0, x, y)) if self.current_field_active else None)
             for ev in events_si:
                 self._emit(ev)
         # 擱淺/水深檢查

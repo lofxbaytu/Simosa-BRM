@@ -196,7 +196,7 @@
         },
         "current": {
           "type": "object",
-          "description": "均勻流。set/drift 為常數流;選填 table(流場表)或 tidal(潮流)擇一時為時變流場(docs/design/scenario-engine.md 第 1.5.2 節):流向/流速由練習時間決定(確定性、不進快照/雜湊),state.currentSource 輸出 table|tidal;timeline/指令 setEnvironment current 覆寫為常數後時變停止,直到再載入情境。皆未給時行為與數值與舊版相同",
+          "description": "流。set/drift 為常數流;選填 table(流場表)或 tidal(潮流)擇一時為時變流場(docs/design/scenario-engine.md 第 1.5.2 節):流向/流速由練習時間決定(確定性、不進快照/雜湊),state.currentSource 輸出 table|tidal;選填 field(空間網格,可與 table/tidal 並存)時流由自船/目標船位置雙線性內插決定,state.currentSource 輸出 field|field+tidal|field+table、state.current 為自船位置的值;timeline/指令 setEnvironment current 覆寫為常數後時變/空間變化停止,直到再載入情境。皆未給時行為與數值與舊版相同",
           "properties": {
             "set": {
               "type": "number",
@@ -259,6 +259,102 @@
                   "minimum": 0,
                   "default": 20,
                   "description": "平潮窗口(分;轉流前後各半個窗口視為平潮)"
+                }
+              }
+            },
+            "field": {
+              "type": "object",
+              "required": [
+                "grid",
+                "u_kn",
+                "v_kn"
+              ],
+              "description": "空間變化流場(docs/design/scenario-engine.md 第 1.5.2 節):規則網格上的東/北分量(kn)以雙線性內插,格外依 outside 取最近邊緣值(edge)或 0(zero);timeScale 為 tidal|table 時整個場逐步乘以該均勻模型的流速比例 k(t) = 當下流速 / 最大流速(table 取各點最大、tidal 取 max(flood, ebb);夾到 [0, 1]),方向永遠取場的向量(退潮不反向)。有 field 時 table/tidal 只作為 timeScale 的來源。結構檢查:dx/dy > 0、nx/ny ≥ 2、u_kn/v_kn 為 ny 列 × nx 行的有限數值、timeScale 對應的 current.tidal/table 須存在",
+              "properties": {
+                "grid": {
+                  "type": "object",
+                  "required": [
+                    "x0",
+                    "y0",
+                    "dx",
+                    "dy",
+                    "nx",
+                    "ny"
+                  ],
+                  "description": "網格(本地 ENU 公尺,原點與情境座標語意相同):節點 (x0 + i·dx, y0 + j·dy),i ∈ [0, nx)、j ∈ [0, ny)",
+                  "properties": {
+                    "x0": {
+                      "type": "number",
+                      "description": "第 0 行節點的東向座標 (m)"
+                    },
+                    "y0": {
+                      "type": "number",
+                      "description": "第 0 列節點的北向座標 (m)"
+                    },
+                    "dx": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "x 方向格距 (m)"
+                    },
+                    "dy": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "y 方向格距 (m)"
+                    },
+                    "nx": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "description": "x 方向節點數(行數)"
+                    },
+                    "ny": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "description": "y 方向節點數(列數)"
+                    }
+                  }
+                },
+                "u_kn": {
+                  "type": "array",
+                  "minItems": 2,
+                  "description": "東向分量 (kn):ny 列(外層,y 索引 j)× nx 行(內層,x 索引 i),u_kn[j][i] 對應節點 (x0 + i·dx, y0 + j·dy)",
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "v_kn": {
+                  "type": "array",
+                  "minItems": 2,
+                  "description": "北向分量 (kn):排列同 u_kn",
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "outside": {
+                  "type": "string",
+                  "enum": [
+                    "edge",
+                    "zero"
+                  ],
+                  "default": "edge",
+                  "description": "格外取值:edge 取最近邊緣值(座標夾到網格範圍)、zero 取 0"
+                },
+                "timeScale": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "tidal",
+                    "table"
+                  ],
+                  "default": "none",
+                  "description": "時間縮放來源:none 不縮放;tidal 需 current.tidal(與 environment.tide),table 需 current.table;比例 = 該模型當下流速 / 其最大流速,方向取場的向量"
                 }
               }
             }
@@ -1690,7 +1786,7 @@
     },
     "timelineAction": {
       "type": "object",
-      "description": "只有一個鍵的物件(鍵即動作名):injectFault(<name> | {name, args?, recordOnly?})、clearFault(<name> | all)、setEnvironment{wind{trueSpeed,trueDir,gustiness},current{set,drift},waterDepth,visibility_nm,ramp_s}、targetControl{同 command.schema.json targetControl.args}、tugControl{同 command.schema.json tugControl.args:id(須為情境 tugs[].id)、mode push|pull|standby|free|unavailable、direction_deg、power_pct;拒絕時發 commandRejected(source timeline)}、voiceScript{role,channel,text?,file?,lang?,durationEstimate_s?}、message{to: instructor|all, text, severity: info|warning|alarm}、phase: <name>、freeze{reason?}、autopilot{enabled,heading?,rotLimit?}、ownShip{rudder?,telegraph?,rpm?,thruster?}、timeScale: <n>、arm: <itemId>、disarm: <itemId>、endExercise{reason?}。不允許 loadScenario/reset/restore/snapshot",
+      "description": "只有一個鍵的物件(鍵即動作名):injectFault(<name> | {name, args?, recordOnly?})、clearFault(<name> | all)、setEnvironment{wind{trueSpeed,trueDir,gustiness},current{set,drift},waterDepth,visibility_nm,ramp_s,waves{significantHeight_m,peakPeriod_s,direction_deg,spectrum?,gamma?} | null}(waves 見 properties.setEnvironment)、targetControl{同 command.schema.json targetControl.args}、tugControl{同 command.schema.json tugControl.args:id(須為情境 tugs[].id)、mode push|pull|standby|free|unavailable、direction_deg、power_pct;拒絕時發 commandRejected(source timeline)}、voiceScript{role,channel,text?,file?,lang?,durationEstimate_s?}、message{to: instructor|all, text, severity: info|warning|alarm}、phase: <name>、freeze{reason?}、autopilot{enabled,heading?,rotLimit?}、ownShip{rudder?,telegraph?,rpm?,thruster?}、timeScale: <n>、arm: <itemId>、disarm: <itemId>、endExercise{reason?}。不允許 loadScenario/reset/restore/snapshot",
       "minProperties": 1,
       "maxProperties": 1,
       "propertyNames": {
@@ -1713,6 +1809,45 @@
         ]
       },
       "properties": {
+        "setEnvironment": {
+          "type": "object",
+          "description": "同 command.schema.json setEnvironment.args(docs/design/scenario-engine.md 第 3.5 節漸變;docs/design/physics-waves.md「練習中變更」):waves 物件 = 建立/更新浪(欄位皆選填、缺的沿用目前值;無浪時 peakPeriod_s 與 direction_deg 必填,核心於執行時檢查、不合法發 commandRejected invalidWaves)、null 或 significantHeight_m 0 = 關閉;ramp_s 只對 Hs 線性漸變(其餘立即;關閉時 Hs 先漸變到 0 再移除)。結構檢查(載入為 error;C# Scenario.CheckSetEnvironmentAction 與 Python set_environment_action_issues 一致):須為物件;waves 須為物件或 null,給了的欄位 significantHeight_m ≥ 0、peakPeriod_s > 0、direction_deg 0–360、spectrum pm|jonswap、gamma ≥ 1",
+          "properties": {
+            "wind": {
+              "type": "object",
+              "properties": {
+                "trueSpeed": { "type": "number", "minimum": 0 },
+                "trueDir": { "type": "number" },
+                "gustiness": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
+            },
+            "current": {
+              "type": "object",
+              "properties": {
+                "set": { "type": "number" },
+                "drift": { "type": "number", "minimum": 0 }
+              }
+            },
+            "waterDepth": { "type": "number", "exclusiveMinimum": 0 },
+            "visibility_nm": { "type": "number", "exclusiveMinimum": 0 },
+            "ramp_s": { "type": "number", "minimum": 0, "description": "漸變秒數(0 = 立即);浪只對 Hs 漸變" },
+            "waves": {
+              "oneOf": [
+                { "type": "null", "description": "關閉浪(ramp_s > 0 時 Hs 先漸變到 0)" },
+                {
+                  "type": "object",
+                  "properties": {
+                    "significantHeight_m": { "type": "number", "minimum": 0, "description": "有義波高 Hs(m);0 = 關閉" },
+                    "peakPeriod_s": { "type": "number", "exclusiveMinimum": 0, "description": "譜峰週期 Tp(s)" },
+                    "direction_deg": { "type": "number", "minimum": 0, "maximum": 360, "description": "浪來向(度,氣象慣例)" },
+                    "spectrum": { "type": "string", "enum": ["pm", "jonswap"] },
+                    "gamma": { "type": "number", "minimum": 1 }
+                  }
+                }
+              ]
+            }
+          }
+        },
         "injectFault": {
           "oneOf": [
             { "type": "string", "description": "故障名稱(fault-catalogue.json)" },

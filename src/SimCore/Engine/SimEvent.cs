@@ -211,6 +211,8 @@ public static class CommandRejectReasons
     public const string AlertNotTransferable = "alertNotTransferable";
     /// <summary>alertAcknowledge / alertTransfer 的 station 不是 bridge|portWing|stbdWing|ecr</summary>
     public const string UnknownStation = "unknownStation";
+    /// <summary>setEnvironment args.waves 不合法(非物件/null、Hs &lt; 0、Tp ≤ 0、無浪時缺 peakPeriod_s/direction_deg、spectrum 不明、gamma &lt; 1);其他環境欄位照常套用</summary>
+    public const string InvalidWaves = "invalidWaves";
     // 外力指令(tugControl / anchor / mooring;設計文件 physics-tugs-anchors-mooring.md 第 6.2 節)
     /// <summary>動力學模型不支援外力(IShipDynamics.SupportsExternalForces = false)</summary>
     public const string ExternalForcesUnsupported = "externalForcesUnsupported";

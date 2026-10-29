@@ -109,9 +109,10 @@ public sealed class TrafficManager
 
     /// <summary>
     /// 推進所有目標一步(自船已推進到 <paramref name="tick"/>):觸發檢查 → 行為 → 運動模型 → 自船會遇指標 → 碰撞。
-    /// <paramref name="env"/> 提供均勻流(目標對地運動含流)與風(錨泊艏向)。
+    /// <paramref name="env"/> 提供均勻流(目標對地運動含流)與風(錨泊艏向);<paramref name="currentAt"/> 不為 null 時(空間變化流場,
+    /// 情境引擎設計第 1.5.2 節)每艘目標改以自身位置取流 (東, 北 m/s),風仍取 <paramref name="env"/>;null 時與舊版位元相同。
     /// </summary>
-    public void Step(in ShipKinematics own, in EnvironmentSample env, long tick)
+    public void Step(in ShipKinematics own, in EnvironmentSample env, long tick, Func<double, double, (double East, double North)>? currentAt = null)
     {
         var evalTick = tick % _evalDivider == 0;
         for (var i = 0; i < _targets.Count; i++)
@@ -122,7 +123,7 @@ public sealed class TrafficManager
                 if (evalTick && TriggerSatisfied(t, own, tick)) Activate(t, tick, "觸發條件成立");
                 continue;
             }
-            UpdateTarget(t, own, env, tick, evalTick);
+            UpdateTarget(t, own, env, tick, evalTick, currentAt);
         }
         UpdateOwnShipMetrics(own, tick, evalTick);
     }
@@ -160,16 +161,19 @@ public sealed class TrafficManager
         }
     }
 
-    private void UpdateTarget(TargetShip t, in ShipKinematics own, in EnvironmentSample env, long tick, bool evalTick)
+    private void UpdateTarget(TargetShip t, in ShipKinematics own, in EnvironmentSample env, long tick, bool evalTick,
+        Func<double, double, (double East, double North)>? currentAt)
     {
         var b = t.Spec.Behaviour;
         var tSince = t.TimeSinceActivation(tick, _dt);
+        // 流:均勻流取步首取樣;空間變化流場取目標自身位置
+        var (curE, curN) = currentAt is null ? (env.CurrentEastMps, env.CurrentNorthMps) : currentAt(t.X, t.Y);
 
         if (b.Mode == TargetBehaviourMode.Anchored && !t.Manual)
         {
             // 風流合成漂移向量(風致漂移取 3 % 風速);船艏朝其來向
-            var driftE = 0.03 * env.WindEastMps + env.CurrentEastMps;
-            var driftN = 0.03 * env.WindNorthMps + env.CurrentNorthMps;
+            var driftE = 0.03 * env.WindEastMps + curE;
+            var driftN = 0.03 * env.WindNorthMps + curN;
             var headTo = driftE * driftE + driftN * driftN > 1e-4 ? Units.NormalizeHeadingRad(Math.Atan2(-driftE, -driftN)) : t.AnchorBaseRad;
             t.IntegrateAnchored(headTo, tSince, _dt);
             TickSound(t, tick);
@@ -187,7 +191,7 @@ public sealed class TrafficManager
                 RunScript(t, tSince, tick);
                 break;
             case TargetBehaviourMode.Follow:
-                FollowLeader(t, own, env);
+                FollowLeader(t, own, curE, curN);
                 break;
             default:
                 break; // hold / colreg(無航點):保持指令
@@ -213,7 +217,7 @@ public sealed class TrafficManager
             speed = t.ManualSpeedMps;
         }
 
-        t.Integrate(heading, speed, env.CurrentEastMps, env.CurrentNorthMps, _dt);
+        t.Integrate(heading, speed, curE, curN, _dt);
         TickSound(t, tick);
     }
 
@@ -275,7 +279,7 @@ public sealed class TrafficManager
     /// k = min(gain, 0.3/τ_V) 使位置迴路(二階:航速一階滯後 + 位置積分)阻尼比 ≥ 0.9,小艇不會繞著站位振盪。
     /// 若直線路徑穿過 leader 船體(含跟隨船船長的安全邊界),先繞到 leader 艉後同側的過渡點再進站,避免「穿船」碰撞。
     /// </summary>
-    private void FollowLeader(TargetShip t, in ShipKinematics own, in EnvironmentSample env)
+    private void FollowLeader(TargetShip t, in ShipKinematics own, double curE, double curN)
     {
         var f = t.Spec.Behaviour.Follow ?? DefaultFollow;
         ShipKinematics leader;
@@ -310,8 +314,8 @@ public sealed class TrafficManager
         var maxV = Units.KnToMps(f.MaxSpeed);
         var vg = Math.Sqrt(vE * vE + vN * vN);
         if (vg > maxV) { vE *= maxV / vg; vN *= maxV / vg; }
-        var wE = vE - env.CurrentEastMps;
-        var wN = vN - env.CurrentNorthMps;
+        var wE = vE - curE;
+        var wN = vN - curN;
         var ws = Math.Sqrt(wE * wE + wN * wN);
         if (ws < 0.2)
         {

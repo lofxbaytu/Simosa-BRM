@@ -5,7 +5,7 @@
 
 import type { SessionInfoCommand, SimCommand } from '../types/command.js';
 import { ACKNOWLEDGE_KINDS, type AcknowledgeKind } from '../types/event.js';
-import type { LoadingCondition } from '../types/state.js';
+import { WAVE_SPECTRA, type LoadingCondition, type WaveSpectrum } from '../types/state.js';
 import { clamp, normalizeHeading } from './angles.js';
 import { isSessionRole, type SessionInfo } from './session-info.js';
 
@@ -86,20 +86,34 @@ export interface EnvironmentChange {
   waterDepth?: number;
   /** 能見度 (nm):C# 核心保存/漸變/廣播(無物理效果);Python 參考伺服器照收無作用 */
   visibility_nm?: number;
-  /** 漸變秒數(設計文件第 3.5 節):自目前值線性漸變到目標值;0 或省略為立即 */
+  /** 漸變秒數(設計文件第 3.5 節):自目前值線性漸變到目標值;0 或省略為立即(浪只對 Hs 漸變) */
   ramp_s?: number;
+  /**
+   * 浪(docs/design/physics-waves.md「練習中變更」):物件 = 建立/更新(缺的欄位核心沿用目前值;無浪時 peakPeriod_s 與 direction_deg 必填),
+   * null = 關閉(significantHeight_m 0 亦為關閉);undefined = 不變
+   */
+  waves?: WaveChange | null;
+}
+
+export interface WaveChange {
+  significantHeight_m?: number;
+  peakPeriod_s?: number;
+  direction_deg?: number;
+  spectrum?: WaveSpectrum | string;
+  gamma?: number;
 }
 
 /** 核心對 setEnvironment 各欄位的支援情形(供 UI 標示;依兩核心原始碼與設計文件整理,2026-10)。 */
 export type CoreSupport = 'both' | 'csharp' | 'python' | 'none';
 
-export const ENVIRONMENT_FIELD_SUPPORT: Readonly<Record<'wind' | 'gustiness' | 'current' | 'waterDepth' | 'visibility' | 'ramp', CoreSupport>> = {
+export const ENVIRONMENT_FIELD_SUPPORT: Readonly<Record<'wind' | 'gustiness' | 'current' | 'waterDepth' | 'visibility' | 'ramp' | 'waves', CoreSupport>> = {
   wind: 'both',
   gustiness: 'csharp',
   current: 'both',
   waterDepth: 'both',
   visibility: 'csharp',
   ramp: 'csharp',
+  waves: 'both',
 };
 
 export const CORE_SUPPORT_LABEL: Readonly<Record<CoreSupport, string>> = {
@@ -134,10 +148,39 @@ export function setEnvironmentCommand(change: EnvironmentChange): SimCommand | n
   }
   if (finite(change.waterDepth) && change.waterDepth > 0) args['waterDepth'] = round1(change.waterDepth);
   if (finite(change.visibility_nm)) args['visibility_nm'] = Math.max(0, round1(change.visibility_nm));
+  if (change.waves === null) args['waves'] = null;
+  else if (change.waves) {
+    const w = waveArgs(change.waves);
+    if (w) args['waves'] = w;
+  }
   if (Object.keys(args).length === 0) return null;
   // ramp_s 只在有其他欄位時附上(單獨的漸變秒數沒有意義)
   if (finite(change.ramp_s) && change.ramp_s > 0) args['ramp_s'] = Math.round(change.ramp_s);
   return { type: 'setEnvironment', args };
+}
+
+/**
+ * setEnvironment args.waves 的內容:Hs 不為負(兩位小數)、Tp 須為正(一位小數)、來向正規化至 [0, 360)(整數度)、浪譜 pm|jonswap、γ ≥ 1;
+ * 不合規的欄位略過;一個欄位都沒有時回傳 null(不送空物件)。
+ */
+export function waveArgs(w: WaveChange): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {};
+  if (finite(w.significantHeight_m)) out['significantHeight_m'] = Math.max(0, Math.round(w.significantHeight_m * 100) / 100);
+  if (finite(w.peakPeriod_s) && w.peakPeriod_s > 0) out['peakPeriod_s'] = round1(w.peakPeriod_s);
+  if (finite(w.direction_deg)) out['direction_deg'] = Math.round(normalizeHeading(w.direction_deg)) % 360;
+  if (typeof w.spectrum === 'string' && (WAVE_SPECTRA as readonly string[]).includes(w.spectrum.trim().toLowerCase())) out['spectrum'] = w.spectrum.trim().toLowerCase();
+  if (finite(w.gamma) && w.gamma >= 1) out['gamma'] = Math.round(w.gamma * 100) / 100;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** 設定/變更浪(setEnvironment { waves });ramp_s > 0 時 Hs 漸變、其餘立即。欄位皆不合規時回傳 null。 */
+export function setWavesCommand(waves: WaveChange, rampS?: number): SimCommand | null {
+  return setEnvironmentCommand(rampS !== undefined ? { waves, ramp_s: rampS } : { waves });
+}
+
+/** 關閉浪(setEnvironment { waves: null });ramp_s > 0 時 C# 核心先把 Hs 漸變到 0 再關閉。 */
+export function clearWavesCommand(rampS?: number): SimCommand {
+  return setEnvironmentCommand(rampS !== undefined ? { waves: null, ramp_s: rampS } : { waves: null })!;
 }
 
 // ------------------------------------------------------------------ 時間表、確認、結束練習、評估查詢(設計文件第 5.2 節)

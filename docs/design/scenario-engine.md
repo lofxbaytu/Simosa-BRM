@@ -97,7 +97,7 @@ timeline:
 |---|---|---|
 | `injectFault: <name>` | 名稱依第 7.2 節故障目錄(第 1.1.4 節);可帶物件 `{name, args}` 保留日後參數化(例如 `{name: steeringGear, args: {jamAt_deg: 15}}`;第一版引擎忽略 args 只記錄) | `SimCommandType.InjectFault` → 事件 `faultInjected` |
 | `clearFault: <name> \| all` | | `ClearFault` → `faultCleared` |
-| `setEnvironment: {wind{trueSpeed,trueDir,gustiness}, current{set,drift}, waterDepth, visibility_nm, ramp_s}` | `ramp_s`(預設 0):自目前值線性漸變到目標值(第 3.5 節) | `ApplyEnvironment` + `EnvironmentRamp` → `environmentChange`(含 `ramp_s`)、漸變完成時 `environmentRampDone` |
+| `setEnvironment: {wind{trueSpeed,trueDir,gustiness}, current{set,drift}, waterDepth, visibility_nm, waves{…} \| null, ramp_s}` | `ramp_s`(預設 0):自目前值線性漸變到目標值(第 3.5 節);`waves` 建立/更新/關閉浪,`ramp_s` 只對 Hs 漸變(`physics-waves.md` 第 6.1 節) | `ApplyEnvironment` + `EnvironmentRamp` → `environmentChange`(含 `ramp_s`)、漸變完成時 `environmentRampDone` |
 | `targetControl: {…}` | 同 `command.schema.json` `targetControl.args` | `TrafficManager.ApplyControl` → 既有 `targetControl` 事件 |
 | `voiceScript: {role, channel, text?, file?, lang?, durationEstimate_s?}` | `role`: vts \| pilot \| ecr \| tug \| otherShip \| master \| agent \| helmsman \| lookout \| narrator;`channel`: vhf16 \| vhf13 \| vhfPort \| intercom \| phone \| pa \| bridge;`file` 相對於情境包目錄 `data/scenarios/<id>/`;核心**只記錄事件**,由教官站/簡化教官模式播放(第 9.1 節) | 事件 `voiceScript`(`data` 含全部欄位) |
 | `message: {to: instructor \| all, text, severity: info \| warning \| alarm}` | 文字訊息(教官站事件流;`to: all` 時學員站可顯示) | `message` |

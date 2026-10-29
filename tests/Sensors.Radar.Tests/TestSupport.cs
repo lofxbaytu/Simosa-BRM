@@ -41,6 +41,8 @@ internal sealed class LinearScene
     public double HeadingErrorDeg { get; set; }
     /// <summary>情境雷達環境(state.radarEnvironment;null = 情境未給)</summary>
     public SimosaBRM.SimCore.Scenario.RadarEnvironmentState? RadarEnvironment { get; set; }
+    /// <summary>核心浪場(state.waves)的有義波高(m;null = 狀態無 waves)</summary>
+    public double? WaveHeightM { get; set; }
 
     public (double X, double Y) OwnAt(double t)
     {
@@ -120,6 +122,9 @@ internal sealed class LinearScene
             },
             Sensors = new SensorStatus { HeadingValid = true, PositionValid = true, DepthValid = true, StwValid = true, MagneticHeading = OwnCourseDeg },
             RadarEnvironment = RadarEnvironment,
+            Waves = WaveHeightM is { } hs
+                ? new SimosaBRM.SimCore.Physics.External.WaveDriftState { SignificantHeightM = hs, PeakPeriodS = 7.0, DirectionDeg = WindFromDeg, WavelengthM = 76.5, Spectrum = "pm" }
+                : null,
         };
     }
 

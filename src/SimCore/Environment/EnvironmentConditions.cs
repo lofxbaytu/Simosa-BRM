@@ -3,7 +3,7 @@ using SimosaBRM.SimCore.Contracts;
 namespace SimosaBRM.SimCore.Environment;
 
 /// <summary>
-/// 環境狀態(規劃書第 6.2 節 W、C 項與淺水 B 項的輸入):真風(速、來向)、均勻流(去向、流速)、水深。
+/// 環境狀態(規劃書第 6.2 節 W、C 項與淺水 B 項的輸入):真風(速、來向)、流(去向、流速;均勻或空間網格 field)、水深。
 /// 內部 SI/弧度;陣風係數由引擎以情境種子的亂數更新。
 /// </summary>
 public sealed class EnvironmentConditions
@@ -20,13 +20,17 @@ public sealed class EnvironmentConditions
     public double CurrentSetRad { get; set; }
     /// <summary>流速(m/s);同上</summary>
     public double CurrentDriftMps { get; set; }
-    /// <summary>時變流場模型(情境 environment.current.table | tidal;null = 常數流,數值與舊版完全相同;情境引擎設計第 1.5.2 節)</summary>
+    /// <summary>時變/空間變化流場模型(情境 environment.current.table | tidal | field;null = 常數流,數值與舊版完全相同;情境引擎設計第 1.5.2 節)</summary>
     public CurrentModel? CurrentModel { get; set; }
-    /// <summary>`setEnvironment current` 覆寫為常數後為 true:時變停止(進快照,倒帶到覆寫前會恢復時變),直到再載入情境</summary>
+    /// <summary>`setEnvironment current` 覆寫為常數後為 true:時變/空間變化停止(進快照,倒帶到覆寫前會恢復),直到再載入情境</summary>
     public bool CurrentOverridden { get; set; }
     /// <summary>時變流場是否正在驅動流向/流速</summary>
     public bool CurrentModelActive => CurrentModel is not null && !CurrentOverridden;
-    /// <summary>state.currentSource("table" | "tidal");常數流(含覆寫後)為 null → 省略</summary>
+    /// <summary>空間變化流場(field)是否正在驅動:此時 <see cref="SampleAt"/>/<see cref="CurrentVectorAt"/> 依位置取樣,CurrentSetRad/DriftMps 為自船位置的值</summary>
+    public bool CurrentFieldActive => CurrentModelActive && CurrentModel!.SpatiallyVarying;
+    /// <summary>最近一次 <see cref="RefreshCurrent"/> 的練習時間(秒);空間流場在 <see cref="SampleAt"/> 取樣用(不進快照,還原後由 RefreshCurrent 重設)</summary>
+    public double CurrentTimeS { get; set; }
+    /// <summary>state.currentSource("table" | "tidal" | "field" | "field+tidal" | "field+table");常數流(含覆寫後)為 null → 省略</summary>
     public string? CurrentSource => CurrentModelActive ? CurrentModel!.Source : null;
     /// <summary>基底水深(海圖水深;常數或 zones 覆寫;setEnvironment waterDepth 漸變改此值)</summary>
     public IDepthProvider Depth { get; set; } = new ConstantDepth(50.0);
@@ -36,6 +40,11 @@ public sealed class EnvironmentConditions
     public double TideHeightM { get; set; }
     /// <summary>能見度(nm;null = 無限制);只保存、漸變、廣播與記錄,無物理效果(情境引擎設計第 1.5 節)</summary>
     public double? VisibilityNm { get; set; }
+    /// <summary>
+    /// 目前有義波高 Hs(m):<c>setEnvironment waves</c> 的 Hs 漸變通道(<see cref="Scenario.RampChannel.WaveHeight"/>)寫入此值,
+    /// 引擎於每步漸變套用後同步到浪模型(WaveDriftModel;設計文件 physics-waves.md「練習中變更」);無浪時 0 且不使用
+    /// </summary>
+    public double WaveHeightM { get; set; }
 
     public double WindEffectiveSpeedMps => WindTrueSpeedMps * GustFactor;
 
@@ -45,25 +54,42 @@ public sealed class EnvironmentConditions
     /// <summary>以練習時間 t(秒)更新潮高(無 Tide 時 0)。</summary>
     public void RefreshTide(double t) => TideHeightM = Tide?.HeightAt(t) ?? 0.0;
 
-    /// <summary>以練習時間 t(秒)更新時變流場的流向/流速;常數流或已覆寫時不動既有值(位元不變)。</summary>
-    public void RefreshCurrent(double t)
+    /// <summary>
+    /// 以練習時間 t(秒)與自船位置 (xEast, yNorth) 更新時變/空間變化流場的流向/流速(均勻模型忽略位置);常數流或已覆寫時不動既有值(位元不變)。
+    /// 空間流場:寫入的是自船位置的值(state.current、ramp 起點、快照皆為此值),其他位置以 <see cref="CurrentVectorAt"/> 取樣。
+    /// </summary>
+    public void RefreshCurrent(double t, double xEast, double yNorth)
     {
+        CurrentTimeS = t;
         if (!CurrentModelActive) return;
-        var (set, drift) = CurrentModel!.At(t);
+        var (set, drift) = CurrentModel!.At(t, xEast, yNorth);
         CurrentSetRad = set;
         CurrentDriftMps = drift;
     }
 
-    /// <summary>在指定位置取樣,供動力學模型使用(水深為有效水深:基底 + 潮高)。</summary>
+    /// <summary>
+    /// 練習時間 t、位置 (xEast, yNorth) 的流向量(ENU,m/s):空間流場啟用時由場取樣(set/drift → 分量,與自船 <see cref="RefreshCurrent"/> 同一路徑,
+    /// 自船位置的結果與 CurrentSetRad/DriftMps 一致),否則為目前的均勻流(位置與 t 無關;運算與舊版 SampleAt 相同)。目標船與其他位置的流取用走此處。
+    /// </summary>
+    public (double East, double North) CurrentVectorAt(double t, double xEast, double yNorth)
+    {
+        if (CurrentFieldActive)
+        {
+            var (set, drift) = CurrentModel!.At(t, xEast, yNorth);
+            return (drift * Math.Sin(set), drift * Math.Cos(set));
+        }
+        // 流「去向」:向量 = (C sinθ, C cosθ)
+        return (CurrentDriftMps * Math.Sin(CurrentSetRad), CurrentDriftMps * Math.Cos(CurrentSetRad));
+    }
+
+    /// <summary>在指定位置取樣,供動力學模型使用(水深為有效水深:基底 + 潮高;空間流場時流為該位置、<see cref="CurrentTimeS"/> 的值)。</summary>
     public EnvironmentSample SampleAt(double xEast, double yNorth)
     {
         var w = WindEffectiveSpeedMps;
         // 風「來向」θ:空氣流動方向為 θ+180°,向量 = (−W sinθ, −W cosθ)
         var windE = -w * Math.Sin(WindTrueDirFromRad);
         var windN = -w * Math.Cos(WindTrueDirFromRad);
-        // 流「去向」:向量 = (C sinθ, C cosθ)
-        var curE = CurrentDriftMps * Math.Sin(CurrentSetRad);
-        var curN = CurrentDriftMps * Math.Cos(CurrentSetRad);
+        var (curE, curN) = CurrentVectorAt(CurrentTimeS, xEast, yNorth);
         return new EnvironmentSample(windE, windN, curE, curN, DepthAt(xEast, yNorth));
     }
 }

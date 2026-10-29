@@ -229,7 +229,9 @@ public sealed class RadarUnit
 
     private void GenerateSpokes(RadarScene scene, long target, double hInd, RadarStepResult result)
     {
-        var seaState = Environment.EffectiveSeaState ?? VideoGrid.SeaStateFromWind(scene.WindSpeedKn);
+        // 海況優先序:教官 environment 指令 / 環境檔 > 情境 environment.radar.seaState > 核心浪場 state.waves 的 Hs(Douglas)> 真風速推估
+        var seaState = Environment.EffectiveSeaState
+                       ?? (scene.WaveHeightM is { } hs ? VideoGrid.SeaStateFromWaveHeight(hs) : VideoGrid.SeaStateFromWind(scene.WindSpeedKn));
         SeaState = seaState;
         _arpaGrid.UpdateClutter(seaState);
         _arpaGrid.UpdateStc(Controls.Sea);

@@ -339,6 +339,21 @@ export function eventLabel(e: SimEvent): string {
       if (isRecord(cur)) parts.push(`流 ${typeof cur['set'] === 'number' ? formatHeading(cur['set']) : '?'}/${typeof cur['drift'] === 'number' ? cur['drift'] : '?'} kn`);
       if (typeof d(e, 'waterDepth') === 'number') parts.push(`水深 ${dn(e, 'waterDepth')} m`);
       if (typeof d(e, 'visibility_nm') === 'number') parts.push(`能見度 ${dn(e, 'visibility_nm')} nm`);
+      // 浪(setEnvironment waves;physics-waves.md「練習中變更」):物件為設定/變更(只列有給的欄位)、null 為關閉
+      const waves = d(e, 'waves');
+      if (waves === null) parts.push('浪關閉');
+      else if (isRecord(waves)) {
+        const hs = waves['significantHeight_m'];
+        if (typeof hs === 'number' && hs === 0) parts.push('浪關閉');
+        else {
+          const items: string[] = [];
+          if (typeof hs === 'number') items.push(`Hs ${hs} m`);
+          if (typeof waves['peakPeriod_s'] === 'number') items.push(`Tp ${waves['peakPeriod_s']} s`);
+          if (typeof waves['direction_deg'] === 'number') items.push(`${formatHeading(waves['direction_deg'])}`);
+          if (typeof waves['spectrum'] === 'string') items.push(String(waves['spectrum']).toUpperCase());
+          parts.push(`浪 ${items.join('/') || '不變'}`);
+        }
+      }
       const ramp = d(e, 'ramp_s');
       const rampText = typeof ramp === 'number' && ramp > 0 ? `(${ramp} s 漸變)` : '';
       return `環境改變 ${parts.join(' · ') || e.message || ''}${rampText}`.trimEnd();

@@ -46,6 +46,13 @@ describe('state-parser:tideHeight_m 與 currentSource', () => {
     expect('tideHeight_m' in plain.state).toBe(false);
     expect('currentSource' in plain.state).toBe(false);
     expect(parseState({ ...base, currentSource: 'table' })!.state.currentSource).toBe('table');
+    // 空間變化流場(environment.current.field;第十九輪):field / field+tidal / field+table 亦為合法來源
+    for (const src of ['field', 'field+tidal', 'field+table'] as const) {
+      const f = parseState({ ...base, currentSource: src })!;
+      expect(f.state.currentSource).toBe(src);
+      expect(f.issues).not.toContain('currentSource');
+    }
+    expect(parseState({ ...base, currentSource: 'grid' })!.issues).toContain('currentSource');
   });
   it('型別錯誤記入 issues 但不影響其他欄位', () => {
     const r = parseState({ ...base, tideHeight_m: 'high', currentSource: 'random' })!;
@@ -122,6 +129,15 @@ describe('情境摘要與 E06b 夾具', () => {
     );
     expect(table.environment.current).toEqual({ set: 10, drift: 0, source: 'table' });
     expect(environmentSummary(table.environment)).toContain('流 010°/0 kn(流場表)');
+    // 空間網格 field:單獨為 field,與 tidal 並存(timeScale 來源)為 field+tidal
+    const fieldYaml = (extra: string) =>
+      `id: T\nship: { id: FSB1 }\ninitial: { position: { lat: 23.8, lon: 120 }, heading: 0 }\nenvironment:\n  waterDepth: 20\n  current:\n    set: 45\n    drift: 1\n${extra}    field:\n      grid: { x0: 0, y0: 0, dx: 100, dy: 100, nx: 2, ny: 2 }\n      u_kn: [[1, 2], [1, 2]]\n      v_kn: [[0, 0], [1, 1]]\n`;
+    const field = parseScenario(fieldYaml(''), 'field.yaml');
+    expect(field.environment.current).toEqual({ set: 45, drift: 1, source: 'field' });
+    expect(environmentSummary(field.environment)).toContain('(流場網格)');
+    const fieldTidal = parseScenario(fieldYaml('    tidal:\n      flood: { speed_kn: 2, direction_deg: 85 }\n      ebb: { speed_kn: 2, direction_deg: 265 }\n'), 'field-tidal.yaml');
+    expect(fieldTidal.environment.current?.source).toBe('field+tidal');
+    expect(environmentSummary(fieldTidal.environment)).toContain('(流場網格·潮流)');
   });
   it('E06b 核心紀錄夾具:header 情境含 tide 與 current.tidal,state 的 current/currentSource/tideHeight_m 隨時間變化', () => {
     const r = parseReplay(fx('record-E06b_tidal_stream-core.jsonl'));

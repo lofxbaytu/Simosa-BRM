@@ -73,7 +73,7 @@ environment:                                     # 情境原點 23.80N 120.05E(R
   關鍵幀只增加約 1/25 的量(`RadarEnvironmentScenarioTests.RecordStateLinesDoNotRepeatRadarEnvironmentEveryFrame`:有/無雨區每行平均相差 < 5 %)。直接呼叫 `BuildState()` 仍帶完整內容(教官快照、測試)。
   內容只來自情境(紀錄 header 有完整定義)、練習中不變,**不進雜湊與快照**(有/無此區段的同一情境雜湊逐步相同,`RadarEnvironmentScenarioTests`)。Python 參考實作忽略。
 - 雷達:`RadarEnvironment.ApplyScenario`(帶有 `radarEnvironment` 的幀;內容相同時不變更版本;**省略 = 不變**)→ `ScenarioRainCells`、`ScenarioRainPolygons`、`ScenarioSeaState`;與檔案/教官雨區**相加**;
-  海況優先序:教官 `environment` 指令 / 環境檔 `seaState` > 情境 `seaState` > 依真風速推估。模擬時間倒退(重設/倒帶)或情境切換(`state.scenario.id` 改變)時以該幀內容重設、該幀無此欄位則清除,待下一個關鍵幀(≤ 1 s)重新套用;
+  海況優先序:教官 `environment` 指令 / 環境檔 `seaState` > 情境 `seaState` > 核心浪場 `state.waves.significantHeight_m`(Douglas 海況表:Hs 0 → 0、< 0.1 → 1、< 0.5 → 2、< 1.25 → 3、< 2.5 → 4、< 4 → 5、< 6 → 6、< 9 → 7、≥ 9 → 8;`VideoGrid.SeaStateFromWaveHeight`,練習中 `setEnvironment waves` 變更後下一圈生效)> 依真風速推估(`WaveSeaStateTests`)。模擬時間倒退(重設/倒帶)或情境切換(`state.scenario.id` 改變)時以該幀內容重設、該幀無此欄位則清除,待下一個關鍵幀(≤ 1 s)重新套用;
   雷達服務中途連線時,最遲 1 s 內收到關鍵幀(`ScenarioWeatherAndSBandFaultTests.ScenarioEnvironmentPersistsBetweenKeyframesAndClearsOnReset`)。
 - 只支援靜態雨區;移動雨胞、`setEnvironment` 改雨區為後續。
 
@@ -290,7 +290,7 @@ dotnet build/bin/Sensors.Radar.Host/Release/net8.0/SimosaBRM.Sensors.Radar.Host.
 ## 9. 限制與後續
 
 - 無旁瓣、多路徑(lobing)、閃爍(glint)、二次掃描回波、RACON/SART、目標間遮蔽;陸地為多邊形 + 高度,非 DEM。量測雜訊因此比實船小,ARPA 精度偏佳。
-- 海況由真風速推估(核心尚無浪場),情境可以 `environment.radar.seaState` 覆寫;雨區由情境 `environment.radar.rainAreas`(第 2.1 節)、環境檔或教官指令給定,皆為靜態。
+- 海況由核心浪場 `state.waves` 的 Hs(Douglas)推估,情境無 `environment.waves` 時依真風速,情境 `environment.radar.seaState` 或教官指令可覆寫;雨區由情境 `environment.radar.rainAreas`(第 2.1 節)、環境檔或教官指令給定,皆為靜態。
 - 雷達控制指令經核心 `radarControl` 進紀錄(第 5.1 節);重播時主控程序 `--replay --radar` 經 `/radar/replay` 重放到雷達服務(第 5.2 節),雷達服務須先啟動並訂閱重播中的主控程序狀態(`--port`),重播以 `--timescale` 的牆鐘步調進行(長紀錄可加大倍率)。雷達操作不重設 BNWAS(MSC.128 的「可辨識操作」目前只含舵/車/警報指令)。
 - 每客戶端量程:影像份數 = 相異量程數(最多 11),效能測試以 3 份驗證;重取樣只用於 6/12 nm(其餘繪製),0.25–3 nm 的客戶端各自繪製。偏心在客戶端。
 - AIS 融合為位置/向量門檻的簡化關聯(無協方差加權、無航跡品質),`aisError` 偏移在保持門檻內時仍關聯並以 `positionOffset_m` 顯示;純 AIS 目標(第 3.2 節)只有報告值與 CPA/TCPA,無 AIS 航跡品質/睡眠目標(sleeping)區分、不發危險目標事件(只標 `dangerous`)。

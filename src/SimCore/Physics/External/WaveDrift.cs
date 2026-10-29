@@ -63,7 +63,8 @@ public sealed class WaveDriftModel : IExternalForceField
     private double _cachedPeakWavelength;
 
     public WaveDriftCoefficients Coefficients { get; }
-    public double SignificantHeightM { get; }
+    /// <summary>有義波高 Hs(m):情境值,或 setEnvironment waves 設定/漸變的目前值(<see cref="SetSignificantHeight"/>);只影響力的強度 ∝ Hs²</summary>
+    public double SignificantHeightM { get; private set; }
     public double PeakPeriodS { get; }
     /// <summary>浪來向(弧度,自北順時針;氣象慣例,與風相同)</summary>
     public double DirectionRad { get; }
@@ -142,7 +143,18 @@ public sealed class WaveDriftModel : IExternalForceField
 
     /// <summary>情境有 environment.waves 時建立(否則 null)。</summary>
     public static WaveDriftModel? Create(ShipParticulars ship, LoadingCondition loading, Scenario.Scenario sc, bool supported)
-        => sc.Environment.Waves is { } w ? new WaveDriftModel(ship, loading, w, supported) : null;
+        => Create(ship, loading, sc.Environment.Waves, supported);
+
+    /// <summary>依浪設定建立(null = 無浪 → null);引擎以目前設定(情境值或 setEnvironment waves 變更後的值)呼叫。</summary>
+    public static WaveDriftModel? Create(ShipParticulars ship, LoadingCondition loading, ScenarioWaves? waves, bool supported)
+        => waves is { } w ? new WaveDriftModel(ship, loading, w, supported) : null;
+
+    /// <summary>
+    /// 練習中變更有義波高(setEnvironment waves 的 Hs,含漸變的每步插值;設計文件 physics-waves.md「練習中變更」):
+    /// 只改力的強度 ∝ Hs²,譜權重、水線幾何與衰減係數不變(與以該 Hs 重建模型的結果逐位元相同);負值視為 0。
+    /// 呼叫者須於步末(或變更後)以 <see cref="UpdateLast"/> 重算 <see cref="Last"/>。
+    /// </summary>
+    public void SetSignificantHeight(double hs) => SignificantHeightM = hs > 0.0 ? hs : 0.0;
 
     /// <summary>半寬 y(x):|x| ≤ Lp/2 為 B/2;進流/去流段 (B/2)·(e + (1 − e)·(1 − s²)),s = (|x| − Lp/2)/L_e。</summary>
     private double HalfBreadth(double x, double lp, double le, double e)

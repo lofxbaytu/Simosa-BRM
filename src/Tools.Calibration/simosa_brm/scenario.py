@@ -11,9 +11,11 @@
   ``harmonic``(``{meanLevel_m, constituents: [{name?, amplitude_m, period_s, phase_deg}]}``)擇一,正規化為 ``{"table": [{t, height_m}]}`` 或
   ``{"harmonic": {...}}``;結構檢查(至少 2 點、t 嚴格遞增、period_s > 0 …)與 C# ``Scenario.StructuralIssues`` 一致。模型見 ``tide.py``:
   有效水深 = ``waterDepth``(基底)+ 潮高(t),``setEnvironment waterDepth`` 仍改基底。
-- ``environment.current.table`` | ``tidal``(選填;情境引擎設計第 1.5.2 節):時變流場,正規化為 ``current: {set, drift, table: [{t, speed_kn,
-  direction_deg}] | None, tidal: {flood, ebb, slackWindow_min} | None}``(utc 已換算);結構檢查(擇一、表 ≥ 2 點且 t 嚴格遞增、速度非負、
-  tidal 需 tide 且 flood/ebb 皆要有)與 C# 一致。模型見 ``current.py``。
+- ``environment.current.table`` | ``tidal`` | ``field``(選填;情境引擎設計第 1.5.2 節):時變/空間變化流場,正規化為 ``current: {set, drift,
+  table: [{t, speed_kn, direction_deg}] | None, tidal: {flood, ebb, slackWindow_min} | None, field: {grid, u_kn, v_kn, outside, timeScale} | None}``
+  (utc 已換算;field 的 outside/timeScale 補預設 edge/none);結構檢查(table/tidal 擇一、表 ≥ 2 點且 t 嚴格遞增、速度非負、tidal 需 tide 且
+  flood/ebb 皆要有;field 的 grid dx/dy > 0、nx/ny ≥ 2、u_kn/v_kn 為 ny × nx 有限數值、outside/timeScale 枚舉且 timeScale 對應模型存在)
+  與 C# 一致。模型見 ``current.py``。
 - YAML 以 ``parameters.yaml_to_tree`` 讀取(純量型別推斷與 C# YamlJson 相同),``${params:<key>}`` 引用在檢查前以參數集替換
   (``parameters.resolve_references``;情境引擎設計第 2.3 節):有引用而未給參數集時依 ``assessment.parameterSet``
   (相對專案根目錄或情境檔目錄,預設 data/parameters/company-procedures.yaml)自動載入,仍無則 ``ValueError``。
@@ -458,6 +460,8 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
                         error(ap, "tugControl.power_pct 須為 0–100")
                     if "direction_deg" in payload and _lenient_number(payload["direction_deg"]) is None:
                         error(ap, "tugControl.direction_deg 須為數值")
+            elif kind == "setEnvironment":
+                set_environment_action_issues(payload, ap, error)
             elif kind == "phase":
                 if not (_action_string(payload) or "").strip():
                     error(ap, "phase 缺少階段名稱")
@@ -667,6 +671,31 @@ def ship_interaction_issues(si: Any, error: Any) -> None:
         error(f"{sp}.eventThreshold_t", "eventThreshold_t 必須為 ≥ 0 的有限數值")
 
 
+def set_environment_action_issues(payload: Any, ap: str, error: Any) -> None:
+    """時間表 ``setEnvironment`` 動作的結構檢查(C# Scenario.CheckSetEnvironmentAction;路徑與訊息相同;docs/design/physics-waves.md「練習中變更」):
+    須為物件;``waves`` 為 None(關閉)或物件,欄位皆選填,給了就檢查(Hs ≥ 0、Tp > 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1)。"""
+    if not isinstance(payload, dict):
+        error(ap, "setEnvironment 須為物件")
+        return
+    if payload.get("waves") is None:
+        return
+    waves = payload["waves"]
+    wp = f"{ap}.setEnvironment.waves"
+    if not isinstance(waves, dict):
+        error(wp, "setEnvironment.waves 須為物件或 null")
+        return
+    if "significantHeight_m" in waves and (not _is_num(waves["significantHeight_m"]) or not math.isfinite(waves["significantHeight_m"]) or waves["significantHeight_m"] < 0.0):
+        error(f"{wp}.significantHeight_m", "significantHeight_m 必須為 ≥ 0 的有限數值")
+    if "peakPeriod_s" in waves and (not _is_num(waves["peakPeriod_s"]) or not math.isfinite(waves["peakPeriod_s"]) or waves["peakPeriod_s"] <= 0.0):
+        error(f"{wp}.peakPeriod_s", "peakPeriod_s 必須為正")
+    if "direction_deg" in waves and (not _is_num(waves["direction_deg"]) or not (0.0 <= waves["direction_deg"] <= 360.0)):
+        error(f"{wp}.direction_deg", "direction_deg 須在 0–360(來向)")
+    if "spectrum" in waves and (not isinstance(waves["spectrum"], str) or waves["spectrum"].lower() not in ("pm", "jonswap")):
+        error(f"{wp}.spectrum", f"spectrum 須為 pm | jonswap:{waves['spectrum']}")
+    if "gamma" in waves and (not _is_num(waves["gamma"]) or not math.isfinite(waves["gamma"]) or waves["gamma"] < 1.0):
+        error(f"{wp}.gamma", "gamma 必須 ≥ 1")
+
+
 def waves_issues(waves: Any, error: Any) -> None:
     """``environment.waves`` 的結構檢查(C# Scenario.StructuralIssues 的浪段;路徑與訊息相同;docs/design/physics-waves.md 第 2 節):
     significantHeight_m ≥ 0、peakPeriod_s > 0、direction_deg 0–360、spectrum pm|jonswap、gamma ≥ 1。"""
@@ -718,10 +747,12 @@ def _table_point_time(p: dict[str, Any], pp: str, start: Any, error: Any) -> flo
 def current_issues(cur: Any, start_time_utc: Any, has_tide: bool, error: Any) -> None:
     """``environment.current`` 的時變流場結構檢查(C# Scenario.StructuralIssues 的流場段;路徑與訊息相同):table 與 tidal 擇一;
     table ≥ 2 點、每點 t/utc 擇一、t 嚴格遞增、speed_kn ≥ 0、direction_deg 有限;tidal 需 environment.tide、flood/ebb 皆要有且數值合法、
-    slackWindow_min ≥ 0。常數流(無 table/tidal)不檢查。"""
+    slackWindow_min ≥ 0;field(可與其一並存)見 ``current_field_issues``。常數流(無 table/tidal/field)不檢查。"""
     cp = "environment.current"
     if not isinstance(cur, dict):
         return
+    if cur.get("field") is not None:
+        current_field_issues(cur, error)
     table, tidal = cur.get("table"), cur.get("tidal")
     if table is not None and tidal is not None:
         error(cp, "current 的 table 與 tidal 只能擇一")
@@ -874,16 +905,92 @@ def normalise_tide(tide: Any, start_time_utc: Any) -> dict[str, Any] | None:
     }}
 
 
+def current_field_issues(cur: dict[str, Any], error: Any) -> None:
+    """``environment.current.field`` 的結構檢查(C# Scenario.StructuralIssues 的 field 段;路徑與訊息相同):grid 必填且 x0/y0 有限、dx/dy > 0、
+    nx/ny 為 ≥ 2 的整數;u_kn/v_kn 為 ny 列 × nx 行的有限數值;outside ∈ edge|zero;timeScale ∈ none|tidal|table 且對應的 current.tidal/table 存在。"""
+    fp = "environment.current.field"
+    field = cur.get("field")
+    if not isinstance(field, dict):
+        error(f"{fp}.grid", "field 需要 grid")
+        error(f"{fp}.u_kn", "field 需要 u_kn")
+        error(f"{fp}.v_kn", "field 需要 v_kn")
+        return
+    grid = field.get("grid")
+    nx = ny = 0
+    if not isinstance(grid, dict):
+        error(f"{fp}.grid", "field 需要 grid")
+    else:
+        if not _is_num(grid.get("x0")) or not _is_num(grid.get("y0")):
+            error(f"{fp}.grid", "x0/y0 必須為有限數值")
+        if not _is_num(grid.get("dx")) or float(grid["dx"]) <= 0.0:
+            error(f"{fp}.grid", "dx 必須為正")
+        if not _is_num(grid.get("dy")) or float(grid["dy"]) <= 0.0:
+            error(f"{fp}.grid", "dy 必須為正")
+        for name in ("nx", "ny"):
+            v = grid.get(name)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 2:
+                error(f"{fp}.grid", f"{name} 必須為 ≥ 2 的整數")
+            elif name == "nx":
+                nx = v
+            else:
+                ny = v
+
+    def check_array(name: str) -> None:
+        rows = field.get(name)
+        if rows is None:
+            error(f"{fp}.{name}", f"field 需要 {name}")
+            return
+        if nx < 2 or ny < 2:
+            return  # 格數錯誤時不再逐列檢查(訊息已足夠)
+        if not isinstance(rows, list) or len(rows) != ny:
+            error(f"{fp}.{name}", f"{name} 須有 ny = {ny} 列(得到 {len(rows) if isinstance(rows, list) else 0})")
+            return
+        for j, row in enumerate(rows):
+            if not isinstance(row, list) or len(row) != nx:
+                error(f"{fp}.{name}[{j}]", f"{name} 每列須有 nx = {nx} 個值(得到 {len(row) if isinstance(row, list) else 0})")
+                continue
+            for i, v in enumerate(row):
+                if not _is_num(v):
+                    error(f"{fp}.{name}[{j}][{i}]", f"{name} 的值必須為有限數值")
+
+    check_array("u_kn")
+    check_array("v_kn")
+    outside = field.get("outside")
+    if outside is not None and str(outside).lower() not in ("edge", "zero"):
+        error(f"{fp}.outside", f"outside 須為 edge | zero:{outside}")
+    ts = field.get("timeScale")
+    if ts is not None:
+        tsl = str(ts).lower()
+        if tsl not in ("none", "tidal", "table"):
+            error(f"{fp}.timeScale", f"timeScale 須為 none | tidal | table:{ts}")
+        elif tsl == "tidal" and cur.get("tidal") is None:
+            error(f"{fp}.timeScale", "timeScale tidal 需要 current.tidal")
+        elif tsl == "table" and cur.get("table") is None:
+            error(f"{fp}.timeScale", "timeScale table 需要 current.table")
+
+
 def normalise_current(cur: Any, start_time_utc: Any) -> dict[str, Any]:
-    """``environment.current`` → ``{"set", "drift", "table": [{t, speed_kn, direction_deg}] | None, "tidal": {flood, ebb, slackWindow_min} | None}``
-    (結構檢查已通過;utc 換算為相對 startTimeUtc 的秒數;slackWindow_min 未給 = 20)。"""
+    """``environment.current`` → ``{"set", "drift", "table": [{t, speed_kn, direction_deg}] | None, "tidal": {flood, ebb, slackWindow_min} | None,
+    "field": {grid: {x0, y0, dx, dy, nx, ny}, u_kn, v_kn, outside, timeScale} | None}``
+    (結構檢查已通過;utc 換算為相對 startTimeUtc 的秒數;slackWindow_min 未給 = 20;field 的 outside/timeScale 未給 = edge/none、小寫)。"""
     cur = cur if isinstance(cur, dict) else {}
     out: dict[str, Any] = {
         "set": (_num(cur, "set", 0.0, where="environment.current") or 0.0) % 360.0,
         "drift": max(0.0, _num(cur, "drift", 0.0, where="environment.current") or 0.0),
         "table": None,
         "tidal": None,
+        "field": None,
     }
+    if isinstance(cur.get("field"), dict):
+        fd = cur["field"]
+        g = fd["grid"]
+        out["field"] = {
+            "grid": {"x0": float(g["x0"]), "y0": float(g["y0"]), "dx": float(g["dx"]), "dy": float(g["dy"]), "nx": int(g["nx"]), "ny": int(g["ny"])},
+            "u_kn": [[float(v) for v in row] for row in fd["u_kn"]],
+            "v_kn": [[float(v) for v in row] for row in fd["v_kn"]],
+            "outside": str(fd.get("outside") or "edge").lower(),
+            "timeScale": str(fd.get("timeScale") or "none").lower(),
+        }
     if cur.get("table") is not None:
         start = parse_utc(start_time_utc if isinstance(start_time_utc, str) else None)
         points = []

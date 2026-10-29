@@ -13,6 +13,8 @@ public enum RampChannel
     CurrentDrift,
     WaterDepth,
     Visibility,
+    /// <summary>有義波高 Hs(m;setEnvironment waves 的漸變通道,設計文件 physics-waves.md「練習中變更」):值寫在 <see cref="EnvironmentConditions.WaveHeightM"/>,引擎套用到浪模型</summary>
+    WaveHeight,
 }
 
 /// <summary>單一通道的線性漸變(角度通道走最短弧);From/To 為內部單位(m/s、弧度、m、nm)。</summary>
@@ -89,6 +91,7 @@ public sealed class RampSet
         RampChannel.CurrentDrift => env.CurrentDriftMps,
         RampChannel.WaterDepth => env.Depth is ZoneDepth zd ? zd.Base.Depth : env.Depth is ConstantDepth cd ? cd.Depth : env.Depth.DepthAt(0, 0),
         RampChannel.Visibility => env.VisibilityNm ?? 0.0,
+        RampChannel.WaveHeight => env.WaveHeightM,
         _ => 0.0,
     };
 
@@ -107,6 +110,7 @@ public sealed class RampSet
                 else env.Depth = new ConstantDepth(v);
                 break;
             case RampChannel.Visibility: env.VisibilityNm = v; break;
+            case RampChannel.WaveHeight: env.WaveHeightM = v; break;
         }
     }
 

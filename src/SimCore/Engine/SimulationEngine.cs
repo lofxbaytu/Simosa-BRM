@@ -103,6 +103,10 @@ public sealed class SimulationEngine
     private BankEffectModel? _bank;
     // 平均波浪漂移力(設計文件 docs/design/physics-waves.md);情境有 environment.waves 時建立,Initialize/Restore 時依情境重建(純函數,無跨步狀態)
     private WaveDriftModel? _waves;
+    /// <summary>目前浪設定(情境 environment.waves,或 setEnvironment waves 變更後的值;null = 無浪);Hs 以 _waves.SignificantHeightM 為準(漸變中每步變,此物件不改)</summary>
+    private ScenarioWaves? _waveSettings;
+    /// <summary>浪設定已被 setEnvironment waves 變更(快照寫出 Waves;還原到變更前的快照即恢復情境設定;Reset/載入情境清除)</summary>
+    private bool _wavesOverridden;
     // 船間交互作用(設計文件 docs/design/physics-ship-interaction.md);情境 environment.shipInteraction.enabled 時建立,Initialize/Restore 時依情境重建
     // (力為純函數;跨步狀態只有事件旗標,進快照)
     private ShipInteractionModel? _interaction;
@@ -188,6 +192,8 @@ public sealed class SimulationEngine
     public BankEffectModel? Bank => _bank;
     /// <summary>平均波浪漂移力(情境無 environment.waves 時 null;<see cref="WaveDriftModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
     public WaveDriftModel? Waves => _waves;
+    /// <summary>目前浪設定(情境值,或 setEnvironment waves 變更後的值;null = 無浪;設計文件 physics-waves.md「練習中變更」)</summary>
+    public ScenarioWaves? WaveSettings => _waveSettings;
     /// <summary>船間交互作用(情境未啟用 environment.shipInteraction 時 null;<see cref="ShipInteractionModel.Active"/> 為 false 時不影響積分與雜湊)</summary>
     public ShipInteractionModel? ShipInteraction => _interaction;
     /// <summary>自動舵可啟用:無 autopilotFailure,且電羅經未失效(指示航向有效)</summary>
@@ -391,7 +397,7 @@ public sealed class SimulationEngine
             CurrentDriftMps = Units.KnToMps(sc.Environment.Current.Drift),
             Depth = new ConstantDepth(sc.Environment.WaterDepth),
             Tide = tide,
-            // 時變流場(environment.current.table | tidal):流向/流速為練習時間的純函數,不進快照/雜湊;無模型時 null(常數流,數值與舊版相同)
+            // 時變/空間變化流場(environment.current.table | tidal | field):流向/流速為練習時間(與位置)的純函數,不進快照/雜湊;無模型時 null(常數流,數值與舊版相同)
             CurrentModel = CurrentModel.FromScenario(sc.Environment.Current, tide, StartUtc),
             CurrentOverridden = false,
             VisibilityNm = sc.Environment.VisibilityNm,
@@ -400,7 +406,7 @@ public sealed class SimulationEngine
         _rng = new DeterministicRandom(sc.Seed);
         Tick = 0;
         Environment.RefreshTide(Time);
-        Environment.RefreshCurrent(Time);
+        Environment.RefreshCurrent(Time, Motion.X, Motion.Y);
         Array.Clear(_hash);
         Frozen = false;
         TimeScale = Units.Clamp(sc.TimeScale <= 0 ? 1.0 : sc.TimeScale, 0.1, Options.MaxTimeScale);
@@ -422,7 +428,10 @@ public sealed class SimulationEngine
         _external = CreateExternal();
         _bank = CreateBank();
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
+        _waveSettings = sc.Environment.Waves;
+        _wavesOverridden = false;
         _waves = CreateWaves();
+        Environment.WaveHeightM = _waves?.SignificantHeightM ?? 0.0;
         _interaction = CreateInteraction();
         // 雷達環境:只來自情境、練習中不變(不進快照與雜湊;重播由紀錄 header 的情境重建;廣播只在關鍵幀帶出)
         _radarEnvironment = ScenarioRadarEnvironmentBuilder.Build(sc, _projection);
@@ -457,9 +466,120 @@ public sealed class SimulationEngine
     private BankEffectModel? CreateBank()
         => BankEffectModel.Create(Ship, Loading, Scenario, _projection, Dynamics.SupportsExternalForces);
 
-    /// <summary>依目前情境建立平均波浪漂移力模組(情境無 environment.waves 時 null)。</summary>
+    /// <summary>依目前浪設定建立平均波浪漂移力模組(情境 environment.waves 或 setEnvironment waves 變更後的值;無浪時 null)。</summary>
     private WaveDriftModel? CreateWaves()
-        => WaveDriftModel.Create(Ship, Loading, Scenario, Dynamics.SupportsExternalForces);
+        => WaveDriftModel.Create(Ship, Loading, _waveSettings, Dynamics.SupportsExternalForces);
+
+    /// <summary>以新浪設定重建浪模型(null = 無浪)並標記為已變更;同步 Environment.WaveHeightM,以目前狀態重算步末結果。</summary>
+    private void SetWaves(ScenarioWaves? settings)
+    {
+        _waveSettings = settings;
+        _wavesOverridden = true;
+        _waves = CreateWaves();
+        Environment.WaveHeightM = _waves?.SignificantHeightM ?? settings?.SignificantHeightM ?? 0.0;
+        RefreshWaves();
+    }
+
+    /// <summary>
+    /// 浪高漸變(<see cref="RampChannel.WaveHeight"/>):把 RampSet 寫在 Environment.WaveHeightM 的插值套用到浪模型;
+    /// 漸變到 0 完成(通道已移除)時關閉浪(模型移除、state.waves 省略、雜湊不再追加區塊)。
+    /// </summary>
+    private void ApplyWaveHeightRamp()
+    {
+        var hs = Environment.WaveHeightM;
+        _waves?.SetSignificantHeight(hs);
+        if (hs == 0.0 && _ramps.Find(RampChannel.WaveHeight) is null) SetWaves(null);
+    }
+
+    /// <summary>目前浪設定的快照(Enabled = false 為已關閉;Hs 取模型目前值,漸變中為插值)。</summary>
+    private WaveSnapshot WaveSnapshotOf()
+        => _waveSettings is { } w
+            ? new WaveSnapshot(true, _waves?.SignificantHeightM ?? w.SignificantHeightM ?? 0.0, w.PeakPeriodS ?? 1.0, Units.NormalizeHeadingDeg(w.DirectionDeg ?? 0.0), (w.Spectrum ?? "pm").ToLowerInvariant(), w.Gamma ?? 3.3)
+            : new WaveSnapshot(false, 0.0, 0.0, 0.0, "pm", 3.3);
+
+    /// <summary>浪設定的對外形狀(事件 changes.waves 的 from/to;null = 無浪;<paramref name="hs"/> 覆寫 Hs,用於帶出模型目前值)。</summary>
+    private static object? WavesExternal(ScenarioWaves? w, double? hs = null)
+        => w is null ? null : new
+        {
+            significantHeight_m = hs ?? w.SignificantHeightM ?? 0.0, peakPeriod_s = w.PeakPeriodS ?? 1.0, direction_deg = Units.NormalizeHeadingDeg(w.DirectionDeg ?? 0.0),
+            spectrum = (w.Spectrum ?? "pm").ToLowerInvariant(), gamma = w.Gamma ?? 3.3,
+        };
+
+    /// <summary>
+    /// setEnvironment args.waves 解析(設計文件 physics-waves.md「練習中變更」):缺省 → (false, null);null 或 significantHeight_m = 0 → (true, null) 關閉;
+    /// 物件 → 與目前設定合併(缺的欄位沿用目前值,Hs 取模型目前值;無浪時 peakPeriod_s 與 direction_deg 必填)並檢查
+    /// (Hs ≥ 0 有限、Tp &gt; 0、來向有限(正規化到 0–360)、spectrum pm|jonswap、gamma ≥ 1);不合法 → commandRejected {reason: invalidWaves} 且 (false, null),
+    /// 其他環境欄位照常套用。
+    /// </summary>
+    private (bool Given, ScenarioWaves? Target) ParseWavesArg(SimCommand cmd, string source, string? itemId)
+    {
+        if (cmd.Arg("waves") is not { } wv) return (false, null);
+        if (wv.ValueKind == JsonValueKind.Null) return (true, null);
+        var ok = wv.ValueKind == JsonValueKind.Object;
+        var cur = _waveSettings;
+        var target = new ScenarioWaves();
+        if (ok)
+        {
+            static double? Num(JsonElement o, string name) => o.TryGetProperty(name, out var e) ? SimCommand.AsDouble(e) : null;
+            target.SignificantHeightM = Num(wv, "significantHeight_m") ?? _waves?.SignificantHeightM ?? cur?.SignificantHeightM;
+            target.PeakPeriodS = Num(wv, "peakPeriod_s") ?? cur?.PeakPeriodS;
+            target.DirectionDeg = Num(wv, "direction_deg") is { } d ? Units.NormalizeHeadingDeg(d) : cur?.DirectionDeg is { } cd ? Units.NormalizeHeadingDeg(cd) : null;
+            target.Gamma = Num(wv, "gamma") ?? cur?.Gamma;
+            if (wv.TryGetProperty("spectrum", out var sp))
+            {
+                if (sp.ValueKind == JsonValueKind.String) target.Spectrum = sp.GetString()?.Trim().ToLowerInvariant();
+                else ok = false;
+            }
+            else target.Spectrum = cur?.Spectrum?.ToLowerInvariant();
+            ok = ok
+                && target.SignificantHeightM is { } hs && double.IsFinite(hs) && hs >= 0.0
+                && target.PeakPeriodS is { } tp && double.IsFinite(tp) && tp > 0.0
+                && target.DirectionDeg is { } dir && double.IsFinite(dir)
+                && (target.Spectrum is null or "pm" or "jonswap")
+                && (target.Gamma is not { } g || (double.IsFinite(g) && g >= 1.0));
+        }
+        if (!ok)
+        {
+            RejectCommand(cmd, source, itemId, CommandRejectReasons.InvalidWaves);
+            return (false, null);
+        }
+        return (true, target.SignificantHeightM == 0.0 ? null : target);
+    }
+
+    /// <summary>
+    /// 套用浪變更(<paramref name="target"/> null = 關閉):ramp_s &gt; 0 時 Hs 自目前值(無浪時 0)線性漸變到目標(通道 WaveHeight;關閉時漸變到 0 後再移除模型),
+    /// Tp/來向/浪譜/γ 立即生效(模型以目前 Hs 重建);否則立即。回傳事件 changes.waves 的 {from, to}。
+    /// </summary>
+    private object ApplyWaves(ScenarioWaves? target, long rampTicks)
+    {
+        var fromHs = _waves?.SignificantHeightM ?? _waveSettings?.SignificantHeightM ?? 0.0;
+        var from = WavesExternal(_waveSettings, fromHs);
+        if (target is null)
+        {
+            if (rampTicks > 0 && _waveSettings is not null && fromHs > 0.0)
+            {
+                _ramps.Set(RampChannel.WaveHeight, Tick, Tick + rampTicks, fromHs, 0.0);
+                _wavesOverridden = true;
+            }
+            else
+            {
+                _ramps.Remove(RampChannel.WaveHeight);
+                SetWaves(null);
+            }
+        }
+        else if (rampTicks > 0)
+        {
+            var toHs = target.SignificantHeightM ?? 0.0;
+            SetWaves(new ScenarioWaves { SignificantHeightM = fromHs, PeakPeriodS = target.PeakPeriodS, DirectionDeg = target.DirectionDeg, Spectrum = target.Spectrum, Gamma = target.Gamma });
+            _ramps.Set(RampChannel.WaveHeight, Tick, Tick + rampTicks, fromHs, toHs);
+        }
+        else
+        {
+            _ramps.Remove(RampChannel.WaveHeight);
+            SetWaves(target);
+        }
+        return new { from, to = WavesExternal(target) };
+    }
 
     /// <summary>依目前情境建立船間交互作用模組(情境未啟用 environment.shipInteraction 時 null)。</summary>
     private ShipInteractionModel? CreateInteraction()
@@ -1326,7 +1446,9 @@ public sealed class SimulationEngine
         }
         if (cmd.ArgAsDouble("waterDepth") is { } depth && depth > 0) targets.Add((RampChannel.WaterDepth, depth));
         if (cmd.ArgAsDouble("visibility_nm") is { } vis && vis > 0) targets.Add((RampChannel.Visibility, vis));
-        if (targets.Count == 0) return;
+        // 浪(args.waves;設計文件 physics-waves.md「練習中變更」):null 或 Hs = 0 → 關閉;物件 → 建立/更新(缺的欄位沿用目前值);不合法時只拒絕浪的部分
+        var (wavesGiven, wavesTarget) = ParseWavesArg(cmd, source, itemId);
+        if (targets.Count == 0 && !wavesGiven) return;
 
         // 時變流場(environment.current.table | tidal)被常數覆寫:時變停止直到再載入情境(情境引擎設計第 1.5.2 節);漸變自目前模型值起算
         bool? currentModelStopped = null;
@@ -1357,10 +1479,12 @@ public sealed class SimulationEngine
             }
             changes[ContractJson.EnumName(ch)] = new { from = RampSet.External(ch, from), to = RampSet.External(ch, to) };
         }
+        // 浪:Hs 漸變(通道 waveHeight)或立即;changes.waves 為 {from, to}(null = 無浪)
+        if (wavesGiven) changes["waves"] = ApplyWaves(wavesTarget, rampTicks);
         Raise(NewEvent(SimEventKinds.EnvironmentChange, source, itemId, null, null, new
         {
             wind = cmd.Arg("wind"), current = cmd.Arg("current"), waterDepth = cmd.ArgAsDouble("waterDepth"), visibility_nm = cmd.ArgAsDouble("visibility_nm"),
-            ramp_s = rampS, changes, currentModelStopped,
+            waves = cmd.Arg("waves"), ramp_s = rampS, changes, currentModelStopped,
         }));
     }
 
@@ -1389,10 +1513,16 @@ public sealed class SimulationEngine
             Environment.GustFactor = 1.0 + Environment.Gustiness * (2.0 * _rng.NextDouble() - 1.0);
 
         // 環境漸變(陣風之後、致動器之前;完成者發 environmentRampDone)
-        if (_ramps.Count > 0 && _ramps.Apply(Tick, Environment) is { } done)
-            foreach (var r in done)
-                Raise(NewEvent(SimEventKinds.EnvironmentRampDone, SimEventSources.Timeline, null, null, ContractJson.EnumName(r.Channel),
-                    new { channel = ContractJson.EnumName(r.Channel), to = RampSet.External(r.Channel, r.To) }));
+        if (_ramps.Count > 0)
+        {
+            var waveRamp = _ramps.Find(RampChannel.WaveHeight) is not null;
+            if (_ramps.Apply(Tick, Environment) is { } done)
+                foreach (var r in done)
+                    Raise(NewEvent(SimEventKinds.EnvironmentRampDone, SimEventSources.Timeline, null, null, ContractJson.EnumName(r.Channel),
+                        new { channel = ContractJson.EnumName(r.Channel), to = RampSet.External(r.Channel, r.To) }));
+            // 浪高漸變:RampSet 把插值寫到 Environment.WaveHeightM,這裡套用到浪模型(無此通道時不碰浪模型,數值與舊版相同)
+            if (waveRamp) ApplyWaveHeightRamp();
+        }
 
         // 自動舵以電羅經「指示航向」計算舵令(gyroDrift 時跟隨錯誤航向);ROT 取迴轉率陀螺(真值)
         if (Autopilot.Enabled)
@@ -1434,7 +1564,7 @@ public sealed class SimulationEngine
         Tick++;
         // 潮高隨練習時間更新(步末位置的 UKC/擱淺檢查與下一步的取樣用新時刻的潮高);時變流場同(state.current 與下一步取樣用新時刻的流)
         Environment.RefreshTide(Time);
-        Environment.RefreshCurrent(Time);
+        Environment.RefreshCurrent(Time, Motion.X, Motion.Y);
         if (external)
         {
             _externalEvents.Clear();
@@ -1454,9 +1584,10 @@ public sealed class SimulationEngine
             Raise(NewEvent(SimEventKinds.Grounding, SimEventSources.Engine, null, null, "擱淺:UKC ≤ 0", new { ukc_m = UnderKeelClearance() }));
         }
 
-        // 目標船:與自船同 dt,依自船推進後的狀態更新(跟隨、COLREG、會遇指標、碰撞)
+        // 目標船:與自船同 dt,依自船推進後的狀態更新(跟隨、COLREG、會遇指標、碰撞);空間變化流場時每艘目標以自身位置、步首時刻取流
+        //(均勻流時仍用步首取樣 sample,位元與舊版相同)
         if (_traffic.Targets.Count > 0)
-            _traffic.Step(OwnKinematics(), sample, Tick);
+            _traffic.Step(OwnKinematics(), sample, Tick, Environment.CurrentFieldActive ? (x, y) => Environment.CurrentVectorAt(t, x, y) : null);
         // 船間交互作用步末結果(雜湊與 state.shipInteraction;自船與目標船皆已推進到本 tick 的幾何)與門檻事件
         if (interaction is not null)
             RaiseInteractionTransition(interaction.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y), _traffic.Targets));
@@ -1639,6 +1770,8 @@ public sealed class SimulationEngine
         Bnwas = _bnwas.CreateSnapshot(),
         External = _external.Active ? _external.CreateSnapshot() : null,
         ShipInteraction = _interaction is { Active: true } ? _interaction.CreateSnapshot() : null,
+        // 浪:只在 setEnvironment waves 變更後寫出(情境原設定不寫,既有快照位元不變;Hs 為目前值,漸變在 Timeline.Ramps)
+        Waves = _wavesOverridden ? WaveSnapshotOf() : null,
         Phase = Phase,
         VisibilityNm = Environment.VisibilityNm,
         StateHash = StateHash,
@@ -1693,7 +1826,17 @@ public sealed class SimulationEngine
         // 岸壁效應:無跨步狀態,依情境重建幾何,於還原完成後以還原的狀態重算步末結果(RefreshBank)
         _bank = CreateBank();
         _sumField = _bank is null ? null : new SumForceField(_external, _bank);
-        // 波浪漂移力:純函數,依情境重建,還原完成後以還原的狀態重算步末結果(RefreshWaves)
+        // 波浪漂移力:純函數,依目前設定重建(快照有 Waves = setEnvironment 變更後的設定,否則情境值),還原完成後以還原的狀態重算步末結果(RefreshWaves)
+        if (s.Waves is { } ws)
+        {
+            _waveSettings = ws.Enabled ? new ScenarioWaves { SignificantHeightM = ws.SignificantHeightM, PeakPeriodS = ws.PeakPeriodS, DirectionDeg = ws.DirectionDeg, Spectrum = ws.Spectrum, Gamma = ws.Gamma } : null;
+            _wavesOverridden = true;
+        }
+        else
+        {
+            _waveSettings = Scenario.Environment.Waves;
+            _wavesOverridden = false;
+        }
         _waves = CreateWaves();
         // 船間交互作用:力為純函數、事件旗標依快照(舊快照或未啟用者為未進入),目標船還原後重算步末結果(RefreshInteraction)
         _interaction = CreateInteraction();
@@ -1741,9 +1884,11 @@ public sealed class SimulationEngine
             CurrentOverridden = s.Environment.CurrentOverridden ?? false,
             // Version 2 快照含能見度(null = 無限制,直接取快照值);Version 1 快照沒有此欄位才沿用目前值
             VisibilityNm = s.Version >= 2 ? s.VisibilityNm : Environment.VisibilityNm,
+            // 浪高漸變通道的目前值(進行中的漸變由 Timeline.Ramps 還原,下一步再插值)
+            WaveHeightM = _waves?.SignificantHeightM ?? 0.0,
         };
         Environment.RefreshTide(Time);
-        Environment.RefreshCurrent(Time);
+        Environment.RefreshCurrent(Time, Motion.X, Motion.Y);
         if (_rng.Seed != s.RandomSeed) _rng = new DeterministicRandom(s.RandomSeed, s.RandomCount);
         else _rng.ResetTo(s.RandomCount);
         if (!keepRunState)

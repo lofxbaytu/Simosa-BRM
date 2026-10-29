@@ -347,6 +347,17 @@ class SimServer:
                 if vis != "keep":
                     notes.append("能見度 " + (f"{ship.env.visibility_nm:g} nm" if ship.env.visibility_nm is not None else "未指定")
                                  + " 已記錄(state.schema.json 無此欄位、運動模型不使用)")
+                if "waves" in args:
+                    # 浪(args.waves;C# ApplyEnvironment 浪段):null / Hs = 0 關閉、物件建立或更新;不合法時其他欄位已套用、只拒絕浪(C# commandRejected invalidWaves)
+                    try:
+                        ship.set_waves(args.get("waves"))
+                        wv = ship.waves
+                        notes.append("浪關閉" if wv is None else f"浪 Hs {wv.hs:g} m / Tp {wv.tp:g} s / 來向 {wv.direction_deg:g}°({wv.spectrum})"
+                                     + ("(ramp_s 只有 C# 核心漸變,此處立即)" if args.get("ramp_s") else ""))
+                    except ValueError:
+                        ok = False
+                        notes.append("拒絕(invalidWaves):waves 須為 null 或物件 {significantHeight_m ≥ 0, peakPeriod_s > 0, direction_deg, spectrum pm|jonswap, gamma ≥ 1}"
+                                     "(無浪時 peakPeriod_s 與 direction_deg 必填);其他欄位已套用")
                 detail = ";".join(notes)
             elif t == "timeScale":
                 self.time_scale = max(0.0, float(v))

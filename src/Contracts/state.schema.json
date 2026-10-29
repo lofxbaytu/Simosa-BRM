@@ -202,7 +202,7 @@
         "set",
         "drift"
       ],
-      "description": "均勻流(情境 environment.current 為時變流場時數值隨練習時間變化;見 currentSource)",
+      "description": "流(情境 environment.current 為時變流場時數值隨練習時間變化;為空間網格 field 時為自船位置的值;見 currentSource)",
       "properties": {
         "set": {
           "type": "number",
@@ -218,9 +218,12 @@
       "type": "string",
       "enum": [
         "table",
-        "tidal"
+        "tidal",
+        "field",
+        "field+tidal",
+        "field+table"
       ],
-      "description": "流場來源:情境 environment.current 為流場表(table)或潮流(tidal)且未被 setEnvironment current 覆寫時輸出;常數流(含覆寫後)省略"
+      "description": "流場來源:情境 environment.current 為流場表(table)、潮流(tidal)或空間網格(field;timeScale 為 tidal/table 時 field+tidal / field+table)且未被 setEnvironment current 覆寫時輸出;常數流(含覆寫後)省略"
     },
     "loading": {
       "type": "string",

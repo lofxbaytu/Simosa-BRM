@@ -2282,10 +2282,12 @@ class ShipInteractionModel:
         """步首:本步四個 RK4 階段共用的目標狀態(C# PreStep)。"""
         self._kins = [t.kin() for t in self.targets]
 
-    def advance_targets(self, env: Env, dt: float) -> None:
-        """步末:目標船推進一步(C# TrafficManager.Step 的 hold 路徑;均勻流取步首取樣)。"""
+    def advance_targets(self, env: Env, dt: float, current_at: Any = None) -> None:
+        """步末:目標船推進一步(C# TrafficManager.Step 的 hold 路徑;均勻流取步首取樣 ``env``;``current_at(x, y)`` 不為 None 時
+        (空間變化流場)每艘目標以自身位置取流,C# 的 currentAt)。"""
         for t in self.targets:
-            t.advance(env.current_e, env.current_n, dt)
+            ce, cn = (env.current_e, env.current_n) if current_at is None else current_at(t.x, t.y)
+            t.advance(ce, cn, dt)
 
     def refresh(self, k: Kin, depth: float) -> None:
         """還原後:以目前狀態重算步末結果,事件狀態不變(C# Refresh)。"""
@@ -2298,9 +2300,9 @@ class ShipInteractionModel:
         self.last = self.compute(k, depth, self._kins)
         return self._update_event(self.last)
 
-    def post_step(self, k: Kin, env: Env, dt: float, events: list[dict[str, Any]]) -> None:
+    def post_step(self, k: Kin, env: Env, dt: float, events: list[dict[str, Any]], current_at: Any = None) -> None:
         """步末(C# Advance:目標船推進 → UpdateLast → 事件):推進目標、重算、超過/離開門檻時加入 shipInteraction 事件。"""
-        self.advance_targets(env, dt)
+        self.advance_targets(env, dt, current_at)
         transition = self.update_last(k, env.depth)
         if transition is not None:
             events.append(self.event(transition))

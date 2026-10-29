@@ -302,3 +302,127 @@ def test_golden_drift_run_is_reproducible() -> None:
         assert res["hash"] == hash_end
     sc_loaded = load_scenario(GOLDEN / "waves_drift_run.yaml")
     assert sc_loaded["environment"]["waves"]["spectrum"] == "jonswap" and sc_loaded["environment"]["waterDepth"] == 20.0
+
+
+# ---------------------------------------------------------------------------- 練習中變更(setEnvironment waves;C# WaveEnvironmentCommandTests)
+
+
+def _timeline_tree(payload: Any) -> dict[str, Any]:
+    return _tree(None, timeline=[{"id": "it", "when": {"type": "time", "atLeast": 1}, "actions": [{"setEnvironment": payload}]}])
+
+
+def test_set_environment_waves_matches_scenario_waves_bit_identically() -> None:
+    """無浪情境 + set_environment(waves=…) 在 tick 0 設定與情境相同的浪 → 運動與雜湊逐位元相同(模型以同一設定建立;C# CommandAddsWaves…)。"""
+    by_scenario = ship_from_scenario(validate_scenario(_tree(BEAM, speed=6.0, telegraph="HAH")))
+    by_command = ship_from_scenario(validate_scenario(_tree(None, speed=6.0, telegraph="HAH")))
+    assert by_command.waves is None
+    by_command.set_environment(waves={"significantHeight_m": 2.0, "peakPeriod_s": 7.0, "direction_deg": 90})
+    assert by_command.waves is not None and by_command.waves.active
+    _steps_to(by_scenario, 500)
+    _steps_to(by_command, 500)
+    assert by_command.state_hash() == by_scenario.state_hash()
+    s = by_command.state_json()["waves"]
+    assert (s["significantHeight_m"], s["direction_deg"]) == (2.0, 90.0) and s["Y_kN"] < -50.0
+
+
+def test_set_waves_partial_update_off_and_invalid() -> None:
+    ship = ship_from_scenario(validate_scenario(_tree(BEAM, speed=6.0, telegraph="HAH")))
+    # 只改來向:Hs/Tp 沿用;浪譜與 γ 大小寫不拘
+    ship.set_waves({"direction_deg": 270})
+    assert (ship.waves.hs, ship.waves.tp, ship.waves.direction_deg) == (2.0, 7.0, 270.0)
+    ship.set_waves({"spectrum": "JONSWAP", "gamma": 2.0})
+    assert (ship.waves.spectrum, ship.waves.gamma, ship.waves.direction_deg) == ("jonswap", 2.0, 270.0)
+    # 來向 360 → 0(C# 以正規化後的來向重建模型)
+    ship.set_waves({"direction_deg": 360})
+    assert ship.waves.direction_deg == 0.0 and ship.waves.direction == 0.0
+    _steps_to(ship, 100)
+    h_waves = ship.state_hash()
+    # Hs = 0 → 關閉:state 不輸出、雜湊不再追加區塊
+    ship.set_waves({"significantHeight_m": 0})
+    assert ship.waves is None and "waves" not in ship.state_json()
+    ship.step()
+    assert ship.state_hash() != h_waves
+    # 無浪時只給 Hs → 不合法(缺 Tp/來向),狀態不變
+    with pytest.raises(ValueError, match="invalidWaves"):
+        ship.set_waves({"significantHeight_m": 1.5})
+    assert ship.waves is None
+    for bad in ({"significantHeight_m": -1, "peakPeriod_s": 7, "direction_deg": 90}, {"significantHeight_m": 1, "peakPeriod_s": 0, "direction_deg": 90},
+                {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "spectrum": "bretschneider"},
+                {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "gamma": 0.5},
+                {"significantHeight_m": 1, "peakPeriod_s": 7, "direction_deg": 90, "spectrum": 3}, "rough", [1, 7, 90]):
+        with pytest.raises(ValueError, match="invalidWaves"):
+            ship.set_waves(bad)
+        assert ship.waves is None
+    # 完整設定再以 None 關閉;set_environment(waves="keep") 不變
+    ship.set_waves({"significantHeight_m": 1.5, "peakPeriod_s": 6, "direction_deg": 45})
+    assert ship.waves is not None and ship.waves.hs == 1.5
+    ship.set_environment(wind_speed_kn=5.0)
+    assert ship.waves is not None and ship.waves.hs == 1.5
+    ship.set_environment(waves=None)
+    assert ship.waves is None
+
+
+def test_set_waves_snapshot_restore_and_reset() -> None:
+    ship = ship_from_scenario(validate_scenario(_tree(BEAM, speed=6.0, telegraph="HAH")))
+    _steps_to(ship, 250)
+    snap_before = ship.snapshot()
+    ship.set_waves({"significantHeight_m": 3.5, "peakPeriod_s": 8.0, "direction_deg": 135, "spectrum": "jonswap"})
+    _steps_to(ship, 750)
+    snap_mid = ship.snapshot()
+    _steps_to(ship, 2000)
+    h, last = ship.state_hash(), ship.waves.last
+    ship.restore(snap_mid)
+    assert ship.state.tick == 750 and ship.waves.hs == 3.5 and ship.waves.spectrum == "jonswap"
+    _steps_to(ship, 2000)
+    assert ship.state_hash() == h and ship.waves.last == last
+    # 倒帶到變更前:恢復情境浪
+    ship.restore(snap_before)
+    assert (ship.waves.hs, ship.waves.direction_deg, ship.waves.spectrum) == (2.0, 90.0, "pm")
+    # 關閉後 reset 回到情境浪
+    ship.set_waves(None)
+    assert ship.waves is None
+    ship.reset(0.0, 0.0, 0.0, 6.0)
+    assert ship.waves is not None and (ship.waves.hs, ship.waves.direction_deg) == (2.0, 90.0)
+
+
+def test_server_set_environment_waves_ack_and_rejection() -> None:
+    from simosa_brm.server import SimServer
+
+    ship = ship_from_scenario(validate_scenario(_tree(None, speed=6.0, telegraph="HAH")))
+    srv = SimServer(ship, 1.0)
+    ack = srv.apply_command({"type": "setEnvironment", "args": {"waves": {"significantHeight_m": 2, "peakPeriod_s": 7, "direction_deg": 90}, "ramp_s": 60}})
+    assert ack["ok"] and "浪 Hs 2 m" in ack["detail"] and "立即" in ack["detail"]
+    assert ship.waves is not None and ship.waves.hs == 2.0
+    # 不合法:其他欄位已套用、只拒絕浪(C# commandRejected invalidWaves)
+    bad = srv.apply_command({"type": "setEnvironment", "args": {"wind": {"trueSpeed": 12, "trueDir": 45}, "waves": {"peakPeriod_s": 0}}})
+    assert not bad["ok"] and "invalidWaves" in bad["detail"]
+    assert ship.env.wind_speed == pytest.approx(12.0 * 0.514444, rel=1e-6) and ship.waves is not None and ship.waves.tp == 7.0
+    # 部分更新與關閉
+    assert srv.apply_command({"type": "setEnvironment", "args": {"waves": {"direction_deg": 180}}})["ok"] and ship.waves.direction_deg == 180.0
+    off = srv.apply_command({"type": "setEnvironment", "args": {"waves": None}})
+    assert off["ok"] and "浪關閉" in off["detail"] and ship.waves is None and "waves" not in ship.state_json()
+    assert srv.apply_command({"type": "setEnvironment", "args": {"waves": {"significantHeight_m": 0, "peakPeriod_s": 5, "direction_deg": 0}}})["ok"] and ship.waves is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "path", "message"),
+    [
+        ({"waves": {"significantHeight_m": -1}}, "timeline[0].actions[0].setEnvironment.waves.significantHeight_m", "≥ 0"),
+        ({"waves": {"peakPeriod_s": 0}}, "timeline[0].actions[0].setEnvironment.waves.peakPeriod_s", "必須為正"),
+        ({"waves": {"direction_deg": 361}}, "timeline[0].actions[0].setEnvironment.waves.direction_deg", "0–360"),
+        ({"waves": {"spectrum": "bretschneider"}}, "timeline[0].actions[0].setEnvironment.waves.spectrum", "pm | jonswap"),
+        ({"waves": {"gamma": 0.5}}, "timeline[0].actions[0].setEnvironment.waves.gamma", "≥ 1"),
+        ({"waves": "rough"}, "timeline[0].actions[0].setEnvironment.waves", "物件或 null"),
+        ("rough", "timeline[0].actions[0]", "setEnvironment 須為物件"),
+    ],
+)
+def test_timeline_set_environment_waves_structural_issues(payload: Any, path: str, message: str) -> None:
+    """時間表 setEnvironment waves 的結構檢查:路徑與訊息同 C# Scenario.CheckSetEnvironmentAction(WaveEnvironmentCommandTests.StructuralIssuesRejectBadTimelineWaves)。"""
+    issues = structural_issues(_timeline_tree(payload))
+    assert any(p == path and message in m for p, m in issues), issues
+    with pytest.raises(ValueError, match=message):
+        validate_scenario(_timeline_tree(payload))
+    # 合法形狀(欄位皆選填、null 關閉)無錯誤
+    for good in ({"waves": {"significantHeight_m": 0, "peakPeriod_s": 5, "direction_deg": 360, "spectrum": "JONSWAP", "gamma": 1}, "ramp_s": 10},
+                 {"waves": None}, {"waves": {"direction_deg": 90}}, {"visibility_nm": 2}):
+        assert structural_issues(_timeline_tree(good)) == []
