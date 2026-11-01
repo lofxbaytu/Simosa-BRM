@@ -4,6 +4,7 @@
 import { html, nothing, type TemplateResult } from 'lit';
 import { BAND_STATE_LABEL, HARD_FAIL_RULE_LABEL, REQUIRED_STATE_LABEL, type AssessmentSummary } from '../lib/assessment.js';
 import { formatSimTime } from '../lib/format.js';
+import { formatMb, formatRecordingDuration } from '../lib/screen-recording.js';
 import { ACK_KIND_LABEL } from '../lib/sim-event.js';
 import { sessionRoleLabel, type RestHoursConfirmation } from '../lib/session-info.js';
 import {
@@ -107,11 +108,13 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
             <tbody>${m.participants.map((p) => html`<tr><td>${p.name}</td><td>${p.rank}</td><td>${participantRoleLabel(p.role)}</td><td>${p.traineeId || '—'}</td></tr>`)}</tbody>
           </table>`}
       ${renderSessionInfo(r)}
+      ${renderRecordings(r)}
     </section>
 
     <section class="sec" data-sec="summary">
       <h2>二、自動量測與評分</h2>
       ${r.summary ? renderSummary(r.summary) : renderLocal(r)}
+      ${r.vhf ? renderVhf(r) : nothing}
     </section>
 
     ${r.manoeuvres.length > 0 ? renderManoeuvres(r.manoeuvres) : nothing}
@@ -173,6 +176,26 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
 export function restHoursText(rest: RestHoursConfirmation | undefined): string {
   if (!rest) return '未確認';
   return `${rest.confirmedBy || '—'} · ${localDateTime(rest.confirmedAtUtc)} · ${rest.compliant ? '符合' : '不符合'}${rest.note ? ` · ${rest.note}` : ''}`;
+}
+
+/** 練習期間的畫面錄影(教官站紀錄 recordings;docs/design/screen-recording.md):檔名、開始、長度、大小;錄影檔隨紀錄包 records/media/ 回傳。 */
+function renderRecordings(r: DebriefReport): TemplateResult {
+  const list = r.recordings;
+  return html`<h3>畫面錄影</h3>
+    ${list.length === 0
+      ? html`<p class="muted recordings-none">紀錄沒有錄影資訊(教官站未錄影,或為核心 JSON Lines 紀錄;錄影檔見紀錄包 records/media/ 與旁檔)。</p>`
+      : html`<table class="tbl recordings">
+          <thead><tr><th>檔名</th><th>開始(UTC)</th><th>長度</th><th>大小</th><th>狀態</th></tr></thead>
+          <tbody>${list.map(
+            (x) => html`<tr>
+              <td class="mono">${x.file ?? x.mediaId ?? '—'}</td>
+              <td>${x.startedUtc}</td>
+              <td>${formatRecordingDuration(x.durationS)}</td>
+              <td>${formatMb(x.uploadedBytes)}</td>
+              <td class=${x.error ? 'warn' : ''}>${x.error ? `失敗:${x.error}` : x.truncated ? '已截斷(超過核心上限)' : '完整'}${x.record ? ` · 紀錄 ${x.record}` : ''}</td>
+            </tr>`,
+          )}</tbody>
+        </table>`}`;
 }
 
 /** 紀錄標頭的參與者登錄與休息時間確認(教官站 sessionInfo;規劃書第 5.5 節)。 */
@@ -296,6 +319,21 @@ function renderLocal(r: DebriefReport): TemplateResult {
       ['超過港區速限時間', fix(l.timeOverSpeedLimit_s, 0, 's')],
       ['擱淺 / 碰撞', `${l.agroundEvents} / ${l.collisionEvents}`],
     ])}`;
+}
+
+/** 內建 VHF 角色扮演的通訊統計(紀錄 vhf 行;「通訊」行為標記的佐證;規劃書第 8.2 節)。 */
+function renderVhf(r: DebriefReport): TemplateResult {
+  const v = r.vhf!;
+  return html`<h3>通訊(VHF 角色扮演)</h3>
+    ${kv([
+      ['通話次數 / 總秒數', `${v.calls} 次 / ${tStr(v.duration_s)}(${v.duration_s} s)`],
+      ['文字訊息 / DSC', `${v.texts} / ${v.dsc}${v.distress > 0 ? `(DISTRESS ${v.distress})` : ''}`],
+    ])}
+    <table class="tbl vhf">
+      <thead><tr><th>站</th><th class="num">通話</th><th class="num">秒數</th><th class="num">文字</th><th class="num">DSC</th></tr></thead>
+      <tbody>${v.byStation.map((s) => html`<tr><td>${s.station}</td><td class="num">${s.calls}</td><td class="num">${s.duration_s}</td><td class="num">${s.texts}</td><td class="num">${s.dsc}</td></tr>`)}</tbody>
+    </table>
+    <p class="muted">VHF 為內建角色扮演頻道(非真實 VHF 傳播、DSC 為簡化文字警示);通話內容不錄音,只記次數與秒數(docs/design/vhf-roleplay.md)。</p>`;
 }
 
 function renderManoeuvres(list: ManoeuvreRow[]): TemplateResult {

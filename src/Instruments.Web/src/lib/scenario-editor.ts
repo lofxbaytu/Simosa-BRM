@@ -23,6 +23,7 @@ import { faultCatalogue, type FaultDefinition } from './instructor-command.js';
 import { AREA_FILES, parseScenario, type ScenarioSummary } from './scenario.js';
 import { getShipConfig, maxDraft } from './ship-config.js';
 import { TIMELINE_ACTION_KINDS, actionSummary, conditionSummary, isParamRef, parseTimelineItem, type TimelineActionKind, type TriggerCondition } from './timeline.js';
+import { linearFieldArrays, uniformFieldArrays, type FieldAxis } from './current-field-plot.js';
 
 // ------------------------------------------------------------------ 型別
 
@@ -1849,6 +1850,47 @@ export function parseFieldArrayText(text: string): number[][] {
 /** 設定 u_kn / v_kn 陣列(由 parseFieldArrayText 得到)。 */
 export function setCurrentFieldArray(draft: ScenarioDraft, key: 'u_kn' | 'v_kn', rows: number[][]): ScenarioDraft {
   return patchCurrentModel(draft, `field.${key}`, rows);
+}
+
+/** 產生器用:取草稿 field 的格數(需已建立 field 且 nx/ny 為 ≥ 2 的整數;否則丟 Error 由表單顯示)。 */
+function fieldGridSize(draft: ScenarioDraft): { nx: number; ny: number } {
+  const field = currentField(draft);
+  if (!field) throw new Error('請先勾選建立空間流場 field');
+  const grid = isRecord(field['grid']) ? field['grid'] : {};
+  const nx = grid['nx'];
+  const ny = grid['ny'];
+  if (typeof nx !== 'number' || !Number.isInteger(nx) || nx < 2 || typeof ny !== 'number' || !Number.isInteger(ny) || ny < 2) throw new Error('field.grid 的 nx/ny 需為 ≥ 2 的整數');
+  return { nx, ny };
+}
+
+/** 環境面板的常數流(流向/流速)數值;參數引用或缺值時丟 Error。 */
+export function uniformCurrentOf(draft: ScenarioDraft): { set: number; drift: number } {
+  const set = draft.environment.currentSet;
+  const drift = draft.environment.currentDrift;
+  if (typeof set !== 'number' || typeof drift !== 'number') throw new Error('環境面板的流向/流速需為數值(不可為參數引用或空白)');
+  return { set, drift };
+}
+
+/**
+ * 「由均勻流產生網格」:以環境面板的常數流(或指定的流向/流速)填滿全部節點(u = drift·sin set、v = drift·cos set),
+ * 格數取現有 field.grid;只改 u_kn/v_kn。
+ */
+export function setCurrentFieldFromUniform(draft: ScenarioDraft, uniform: { set: number; drift: number } = uniformCurrentOf(draft)): ScenarioDraft {
+  const { nx, ny } = fieldGridSize(draft);
+  if (!Number.isFinite(uniform.set) || !Number.isFinite(uniform.drift) || uniform.drift < 0) throw new Error('流向/流速需為有限數值且流速 ≥ 0');
+  const { u_kn, v_kn } = uniformFieldArrays(nx, ny, uniform.set, uniform.drift);
+  return setCurrentFieldArray(setCurrentFieldArray(draft, 'u_kn', u_kn), 'v_kn', v_kn);
+}
+
+/**
+ * 「由兩端流速線性內插」:沿 axis(x 西→東 / y 南→北)由端點 A 到端點 B 以東/北分量線性內插,其餘方向相同;
+ * 格數取現有 field.grid;只改 u_kn/v_kn。
+ */
+export function setCurrentFieldLinear(draft: ScenarioDraft, axis: FieldAxis, endA: { set: number; drift: number }, endB: { set: number; drift: number }): ScenarioDraft {
+  const { nx, ny } = fieldGridSize(draft);
+  for (const e of [endA, endB]) if (!Number.isFinite(e.set) || !Number.isFinite(e.drift) || e.drift < 0) throw new Error('兩端的流向/流速需為有限數值且流速 ≥ 0');
+  const { u_kn, v_kn } = linearFieldArrays(nx, ny, axis, endA, endB);
+  return setCurrentFieldArray(setCurrentFieldArray(draft, 'u_kn', u_kn), 'v_kn', v_kn);
 }
 
 /** 數值欄位的檢查用讀取:數字回自身、參數引用回 'ref'(略過數值規則)、其他(缺、字串、布林)回 undefined。 */

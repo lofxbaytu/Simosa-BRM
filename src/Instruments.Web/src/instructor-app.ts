@@ -36,6 +36,18 @@ import { DebriefAccumulator, type DebriefSummary } from './lib/debrief.js';
 import { BRM_CATEGORIES, BrmMarkerStore, type BrmMarker } from './lib/brm-markers.js';
 import { StateSampler, buildSessionRecord, type CommandLogEntry } from './lib/session-record.js';
 import type { SessionInfo } from './lib/session-info.js';
+import {
+  ScreenRecordingController,
+  defaultRecordingSettings,
+  idleRecordingStatus,
+  loadRecordingSettings,
+  mediaBaseUrl,
+  recordingDepsProvider,
+  saveRecordingSettings,
+  type RecordingSettings,
+  type RecordingStatus,
+  type RecordingSummary,
+} from './lib/screen-recording.js';
 import { saveHandoff } from './report/report-store.js';
 import { downloadText, fileStamp } from './lib/download.js';
 import { formatHeading, formatKnots, formatMeters, formatRot, formatRudder, formatSimTime } from './lib/format.js';
@@ -58,6 +70,8 @@ import './components/conning-bar.js';
 import './components/track-plot.js';
 import './components/instructor/scenario-panel.js';
 import './components/instructor/session-info-panel.js';
+import './components/vhf-panel.js';
+import { defaultVhfUrl } from './lib/vhf.js';
 import './components/instructor/berthing-rehearsal-panel.js';
 import './components/instructor/scenario-editor.js';
 import './components/instructor/run-control-panel.js';
@@ -76,6 +90,7 @@ import './components/instructor/sensor-truth-panel.js';
 import './components/instructor/tug-panel.js';
 import './components/instructor/anchor-panel.js';
 import './components/instructor/mooring-panel.js';
+import './components/instructor/recording-panel.js';
 import { requiredCountdowns } from './components/instructor/timeline-panel.js';
 
 export type PageMode = 'full' | 'simple' | 'replay';
@@ -457,6 +472,16 @@ export class InstructorApp extends LitElement {
   @state() private voicePlaying = false;
   /** 最近送出的參與者與休息時間確認(sessionInfo 指令 args;寫入教官站紀錄;規劃書第 5.5 節) */
   @state() private sessionInfo: SessionInfo | null = null;
+  /** 畫面錄影(lib/screen-recording.ts;docs/design/screen-recording.md):狀態、本工作階段的錄影摘要(寫進教官站紀錄 recordings)、設定;
+   *  上傳端網址由 ?media= 或狀態 WebSocket 主機推得(http://<主機>:8768) */
+  @state() private recStatus: RecordingStatus = idleRecordingStatus();
+  @state() private recSummaries: RecordingSummary[] = [];
+  @state() private recSettings: RecordingSettings = defaultRecordingSettings();
+  @state() private mediaUrl = mediaBaseUrl(DEFAULT_WS_URL);
+  @state() private recSupported = false;
+  /** 內建 VHF 角色扮演頻道(docs/design/vhf-roleplay.md):轉送網址(?vhf=;未給時同核心主機埠 8767;?vhf=0、重播檢視與示範模式不顯示)與站名(?station=,預設 instructor) */
+  @state() private vhfUrl: string | null = null;
+  @state() private vhfStation = 'instructor';
 
   @query('brm-replay-view') private replayView?: ReplayView;
 
@@ -474,6 +499,8 @@ export class InstructorApp extends LitElement {
   private readonly debrief = new DebriefAccumulator();
   private readonly markerStore = new BrmMarkerStore();
   private readonly sampler = new StateSampler(1);
+  private recorder: ScreenRecordingController | null = null;
+  private recorderUnsub: (() => void) | null = null;
   /** 練習開始時刻(本機時鐘 ISO;新練習後第一筆抽樣時記下):紀錄的 startedUtc,講評報告以它識別同一練習(不隨匯出時間改變) */
   private exerciseStartedUtc: string | null = null;
   private lastStateAt = 0;
@@ -491,11 +518,17 @@ export class InstructorApp extends LitElement {
     this.view = this.pageMode === 'replay' ? 'replay' : 'live';
     const ws = params.get('ws');
     if (ws) this.wsUrl = ws;
+    this.mediaUrl = mediaBaseUrl(this.wsUrl, params.get('media'));
+    this.recSettings = loadRecordingSettings();
+    this.recSupported = recordingDepsProvider.create() !== null;
     const theme = params.get('theme');
     if (isTheme(theme)) this.theme = theme;
     const ship = params.get('ship');
     if (isShipId(ship)) this.demoShip = ship;
     this.sourceMode = params.get('demo') === '1' ? 'demo' : 'live';
+    const vhf = params.get('vhf');
+    this.vhfUrl = vhf === '0' || vhf === 'off' || this.pageMode === 'replay' ? null : vhf || defaultVhfUrl(this.wsUrl);
+    this.vhfStation = params.get('station') || 'instructor';
     applyTheme(this.theme, false);
     this.scenarios = loadScenarioList();
     const preselect = params.get('scenario');
@@ -520,6 +553,9 @@ export class InstructorApp extends LitElement {
     this.addEventListener('exercise-ended', this.onExerciseEnded);
     this.addEventListener('session-info-submitted', this.onSessionInfo as EventListener);
     this.addEventListener('session-info-cleared', this.onSessionInfoCleared);
+    this.addEventListener('recording-start', this.onRecordingStart);
+    this.addEventListener('recording-stop', this.onRecordingStop);
+    this.addEventListener('recording-settings-changed', this.onRecordingSettings as EventListener);
     this.voiceUnsub = this.voice.onPlaying((p) => (this.voicePlaying = p));
     window.addEventListener('keydown', this.onKeyDown);
   }
@@ -545,6 +581,11 @@ export class InstructorApp extends LitElement {
     this.removeEventListener('exercise-ended', this.onExerciseEnded);
     this.removeEventListener('session-info-submitted', this.onSessionInfo as EventListener);
     this.removeEventListener('session-info-cleared', this.onSessionInfoCleared);
+    this.removeEventListener('recording-start', this.onRecordingStart);
+    this.removeEventListener('recording-stop', this.onRecordingStop);
+    this.removeEventListener('recording-settings-changed', this.onRecordingSettings as EventListener);
+    this.recorderUnsub?.();
+    this.recorder?.dispose();
     if (this.assessmentTimer) clearTimeout(this.assessmentTimer);
     this.voiceUnsub?.();
     this.voice.stop();
@@ -684,7 +725,10 @@ export class InstructorApp extends LitElement {
     } else if (ev.kind === 'message' && (ev.visible || this.pageMode === 'simple')) {
       this.lastVoice = eventLabel(ev);
     }
-    if (ev.kind === 'exerciseEnded') this.requestAssessment();
+    if (ev.kind === 'exerciseEnded') {
+      this.requestAssessment();
+      if (this.recSettings.autoStart) void this.stopRecording('exerciseEnded');
+    }
   }
 
   private recordSteeringEvent(ev: SimEvent): void {
@@ -902,6 +946,8 @@ export class InstructorApp extends LitElement {
     }
     if (!succeeded || !wasPending) return;
     this.restartExercise();
+    // 完整教官站:載入情境成功即為新練習開始 → 依設定自動開始錄影(簡化模式在「開始練習」才開始)
+    if (this.pageMode === 'full' && this.recSettings.autoStart) void this.startRecording();
     if (this.pageMode === 'simple') {
       this.opLog.clear();
       this.opEvents = [];
@@ -1013,9 +1059,57 @@ export class InstructorApp extends LitElement {
       coreSummary: this.coreSummary,
       startedUtc: this.exerciseStartedUtc,
       sessionInfo: this.sessionInfo,
+      recordings: this.recSummaries,
     });
     return JSON.stringify(record);
   }
+
+  // ------------------------------------------------------------ 畫面錄影(docs/design/screen-recording.md 第 5 節)
+  /** 控制器延後建立(第一次開始錄影時);瀏覽器不支援 getDisplayMedia / MediaRecorder 時回 null 並讓面板顯示提示。 */
+  private ensureRecorder(): ScreenRecordingController | null {
+    if (this.recorder) return this.recorder;
+    const deps = recordingDepsProvider.create();
+    if (!deps) {
+      this.recSupported = false;
+      return null;
+    }
+    const rec = new ScreenRecordingController(this.mediaUrl, deps);
+    this.recorderUnsub = rec.onStatus((st) => {
+      this.recStatus = st;
+      this.recSummaries = [...rec.summaries];
+    });
+    this.recorder = rec;
+    return rec;
+  }
+
+  /** 開始錄影(面板按鈕或自動開始):練習識別 = 情境 id@練習開始時刻;站別依頁面模式;核心自行關聯正在寫的紀錄。 */
+  private async startRecording(): Promise<void> {
+    const rec = this.ensureRecorder();
+    if (!rec || rec.active) return;
+    this.exerciseStartedUtc ??= new Date().toISOString();
+    const scenarioId = this.activeScenario?.id ?? this.shipState.scenario?.id ?? this.shipState.shipId;
+    await rec.start({ exerciseId: `${scenarioId}@${this.exerciseStartedUtc}`, station: this.pageMode === 'simple' ? 'instructor-simple' : 'instructor', withAudio: this.recSettings.withAudio });
+    this.recSummaries = [...rec.summaries];
+  }
+
+  private async stopRecording(reason = 'client'): Promise<void> {
+    if (!this.recorder) return;
+    await this.recorder.stop(reason);
+    this.recSummaries = [...this.recorder.summaries];
+  }
+
+  private onRecordingStart = (): void => {
+    void this.startRecording();
+  };
+
+  private onRecordingStop = (): void => {
+    void this.stopRecording();
+  };
+
+  private onRecordingSettings = (ev: CustomEvent<RecordingSettings>): void => {
+    this.recSettings = ev.detail;
+    saveRecordingSettings(ev.detail);
+  };
 
   // ------------------------------------------------------------ 簡化教官模式流程
   private simpleStart(): void {
@@ -1024,6 +1118,7 @@ export class InstructorApp extends LitElement {
     this.opEvents = [];
     this.simplePhase = 'running';
     this.send(simpleCommand('resume'));
+    if (this.recSettings.autoStart) void this.startRecording();
   }
 
   private simpleToggleFreeze(): void {
@@ -1044,6 +1139,7 @@ export class InstructorApp extends LitElement {
     this.requestAssessment();
     this.debriefSummary = this.debrief.summary();
     this.simplePhase = 'ended';
+    if (this.recSettings.autoStart) void this.stopRecording('exerciseEnded');
   }
 
   private simpleNew(): void {
@@ -1093,6 +1189,7 @@ export class InstructorApp extends LitElement {
         ${live
           ? html`<div class="alarms">
               ${flags.frozen ? html`<span class="caution">已凍結</span>` : nothing}
+              ${this.recStatus.state === 'recording' ? html`<span class="alarm rec-badge" title="畫面錄影中(上傳到核心 ${this.mediaUrl})">● 錄影中</span>` : nothing}
               ${flags.aground ? html`<span class="alarm">擱淺</span>` : nothing}
               ${flags.collision ? html`<span class="alarm">碰撞</span>` : nothing}
               ${faults.map((f) => html`<span class="alarm">故障:${f}</span>`)}
@@ -1159,6 +1256,7 @@ export class InstructorApp extends LitElement {
               .unsupported=${this.engineUnsupported}
             ></brm-timeline-panel>
             <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale} .restHoursConfirmed=${!!this.sessionInfo?.restHoursConfirmation}></brm-run-control>
+            <brm-recording-panel .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
           </div>
           <div class="col center">
             <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${overlay} .targets=${s.targets} .alarmTargets=${this.alarmTargets} target-table></brm-track-plot>
@@ -1181,6 +1279,7 @@ export class InstructorApp extends LitElement {
             <brm-operation-log .events=${this.opEvents}></brm-operation-log>
             <brm-command-log .entries=${this.commandLog}></brm-command-log>
             <brm-marker-bar .markers=${this.markers}></brm-marker-bar>
+            ${this.vhfUrl && this.sourceMode === 'live' ? html`<brm-vhf dualWatch .url=${this.vhfUrl} .station=${this.vhfStation}></brm-vhf>` : nothing}
           </div>
         </div>
       </div>
@@ -1221,6 +1320,7 @@ export class InstructorApp extends LitElement {
                   </div>`
                 : nothing}</div>
             <brm-session-info-panel compact .simUtc=${s.utc ?? ''} .submitted=${this.sessionInfo}></brm-session-info-panel>
+            <brm-recording-panel .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
             <div class="actions">
               <button class="primary start" @click=${this.simpleStart}>開始練習</button>
               ${this.sessionInfo?.restHoursConfirmation
@@ -1258,9 +1358,11 @@ export class InstructorApp extends LitElement {
               <div class="ctl-stack">
                 ${s.tugs && s.tugs.length > 0 ? html`<brm-tug-panel compact .tugs=${s.tugs} .defs=${simpleOverlay?.tugDefs ?? sc?.tugs ?? []} .epoch=${this.exerciseEpoch}></brm-tug-panel>` : nothing}
                 <brm-steering-panel compact .state=${this.hasReceived ? s : null}></brm-steering-panel>
+                <brm-recording-panel compact .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
               </div>
               <brm-alert-monitor compact .alerts=${s.alerts ?? []} .bnwas=${s.bnwas} .events=${this.events} .simTime=${s.t} .unsupported=${this.alertsUnsupported}></brm-alert-monitor>
               <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>
+              ${this.vhfUrl && this.sourceMode === 'live' ? html`<brm-vhf compact dualWatch .url=${this.vhfUrl} .station=${this.vhfStation}></brm-vhf>` : nothing}
               <brm-operation-log .events=${this.opEvents} .max=${50}></brm-operation-log>
             </div>
             <div class="actions">

@@ -19,6 +19,9 @@ public sealed class HostOptions
     public int NmeaPort { get; set; } = 10110;
     public string NmeaMulticastGroup { get; set; } = "239.192.0.1";
     public int NmeaMulticastPort { get; set; } = 60001;
+    /// <summary>內建 VHF 角色扮演頻道(VhfRelayServer;ws://0.0.0.0:8767/;--no-vhf 關閉;docs/design/vhf-roleplay.md)</summary>
+    public bool EnableVhf { get; set; } = true;
+    public int VhfPort { get; set; } = 8767;
     public double? TimeScale { get; set; }
     /// <summary>模擬秒數到達後自動結束(0 = 不限)</summary>
     public double Duration { get; set; }
@@ -38,6 +41,13 @@ public sealed class HostOptions
     public string? StopFile { get; set; }
     /// <summary>--no-stop-file:不輪詢停止檔</summary>
     public bool EnableStopFile { get; set; } = true;
+    /// <summary>練習錄影上傳端(MediaUploadServer;http://0.0.0.0:8768/;--no-media 關閉;docs/design/screen-recording.md)</summary>
+    public bool EnableMedia { get; set; } = true;
+    public int MediaPort { get; set; } = MediaUploadServer.DefaultPort;
+    /// <summary>錄影檔目錄(--media-dir;null = 預設 build/records/media;必須在專案資料夾內)</summary>
+    public string? MediaDir { get; set; }
+    /// <summary>每段錄影的上傳上限(MB;--media-max-mb,預設 2048);超過即回 413 停止接收並在旁檔標 truncated</summary>
+    public long MediaMaxMb { get; set; } = MediaUploadServer.DefaultMaxMb;
     public bool Help { get; set; }
 
     public const string Usage = """
@@ -61,6 +71,12 @@ public sealed class HostOptions
                                       (寫完紀錄 footer);tools/launch/stop-all.* 以此在 Windows 上優雅停止。--no-stop-file 關閉
           --dynamics mmg|placeholder  動力學模型(預設 mmg:MMG 完整模型,係數 data/ships/<ID>/coefficients.<loading>.json)
           --no-ws | --no-udp | --no-nmea
+          --vhf-port 8767             內建 VHF 角色扮演頻道的 WebSocket 埠(ws://0.0.0.0:8767;學員站/教官站 PTT 語音、文字、DSC 轉送;
+                                      通話/文字/DSC 寫紀錄 vhf 行、不進雜湊);--no-vhf 關閉
+          --media-port 8768           練習錄影上傳端(http://0.0.0.0:8768/media/…;教官站 getDisplayMedia + MediaRecorder 的片段即時上傳,
+                                      寫成 build/records/media/<mediaId>.webm 與 .json 旁檔;只接受本機/直連網段);--no-media 關閉
+          --media-dir <目錄>          錄影檔目錄(預設 build/records/media;須在專案資料夾內)
+          --media-max-mb 2048         每段錄影的上傳上限(MB);超過即回 413 停止接收、旁檔標 truncated
           --multicast 239.255.70.1:7001     狀態匯流排多播群組
           --nmea-port 10110                 NMEA 單播埠(127.0.0.1,OpenCPN 預設)
           --nmea-multicast 239.192.0.1:60001
@@ -94,6 +110,13 @@ public sealed class HostOptions
                 case "--duration": o.Duration = double.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--stop-file": o.StopFile = Next(); break;
                 case "--no-stop-file": o.EnableStopFile = false; break;
+                case "--media-port": o.MediaPort = int.Parse(Next()); break;
+                case "--no-media": o.EnableMedia = false; break;
+                case "--media-dir": o.MediaDir = Next(); break;
+                case "--media-max-mb":
+                    o.MediaMaxMb = long.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture);
+                    if (o.MediaMaxMb <= 0) throw new ArgumentException($"--media-max-mb 須大於 0:{o.MediaMaxMb}");
+                    break;
                 case "--dynamics":
                     o.Dynamics = Next().ToLowerInvariant();
                     if (o.Dynamics is not ("mmg" or "placeholder")) throw new ArgumentException($"--dynamics 須為 mmg 或 placeholder:{o.Dynamics}");
@@ -101,6 +124,8 @@ public sealed class HostOptions
                 case "--no-ws": o.EnableWebSocket = false; break;
                 case "--no-udp": o.EnableUdpBus = false; break;
                 case "--no-nmea": o.EnableNmea = false; break;
+                case "--vhf-port": o.VhfPort = int.Parse(Next()); break;
+                case "--no-vhf": o.EnableVhf = false; break;
                 case "--multicast": (o.MulticastGroup, o.MulticastPort) = SplitEndpoint(Next(), o.MulticastPort); break;
                 case "--nmea-port": o.NmeaPort = int.Parse(Next()); break;
                 case "--nmea-multicast": (o.NmeaMulticastGroup, o.NmeaMulticastPort) = SplitEndpoint(Next(), o.NmeaMulticastPort); break;

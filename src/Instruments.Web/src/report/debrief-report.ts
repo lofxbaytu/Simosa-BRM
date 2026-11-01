@@ -9,7 +9,9 @@ import { summarize, type DebriefSummary } from '../lib/debrief.js';
 import type { ReplayData } from '../lib/record-replay.js';
 import { eventLabel, eventSeverity, SOURCE_LABEL, type EventSeverity } from '../lib/sim-event.js';
 import type { SessionInfo } from '../lib/session-info.js';
+import type { RecordingSummary } from '../lib/screen-recording.js';
 import { getShipConfig, isShipId } from '../lib/ship-config.js';
+import { hasVhfActivity, vhfSummary, type VhfSummary } from '../lib/vhf.js';
 import { ANCHORS, allElements, criterion, type BehaviouralAnchors } from './anchors.js';
 import { computeAgreement, ratingOf, summarizeForm, type AgreementResult, type FormSummary, type MarkerForm } from './marker-form.js';
 
@@ -591,6 +593,10 @@ export interface DebriefReport {
   parameters: ParameterSection;
   /** 紀錄標頭的參與者與休息時間確認(教官站 sessionInfo;規劃書第 5.5 節);紀錄沒有時 null */
   sessionInfo: SessionInfo | null;
+  /** 內建 VHF 角色扮演的通訊統計(紀錄 vhf 行;無任何通話/文字/DSC 時 null;「通訊」行為標記的佐證) */
+  vhf: VhfSummary | null;
+  /** 練習期間的畫面錄影(教官站紀錄 recordings;核心紀錄沒有時空陣列,錄影檔在紀錄包 records/media/) */
+  recordings: RecordingSummary[];
   generatedUtc: string;
 }
 
@@ -658,8 +664,16 @@ export function buildDebriefReport(input: BuildReportInput): DebriefReport {
     debrief: DEBRIEF_SECTIONS.map((s) => ({ id: s.id, title: s.title, hint: s.hint, text: meta.debrief[s.id] ?? '' })),
     parameters: buildParameterSection(data),
     sessionInfo: data.header.sessionInfo ?? null,
+    vhf: vhfActivity(data.events),
+    recordings: (data.header.recordings ?? []).map((r) => ({ ...r })),
     generatedUtc: (input.now ?? new Date()).toISOString(),
   };
+}
+
+/** 事件中的 VHF 通訊統計;沒有任何 VHF 活動時 null。 */
+export function vhfActivity(events: readonly SimEvent[]): VhfSummary | null {
+  const s = vhfSummary(events);
+  return hasVhfActivity(s) ? s : null;
 }
 
 /** 報告的純文字大綱(測試與無障礙檢查用;依章節列出關鍵值)。 */
@@ -672,5 +686,6 @@ export function reportOutline(r: DebriefReport): string[] {
   if (a) out.push(`評分 ${a.score ?? '—'} / 及格 ${a.passMark ?? '—'} ${a.hardFailed ? '硬性失敗' : a.passed ? '通過' : a.passed === false ? '未通過' : ''}`.trim());
   if (r.parameters.version) out.push(`參數集 ${r.parameters.id ?? ''} ${r.parameters.version}`.trim());
   if (r.parameters.documents.length) out.push(`來源文件 ${r.parameters.documents.map((d) => `${d.source} 第 ${d.revisions.join('/')} 版`).join('、')}`);
+  if (r.vhf) out.push(`VHF 通話 ${r.vhf.calls} 次 ${r.vhf.duration_s} s / 文字 ${r.vhf.texts} / DSC ${r.vhf.dsc}`);
   return out;
 }

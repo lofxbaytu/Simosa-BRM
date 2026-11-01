@@ -19,11 +19,11 @@
 | 段 | 條文摘要 | 本系統對應(模組/情境/文件) | 狀態 | 缺項/備註 |
 |---|---|---|---|---|
 | 1.1 | 適合選定的目標與訓練任務 | 用途定為內部 BRM 複訓、船舶熟悉、靠離泊預演(規劃書第 1.4、8.0 節);情境庫 E01–E22、F01–F03 對應 A-II/1、A-II/2、A-VIII/2 與 1.22/1.39(第 8.1 節「對應法規」欄);`docs/訓練/BRM-課程大綱.md` | 部分 | 情境與課程大綱已有;適合性須由試行課程(第 14 章「課程」)確認 → 需實機 |
-| 1.2 | 以符合訓練目標的實體擬真程度模擬船上設備的操作能力,含能力、限制與可能誤差 | 儀器頁 `src/Instruments.Web/`(船上以 WebView2 外殼 `src/Shell.WebView2` kiosk 全螢幕顯示;已實作(軟體),實機需 Windows 驗證)、感測器真值/指示值與故障 `src/SimCore/Sensors/`、雷達/ARPA `src/Sensors.Radar/`、故障目錄 `src/Contracts/fault-catalogue.json`(R1);自船動態 `src/SimCore/Physics/`(R2) | 部分 | 同 R1:ECDIS(OpenCPN 整合/自建 S-52/ENC 管理)、磁羅經、VHF/DSC、機艙操作模式未實作;同 R2:浪只有平均漂移力(`Physics/External/WaveDrift.cs`;一階振盪未實作,橫搖為解耦 1 自由度 `Physics/RollModel.cs`)、船間交互作用為單向細長體線源模型(`Physics/External/ShipInteraction.cs`;係數為文獻量級估計) |
+| 1.2 | 以符合訓練目標的實體擬真程度模擬船上設備的操作能力,含能力、限制與可能誤差 | 儀器頁 `src/Instruments.Web/`(船上以 WebView2 外殼 `src/Shell.WebView2` kiosk 全螢幕顯示;已實作(軟體),實機需 Windows 驗證)、感測器真值/指示值與故障 `src/SimCore/Sensors/`、雷達/ARPA `src/Sensors.Radar/`、故障目錄 `src/Contracts/fault-catalogue.json`(R1);自船動態 `src/SimCore/Physics/`(R2) | 部分 | 同 R1:ECDIS(OpenCPN 整合/自建 S-52/ENC 管理)、磁羅經、機艙操作模式未實作(VHF/DSC 已以內建角色扮演頻道實作,`docs/design/vhf-roleplay.md`);同 R2:浪只有平均漂移力(`Physics/External/WaveDrift.cs`;一階振盪未實作,橫搖為解耦 1 自由度 `Physics/RollModel.cs`)、船間交互作用為單向細長體線源模型(`Physics/External/ShipInteraction.cs`;係數為文獻量級估計) |
 | 1.3 | 足夠的行為擬真度使學員能習得符合訓練目標的技能 | MMG 3 自由度模型以 FSB1 試俥校正(`build/calibration/FSB1/validation.full.md`;23/26 在公差內),FSB2 以海報值;淺水/squat/岸壁/側推趨勢由自動測試固定 | 部分 / 需實機 | FSB2 試俥報告與兩船壓載實測待取得;船長/引水人主觀評價 ≥4/5 需實機(第 14 章物理) |
 | 1.4 | 可控制的操作環境,能產生各種情況,含與訓練目標相關的緊急、危險或異常情況 | 情境引擎 `src/SimCore/Scenario/`(時間表、觸發、動作、環境漸變)、交通/COLREG `src/SimCore/Traffic/`、故障注入 `src/SimCore/Engine/`;E07–E12、E19 緊急情境 | 已實作 | 時變流場(`TidalStreamTests`)與浪的平均漂移力(`WaveDriftTests`)已實作;浪的一階振盪/橫搖為 R2/R3 缺項,不影響本段的「可控制」要件 |
-| 1.5 | 學員與設備、模擬環境及教官互動的介面 | 操船台/儀器頁、雷達頁(WebView2 外殼 `src/Shell.WebView2` 全螢幕,`start-ship-laptop.ps1 -Shell`)、視景 `src/Visual.Godot/`;教官站 `instructor.html`;VHF/對講 | 部分 | VHF/對講(Mumble)與角色扮演語音未實作;船上以語音腳本代替(第 9.1 節) |
-| 1.6 | 教官能控制、監看並記錄練習以利講評 | 教官站執行控制、事件注入、BRM 快速標記 `src/lib/brm-markers.ts`、學員操作紀錄;核心紀錄/重播 `src/SimCore/Recording/`、`?mode=replay`;講評報告 `report.html` | 部分 | 聲音/影像擷取(OBS/Mumble)未實作;紀錄未簽章(R6) |
+| 1.5 | 學員與設備、模擬環境及教官互動的介面 | 操船台/儀器頁、雷達頁(WebView2 外殼 `src/Shell.WebView2` 全螢幕,`start-ship-laptop.ps1 -Shell`)、視景 `src/Visual.Godot/`;教官站 `instructor.html`;內建 VHF 角色扮演頻道 `<brm-vhf>`(`src/SimCore.Host/VhfRelayServer.cs`、`src/Instruments.Web/src/components/vhf-panel.ts`;`VhfRelayTests`、vitest `vhf*`) | 已實作 / 需實機 | VHF 為內建軟體模擬(PTT 語音 webm/opus、文字、DSC 簡化、雙守聽;非真實傳播,`docs/design/vhf-roleplay.md` 第 6 節),取代 Mumble;語音腳本仍可用(第 9.1 節);船上麥克風授權與耳麥配置需實機 |
+| 1.6 | 教官能控制、監看並記錄練習以利講評 | 教官站執行控制、事件注入、BRM 快速標記 `src/lib/brm-markers.ts`、學員操作紀錄;核心紀錄/重播 `src/SimCore/Recording/`、`?mode=replay`;畫面錄影(含系統音訊)`src/lib/screen-recording.ts` → 核心 `MediaUploadServer` → 紀錄包 `records/media`;講評報告 `report.html` | 部分 | 畫面錄影已實作(軟體;`docs/design/screen-recording.md`;實機確認畫質/磁碟);語音對講(Mumble)未實作;紀錄未簽章(R6) |
 
 ### 2.2 第 2 段 評估用模擬器一般性能標準
 
@@ -65,7 +65,7 @@
 | 6.1 | 事前簡報目標與任務,並給予足夠規劃時間 | 情境 `briefing` 區段(目標、角色、附件)→ 簡化教官模式簡報畫面(R7);課程大綱每單元「簡報 15–20 分鐘」 | 部分 | 「規劃時間」計時未實作(R7 缺項);以大綱規定的簡報時段替代 |
 | 6.2 | 足夠的模擬器熟悉時間 | E01(熟悉與交接班)為每期必含;F01–F03 船舶熟悉;課程大綱第 3 節單元 0 | 已實作 | — |
 | 6.3 | 指導與練習刺激符合目標與學員經驗 | 三步升級設計規則、課程前段每次只注入一個故障(第 8.1 節;`docs/design/scenario-library.md` 各批「設計規則的落實」表) | 已實作 | 刺激強度的實際適合性需試行回饋 |
-| 6.4 | 有效監看,輔以聲音/影像觀察及前後評估報告 | 教官站即時監看、學員操作紀錄、BRM 標記;紀錄包;講評報告 | 部分 | 聲音/影像擷取未實作(R6);船上由帶領者現場觀察 |
+| 6.4 | 有效監看,輔以聲音/影像觀察及前後評估報告 | 教官站即時監看、學員操作紀錄、BRM 標記;畫面錄影(含系統音訊)`src/lib/screen-recording.ts` → 核心 → 紀錄包 `records/media`,講評報告列出錄影;紀錄包;講評報告 | 部分 / 需實機 | 畫面錄影已實作(軟體),實機確認畫質/幀率/磁碟;語音對講(VHF)錄音未實作;船上由帶領者現場觀察 |
 | 6.5 | 有效講評,確認目標達成與操作技能達標 | 講評摘要 `src/lib/debrief.ts`、講評報告;第 8.4 節五階段講評結構;`docs/訓練/評估者指引.md` 第 4 節 | 部分 | 講評引導問題在情境檔但未於畫面獨立呈現(R7) |
 | 6.6 | 鼓勵講評時的同儕評估 | 課程大綱講評流程(學員先自評/互評);評估者指引第 4.3 節 | 部分 | 「同儕評估提示」結構未實作(R7);以指引的流程替代 |
 | 6.7 | 練習經設計與測試以確保適合目標 | 每個情境的 xunit 測試(載入/驗證、固定腳本執行、必要事件、紀錄→重播一致)、核心紀錄夾具;`docs/design/scenario-library.md` 為練習設計/測試紀錄 | 已實作 | 教官實機各執行 1 次需實機(第 14 章情境) |
@@ -145,7 +145,7 @@
 | 羅經 | 電羅經、磁羅經(自差) | 電羅經與故障(E08) | 部分 | 磁羅經未實作(R1) |
 | GNSS/AIS/測深/計程儀 | 顯示與故障 | `src/SimCore/Sensors/`、`src/Gateway.Nmea/` | 已實作 | — |
 | BNWAS、BAM | MSC.128(75)、MSC.302(87) | `src/SimCore/Alerts/`(`BnwasTests`、`AlertManagerTests`) | 部分 | ALF/ALC 句型、responsibility transferred 未實作 |
-| VHF/DSC、內線、PA | 頻道、DSC、角色扮演語音 | — | 未實作 | Mumble 未實作;船上以語音腳本(R6) |
+| VHF/DSC、內線、PA | 頻道、DSC、角色扮演語音 | 內建 VHF 角色扮演頻道:`src/SimCore.Host/VhfRelayServer.cs`(ws 8767,`--vhf-port`/`--no-vhf`)、`<brm-vhf>` `src/Instruments.Web/src/components/vhf-panel.ts`、`lib/vhf.ts`、`lib/vhf-client.ts`;紀錄 `vhf` 行;協定 `src/Contracts/vhf-protocol.md`(`VhfRelayTests`;vitest `vhf`、`vhf-client`、`vhf-panel`、`vhf-record`) | 已實作(軟體,內建) | 14 個頻道旋鈕、PTT(滑鼠/觸控/空白鍵)語音、同頻道才聽得到、同時發話後發者收「頻道佔用」、文字備援、DSC 簡化(DISTRESS/URGENCY 文字警示)、教官雙守聽、通話/文字/DSC 進紀錄與講評;非真實 VHF 傳播、無 DSC 編碼、內線/PA 無獨立介面(以工作頻道/文字模擬);麥克風授權需實機(`docs/design/vhf-roleplay.md`) |
 | 風、傾斜、NAVTEX、航行燈面板、汽笛 | 顯示與操作 | 風向風速、汽笛事件 | 部分 | NAVTEX、航行燈面板、傾斜儀未實作 |
 | 實體操控台與駕駛台配置 | 實體舵輪、車鐘、面板,駕駛台空間與照明 | 精簡版操控台(規劃書第 5.4 節);兩螢幕顯示以 WebView2 外殼 kiosk 全螢幕(`src/Shell.WebView2`,`--monitor`;已實作(軟體),實機需 Windows 驗證);USB 操控台服務未實作 | 不適用 / 未實作 | 桌面配置;操控台服務列於追溯表第 4 節;外殼驗證列於安裝文件第 4.5 節第 6 項 |
 
@@ -157,7 +157,7 @@
 | 執行控制 | 啟動、暫停、重設時間與位置、重啟 | `src/SimCore/Engine/`(freeze/snapshot/restore) | 已實作 | — |
 | 練習中改變環境 | 風、能見度、流等即時變化 | 教官站環境面板、`EnvironmentRamp` | 已實作 | — |
 | 故障注入 | 即時注入與清除 | 教官站故障面板、`fault-catalogue.json` | 已實作 | — |
-| 與學員通訊 | 教官扮演 VTS/引水/拖船等 | — | 未實作 | 船上以語音腳本;訪船時由現場人員扮演 |
+| 與學員通訊 | 教官扮演 VTS/引水/拖船等 | 教官站 `<brm-vhf dualWatch>`(守聽 16 + 工作頻道;完整與簡化教官模式)以 PTT 語音或文字扮演 VTS/引水人/拖船/他船,DSC 警示;事件流「VHF」來源;講評報告「通訊(VHF 角色扮演)」統計 | 已實作(軟體,內建) | 語音腳本(時間表 `voiceScript`)仍可用;通話不錄音,只記次數/頻道/秒數(錄音屬聲音/影像擷取,R6) |
 | 監看 | 鳥瞰圖、儀器鏡像、警報與操作紀錄 | 教官站(`instructor-app` vitest) | 已實作 | 3D 任意視角未實作 |
 | 紀錄 | 完整紀錄含語音/影像 | 核心紀錄(雜湊鏈)、紀錄包 `src/Tools.Packaging/` | 部分 | 語音/影像未實作;教官站紀錄未簽章 |
 | 重播 | 變速、任意點接續 | `?mode=replay`、Host `--replay`、`restore` 倒帶 | 已實作 | — |
@@ -177,13 +177,13 @@
 
 | 來源 | 列數 | 已實作 | 部分 | 未實作 | 不適用 | 需實機(含「部分 / 需實機」) |
 |---|---|---|---|---|---|---|
-| A-I/12 第 1 部分(第 1–4 段) | 16 | 6 | 8 | 1 | 1 | 1(1.3) |
-| A-I/12 第 2 部分(第 5–8 段) | 15 | 5 | 10 | 0 | 0 | 2(7.2、7.5) |
-| DNV Class A 功能清單 | 47 | 21 | 17 | 3 | 3 | 4 |
+| A-I/12 第 1 部分(第 1–4 段) | 16 | 7 | 7 | 1 | 1 | 2(1.3、1.5) |
+| A-I/12 第 2 部分(第 5–8 段) | 15 | 5 | 10 | 0 | 0 | 3(6.4、7.2、7.5) |
+| DNV Class A 功能清單 | 47 | 23 | 17 | 1 | 3 | 4 |
 
 > 計數規則:依第 4 節各表「狀態」欄逐列點算(「已實作 / 需實機」計入已實作並同時計入需實機欄;「不適用 / 未實作」計入不適用);更新任一列狀態時須重新點算本表。
 
-A-I/12 的「未實作」只有 ARPA 排除區(4.3,不列入 D5 等級);其餘差距集中在聲音/影像擷取、VHF 角色扮演、簡報的規劃時間/同儕評估結構,以及須以試行課程驗證的評估程序。DNV Class A 的 6 自由度(含浪的一階振盪;平均浪漂移力與解耦 1 自由度橫搖已實作)、雙向船間交互作用(單向模型已實作)、240° 視野與實體駕駛台為桌面配置的結構性差距,對應規劃書第 4.2 節「可認證等級為 Class C/S」的判斷。
+A-I/12 的「未實作」只有 ARPA 排除區(4.3,不列入 D5 等級);其餘差距集中在語音對講/錄音(畫面錄影已實作,需實機確認)、簡報的規劃時間/同儕評估結構(VHF 角色扮演已以內建頻道實作),以及須以試行課程驗證的評估程序。DNV Class A 的 6 自由度(含浪的一階振盪;平均浪漂移力與解耦 1 自由度橫搖已實作)、雙向船間交互作用(單向模型已實作)、240° 視野與實體駕駛台為桌面配置的結構性差距,對應規劃書第 4.2 節「可認證等級為 Class C/S」的判斷。
 
 ## 6. 待核准事項(ASSUMED)
 

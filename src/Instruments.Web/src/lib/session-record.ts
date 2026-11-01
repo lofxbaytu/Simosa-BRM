@@ -11,6 +11,7 @@ import type { DebriefSummary } from './debrief.js';
 import type { OperationEvent } from './operation-log.js';
 import type { ScenarioSummary } from './scenario.js';
 import type { SessionInfo } from './session-info.js';
+import type { RecordingSummary } from './screen-recording.js';
 
 export const SESSION_RECORD_FORMAT = 'simosa-brm-instructor-record';
 
@@ -26,8 +27,8 @@ export interface CommandLogEntry {
 
 export interface SessionRecord {
   format: typeof SESSION_RECORD_FORMAT;
-  /** 1:第一版;2:新增 events(核心事件)與 coreSummary(核心 summary);3:新增 sessionInfo(參與者與休息時間確認) */
-  version: 1 | 2 | 3;
+  /** 1:第一版;2:新增 events(核心事件)與 coreSummary(核心 summary);3:新增 sessionInfo(參與者與休息時間確認);4:新增 recordings(畫面錄影) */
+  version: 1 | 2 | 3 | 4;
   /** 匯出時刻(每次下載或按「講評報告」都不同;不可作為練習識別) */
   createdUtc: string;
   /**
@@ -53,6 +54,8 @@ export interface SessionRecord {
   coreSummary?: Record<string, unknown> | null;
   /** 參與者與休息時間確認(版本 3;教官站送出 sessionInfo 指令時的 args;未送出為 null) */
   sessionInfo?: SessionInfo | null;
+  /** 本練習期間的畫面錄影(版本 4;lib/screen-recording.ts 上傳到核心的 <mediaId>.webm 摘要;未錄影為空陣列) */
+  recordings?: RecordingSummary[];
 }
 
 /** 以固定間隔抽樣狀態(預設 1 Hz;2 小時約 7,200 筆),並保留事件所需的完整序列給講評累計器(由呼叫者另外餵)。 */
@@ -97,12 +100,14 @@ export interface SessionRecordInput {
   startedUtc?: string;
   /** 參與者與休息時間確認(sessionInfo 指令的 args;未送出時省略或 null) */
   sessionInfo?: SessionInfo | null;
+  /** 畫面錄影摘要(未錄影時省略) */
+  recordings?: readonly RecordingSummary[];
 }
 
 export function buildSessionRecord(input: SessionRecordInput, now = new Date()): SessionRecord {
   return {
     format: SESSION_RECORD_FORMAT,
-    version: 3,
+    version: 4,
     createdUtc: now.toISOString(),
     ...(input.startedUtc ? { startedUtc: input.startedUtc } : {}),
     mode: input.mode,
@@ -118,6 +123,7 @@ export function buildSessionRecord(input: SessionRecordInput, now = new Date()):
     events: [...(input.events ?? [])],
     coreSummary: input.coreSummary ? input.coreSummary.raw : null,
     sessionInfo: input.sessionInfo ? structuredClone(input.sessionInfo) : null,
+    recordings: (input.recordings ?? []).map((r) => ({ ...r })),
   };
 }
 

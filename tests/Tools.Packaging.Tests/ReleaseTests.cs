@@ -98,6 +98,19 @@ public sealed class ReleaseTests : IDisposable
         Assert.Contains(v2.Errors, e => e.Contains("清單中沒有的檔案") && e.Contains("app/extra.txt"));
         File.Delete(Path.Combine(dir, "app", "extra.txt"));
 
+        // Inno Setup 安裝程式(tools/installer/SimosaBRM.iss)的解除安裝檔不算多出(安裝後 release verify 仍須通過);其他 unins 字首的檔案照常列為多出
+        Directory.CreateDirectory(Path.Combine(dir, "tools", "uninstall"));
+        File.WriteAllText(Path.Combine(dir, "tools", "uninstall", "unins000.exe"), "MZ");
+        File.WriteAllText(Path.Combine(dir, "tools", "uninstall", "unins000.dat"), "x");
+        File.WriteAllText(Path.Combine(dir, "unins001.msg"), "x");
+        Assert.True(ReleaseManifestBuilder.Verify(dir).Ok);
+        Assert.DoesNotContain(ReleaseManifestBuilder.Scan(dir), f => f.Path.Contains("unins"));
+        File.WriteAllText(Path.Combine(dir, "tools", "uninstall", "uninstall-notes.txt"), "x");
+        Assert.Contains(ReleaseManifestBuilder.Verify(dir).Errors, e => e.Contains("清單中沒有的檔案") && e.Contains("tools/uninstall/uninstall-notes.txt"));
+        File.Delete(Path.Combine(dir, "tools", "uninstall", "uninstall-notes.txt"));
+        Directory.Delete(Path.Combine(dir, "tools", "uninstall"), true);
+        File.Delete(Path.Combine(dir, "unins001.msg"));
+
         // 缺少的檔案與大小不符
         File.Delete(Path.Combine(dir, "contracts", "state.schema.json"));
         File.WriteAllText(Path.Combine(dir, "config", "ship-laptop.json"), "{\"shipId\":\"FSB2\",\"x\":1}\n");

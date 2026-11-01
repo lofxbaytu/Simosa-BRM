@@ -105,6 +105,16 @@ export interface SessionExercise {
   roles?: Record<string, string>;
   /** 休息時間確認(由講評紀錄標頭帶入;規劃書第 5.5 節;紀錄沒有時省略) */
   restHoursConfirmation?: RestHoursConfirmation;
+  /** 內建 VHF 角色扮演的通訊統計(講評報告 vhf;團隊層級,「通訊」行為標記的佐證;紀錄無 VHF 活動時省略) */
+  vhf?: ExerciseVhf;
+}
+
+/** 練習的 VHF 通訊統計(通話次數、總秒數、文字與 DSC 筆數)。 */
+export interface ExerciseVhf {
+  calls: number;
+  duration_s: number;
+  texts: number;
+  dsc: number;
 }
 
 export interface CourseSession {
@@ -360,6 +370,7 @@ export function upsertExerciseFromReport(session: CourseSession, report: Debrief
   for (const p of report.meta.participants) if (p.traineeId && attended.includes(p.traineeId) && p.role) roles[p.traineeId] = p.role;
   if (Object.keys(roles).length > 0) ex.roles = roles;
   if (report.sessionInfo?.restHoursConfirmation) ex.restHoursConfirmation = { ...report.sessionInfo.restHoursConfirmation };
+  if (report.vhf) ex.vhf = { calls: report.vhf.calls, duration_s: report.vhf.duration_s, texts: report.vhf.texts, dsc: report.vhf.dsc };
   const i = old ? session.exercises.indexOf(old) : -1;
   if (old && i >= 0) {
     // 保留人工修改的時數與設備配置(評估員判定/備註已在上面帶入)
@@ -397,7 +408,7 @@ export interface IndividualTrainingRecord {
   completedExercises: string[];
   instructors: string[];
   assessors: string[];
-  results: Array<{ exerciseNo: string; scenarioId: string; date: string; hours: number; attended: boolean; completed: boolean; reportNo: string; role?: string; restHoursConfirmation?: RestHoursConfirmation } & TraineeResult>;
+  results: Array<{ exerciseNo: string; scenarioId: string; date: string; hours: number; attended: boolean; completed: boolean; reportNo: string; role?: string; restHoursConfirmation?: RestHoursConfirmation; vhf?: ExerciseVhf } & TraineeResult>;
   evaluation: string;
 }
 
@@ -416,6 +427,7 @@ export function buildIndividualRecord(session: CourseSession, trainee: Trainee):
     reportNo: e.reportNo,
     ...(e.roles?.[trainee.id] ? { role: e.roles[trainee.id] } : {}),
     ...(e.restHoursConfirmation ? { restHoursConfirmation: e.restHoursConfirmation } : {}),
+    ...(e.vhf ? { vhf: e.vhf } : {}),
     ...(e.results[trainee.id] ?? {}),
   }));
   const attendedEx = session.exercises.filter((e) => e.attended.includes(trainee.id));
@@ -491,6 +503,10 @@ export const SESSION_CSV_COLUMNS = [
   'restHoursConfirmedAtUtc',
   'restHoursCompliant',
   'restHoursNote',
+  'vhfCalls',
+  'vhfDuration_s',
+  'vhfTexts',
+  'vhfDsc',
   'evaluation',
 ] as const;
 
@@ -513,7 +529,7 @@ export function sessionToCsv(session: CourseSession): string {
   for (const t of session.trainees) {
     const tcols = [txt(t.id), txt(t.name), txt(t.rank)];
     if (session.exercises.length === 0) {
-      rows.push([...common, ...tcols, '', '', '', '', '', '', txt(session.equipment), '', '', '', '', '', '', '', '', '', '', '', txt(individualRecordNo(session, t)), '', '', '', '', '', txt(session.evaluation)]);
+      rows.push([...common, ...tcols, '', '', '', '', '', '', txt(session.equipment), '', '', '', '', '', '', '', '', '', '', '', txt(individualRecordNo(session, t)), '', '', '', '', '', '', '', '', '', txt(session.evaluation)]);
       continue;
     }
     for (const e of session.exercises) {
@@ -546,6 +562,10 @@ export function sessionToCsv(session: CourseSession): string {
         txt(rest?.confirmedAtUtc ?? ''),
         rest ? yn(rest.compliant) : '',
         txt(rest?.note ?? ''),
+        e.vhf ? String(e.vhf.calls) : '',
+        e.vhf ? String(e.vhf.duration_s) : '',
+        e.vhf ? String(e.vhf.texts) : '',
+        e.vhf ? String(e.vhf.dsc) : '',
         txt(session.evaluation),
       ]);
     }

@@ -10,20 +10,25 @@
   4) 網頁 → app\web、啟動腳本 → app\launch、data\(排除 ships\*\confidential\)、contracts\、docs\、config\ 範例;
   5) Godot 視景:有 Godot 與 Windows 匯出範本時 --export-release "Windows Desktop" → app\visual\,否則略過並記入清單註記;
   6) simosa-pkg pack 把 app\ 包成簽章更新包 packages\simosa-<版本>-software.sbupd(開發用 PEM 金鑰 build\release\dev-keys\,僅供測試);
-  7) 發行清單 manifest.json(版本、git 版次、每檔 SHA-256、元件版本)→ release verify、更新包 verify。
+  7) 發行清單 manifest.json(版本、git 版次、每檔 SHA-256、元件版本)→ release verify、更新包 verify;
+  8) -Installer:Windows 安裝程式(tools\installer\SimosaBRM.iss,Inno Setup 6.3+;規劃書第 12.1 節 M4「安裝程式」):有 ISCC.exe 時編譯成
+     build\release\installer\SimosaBRM-Setup-<版本>.exe,否則只把腳本與說明複製到該目錄(tools\installer\README.md;docs\ops\安裝與啟動.md 第 2.8 節)。
   所有輸出留在專案內(build\release\、.cache\),不寫 C:\;不執行 git 指令(版次由 -Git 或直接讀 .git\HEAD)。
+  -WhatIf:只檢查參數與工具鏈(dotnet、pnpm、Godot、ISCC)並印出各步驟計畫,不建置、不寫任何檔案(tools\run-ps-tests.sh 以此做語法/參數檢查)。
 .EXAMPLE
   .\tools\build-release.ps1 -Version 2026.11.1 -Git (git rev-parse HEAD)
   .\tools\build-release.ps1 -Version 2026.11.1 -SkipGodot -Zip
+  .\tools\build-release.ps1 -Version 2026.11.1 -Installer
+  .\tools\build-release.ps1 -WhatIf -SkipGodot -Installer
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$Version,
     [string]$Git,
     [string]$Branch,
     [string]$Rid = 'win-x64',
     [string]$Out = 'build\release',
-    [switch]$SkipWeb, [switch]$SkipGodot, [string]$Godot, [switch]$NoPackage, [switch]$Zip
+    [switch]$SkipWeb, [switch]$SkipGodot, [string]$Godot, [switch]$NoPackage, [switch]$Zip, [switch]$Installer
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -56,6 +61,35 @@ $components = New-Object System.Collections.Generic.List[string]
 function Note([string]$m) { Write-Host "  註記:$m"; $notes.Add($m) }
 function Step([string]$m) { Write-Host ''; Write-Host "== $m" }
 function Run([string]$exe, [string[]]$a) { & $exe @a; if ($LASTEXITCODE -ne 0) { throw "$exe $($a -join ' ') 失敗(結束碼 $LASTEXITCODE)" } }
+# Inno Setup 6 編譯器:ISCC 環境變數 → PATH → .cache\innosetup\(可攜版,留在專案內)→ 預設安裝位置;找不到回 $null
+function Find-Iscc {
+    if ($env:ISCC -and (Test-Path $env:ISCC)) { return $env:ISCC }
+    $c = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue; if ($c) { return $c.Source }
+    foreach ($p in @((Join-Path $root '.cache\innosetup\ISCC.exe'), "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")) {
+        if ($p -and -not $p.StartsWith('\') -and (Test-Path $p)) { return $p }
+    }
+    return $null
+}
+$issScript = Join-Path $root 'tools\installer\SimosaBRM.iss'
+$installerDir = Join-Path $root (Join-Path $Out 'installer')
+
+if ($WhatIfPreference) {
+    # -WhatIf:只印計畫,不建置、不寫檔(所有會寫檔的步驟都在此之後)
+    $iscc = Find-Iscc
+    Write-Host "WhatIf:Simosa BRM 發行組裝 $Version(git $Git $Branch;$Rid)→ $outDir"
+    Write-Host "  1/7 dotnet build SimosaBRM.sln -c Release(dotnet $(& dotnet --version))"
+    Write-Host "  2/7 網頁:$(if ($SkipWeb) { '略過(-SkipWeb)' } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) { 'pnpm build' } else { '找不到 pnpm,沿用 build\web\instruments' })"
+    Write-Host "  3/7 dotnet publish ${Rid}:app\simcore、app\radar、app\web-server、tools\updater$(if ($Rid -eq 'win-x64') { '、app\shell(WebView2 外殼)' } else { '(外殼僅建置)' })"
+    Write-Host '  4/7 app\web、app\launch、data\(排除 confidential)、contracts\、docs\、config\、tools\installer\SimosaBRM.iss'
+    Write-Host "  5/7 Godot 視景:$(if ($SkipGodot) { '略過(-SkipGodot)' } elseif ($Godot -or $env:GODOT -or $env:SIMOSA_GODOT) { '匯出' } else { '自 .cache\godot 偵測' })"
+    Write-Host "  6/7 簽章更新包:$(if ($NoPackage) { '略過(-NoPackage)' } else { "packages\simosa-$Version-software.sbupd(開發金鑰 $keys)" })"
+    Write-Host "  7/7 manifest.json → release verify$(if (-not $NoPackage) { '、更新包 verify' })$(if ($Zip) { ";壓縮檔 $(Join-Path $Out "simosa-brm-$Version-$Rid.zip")" })"
+    if ($Installer) {
+        if (-not (Test-Path $issScript)) { throw "找不到安裝程式腳本 $issScript" }
+        Write-Host "  8/8 安裝程式(-Installer):$(if ($iscc) { "ISCC $iscc → $(Join-Path $installerDir "SimosaBRM-Setup-$Version.exe")" } else { "找不到 ISCC.exe,只複製腳本與說明到 $installerDir" })"
+    } else { Write-Host '  安裝程式:未要求(-Installer)' }
+    return
+}
 
 Write-Host "Simosa BRM 發行組裝 $Version(git $Git $Branch;$Rid)→ $outDir"
 if (Test-Path $outDir) { Write-Host "  清除既有 $outDir"; Remove-Item -Recurse -Force $outDir }
@@ -134,6 +168,10 @@ Copy-Item 'src\Contracts\README.md' (Join-Path $outDir 'docs\components\契約-C
 $components.Add("docs=$Version=docs")
 New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'config') | Out-Null
 Copy-Item 'config\*.json', 'config\README.md' (Join-Path $outDir 'config')
+# Windows 安裝程式腳本隨發行版(tools\installer\;在有 Inno Setup 的機器可直接編譯本發行版)
+New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'tools\installer') | Out-Null
+Copy-Item $issScript, (Join-Path $root 'tools\installer\README.md') (Join-Path $outDir 'tools\installer')
+$components.Add("installer-script=$Version=tools/installer=Inno Setup 腳本 SimosaBRM.iss(以 -Installer 編譯;tools/installer/README.md)")
 Note 'Python 校正工具(src/Tools.Calibration)不隨發行版散布;係數檔 data/ships/*/coefficients.*.json 已由該工具產生並隨 data/ 發布,說明見 docs/components/校正工具-Tools.Calibration.md'
 @"
 Simosa BRM 發行版 $Version($Rid,framework-dependent:需 .NET 8 執行階段)git $Git $Branch
@@ -142,6 +180,7 @@ app\web          網頁:index.html 儀器、instructor.html 教官站(?mode=simp
 app\web-server   simosa-web 靜態網頁伺服                                  app\launch       start-ship-laptop / start-instructor-laptop / stop-all
 app\visual       Godot 視景匯出檔(有匯出範本時)                           tools\updater    simosa-pkg(更新包、紀錄包、直連同步;放在 app\ 之外)
 app\shell        WebView2 操船台外殼 SimosaBRM.Shell.exe(start-ship-laptop.ps1 -Shell)   tools\webview2   WebView2 Runtime 離線安裝檔放置處(README.txt)
+tools\installer  Windows 安裝程式腳本 SimosaBRM.iss(Inno Setup 6.3+;build-release.ps1 -Installer 編譯;README.md)
 data\            船模、情境、區域、參數集、視景對照(不含 ships\*\confidential)   contracts\       JSON Schema   config\  設定範例(無金鑰)
 docs\            規劃書、設計文件、ops\安裝與啟動.md、驗收\需求追溯表.md     packages\        簽章更新包(開發金鑰簽章,僅供測試)
 manifest.json    發行清單(每檔 SHA-256):安裝前 simosa-pkg release verify --dir <本目錄>
@@ -214,6 +253,30 @@ if ($Zip) {
     if (Test-Path $zipFile) { Remove-Item $zipFile }
     Compress-Archive -Path $outDir -DestinationPath $zipFile
     Write-Host "  壓縮檔 $zipFile($([math]::Round((Get-Item $zipFile).Length / 1MB, 1)) MB)"
+}
+
+# 8) Windows 安裝程式(-Installer;Inno Setup 6.3+):在清單核對之後編譯(安裝程式內含 manifest.json,安裝後可 release verify);
+#    輸出 build\release\installer\(在 $outDir 之外,不進清單)。無 ISCC 時只複製腳本與說明,之後在有 Inno Setup 的 Windows 機器執行 BUILD-<版本>.txt 的指令。
+if ($Installer) {
+    Step '8/8 Windows 安裝程式(tools\installer\SimosaBRM.iss)'
+    New-Item -ItemType Directory -Force -Path $installerDir | Out-Null
+    $isccCmd = "ISCC.exe /DAppVersion=$Version /DSourceDir=`"$outDir`" /DOutputDir=`"$installerDir`" `"$issScript`""
+    $iscc = Find-Iscc
+    if ($iscc) {
+        Run $iscc @("/DAppVersion=$Version", "/DSourceDir=$outDir", "/DOutputDir=$installerDir", '/Qp', $issScript)
+        $setup = Join-Path $installerDir "SimosaBRM-Setup-$Version.exe"
+        if (-not (Test-Path $setup)) { throw "ISCC 未產生 $setup" }
+        Write-Host "  安裝程式 $setup($([math]::Round((Get-Item $setup).Length / 1MB, 1)) MB);正式派送前以公司憑證簽章(tools\installer\README.md)"
+    } else {
+        Copy-Item $issScript, (Join-Path $root 'tools\installer\README.md') $installerDir
+        @"
+Simosa BRM $Version 的 Windows 安裝程式尚未編譯:本機沒有 Inno Setup 6.3+(ISCC.exe;ISCC 環境變數、PATH、.cache\innosetup\ 或預設安裝位置皆未找到)。
+在有 Inno Setup 的 Windows 機器(不需網際網路)執行:
+  $isccCmd
+→ $installerDir\SimosaBRM-Setup-$Version.exe;發行版本身也帶著 tools\installer\SimosaBRM.iss。說明:README.md、docs\ops\安裝與啟動.md 第 2.8 節。
+"@ | Set-Content -Path (Join-Path $installerDir "BUILD-$Version.txt") -Encoding UTF8
+        Write-Host "  找不到 ISCC.exe(Inno Setup 6.3+):安裝程式未編譯,腳本與說明已複製到 $installerDir(見 BUILD-$Version.txt)"
+    }
 }
 Write-Host ''
 Write-Host "完成:$outDir;安裝步驟見 docs\ops\安裝與啟動.md"

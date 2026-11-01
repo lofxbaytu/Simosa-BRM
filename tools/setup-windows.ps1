@@ -1,11 +1,14 @@
 # Simosa BRM 開發環境設定(Windows 11)
 # 用途:把所有工具的快取與輸出固定在 D:\Simosa BRM 之內,避免寫到 C:\。
 # 執行:以系統管理員開 PowerShell,cd 到 D:\Simosa BRM 後執行 .\tools\setup-windows.ps1
+#   -InstallPwsh:另把 PowerShell 7(固定版 $PwshVersion;啟動腳本測試 tools\launch\tests\launch-common.tests.ps1 需 pwsh 7,Windows 內建的 5.1 不夠)
+#                 以 dotnet 全域工具裝到 .cache\dotnet-tools\(NuGet 走 nuget.config 與 .cache\nuget;不寫 C:\;開發機用,船上不需要)
+param([switch]$InstallPwsh, [string]$PwshVersion = '7.4.22')
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Write-Host "專案根目錄:$root"
 $cache = Join-Path $root '.cache'
-New-Item -ItemType Directory -Force -Path (Join-Path $cache 'nuget'), (Join-Path $cache 'pnpm'), (Join-Path $cache 'uv'), (Join-Path $cache 'uv-python'), (Join-Path $cache 'uv-tools'), (Join-Path $cache 'uv-bin'), (Join-Path $cache 'playwright'), (Join-Path $cache 'dotnet-home'), (Join-Path $root 'build'), (Join-Path $root 'data\records') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $cache 'nuget'), (Join-Path $cache 'pnpm'), (Join-Path $cache 'uv'), (Join-Path $cache 'uv-python'), (Join-Path $cache 'uv-tools'), (Join-Path $cache 'uv-bin'), (Join-Path $cache 'playwright'), (Join-Path $cache 'dotnet-home'), (Join-Path $cache 'dotnet-tools'), (Join-Path $root 'build'), (Join-Path $root 'data\records') | Out-Null
 
 # 使用者層級環境變數(只影響本機帳號;各工具因此把快取放在專案內)
 # uv:套件快取(UV_CACHE_DIR)之外,沒有 Python 3.12+ 時 uv sync/run 會自動下載受管 CPython,
@@ -37,6 +40,21 @@ Check 'pnpm'    { pnpm --version }
 Check 'uv'      { uv --version }
 Check 'git'     { git --version }
 Check 'git-lfs' { git lfs version }
+# PowerShell 7:優先看專案內的 dotnet 全域工具版(.cache\dotnet-tools\pwsh.exe),其次 PATH
+$pwshTool = Join-Path $cache 'dotnet-tools\pwsh.exe'
+Check 'pwsh'    { if (Test-Path $pwshTool) { & $pwshTool -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' } else { pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' } }
+Check 'ISCC'    { $c = Get-Command ISCC.exe -ErrorAction SilentlyContinue; if ($c) { $c.Source } elseif (Test-Path (Join-Path $cache 'innosetup\ISCC.exe')) { Join-Path $cache 'innosetup\ISCC.exe' } else { throw 'none' } }
+
+# PowerShell 7 以 dotnet 全域工具安裝到專案內(tools\run-ps-tests.sh 與 tools\launch\tests\launch-common.tests.ps1 用;固定版號,NuGet 快取在 .cache\nuget)
+if ($InstallPwsh) {
+    if (-not (Test-Path $pwshTool)) {
+        Write-Host "安裝 PowerShell $PwshVersion → $(Join-Path $cache 'dotnet-tools')"
+        $env:DOTNET_CLI_HOME = $vars['DOTNET_CLI_HOME']; $env:NUGET_PACKAGES = $vars['NUGET_PACKAGES']
+        & dotnet tool install PowerShell --tool-path (Join-Path $cache 'dotnet-tools') --version $PwshVersion --configfile (Join-Path $root 'nuget.config')
+        if ($LASTEXITCODE -ne 0) { throw "dotnet tool install PowerShell 失敗(結束碼 $LASTEXITCODE)" }
+    } else { Write-Host "已有 $pwshTool" }
+    Write-Host "  執行測試:& '$pwshTool' -NoProfile -File tools\launch\tests\launch-common.tests.ps1(或 Git Bash:bash tools/run-ps-tests.sh)"
+}
 
 Write-Host ''
 Write-Host '安裝建議(皆可指定安裝到 D:\):'
@@ -45,5 +63,7 @@ Write-Host '  Node.js 22 LTS  : winget install OpenJS.NodeJS.LTS;  然後 corepa
 Write-Host '  uv              : winget install astral-sh.uv  (Python 3.12+ 不必另裝:uv sync 會下載到 .cache\uv-python)'
 Write-Host '  Git + LFS       : winget install Git.Git; git lfs install'
 Write-Host '  Godot 4.5 .NET 或 Unity 6:安裝到 D:\Tools\,專案位於 src\Visual.*'
+Write-Host "  PowerShell 7     : .\tools\setup-windows.ps1 -InstallPwsh(dotnet tool,固定版 $PwshVersion,裝到 .cache\dotnet-tools;啟動腳本測試用,船上不需要)"
+Write-Host '  Inno Setup 6.3+  : 安裝到 D:\Tools\Inno Setup 6\ 或可攜版放 .cache\innosetup\ISCC.exe(tools\build-release.ps1 -Installer 產生 Windows 安裝程式;tools\installer\README.md)'
 Write-Host ''
 Write-Host '完成。之後在此資料夾執行:dotnet build、pnpm install、uv sync 時,快取與輸出都會留在 D:\Simosa BRM 內。'

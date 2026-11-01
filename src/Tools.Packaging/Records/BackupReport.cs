@@ -40,6 +40,8 @@ public sealed class CleanupResult
     public List<string> Deleted { get; set; } = new();
     /// <summary>已刪除的原始紀錄檔(相對紀錄目錄)</summary>
     public List<string> DeletedFiles { get; set; } = new();
+    /// <summary>刻意保留的檔案(錄影旁檔:其錄影檔超過上限未隨包回傳、仍在船上,待錄影檔打包後一併刪除)</summary>
+    public List<string> RetainedFiles { get; set; } = new();
     /// <summary>未列入回報、繼續保留的紀錄包</summary>
     public List<string> Retained { get; set; } = new();
     /// <summary>雜湊不符(不刪除)</summary>

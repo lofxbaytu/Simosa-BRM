@@ -1,5 +1,6 @@
 // 重播檢視(講評站雛型,規劃書第 9.2 節)的紀錄解析:
-//  - SimCore 的 JSON Lines 紀錄(src/SimCore/README.md 第 4 節;每行 kind = header | input | state | snapshot | event | summary | footer);
+//  - SimCore 的 JSON Lines 紀錄(src/SimCore/README.md 第 4 節;每行 kind = header | input | state | snapshot | event | summary | session | vhf | footer;
+//    vhf 行為內建 VHF 角色扮演的通話/文字/DSC(帶外、不在事件序列內),其 event 併入 events 供講評時間軸與通訊統計);
 //  - 教官站自己的 SessionRecord JSON(session-record.ts;含 BRM 標記、核心事件與核心 summary)。
 // 解析後提供依時間查狀態(二分搜尋)與航跡點,供時間軸拖曳檢視;不需核心連線。
 // 未知的 kind 只計數(不逐行列為錯誤),舊紀錄(無 event/summary 行、header 無 parameterSet)仍可載入。
@@ -17,6 +18,7 @@ import { isValidCommand } from './command.js';
 import { parseState } from './state-parser.js';
 import { isSessionRecord } from './session-record.js';
 import { parseSessionInfo, type SessionInfo } from './session-info.js';
+import { parseRecordings, type RecordingSummary } from './screen-recording.js';
 import { parseSimEvent } from './sim-event.js';
 import type { TrackPoint } from './track-history.js';
 import { BrmMarkerStore } from './brm-markers.js';
@@ -42,6 +44,8 @@ export interface ReplayHeader {
   parameterSet?: RecordParameterSet;
   /** 參與者與休息時間確認:教官站紀錄 sessionInfo,或核心紀錄 header 的 participants / restHoursConfirmation / course(規劃書第 5.5 節) */
   sessionInfo?: SessionInfo;
+  /** 畫面錄影摘要(教官站紀錄 version 4 的 recordings;核心 JSON Lines 紀錄沒有,錄影由紀錄包旁檔關聯) */
+  recordings?: RecordingSummary[];
 }
 
 export interface ReplayInput {
@@ -221,6 +225,22 @@ export function parseJsonLines(text: string): ReplayData {
         data.events.push(ev);
         break;
       }
+      case 'vhf': {
+        // VHF 角色扮演行(docs/design/vhf-roleplay.md 第 4 節):event 為 SimEvent 形狀(source "vhf"),列入事件供講評;
+        // 行的 tick/t 為轉送當下的引擎時刻,event 缺 tick/t 時補上
+        const raw = isRecord(obj['event']) ? { ...obj['event'] } : null;
+        if (raw) {
+          if (typeof raw['tick'] !== 'number' && typeof obj['tick'] === 'number') raw['tick'] = obj['tick'];
+          if (typeof raw['t'] !== 'number' && typeof obj['t'] === 'number') raw['t'] = obj['t'];
+        }
+        const ev = parseSimEvent(raw, data.header.dt);
+        if (!ev) {
+          data.errors.push(`第 ${i + 1} 行:vhf 無法解析`);
+          return;
+        }
+        data.events.push(ev);
+        break;
+      }
       case 'summary': {
         const sum = parseAssessmentSummary(obj['summary']);
         if (!sum) {
@@ -309,6 +329,8 @@ export function parseSessionJson(text: string): ReplayData {
   h.dynamics = `教官站紀錄(${obj.mode === 'simple' ? '簡化教官模式' : '教官站'},來源 ${obj.source})`;
   const si = parseSessionInfo(obj.sessionInfo);
   if (si) h.sessionInfo = si;
+  const recordings = parseRecordings((obj as { recordings?: unknown }).recordings);
+  if (recordings.length > 0) h.recordings = recordings;
   data.header = h;
   let prev: OwnShipState | undefined;
   obj.states.forEach((raw, i) => {

@@ -98,19 +98,27 @@ payload/<安裝路徑>  例如 payload/data/parameters/company-procedures.yaml
 ```
 manifest.json  manifest.sig  records/<相對 build/records 的路徑>
 ```
-收集船上 `build/records/` 第一層 `*.jsonl`(練習紀錄)與 `build/records/reports/**`(報告);未寫 footer 且 2 分鐘內仍在修改的紀錄視為練習進行中,不打包。已打包(相同路徑 + 相同雜湊)者不重複打包。
+收集船上 `build/records/` 第一層 `*.jsonl`(練習紀錄)、`build/records/reports/**`(報告)與 `build/records/media/`(教官站畫面錄影 `*.webm` 與旁檔 `*.json`,kind `media` / `media-meta`;`docs/design/screen-recording.md` 第 4 節);未寫 footer 且 2 分鐘內仍在修改的紀錄視為練習進行中,不打包;`.part` 與沒有旁檔的 `.webm` 為錄影進行中,不打包。已打包(相同路徑 + 相同雜湊)者不重複打包。單段錄影超過 `packaging.json` `mediaMaxMb`(預設 2048;`records pack --media-max-mb` 覆寫)時只放旁檔並在 `media[]` 標 `omitted: true` 與原因,錄影留在船上(`records list` 警告;旁檔在備份回報時保留,待錄影檔補打包後一併刪除)。
 
 ```json
 {
   "format": "simosa-records/1", "packageId": "rec-FSB1-20261017T040000-9f8e7d6c", "shipId": "FSB1", "deviceId": "FSB1-LT01",
   "createdUtc": "2026-10-17T04:00:00Z", "visitSeq": 3,
   "files": [{ "path": "records/20261012-013000-E01_baseline.jsonl", "sha256": "…", "size": 1234567, "kind": "record" },
-            { "path": "records/reports/E01-debrief.html", "sha256": "…", "size": 2345, "kind": "report" }],
+            { "path": "records/reports/E01-debrief.html", "sha256": "…", "size": 2345, "kind": "report" },
+            { "path": "records/media/20261012-013005-instructor-E01-9f8e7d.webm", "sha256": "…", "size": 734003200, "kind": "media" },
+            { "path": "records/media/20261012-013005-instructor-E01-9f8e7d.json", "sha256": "…", "size": 812, "kind": "media-meta" }],
   "exercises": [{ "file": "records/20261012-013000-E01_baseline.jsonl", "scenarioId": "E01_baseline", "scenarioName": "…",
                   "shipId": "FSB1", "loading": "ballast", "startUtc": "2026-10-12T01:30:00Z", "endUtc": "2026-10-12T02:30:00Z",
                   "durationS": 3600, "simDurationS": 3600, "endEstimated": true,
                   "participants": [{ "name": "王大副", "role": "OOW" }], "integrityOk": true, "hasSummary": true,
-                  "parameterSetVersion": "2026.10.1" }],
+                  "parameterSetVersion": "2026.10.1",
+                  "media": [{ "mediaId": "20261012-013005-instructor-E01-9f8e7d", "file": "records/media/20261012-013005-instructor-E01-9f8e7d.webm",
+                              "sidecar": "records/media/20261012-013005-instructor-E01-9f8e7d.json", "station": "instructor", "mime": "video/webm;codecs=vp9,opus",
+                              "startUtc": "2026-10-12T01:30:05Z", "endUtc": "2026-10-12T02:30:07Z", "durationS": 3601.2, "durationEstimated": false,
+                              "sizeBytes": 734003200, "sha256": "…", "truncated": false, "omitted": false,
+                              "record": "20261012-013000-E01_baseline.jsonl", "recordCreatedUtc": "2026-10-12T01:30:00Z", "scenarioId": "E01_baseline" }] }],
+  "media": [ "…(本包全部錄影,含未對應到任何練習者;欄位同上)" ],
   "trainingHours": { "exerciseCount": 1, "totalS": 3600, "totalHours": 1.0, "simTotalS": 3600, "estimated": true,
                      "participants": [{ "name": "王大副", "role": "OOW", "exercises": 1, "totalS": 3600, "totalHours": 1.0,
                                         "sessions": [{ "scenarioId": "E01_baseline", "startUtc": "…", "endUtc": "…", "durationS": 3600,
@@ -295,7 +303,7 @@ DPA 以備援金鑰:`simosa-pkg pack --kind trust --version <新版> --summary "
 
 - 傳輸加密:直連為實體隔離的點對點網路線,內容均已簽章;紀錄包內容(個資)若需傳輸加密,可於下一版加上以船上裝置公鑰/教官公鑰的 ECDH + AES-GCM 包裝。
 - 教官站「直連模式」的 Wi-Fi/藍牙停用檢查(第 14 章「教官筆電 Wi-Fi 開啟時直連模式拒絕同步」)由教官站在呼叫 `sync` 前執行。
-- 錄影檔(數 GB)目前與紀錄包分開;日後以相同 manifest 格式另包並以串流傳輸。
+- 錄影檔已隨紀錄包回傳(2026-11-01;`screen-recording.md`),單段上限 `mediaMaxMb`;超限者留在船上以外接碟人工搬移,尚無串流/分包傳輸。
 - 選配的船舶電子郵件途徑沿用隨身碟格式(單一簽章檔),未另行實作。
 - 永久撤銷清單:目前以「trust 包不可 rollback」防止被撤銷的金鑰回到信任清單;管理者手動 `trust add` 仍可加回(屬刻意操作,記入稽核)。
 - 練習結束的牆鐘時間待 SimCore 在 footer 寫入 `closedUtc`;在此之前以紀錄檔最後修改時間估計(`endEstimated`)。

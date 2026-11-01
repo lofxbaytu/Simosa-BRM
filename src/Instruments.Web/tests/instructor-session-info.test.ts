@@ -164,7 +164,7 @@ describe('未確認警示(不阻擋)', () => {
     const json = (app as unknown as { sessionRecordJson(): string }).sessionRecordJson();
     const record = JSON.parse(json) as { version: number; sessionInfo: SessionInfo | null };
     expect(isSessionRecord(record)).toBe(true);
-    expect(record.version).toBe(3);
+    expect(record.version).toBe(4);
     expect(record.sessionInfo!.participants).toEqual([{ name: '王大明', role: 'master' }]);
     expect(record.sessionInfo!.restHoursConfirmation!.confirmedBy).toBe('王大明');
     // 清除後紀錄不再含 sessionInfo

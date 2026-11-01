@@ -84,7 +84,8 @@ async function mountLive(): Promise<{ app: App; inner: Inner; ws: FakeWebSocket 
   const app = document.createElement('brm-app') as App;
   document.body.appendChild(app);
   await app.updateComplete;
-  const ws = FakeWebSocket.instances.at(-1)!;
+  // 狀態 WebSocket(8765);操船台另有內建 VHF 面板的 WebSocket(8767),不取
+  const ws = FakeWebSocket.instances.filter((i) => !i.url.includes(':8767')).at(-1)!;
   ws.readyState = 1;
   ws.onopen?.();
   return { app, inner: app as unknown as Inner, ws };

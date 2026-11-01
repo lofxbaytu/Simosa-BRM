@@ -1,5 +1,7 @@
 // 鳥瞰航跡圖的疊圖資料(設計文件第 6 節 W8):由情境摘要(教官站即時)或紀錄 header.scenario(重播檢視)
 // 轉成本地 ENU 的航線(航點、走廊半寬)、區域多邊形與事件標記;座標換算用情境 origin(無 origin 時只有 x/y 點可畫)。
+// 第二十一輪(docs/design/instructor-plot.md):加流場網格層(環境 current.field 解析後的 CurrentFieldSpec;箭頭由 track-plot 取樣繪製)
+// 與示意幾何層(data/areas/*.json 的海岸線/防波堤/淺灘/錨地/速限區/岸壁;情境編輯器內嵌圖無 ENC 時的底圖)。
 
 import type { SimEvent } from '../types/event.js';
 import type { OwnShipState } from '../types/state.js';
@@ -8,6 +10,8 @@ import type { ScenarioSummary } from './scenario.js';
 import { eventSeverity, type EventSeverity } from './sim-event.js';
 import { stateIndexAt } from './record-replay.js';
 import { berthGeometry, parseScenarioTugs, resolveScenarioBerth, type BerthGeometry, type ScenarioMooringLineDef, type ScenarioTugDef } from './external-forces.js';
+import { currentFieldOfScenario, type CurrentFieldSpec } from './current-field-plot.js';
+import { latLonToEnu } from './timeline.js';
 
 export interface OverlayWaypoint {
   name: string;
@@ -50,11 +54,80 @@ export interface PlotOverlay {
   mooringLines?: ScenarioMooringLineDef[];
   /** 拖船定義(連接點;畫拖纜/推頂點用) */
   tugDefs?: ScenarioTugDef[];
+  /** 空間流場網格(情境 environment.current.field;track-plot 的流場層取樣畫箭頭;無/不合法則省略) */
+  currentField?: CurrentFieldSpec | null;
+  /** 示意幾何(data/areas 的海岸線等;情境編輯器內嵌圖底圖;即時/重播不帶) */
+  sketch?: OverlaySketch | null;
 }
 
-/** 疊圖是否有任何可畫的內容(航線、區域、事件、泊位)。 */
+/** 示意幾何形狀種類(對應 data/areas/*.json 的陣列鍵)。 */
+export type SketchKind = 'land' | 'breakwater' | 'shoal' | 'anchorage' | 'speedLimit' | 'bank';
+
+export interface OverlaySketchShape {
+  kind: SketchKind;
+  name: string;
+  /** 多邊形(land/breakwater/shoal/anchorage/speedLimit)或折線(bank)的 ENU 點 */
+  points: Array<{ x: number; y: number }>;
+}
+
+export interface OverlaySketch {
+  shapes: OverlaySketchShape[];
+  /** 使用到的區域檔名(顯示來源) */
+  files: string[];
+}
+
+/** 疊圖是否有任何可畫的內容(航線、區域、事件、泊位、拖船、流場網格、示意幾何)。 */
 export function overlayHasContent(o: PlotOverlay): boolean {
-  return o.route !== null || o.zones.length > 0 || o.events.length > 0 || !!o.berth || (o.tugDefs?.length ?? 0) > 0;
+  return o.route !== null || o.zones.length > 0 || o.events.length > 0 || !!o.berth || (o.tugDefs?.length ?? 0) > 0 || !!o.currentField || (o.sketch?.shapes.length ?? 0) > 0;
+}
+
+const SKETCH_KEYS: ReadonlyArray<readonly [key: string, kind: SketchKind, member: 'polygon' | 'line' | 'points']> = [
+  ['land', 'land', 'points'],
+  ['breakwaters', 'breakwater', 'polygon'],
+  ['shoals', 'shoal', 'polygon'],
+  ['anchorages', 'anchorage', 'polygon'],
+  ['speedLimitZones', 'speedLimit', 'polygon'],
+  ['banks', 'bank', 'line'],
+] as const;
+
+function sketchPoints(raw: unknown, member: 'polygon' | 'line' | 'points', origin: { lat: number; lon: number }): Array<{ x: number; y: number }> {
+  if (!isRecord(raw) || !Array.isArray(raw[member])) return [];
+  const out: Array<{ x: number; y: number }> = [];
+  for (const p of raw[member] as unknown[]) {
+    if (Array.isArray(p) && typeof p[0] === 'number' && typeof p[1] === 'number') out.push(latLonToEnu(origin, p[0], p[1]));
+    else if (isRecord(p)) {
+      if (typeof p['x'] === 'number' && typeof p['y'] === 'number') out.push({ x: p['x'], y: p['y'] });
+      else if (typeof p['lat'] === 'number' && typeof p['lon'] === 'number') out.push(latLonToEnu(origin, p['lat'], p['lon']));
+    }
+  }
+  return out;
+}
+
+/**
+ * 由建置時匯入的區域檔(鍵 = 路徑、值 = JSON)收集 origin 周圍 radius_m 內的示意幾何(任一頂點在範圍內即收錄;
+ * land 的 points 為 [lat, lon] 對,其餘為 {lat, lon} 或 {x, y} 物件)。無 origin 或沒有形狀時回傳 null。
+ */
+export function sketchFromAreas(areaFiles: Readonly<Record<string, unknown>>, origin: { lat: number; lon: number } | null, radius_m = 30_000): OverlaySketch | null {
+  if (!origin) return null;
+  const shapes: OverlaySketchShape[] = [];
+  const files: string[] = [];
+  for (const key of Object.keys(areaFiles).sort()) {
+    const doc = areaFiles[key];
+    if (!isRecord(doc)) continue;
+    let used = false;
+    for (const [arrayKey, kind, member] of SKETCH_KEYS) {
+      const list = doc[arrayKey];
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        const points = sketchPoints(item, member, origin);
+        if (points.length < 2 || !points.some((p) => Math.hypot(p.x, p.y) <= radius_m)) continue;
+        shapes.push({ kind, name: isRecord(item) ? String(item['name'] ?? item['id'] ?? '') : '', points });
+        used = true;
+      }
+    }
+    if (used) files.push(key.replace(/\\/g, '/').split('/').pop() ?? key);
+  }
+  return shapes.length > 0 ? { shapes, files } : null;
 }
 
 function withExternal(base: PlotOverlay, berthRaw: unknown, tugsRaw: unknown, origin: { lat: number; lon: number } | null, resolved?: { definition: Record<string, unknown> | null; lines: ScenarioMooringLineDef[] } | null, tugDefs?: ScenarioTugDef[]): PlotOverlay {
@@ -103,19 +176,24 @@ export function overlayZones(zones: readonly ScenarioZone[], origin: { lat: numb
   return out;
 }
 
-/** 由教官站的情境摘要建立疊圖(即時模式)。 */
+/** 由教官站的情境摘要建立疊圖(即時模式);流場網格取摘要 currentField。 */
 export function overlayFromScenario(s: ScenarioSummary | null): PlotOverlay {
   if (!s) return { route: null, zones: [], events: [] };
   const origin = s.origin ?? null;
-  return withExternal({ route: overlayRoute(s.route, origin), zones: overlayZones(s.zones, origin), events: [] }, undefined, undefined, origin, s.berth ?? null, s.tugs ?? []);
+  const base = withExternal({ route: overlayRoute(s.route, origin), zones: overlayZones(s.zones, origin), events: [] }, undefined, undefined, origin, s.berth ?? null, s.tugs ?? []);
+  if (s.currentField) base.currentField = s.currentField;
+  return base;
 }
 
-/** 由紀錄 header.scenario(解析後的完整情境物件)建立疊圖(重播檢視)。 */
+/** 由紀錄 header.scenario(解析後的完整情境物件)建立疊圖(重播檢視);流場網格由 environment.current.field 解析。 */
 export function overlayFromHeaderScenario(raw: unknown): PlotOverlay {
   if (!isRecord(raw)) return { route: null, zones: [], events: [] };
   const origin = originOf(raw);
   // 紀錄 header 的情境在載入時已內嵌 berth.definition(重播不讀檔)
-  return withExternal({ route: overlayRoute(parseRoute(raw['route']), origin), zones: overlayZones(parseZones(raw['zones']), origin), events: [] }, raw['berth'], raw['tugs'], origin);
+  const base = withExternal({ route: overlayRoute(parseRoute(raw['route']), origin), zones: overlayZones(parseZones(raw['zones']), origin), events: [] }, raw['berth'], raw['tugs'], origin);
+  const field = currentFieldOfScenario(raw);
+  if (field) base.currentField = field;
+  return base;
 }
 
 /** 事件標記:以事件時刻的自船位置(狀態序列內插前一筆)為座標;只標 warning/alarm 與時間表觸發。 */

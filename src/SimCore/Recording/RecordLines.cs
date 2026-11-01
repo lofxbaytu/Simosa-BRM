@@ -22,6 +22,11 @@ public static class RecordKinds
     public const string Summary = "summary";
     /// <summary>參與者與休息時間確認(紀錄已開啟後收到 sessionInfo 指令時追加;不進狀態雜湊鏈;RecordSession)</summary>
     public const string Session = "session";
+    /// <summary>
+    /// 內建 VHF 角色扮演頻道的通話/文字/DSC(主控程序 VhfRelayServer 轉送時追加;docs/design/vhf-roleplay.md 第 4 節):
+    /// 帶外行 — 不進狀態雜湊鏈、不在 event 行的事件序列內(重播不比對、不重現),只計入 footer 的檔案 SHA-256;講評站以 event 內容列進時間軸(RecordVhf)
+    /// </summary>
+    public const string Vhf = "vhf";
     public const string Footer = "footer";
 }
 
@@ -101,6 +106,18 @@ public sealed record RecordEvent
 {
     [JsonPropertyName("kind")] public string Kind { get; init; } = RecordKinds.Event;
     [JsonPropertyName("tick")] public required long Tick { get; init; }
+    [JsonPropertyName("event")] public required SimEvent Event { get; init; }
+}
+
+/// <summary>
+/// VHF 角色扮演行(<see cref="RecordKinds.Vhf"/>):<c>event</c> 為 SimEvent 形狀(kind vhfCall | vhfText | vhfDsc、source "vhf"、seq −1、
+/// itemId = 頻道、data {id, station, channel, duration_s?, text?, category?, utc});tick/t 為轉送當下的引擎時刻。與 session 行同為帶外行。
+/// </summary>
+public sealed record RecordVhf
+{
+    [JsonPropertyName("kind")] public string Kind { get; init; } = RecordKinds.Vhf;
+    [JsonPropertyName("tick")] public required long Tick { get; init; }
+    [JsonPropertyName("t")] public required double T { get; init; }
     [JsonPropertyName("event")] public required SimEvent Event { get; init; }
 }
 

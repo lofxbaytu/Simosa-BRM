@@ -57,6 +57,10 @@ export class EventStream extends LitElement {
       .item.engine {
         border-left-color: var(--ob-border-strong);
       }
+      .item.vhf {
+        border-left-color: var(--ob-ok);
+        border-left-style: double;
+      }
       .item.warning .text {
         color: var(--ob-warning);
       }

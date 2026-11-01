@@ -53,7 +53,7 @@ public sealed class CliApp
           status [--root <安裝目錄>] [--json]
           device init --ship <船舶ID> [--device-id <ID>] [--root] [--overwrite] [--pem]
           device show [--root]
-          records pack|list [--root]
+          records pack|list [--root] [--media-max-mb <MB>]   (pack:錄影 media/*.webm 超過上限者只放旁檔並標 omitted;預設 packaging.json mediaMaxMb=2048)
           records accept-report <檔.sbbak> [--root]
         教官筆電紀錄庫
           store import <檔.sbrec> [--store <目錄>] [--enroll-device]
@@ -368,8 +368,21 @@ public sealed class CliApp
         var (mb, sig) = UpdatePackageReader.ReadSigned(zip);
         _out.WriteLine($"簽章:自稱「{sig.Signer}」(金鑰 {KeyFiles.Short(sig.KeyId)},{sig.SignedUtc:O};未比對信任清單,套用前請用 verify)");
         _out.WriteLine(System.Text.Encoding.UTF8.GetString(mb));
+        if (path.EndsWith(".sbrec", StringComparison.OrdinalIgnoreCase))
+        {
+            // 紀錄包:練習與錄影摘要(docs/design/screen-recording.md 第 4 節)
+            var m = PackageJson.FromBytes<RecordPackageManifest>(mb, "manifest.json");
+            _out.WriteLine($"練習 {m.Exercises.Count} 個、錄影 {m.Media.Count} 段(包內 {m.Media.Count(x => !x.Omitted)}、只有旁檔 {m.Media.Count(x => x.Omitted)})");
+            foreach (var e in m.Exercises)
+                _out.WriteLine($"  練習 {e.ScenarioId}  {e.StartUtc:yyyy-MM-dd HH:mm}Z  {FormatDuration(e.DurationS)}  錄影 {e.Media.Count} 段");
+            foreach (var x in m.Media)
+                _out.WriteLine($"  錄影 {x.File}  {x.StartUtc:yyyy-MM-dd HH:mm:ss}Z  {FormatDuration(x.DurationS)}{(x.DurationEstimated ? "(估計)" : "")}  {x.SizeBytes / (1024.0 * 1024):F1} MB  站別 {x.Station ?? "—"}  紀錄 {x.Record ?? "—"}{(x.Truncated ? "  已截斷(上傳超過上限)" : "")}{(x.Omitted ? $"  未納入:{x.OmitReason}" : "")}{(x.Error is null ? "" : $"  旁檔錯誤:{x.Error}")}");
+        }
         return 0;
     }
+
+    private static string FormatDuration(double? s)
+        => s is { } d ? (d >= 3600 ? $"{(int)(d / 3600)} h {(int)(d % 3600 / 60):D2} min" : $"{(int)(d / 60)} min {(int)(d % 60):D2} s") : "—";
 
     private int Verify(CliArgs a)
     {
@@ -459,13 +472,17 @@ public sealed class CliApp
     private int RecordsCmd(CliArgs a)
     {
         var sub = a.Pos(0, "子指令(pack|list|accept-report)");
-        var mgr = new ShipRecordManager(Layout(a));
+        var mgr = a.Get("media-max-mb") is { } mm
+            ? new ShipRecordManager(Layout(a)) { MediaMaxBytes = (long.TryParse(mm, out var mmv) && mmv >= 0 ? mmv : throw new CliUsageException("--media-max-mb 須為非負整數(MB)")) * 1024L * 1024L }
+            : new ShipRecordManager(Layout(a));
         switch (sub)
         {
             case "pack":
             {
                 var p = mgr.PackPending();
-                _out.WriteLine(p is null ? "沒有新的紀錄需要打包" : $"已打包 {p.PackageId}:{p.Files.Count} 個檔案、{p.Exercises} 個練習、{p.TrainingS / 3600:F2} 小時");
+                var mediaCount = p?.Files.Count(f => f.Kind == "media") ?? 0;
+                _out.WriteLine(p is null ? "沒有新的紀錄需要打包" : $"已打包 {p.PackageId}:{p.Files.Count} 個檔案、{p.Exercises} 個練習、{p.TrainingS / 3600:F2} 小時{(mediaCount > 0 ? $"、錄影 {mediaCount} 段" : "")}");
+                foreach (var w in mgr.RetentionWarnings().Where(w => w.Contains("錄影"))) _err.WriteLine($"警告:{w}");
                 return 0;
             }
             case "list":

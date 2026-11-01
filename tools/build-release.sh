@@ -8,14 +8,16 @@
 #   4) 網頁 → app/web、啟動腳本 → app/launch、data/(排除 ships/*/confidential/)、contracts/、docs/、config/ 範例;
 #   5) Godot 視景:有 Godot 與匯出範本時 --export-release → app/visual/,否則略過並記入清單註記;
 #   6) 以 simosa-pkg pack 把 app/ 包成簽章更新包 packages/simosa-<版本>-software.sbupd(開發用 PEM 金鑰 build/release/dev-keys/,僅供測試);
-#   7) 發行清單 manifest.json(版本、git 版次、每檔 SHA-256、元件版本)→ release verify、更新包 verify(暫時船上根目錄)。
+#   7) 發行清單 manifest.json(版本、git 版次、每檔 SHA-256、元件版本)→ release verify、更新包 verify(暫時船上根目錄);
+#   8) --installer:Windows 安裝程式腳本(tools/installer/SimosaBRM.iss,Inno Setup 6.3+)— Linux 無 ISCC,只做靜態檢查並把腳本、說明與編譯指令
+#      複製到 build/release/installer/(Windows 的 build-release.ps1 -Installer 會實際編譯;docs/ops/安裝與啟動.md 第 2.8 節)。
 # 用法:tools/build-release.sh [--version <1–4 段數字>] [--git <版次>] [--branch <分支>] [--rid linux-x64|win-x64] [--out build/release]
-#       [--skip-web] [--skip-godot] [--godot <Godot 執行檔>] [--no-package] [--zip]
+#       [--skip-web] [--skip-godot] [--godot <Godot 執行檔>] [--no-package] [--zip] [--installer]
 # 所有輸出留在專案內(build/release/、.cache/);不執行任何 git 指令(版次由 --git 或直接讀 .git/HEAD)。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-VERSION=""; GIT_REV=""; GIT_BRANCH=""; RID="linux-x64"; OUT_BASE="build/release"; SKIP_WEB=0; SKIP_GODOT=0; GODOT="${GODOT:-${SIMOSA_GODOT:-}}"; PACKAGE=1; ZIP=0
+VERSION=""; GIT_REV=""; GIT_BRANCH=""; RID="linux-x64"; OUT_BASE="build/release"; SKIP_WEB=0; SKIP_GODOT=0; GODOT="${GODOT:-${SIMOSA_GODOT:-}}"; PACKAGE=1; ZIP=0; INSTALLER=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
@@ -28,7 +30,8 @@ while [[ $# -gt 0 ]]; do
     --godot) GODOT="$2"; shift 2 ;;
     --no-package) PACKAGE=0; shift ;;
     --zip) ZIP=1; shift ;;
-    -h|--help) sed -n 2,12p "${BASH_SOURCE[0]}"; exit 0 ;;
+    --installer) INSTALLER=1; shift ;;
+    -h|--help) sed -n 2,14p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
@@ -126,6 +129,9 @@ cp src/SimCore/README.md "$OUT/docs/components/模擬核心-SimCore.md"
 cp src/Contracts/README.md "$OUT/docs/components/契約-Contracts.md"
 COMPONENTS+=("docs=$VERSION=docs")
 mkdir -p "$OUT/config" && cp config/*.json config/README.md "$OUT/config/"
+# Windows 安裝程式腳本隨發行版(tools/installer/;在有 Inno Setup 的 Windows 機器可直接編譯本發行版)
+mkdir -p "$OUT/tools/installer" && cp tools/installer/SimosaBRM.iss tools/installer/README.md "$OUT/tools/installer/"
+COMPONENTS+=("installer-script=$VERSION=tools/installer=Inno Setup 腳本 SimosaBRM.iss(Windows 以 build-release.ps1 -Installer 編譯;tools/installer/README.md)")
 note "Python 校正工具(src/Tools.Calibration)不隨發行版散布;係數檔 data/ships/*/coefficients.*.json 已由該工具產生並隨 data/ 發布,說明見 docs/components/校正工具-Tools.Calibration.md"
 cat > "$OUT/README.txt" <<TXT
 Simosa BRM 發行版 $VERSION($RID,framework-dependent:需 .NET 8 執行階段)git ${GIT_REV:-?} ${GIT_BRANCH:-}
@@ -134,6 +140,7 @@ app/web          網頁:index.html 儀器、instructor.html 教官站(?mode=simp
 app/web-server   simosa-web 靜態網頁伺服                                  app/launch       start-ship-laptop / start-instructor-laptop / stop-all
 app/visual       Godot 視景匯出檔(有匯出範本時)                           tools/updater    simosa-pkg(更新包、紀錄包、直連同步;放在 app/ 之外)
 app/shell        WebView2 操船台外殼 SimosaBRM.Shell.exe(win-x64 發行版;start-ship-laptop.ps1 -Shell)   tools/webview2   WebView2 Runtime 離線安裝檔放置處(README.txt)
+tools/installer  Windows 安裝程式腳本 SimosaBRM.iss(Inno Setup 6.3+;Windows 的 build-release.ps1 -Installer 編譯;README.md)
 data/            船模、情境、區域、參數集、視景對照(不含 ships/*/confidential)   contracts/       JSON Schema   config/  設定範例(無金鑰)
 docs/            規劃書、設計文件、ops/安裝與啟動.md、驗收/需求追溯表.md     packages/        簽章更新包(開發金鑰簽章,僅供測試)
 manifest.json    發行清單(每檔 SHA-256):安裝前 simosa-pkg release verify --dir <本目錄>
@@ -202,6 +209,19 @@ if [[ $ZIP == 1 ]]; then
   ZIPF="$ROOT/$OUT_BASE/simosa-brm-$VERSION-$RID.zip"
   (cd "$ROOT/$OUT_BASE" && python3 -I -c "import shutil,sys; shutil.make_archive(sys.argv[1][:-4], 'zip', '.', sys.argv[2])" "$ZIPF" "$VERSION")
   echo "  壓縮檔 $ZIPF($(du -h "$ZIPF" | cut -f1))"
+fi
+# 8) --installer:Linux 沒有 ISCC,只做靜態檢查並複製腳本、說明與編譯指令到 build/release/installer/(在 $OUT 之外,不進清單)
+if [[ $INSTALLER == 1 ]]; then
+  step "8/8 Windows 安裝程式腳本(tools/installer/SimosaBRM.iss;本機無 Inno Setup,只複製)"
+  INST="$ROOT/$OUT_BASE/installer"; mkdir -p "$INST"
+  if command -v python3 >/dev/null; then python3 -I tools/installer/check-iss.py tools/installer/SimosaBRM.iss | sed 's/^/  /'; fi
+  cp tools/installer/SimosaBRM.iss tools/installer/README.md "$INST/"
+  cat > "$INST/BUILD-$VERSION.txt" <<TXT
+Simosa BRM $VERSION 的 Windows 安裝程式尚未編譯:本機($(uname -s))沒有 Inno Setup。在有 Inno Setup 6.3+ 的 Windows 機器(不需網際網路)執行:
+  ISCC.exe /DAppVersion=$VERSION /DSourceDir="<本發行版目錄 $VERSION>" /DOutputDir="<輸出目錄>" "<本發行版目錄>\tools\installer\SimosaBRM.iss"
+→ SimosaBRM-Setup-$VERSION.exe;本發行版為 $RID,安裝程式應以 win-x64 發行版(build-release.ps1 或 --rid win-x64)為來源。說明:README.md、docs/ops/安裝與啟動.md 第 2.8 節。
+TXT
+  echo "  腳本與說明已複製到 $INST(BUILD-$VERSION.txt)"
 fi
 echo
 echo "完成:$OUT($(du -sh "$OUT" | cut -f1));安裝步驟見 docs/ops/安裝與啟動.md"

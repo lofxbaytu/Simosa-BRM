@@ -4,6 +4,8 @@
 // 即時以 parseScenario 與編輯器檢查顯示問題清單 → 「下載 YAML」或「載入核心」(scenario-editor-load 事件;教官站以 loadScenario args.scenario
 // 內嵌送核心,沿用 loadScenarioSummary 的樂觀切換與 scenarioLoadRejected 還原)。草稿每次修改存 localStorage(船上離線;重新整理後還原)。
 // 草稿模型與輸出見 lib/scenario-editor.ts;擴充區段的表單在 scenario-editor-sections.ts;未被表單涵蓋的欄位原樣保留。
+// 第二十一輪:「海圖點選編輯」面板(scenario-editor-plot.ts;中欄最上方,由航線/區域/船與初始/目標船的「在圖上編輯」鈕開啟):
+// 內嵌 <brm-track-plot editable> 以示意幾何為底圖點選新增/拖曳/右鍵刪除/方向鍵微調航點、頂點、自船與目標船初始位置,與表格雙向同步。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -74,8 +76,11 @@ import {
   renderTimelineItemEditor,
   renderZonesSection,
   textOf,
+  plotEditButton,
   type EditorHost,
 } from './scenario-editor-sections.js';
+import { renderPlotEditor } from './scenario-editor-plot.js';
+import type { PlotEditTarget } from '../../lib/scenario-editor-plot.js';
 
 /** 「載入核心」事件內容(與靠離泊預演結果相同的用法:summary 供樂觀切換,scenario 為 loadScenario args.scenario)。 */
 export interface ScenarioEditorResult {
@@ -320,6 +325,28 @@ export class ScenarioEditor extends LitElement {
         gap: 4px;
         align-items: center;
       }
+      .plot-editor .plot {
+        display: block;
+        height: 340px;
+        min-height: 240px;
+        resize: vertical;
+        overflow: hidden;
+      }
+      .plot-editor .panel-title select {
+        max-width: 220px;
+      }
+      .field-gen {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .field-gen .pair input {
+        width: 64px;
+        flex: 0 0 auto;
+      }
+      .field-gen .pair span {
+        white-space: nowrap;
+      }
     `,
   ];
 
@@ -345,6 +372,10 @@ export class ScenarioEditor extends LitElement {
   @state() private hardFailForm: HardFailForm = { rule: 'cpa', value: '0.3' };
   /** 展開中的子編輯器(時間表項目 item:<index>、區域頂點 zone:<index>) */
   @state() private open: ReadonlySet<string> = new Set();
+  /** 海圖點選編輯的對象(null = 面板關閉) */
+  @state() private plotTarget: PlotEditTarget | null = null;
+  /** 圖上選取中的把手鍵 */
+  @state() private plotSelected: string | null = null;
 
   private readonly faults = faultOptions();
 
@@ -361,7 +392,23 @@ export class ScenarioEditor extends LitElement {
       fail: (message) => (el.error = message),
       isOpen: (key) => el.open.has(key),
       toggle: (key) => el.toggleOpen(key),
+      get plotTarget() {
+        return el.plotTarget;
+      },
+      setPlotTarget: (t) => {
+        el.plotTarget = t;
+        el.plotSelected = null;
+      },
+      get plotSelected() {
+        return el.plotSelected;
+      },
+      setPlotSelected: (key) => (el.plotSelected = key),
     };
+  }
+
+  /** 海圖點選編輯的對象(測試用) */
+  get plotEditTarget(): PlotEditTarget | null {
+    return this.plotTarget;
   }
 
   private toggleOpen(key: string): void {
@@ -577,6 +624,7 @@ export class ScenarioEditor extends LitElement {
           ${renderSensorsSection(this.host)}
         </div>
         <div class="col">
+          ${renderPlotEditor(this.host)}
           ${this.renderTargets()}
           ${this.renderTimeline()}
           ${renderRouteSection(this.host)}
@@ -666,7 +714,7 @@ export class ScenarioEditor extends LitElement {
           ${LOADINGS.map((l) => html`<option value=${l}>${loadingLabel(l)}</option>`)}
         </select>
         <label>初始位置</label>
-        <div class="full-span pair">${renderPosition(() => this.draft.initial.position, 'own', (p) => this.patchInitial({ position: p }))}</div>
+        <div class="full-span pair">${renderPosition(() => this.draft.initial.position, 'own', (p) => this.patchInitial({ position: p }))}${plotEditButton(this.host, 'own-plot', { kind: 'own' }, '圖上')}</div>
         <label>航向 (°)</label>
         <input class="heading" type="number" step="1" min="0" max="360" .value=${numberOrRefText(i.heading)} @change=${(e: Event) => this.patchInitial({ heading: this.num(e) })} />
         <label>速度 (kn)</label>
@@ -736,7 +784,7 @@ export class ScenarioEditor extends LitElement {
         ${TARGET_SHIP_TYPES.map((s) => html`<option value=${s}>${s}</option>`)}
       </select>
       <label>位置</label>
-      <div class="pair" style="grid-column: 2 / 5">${renderPosition(() => this.draft.targets[i]?.position ?? {}, 't-pos', (p) => patch({ position: p }))}</div>
+      <div class="pair" style="grid-column: 2 / 5">${renderPosition(() => this.draft.targets[i]?.position ?? {}, 't-pos', (p) => patch({ position: p }))}${plotEditButton(this.host, 't-plot', { kind: 'target', index: i }, '圖上')}</div>
       <label>長/寬 (m)</label>
       <div class="pair">
         <input class="t-loa" type="number" step="1" .value=${numberOrRefText(t.loa)} @change=${(e: Event) => patch({ loa: this.num(e) })} />

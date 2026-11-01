@@ -19,6 +19,8 @@ public sealed class RecordFile
     public RecordSummary? Summary => Summaries.Count > 0 ? Summaries[^1] : null;
     /// <summary>所有 session 行(紀錄開啟後收到的 sessionInfo;舊檔無則空)</summary>
     public IReadOnlyList<RecordSession> Sessions { get; init; } = Array.Empty<RecordSession>();
+    /// <summary>VHF 角色扮演的通話/文字/DSC 行(帶外;舊檔無則空;講評用)</summary>
+    public IReadOnlyList<RecordVhf> Vhf { get; init; } = Array.Empty<RecordVhf>();
     /// <summary>參與者與休息時間確認:header 有就用 header,否則取最後一行 session;都沒有為 null</summary>
     public RecordSessionInfo? SessionInfo => Header.SessionInfo ?? (Sessions.Count > 0 ? Sessions[^1].ToInfo() : null);
     /// <summary>參與者資訊來源:header | session | null</summary>
@@ -43,6 +45,7 @@ public static class RecordReader
         var events = new List<RecordEvent>();
         var summaries = new List<RecordSummary>();
         var sessions = new List<RecordSession>();
+        var vhf = new List<RecordVhf>();
         long stateLines = 0;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
@@ -65,6 +68,7 @@ public static class RecordReader
                 case RecordKinds.Event: events.Add(ContractJson.Deserialize<RecordEvent>(line)!); break;
                 case RecordKinds.Summary: summaries.Add(ContractJson.Deserialize<RecordSummary>(line)!); break;
                 case RecordKinds.Session: sessions.Add(ContractJson.Deserialize<RecordSession>(line)!); break;
+                case RecordKinds.Vhf: vhf.Add(ContractJson.Deserialize<RecordVhf>(line)!); break;
                 case RecordKinds.State: stateLines++; break;
                 default: break; // 未知行型別:保留在雜湊內但忽略
             }
@@ -79,6 +83,7 @@ public static class RecordReader
             Events = events,
             Summaries = summaries,
             Sessions = sessions,
+            Vhf = vhf,
             StateLines = stateLines,
             Footer = footer,
             ComputedSha256 = Convert.ToHexString(hash.GetCurrentHash()),

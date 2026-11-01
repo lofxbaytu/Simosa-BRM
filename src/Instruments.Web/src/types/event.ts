@@ -2,10 +2,10 @@
 // {"type":"event","event":{…}} 推送框)。舊的 TrafficEvent 欄位(kind/tick/t/targetId/message/range_nm/cpa_nm/tcpa_min)
 // 不變,新欄位(source/itemId/phase/visible/seq/data)皆選填。
 
-/** 事件來源:traffic(目標船)| timeline(時間表)| assessment(評估)| instructor(教官指令)| engine(引擎)。 */
-export type SimEventSource = 'traffic' | 'timeline' | 'assessment' | 'instructor' | 'engine';
+/** 事件來源:traffic(目標船)| timeline(時間表)| assessment(評估)| instructor(教官指令)| engine(引擎)| vhf(內建 VHF 角色扮演頻道;紀錄 vhf 行、帶外)。 */
+export type SimEventSource = 'traffic' | 'timeline' | 'assessment' | 'instructor' | 'engine' | 'vhf';
 
-export const SIM_EVENT_SOURCES: readonly SimEventSource[] = ['traffic', 'timeline', 'assessment', 'instructor', 'engine'] as const;
+export const SIM_EVENT_SOURCES: readonly SimEventSource[] = ['traffic', 'timeline', 'assessment', 'instructor', 'engine', 'vhf'] as const;
 
 /** 既有交通事件 kind(src/SimCore/Traffic/TrafficEvent.cs)。 */
 export type TrafficEventKind = 'collision' | 'cpaAlarm' | 'cpaClear' | 'targetActivated' | 'waypointReached' | 'scriptStep' | 'colreg' | 'soundSignal' | 'targetControl';
@@ -93,7 +93,11 @@ export type ExternalForceEventKind =
   | 'mooringCommand'
   | 'mooringLineParted';
 
-export type SimEventKind = TrafficEventKind | TimelineEventKind | AssessmentEventKind | InstructorEventKind | AlertEventKind | ExternalForceEventKind;
+/** 內建 VHF 角色扮演頻道(docs/design/vhf-roleplay.md 第 4 節;紀錄 vhf 行 + WebSocket 事件框,source "vhf"、seq −1、不進雜湊):
+ *  vhfCall(通話結束;data {id, station, channel, duration_s, endReason: pttEnd|disconnected|timeout|channelChanged})、vhfText(文字;data {station, channel, text})、vhfDsc(DSC 簡化;data {station, category, text?})。 */
+export type VhfEventKind = 'vhfCall' | 'vhfText' | 'vhfDsc';
+
+export type SimEventKind = TrafficEventKind | TimelineEventKind | AssessmentEventKind | InstructorEventKind | AlertEventKind | ExternalForceEventKind | VhfEventKind;
 
 export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'collision',
@@ -176,6 +180,9 @@ export const SIM_EVENT_KINDS: readonly SimEventKind[] = [
   'quayContact',
   'mooringCommand',
   'mooringLineParted',
+  'vhfCall',
+  'vhfText',
+  'vhfDsc',
 ] as const;
 
 export interface SimEvent {

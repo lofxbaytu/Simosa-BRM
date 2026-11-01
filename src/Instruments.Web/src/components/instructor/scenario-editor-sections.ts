@@ -1,5 +1,7 @@
 // 情境編輯器的擴充區段(規劃書第 9.1 節;R4;設計文件 docs/design/scenario-engine.md 第 6.1 節):航線、區域、時間表項目逐項編輯、
 // 簡報角色/附件、感測器/警報/BNWAS、評估必要事件與設定、拖船/錨/泊位/岸壁、環境進階(潮汐 / 浪 / 流場模型(表、潮流、空間網格)/ 船間交互作用 / 橫搖)。
+// 第二十一輪:航線/區域的「在圖上編輯」鈕開啟海圖點選編輯面板(scenario-editor-plot.ts;EditorHost.plotTarget),
+// 空間網格加「由均勻流產生網格」「由兩端流速線性內插」產生器與「網格預覽」。
 // 以純函式渲染,透過 EditorHost 讀寫 <brm-scenario-editor> 的草稿,樣式沿用主元件(模板渲染在同一個 shadow root)。
 // 草稿模型與各區段的修改函式見 lib/scenario-editor.ts(原樣物件 + 點路徑修改,未改的鍵不動)。
 
@@ -49,6 +51,8 @@ import {
   rollPeriodEstimate,
   setCurrentFieldArray,
   setCurrentFieldEnabled,
+  setCurrentFieldFromUniform,
+  setCurrentFieldLinear,
   setCurrentTableTimeKey,
   setCurrentTimeModel,
   setRollEnabled,
@@ -153,8 +157,10 @@ import {
   type UkcLimitKind,
 } from '../../lib/scenario-editor.js';
 import { ZONE_TYPES } from '../../lib/timeline.js';
+import type { PlotEditTarget } from '../../lib/scenario-editor-plot.js';
+import type { FieldAxis } from '../../lib/current-field-plot.js';
 
-/** 主元件提供給各區段的介面:讀最新草稿、寫回(觸發驗證與儲存)、表單錯誤、展開狀態。 */
+/** 主元件提供給各區段的介面:讀最新草稿、寫回(觸發驗證與儲存)、表單錯誤、展開狀態、海圖點選編輯的對象與選取把手。 */
 export interface EditorHost {
   readonly draft: ScenarioDraft;
   setDraft(d: ScenarioDraft): void;
@@ -162,6 +168,18 @@ export interface EditorHost {
   fail(message: string): void;
   isOpen(key: string): boolean;
   toggle(key: string): void;
+  /** 海圖點選編輯的對象(null = 面板關閉) */
+  readonly plotTarget: PlotEditTarget | null;
+  setPlotTarget(target: PlotEditTarget | null): void;
+  /** 圖上選取中的把手鍵 */
+  readonly plotSelected: string | null;
+  setPlotSelected(key: string | null): void;
+}
+
+/** 「在圖上編輯」鈕(航線/區域/船與初始/目標船共用;對象相同時顯示為作用中)。 */
+export function plotEditButton(h: EditorHost, cls: string, target: PlotEditTarget, label = '在圖上編輯'): TemplateResult {
+  const active = h.plotTarget !== null && JSON.stringify(h.plotTarget) === JSON.stringify(target);
+  return html`<button class="small ${cls} ${active ? 'active' : ''}" title="在內嵌航跡圖上點擊新增、拖曳移動、右鍵刪除、方向鍵微調" @click=${() => h.setPlotTarget(target)}>${label}</button>`;
 }
 
 export function textOf(ev: Event): string {
@@ -263,7 +281,10 @@ export function renderRouteSection(h: EditorHost): TemplateResult {
   return html`<div class="panel route">
     <div class="panel-title">
       <span>航線 ROUTE</span>
-      <label class="pair"><input class="route-enabled" type="checkbox" .checked=${route !== null} @change=${(e: Event) => h.setDraft(setRouteEnabled(h.draft, checked(e)))} /><span>${route ? `${wps.length} 航點` : '無航線'}</span></label>
+      <span class="pair">
+        <label class="pair"><input class="route-enabled" type="checkbox" .checked=${route !== null} @change=${(e: Event) => h.setDraft(setRouteEnabled(h.draft, checked(e)))} /><span>${route ? `${wps.length} 航點` : '無航線'}</span></label>
+        ${route ? plotEditButton(h, 'route-plot', { kind: 'route' }) : nothing}
+      </span>
     </div>
     ${route
       ? html`<div class="form">
@@ -344,6 +365,7 @@ function renderZone(h: EditorHost, z: RawSection, i: number): TemplateResult {
       <span class="hint">多邊形 ${poly.length} 點${kept.length > 0 ? ` · 保留:${kept.join('、')}` : ''}</span>
       <span class="pair">
         <button class="small z-vertices" @click=${() => h.toggle(`zone:${i}`)}>${open ? '收合頂點' : '編輯頂點'}</button>
+        ${plotEditButton(h, 'z-plot', { kind: 'zone', index: i })}
         <button class="small danger z-remove" @click=${() => h.setDraft(removeZone(h.draft, i))}>刪除</button>
       </span>
     </div>
@@ -979,6 +1001,55 @@ function renderField(h: EditorHost, field: RawSection): TemplateResult {
       <label class="full">北向分量 v_kn(排列同 u_kn)</label>
       <textarea class="full fg-v" rows="4" .value=${fieldArrayText(field['v_kn'])} @change=${(e: Event) => setArray('v_kn', textOf(e))}></textarea>
       <div class="full hint field-issues ${issues.length > 0 ? 'bad' : 'ok'}">${issues.length > 0 ? issues.map((i) => html`<div>✖ ${i}</div>`) : `尺寸正確:u_kn / v_kn 各 ${ny} 列 × ${nx} 行`}</div>
+      ${renderFieldGenerators(h)}
+    </div>
+  </div>`;
+}
+
+/** 表單值讀成有限數值;否則丟 Error(由 guard 顯示)。 */
+function finiteOf(root: Element, selector: string, what: string): number {
+  const input = root.querySelector<HTMLInputElement>(selector);
+  const n = Number(input?.value ?? '');
+  if (!input || input.value.trim() === '' || !Number.isFinite(n)) throw new Error(`${what}需為數值`);
+  return n;
+}
+
+/**
+ * 網格產生器:「由均勻流產生網格」(環境面板的流向/流速填滿全部節點)、「由兩端流速線性內插」(沿 x 或 y 由端點 A 到 B 的
+ * 東/北分量線性內插;A/B 預設為環境面板的常數流)與「網格預覽」(開啟海圖點選編輯面板的流場網格預覽)。
+ */
+function renderFieldGenerators(h: EditorHost): TemplateResult {
+  const set = h.draft.environment.currentSet;
+  const drift = h.draft.environment.currentDrift;
+  const setText = typeof set === 'number' ? String(set) : '';
+  const driftText = typeof drift === 'number' ? String(drift) : '';
+  const linear = (e: Event) =>
+    guard(h, () => {
+      const root = (e.currentTarget as HTMLElement).closest('.field-gen');
+      if (!root) throw new Error('找不到產生器表單');
+      const axis = (root.querySelector<HTMLSelectElement>('select.gen-axis')?.value ?? 'x') as FieldAxis;
+      const endA = { set: finiteOf(root, 'input.gen-a-set', '端點 A 流向'), drift: finiteOf(root, 'input.gen-a-drift', '端點 A 流速') };
+      const endB = { set: finiteOf(root, 'input.gen-b-set', '端點 B 流向'), drift: finiteOf(root, 'input.gen-b-drift', '端點 B 流速') };
+      h.setDraft(setCurrentFieldLinear(h.draft, axis, endA, endB));
+    });
+  return html`<div class="full field-gen">
+    <div class="pair">
+      <button class="small gen-uniform" title="以環境面板的流向/流速填滿全部節點(只改 u_kn/v_kn)" @click=${() => guard(h, () => h.setDraft(setCurrentFieldFromUniform(h.draft)))}>由均勻流產生網格</button>
+      <span class="hint">環境面板 ${setText || '?'}° / ${driftText || '?'} kn → 全部節點</span>
+      ${plotEditButton(h, 'field-preview', { kind: 'field' }, '網格預覽')}
+    </div>
+    <div class="pair">
+      <select class="gen-axis" data-value="x">
+        <option value="x">西 → 東(沿 x)</option>
+        <option value="y">南 → 北(沿 y)</option>
+      </select>
+      <span>A</span>
+      <input class="gen-a-set" type="text" inputmode="decimal" placeholder="流向 °" .value=${setText} />
+      <input class="gen-a-drift" type="text" inputmode="decimal" placeholder="kn" .value=${driftText} />
+      <span>→ B</span>
+      <input class="gen-b-set" type="text" inputmode="decimal" placeholder="流向 °" .value=${setText} />
+      <input class="gen-b-drift" type="text" inputmode="decimal" placeholder="kn" .value=${driftText} />
+      <button class="small gen-linear" title="端點 A(第 0 行/列)到端點 B(最後一行/列)以東/北分量線性內插" @click=${linear}>由兩端流速線性內插</button>
     </div>
   </div>`;
 }

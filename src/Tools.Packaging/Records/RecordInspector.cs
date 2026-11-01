@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using SimosaBRM.SimCore.Recording;
 
 namespace SimosaBRM.Packaging.Records;
 
@@ -163,6 +164,72 @@ public static class RecordInspector
 
     private static string? Str(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    /// <summary>
+    /// 讀錄影旁檔(<see cref="MediaSidecar"/>;SimCore.Host MediaUploadServer 於停止錄影時寫)→ 紀錄包的錄影摘要。
+    /// <paramref name="webmPackagePath"/> 為錄影檔的包內路徑;<paramref name="omitReason"/> 非 null 表示錄影檔不放進包(超過上限或檔案不在),只放旁檔。
+    /// 旁檔損壞時仍回傳摘要(Error 欄),讓旁檔進包供事後檢視。
+    /// </summary>
+    public static MediaSummary InspectMedia(string sidecarPath, string sidecarPackagePath, string webmPackagePath, string? omitReason)
+    {
+        var m = new MediaSummary { Sidecar = sidecarPackagePath, File = webmPackagePath, MediaId = Path.GetFileNameWithoutExtension(sidecarPath) };
+        try
+        {
+            var sc = MediaSidecar.Load(sidecarPath);
+            if (sc.MediaId is { Length: > 0 }) m.MediaId = sc.MediaId;
+            m.Station = sc.Station;
+            m.Mime = sc.Mime;
+            m.StartUtc = sc.StartedUtc == default ? null : DateTime.SpecifyKind(sc.StartedUtc, DateTimeKind.Utc);
+            m.EndUtc = sc.StoppedUtc is { } e ? DateTime.SpecifyKind(e, DateTimeKind.Utc) : null;
+            m.DurationS = sc.DurationS;
+            m.DurationEstimated = sc.DurationEstimated;
+            m.SizeBytes = sc.SizeBytes;
+            m.Sha256 = sc.Sha256 is { Length: > 0 } ? sc.Sha256 : null;
+            m.Truncated = sc.Truncated;
+            if (sc.Record is { } r)
+            {
+                m.Record = r.File;
+                m.RecordCreatedUtc = r.CreatedUtc is { } c ? DateTime.SpecifyKind(c, DateTimeKind.Utc) : null;
+                m.ScenarioId = r.ScenarioId;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            m.Error = ex.Message;
+        }
+        if (omitReason is not null)
+        {
+            m.Omitted = true;
+            m.OmitReason = omitReason;
+        }
+        return m;
+    }
+
+    /// <summary>
+    /// 把錄影關聯到練習:旁檔 record.file 等於練習檔名(exercises[].file 的檔名部分),否則 record.createdUtc 與練習 startUtc 相同(容差 1 s)。
+    /// 回傳未對應到任何練習的錄影(仍列在 manifest.media)。
+    /// </summary>
+    public static List<MediaSummary> AttachMedia(IReadOnlyList<ExerciseSummary> exercises, IEnumerable<MediaSummary> media)
+    {
+        var unmatched = new List<MediaSummary>();
+        foreach (var m in media)
+        {
+            ExerciseSummary? hit = null;
+            if (m.Record is { Length: > 0 } rf)
+                hit = exercises.FirstOrDefault(e => string.Equals(FileName(e.File), rf, StringComparison.OrdinalIgnoreCase));
+            if (hit is null && m.RecordCreatedUtc is { } cu)
+                hit = exercises.FirstOrDefault(e => e.StartUtc is { } st && Math.Abs((st - cu).TotalSeconds) < 1);
+            if (hit is null) unmatched.Add(m);
+            else hit.Media.Add(m);
+        }
+        return unmatched;
+    }
+
+    private static string FileName(string packagePath)
+    {
+        var idx = packagePath.LastIndexOf('/');
+        return idx < 0 ? packagePath : packagePath[(idx + 1)..];
+    }
 
     /// <summary>練習清單 → 訓練時數彙總(總時數 + 每位參與者)。</summary>
     public static TrainingHours Summarize(IEnumerable<ExerciseSummary> exercises)

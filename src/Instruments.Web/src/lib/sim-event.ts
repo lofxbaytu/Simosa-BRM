@@ -58,6 +58,8 @@ const ASSESSMENT_KINDS: ReadonlySet<string> = new Set([
   'bandFail',
 ]);
 const INSTRUCTOR_KINDS: ReadonlySet<string> = new Set(['acknowledge', 'timelineManual', 'steeringModeChanged', 'commandRejected', 'scenarioLoadRejected']);
+/** 內建 VHF 角色扮演頻道(紀錄 vhf 行;docs/design/vhf-roleplay.md 第 4 節) */
+const VHF_KINDS: ReadonlySet<string> = new Set(['vhfCall', 'vhfText', 'vhfDsc']);
 
 /** 由 kind 推得預設來源(舊 TrafficEvent 紀錄沒有 source 欄位)。 */
 export function defaultSourceFor(kind: string): SimEventSource {
@@ -65,12 +67,13 @@ export function defaultSourceFor(kind: string): SimEventSource {
   if (TIMELINE_KINDS.has(kind)) return 'timeline';
   if (ASSESSMENT_KINDS.has(kind)) return 'assessment';
   if (INSTRUCTOR_KINDS.has(kind)) return 'instructor';
+  if (VHF_KINDS.has(kind)) return 'vhf';
   // tugCommand / anchorLetGo / anchorCommand / mooringCommand 來源依指令來源(缺 source 的舊紀錄視為教官);其他外力事件為 engine
   if (EXTERNAL_COMMAND_EVENT_KINDS.has(kind)) return 'instructor';
   return 'engine';
 }
 
-const SOURCES: readonly SimEventSource[] = ['traffic', 'timeline', 'assessment', 'instructor', 'engine'];
+const SOURCES: readonly SimEventSource[] = ['traffic', 'timeline', 'assessment', 'instructor', 'engine', 'vhf'];
 
 /** 物件是否至少具備 SimEvent 的必要欄位(kind 字串、tick 或 t 數字)。 */
 export function isSimEvent(v: unknown): v is SimEvent {
@@ -141,6 +144,11 @@ export function eventSeverity(e: SimEvent): EventSeverity {
       const sev = e.data?.['severity'];
       return sev === 'alarm' ? 'alarm' : sev === 'warning' ? 'warning' : 'info';
     }
+    case 'vhfDsc': {
+      // DSC 簡化警示:遇險紅、緊急黃(docs/design/vhf-roleplay.md 第 4 節)
+      const cat = e.data?.['category'];
+      return cat === 'distress' ? 'alarm' : cat === 'urgency' ? 'warning' : 'info';
+    }
     default:
       return 'info';
   }
@@ -152,7 +160,11 @@ export const SOURCE_LABEL: Readonly<Record<SimEventSource, string>> = {
   assessment: '評估',
   instructor: '教官',
   engine: '引擎',
+  vhf: 'VHF',
 };
+
+/** DSC 類別顯示文字(vhfDsc.data.category;與 lib/vhf.ts DSC_CATEGORY_LABEL 一致,此處避免循環引用) */
+const DSC_LABEL: Readonly<Record<string, string>> = { distress: 'DISTRESS 遇險', urgency: 'URGENCY 緊急', safety: 'SAFETY 安全', routine: 'ROUTINE 例行' };
 
 export const ACK_KIND_LABEL: Readonly<Record<string, string>> = {
   verbal: '口頭辨識',
@@ -430,6 +442,13 @@ export function eventLabel(e: SimEvent): string {
       return `手動觸發${item}${d(e, 'ok') === false ? ' — 核心拒絕' : ''}${e.message ? ` ${e.message}` : ''}`;
     case 'steeringModeChanged':
       return `操舵模式 ${STEERING_MODE_LABEL[ds(e, 'from')] ?? ds(e, 'from') ?? '?'} → ${STEERING_MODE_LABEL[ds(e, 'to')] ?? ds(e, 'to') ?? '?'}${ds(e, 'pump') ? `(泵 ${ds(e, 'pump')})` : ''}`;
+    // ---- VHF 角色扮演(紀錄 vhf 行;itemId = 頻道)
+    case 'vhfCall':
+      return `VHF CH${ds(e, 'channel') || e.itemId || '?'} ${ds(e, 'station') || '?'} 通話 ${dn(e, 'duration_s', 1)} s${ds(e, 'endReason') && ds(e, 'endReason') !== 'pttEnd' ? `(${ds(e, 'endReason') === 'disconnected' ? '斷線結束' : ds(e, 'endReason') === 'timeout' ? '逾時結束' : ds(e, 'endReason') === 'channelChanged' ? '換頻道結束' : ds(e, 'endReason')})` : ''}`;
+    case 'vhfText':
+      return `VHF CH${ds(e, 'channel') || e.itemId || '?'} ${ds(e, 'station') || '?'} 文字:${ds(e, 'text')}`;
+    case 'vhfDsc':
+      return `DSC ${DSC_LABEL[ds(e, 'category')] ?? ds(e, 'category').toUpperCase()} 由 ${ds(e, 'station') || '?'}${ds(e, 'text') ? `:${ds(e, 'text')}` : ''}`;
     case 'scenarioLoadRejected': {
       const n = d(e, 'issueCount');
       return e.message ?? `情境 ${ds(e, 'scenarioId') || e.itemId || '(未知)'} 載入被拒${typeof n === 'number' ? `(${n} 項問題)` : ''}`;

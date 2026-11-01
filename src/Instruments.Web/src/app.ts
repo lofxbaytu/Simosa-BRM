@@ -31,6 +31,8 @@ import './components/instructor-controls.js';
 import './components/alert-panel.js';
 import './components/bnwas-indicator.js';
 import './components/external-readout.js';
+import './components/vhf-panel.js';
+import { defaultVhfUrl } from './lib/vhf.js';
 import type { ScenarioSummary } from './lib/scenario.js';
 import { berthGeometry, type BerthGeometry } from './lib/external-forces.js';
 import type { PlotOverlay } from './lib/plot-overlay.js';
@@ -100,9 +102,10 @@ export class BrmApp extends LitElement {
         max-width: min(380px, 60%);
         pointer-events: none;
       }
+      /* 警報欄:BNWAS、中央警報面板、內建 VHF 角色扮演面板(docs/design/vhf-roleplay.md;?vhf=0 不顯示) */
       .alert-col {
         display: grid;
-        grid-template-rows: auto minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr) auto;
         gap: 6px;
         min-height: 0;
       }
@@ -281,6 +284,8 @@ export class BrmApp extends LitElement {
   @state() private soundOn = true;
   /** 本操船台所在的工作站(?station=bridge|portWing|stbdWing|ecr;警報面板的確認/轉移依此;sensors-alerts.md 第 3.6 節) */
   @state() private station: AlertStation = 'bridge';
+  /** 內建 VHF 角色扮演頻道的轉送網址(?vhf=ws://…:8767/;未給時同核心主機埠 8767;?vhf=0 不顯示面板;示範模式無核心也不顯示) */
+  @state() private vhfUrl: string | null = null;
   private readonly sounder = new AlertSounder();
   /** 上一筆核心狀態的 autopilot.enabled(偵測核心脫開自動舵:true → false) */
   private coreAutopilotEnabled: boolean | undefined;
@@ -310,6 +315,8 @@ export class BrmApp extends LitElement {
     if (isShipId(ship)) this.demoShip = ship;
     this.mode = params.get('demo') === '1' ? 'demo' : 'live';
     this.station = parseStation(params.get('station'));
+    const vhf = params.get('vhf');
+    this.vhfUrl = vhf === '0' || vhf === 'off' ? null : vhf || defaultVhfUrl(this.wsUrl);
     this.applyTheme();
     this.startSource();
     this.staleTimer = setInterval(() => {
@@ -562,6 +569,7 @@ export class BrmApp extends LitElement {
         <div class="alert-col">
           <brm-bnwas .bnwas=${s.bnwas}></brm-bnwas>
           <brm-alert-panel .alerts=${s.alerts ?? []} .simTime=${s.t} .soundOn=${this.soundOn} .unsupported=${!alertsSupported} .station=${this.station}></brm-alert-panel>
+          ${this.vhfUrl && this.mode === 'live' ? html`<brm-vhf compact .url=${this.vhfUrl} .station=${this.station}></brm-vhf>` : nothing}
         </div>
       </div>
 

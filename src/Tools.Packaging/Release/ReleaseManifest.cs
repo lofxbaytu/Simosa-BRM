@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using SimosaBRM.Packaging.Common;
 
 namespace SimosaBRM.Packaging.Release;
@@ -67,6 +68,17 @@ public static class ReleaseManifestBuilder
 {
     /// <summary>掃描時略過的檔名(清單本身與作業系統縮圖快取)。</summary>
     private static readonly HashSet<string> Skip = new(StringComparer.OrdinalIgnoreCase) { ReleaseManifest.FileName, "Thumbs.db", ".DS_Store" };
+    /// <summary>
+    /// Inno Setup 安裝程式(tools/installer/SimosaBRM.iss)安裝後寫入安裝根目錄(tools/uninstall/)的解除安裝檔 unins000.exe/.dat/.msg:
+    /// 不屬發行內容,掃描與核對時一併略過,安裝後 <c>release verify</c> 才不會把它們列為「清單中沒有的檔案」。
+    /// </summary>
+    private static readonly Regex UninstallerFile = new(@"^unins\d{3}\.(exe|dat|msg)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsSkipped(string file)
+    {
+        var name = Path.GetFileName(file);
+        return Skip.Contains(name) || UninstallerFile.IsMatch(name);
+    }
 
     public static ReleaseManifest Build(string dir, string version, string? gitRevision = null, string? gitBranch = null, string? runtime = null,
                                         IReadOnlyDictionary<string, ReleaseComponent>? components = null, IEnumerable<string>? notes = null, TimeProvider? clock = null)
@@ -131,7 +143,7 @@ public static class ReleaseManifestBuilder
         var present = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
         {
-            if (Skip.Contains(Path.GetFileName(file))) continue;
+            if (IsSkipped(file)) continue;
             var rel = PackagePaths.Relative(dir, file);
             present.Add(rel);
             if (!listed.TryGetValue(rel, out var f))
@@ -155,7 +167,7 @@ public static class ReleaseManifestBuilder
         var list = new List<ReleaseFile>();
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).OrderBy(f => PackagePaths.Relative(dir, f), StringComparer.Ordinal))
         {
-            if (Skip.Contains(Path.GetFileName(file))) continue;
+            if (IsSkipped(file)) continue;
             list.Add(new ReleaseFile { Path = PackagePaths.Relative(dir, file), Sha256 = Sha256Hex.OfFile(file), Size = new FileInfo(file).Length });
         }
         return list;

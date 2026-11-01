@@ -39,7 +39,7 @@ describe('SessionRecord v2', () => {
       },
       new Date(Date.UTC(2026, 9, 17)),
     );
-    expect(record.version).toBe(3);
+    expect(record.version).toBe(4);
     expect(record.coreSummary).toBe(summaryRaw);
     expect(record.events).toHaveLength(2);
     const json = JSON.stringify(record);

@@ -182,6 +182,7 @@ function Find-LaunchShellExe([string]$Root) {
 
 # 以 WebView2 外殼開啟網頁(每頁一個全螢幕 kiosk 程序;PID 記入 simosa.pids,stop-all.ps1 一併結束;docs\ops\安裝與啟動.md 第 4.5 節)。
 # $Monitors:與 $Pages 同序的螢幕索引(0 起算;省略或 $null 時由外殼用主螢幕);找不到外殼 exe 時退回預設瀏覽器。
+# 程序名稱 shell-<頁面主檔名>(index.html?station=bridge → shell-index;同主檔名的第 2 頁起加 -2、-3…,避免兩頁共用同一 log 與 PID 名稱)。
 function Start-LaunchShellPages([string]$Exe, [string]$BaseUrl, $Pages, [hashtable]$Subst, [string]$WorkDir, [string]$LogDir, $Monitors = $null) {
     if (-not $Exe -or -not (Test-Path $Exe)) {
         Write-Warning '找不到 WebView2 外殼(app\shell\SimosaBRM.Shell.exe 或 build\bin\Shell.WebView2\…),改用預設瀏覽器'
@@ -189,12 +190,14 @@ function Start-LaunchShellPages([string]$Exe, [string]$BaseUrl, $Pages, [hashtab
         return
     }
     $i = 0
+    $used = @{}
     foreach ($p in @($Pages)) {
         $u = [string]$p
         foreach ($k in $Subst.Keys) { $u = $u.Replace('{' + $k + '}', [string]$Subst[$k]) }
         $url = "$BaseUrl/$u"
         $name = 'shell-' + ($u -replace '\.html.*$', '' -replace '[^A-Za-z0-9_-]', '_')
         if ($name -eq 'shell-') { $name = "shell-$i" }
+        if ($used.ContainsKey($name)) { $used[$name]++; $name = "$name-$($used[$name])" } else { $used[$name] = 1 }
         # --no-close-confirm:stop-all.ps1 以 CloseMainWindow 結束外殼時不彈確認對話框(否則會等到逾時被強制結束)
         $shellArgs = @('--url', $url, '--kiosk', '--no-close-confirm')
         if ($null -ne $Monitors -and $i -lt @($Monitors).Count -and $null -ne @($Monitors)[$i]) { $shellArgs += @('--monitor', "$(@($Monitors)[$i])") }

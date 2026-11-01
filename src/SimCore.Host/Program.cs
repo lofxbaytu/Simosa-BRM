@@ -269,6 +269,39 @@ if (options.EnableWebSocket)
     Console.WriteLine($"  WebSocket:{ws.Prefix!.Replace("http://", "ws://").Replace("*", "0.0.0.0")}(推送 OwnShipState JSON 每 40 ms;接收 SimCommand JSON;sessionInfo / shutdown 由主控程序回 ack)");
 }
 
+// 練習錄影上傳端(docs/design/screen-recording.md;R6 影像擷取、R13 錄影與紀錄包同步/上限):獨立 HttpListener,教官站的畫面錄影片段即時上傳,
+// 寫成 build/records/media/<mediaId>.webm 與旁檔;旁檔記下當時正在寫的紀錄檔名與 header.createdUtc,紀錄檔本身不改、不進雜湊
+MediaUploadServer? media = null;
+if (options.EnableMedia)
+{
+    try
+    {
+        media = new MediaUploadServer(MediaUploadServer.ResolveDir(root, options.MediaDir), options.MediaPort, options.MediaMaxMb * 1024 * 1024)
+        {
+            ProjectRoot = root,
+            CurrentRecordPath = () => router.Recorder is { Closed: false } rec ? rec.Path : null,
+        };
+    }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 2;
+    }
+    media.Log += msg => Console.WriteLine($"  [media] {msg}");
+    try
+    {
+        media.Start();
+        Console.WriteLine($"  錄影上傳:{media.Prefix!.Replace("*", "0.0.0.0")}media/(POST start/chunk/stop;目錄 {RepositoryPaths.ToProjectRelative(media.MediaDir, root)},每段上限 {options.MediaMaxMb} MB;只接受本機/直連網段)");
+    }
+    catch (HttpListenerException ex)
+    {
+        // 埠被占用(例如同機第二個核心程序)不影響練習:錄影停用,教官站面板會顯示無法連線
+        Console.WriteLine($"  錄影上傳端無法監聽埠 {options.MediaPort}({ex.Message}):錄影停用(以 --media-port 改埠或 --no-media 關閉)");
+        await media.DisposeAsync();
+        media = null;
+    }
+}
+
 UdpStateBus? bus = null;
 if (options.EnableUdpBus)
 {
@@ -286,6 +319,33 @@ if (options.EnableNmea)
     });
     nmea = new NmeaGateway(engine, sink, startUtc);
     Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV/ALR 1 Hz,指示值;目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,起始 UTC {startUtc:O})");
+}
+
+// 內建 VHF 角色扮演頻道(docs/design/vhf-roleplay.md):獨立 WebSocket 轉送 PTT 語音/文字/DSC;通話結束、文字、DSC 寫紀錄 vhf 行(帶外、不進雜湊)
+// 並以事件框送教官站(source "vhf",與 scenarioLoadRejected 相同的帶外途徑)
+VhfRelayServer? vhf = null;
+if (options.EnableVhf)
+{
+    vhf = new VhfRelayServer(options.VhfPort);
+    vhf.Log += msg => Console.WriteLine($"  [vhf] {msg}");
+    vhf.Logged += entry =>
+    {
+        var ev = entry.ToEvent(engine.Tick, engine.Time);
+        router.Recorder?.WriteVhf(ev);
+        ws?.PublishEvent(ContractJson.SerializeToUtf8Bytes(new { type = "event", @event = ev }));
+    };
+    try
+    {
+        vhf.Start();
+        Console.WriteLine($"  VHF 角色扮演:{vhf.Prefix!.Replace("http://", "ws://").Replace("*", "0.0.0.0")}(頻道 {string.Join("/", VhfRelayServer.Channels)};PTT 語音 webm/opus、文字、DSC;通話寫紀錄 vhf 行)");
+    }
+    catch (Exception ex) when (ex is System.Net.HttpListenerException or ObjectDisposedException or InvalidOperationException)
+    {
+        // VHF 為選配:埠被占用等啟動失敗只提示,核心照常執行(學員站/教官站面板顯示「未連線」)
+        Console.Error.WriteLine($"  VHF 角色扮演未啟動(埠 {options.VhfPort}):{ex.Message};以 --vhf-port 改埠或 --no-vhf 關閉");
+        await vhf.DisposeAsync();
+        vhf = null;
+    }
 }
 
 OwnShipState? latest = null;
@@ -344,6 +404,9 @@ if (joined && shutdown.EndExerciseRequested && !engine.Ended)
 }
 nmea?.Dispose();
 bus?.Dispose();
+// 錄影上傳端先停:尚未 stop 的錄影在紀錄關閉前定稿(stopReason = hostShutdown),不留 .part
+if (media is not null) await media.DisposeAsync();
+if (vhf is not null) await vhf.DisposeAsync();
 if (ws is not null) await ws.DisposeAsync();
 if (router.Recorder is { } recorder)
 {

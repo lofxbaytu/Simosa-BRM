@@ -23,6 +23,7 @@ public sealed class RecordWriter : IDisposable
     private long _inputs;
     private long _summaries;
     private long _sessions;
+    private long _vhf;
     private bool _closed;
 
     public string Path { get; }
@@ -136,6 +137,24 @@ public sealed class RecordWriter : IDisposable
 
     /// <summary>已寫入的 session 行數</summary>
     public long SessionLines => _sessions;
+
+    /// <summary>
+    /// VHF 角色扮演的通話/文字/DSC(主控程序 VhfRelayServer 轉送時;docs/design/vhf-roleplay.md 第 4 節):追加一行 vhf
+    /// (帶外:不進狀態雜湊鏈、不在事件序列內,只計入 footer 的檔案 SHA-256)。可由任何執行緒呼叫;已關閉時不寫並回傳 false。
+    /// </summary>
+    public bool WriteVhf(SimEvent ev)
+    {
+        lock (_sync)
+        {
+            if (_closed) return false;
+            WriteLine(new RecordVhf { Tick = ev.Tick, T = ev.T, Event = ev });
+            _vhf++;
+            return true;
+        }
+    }
+
+    /// <summary>已寫入的 vhf 行數</summary>
+    public long VhfLines => _vhf;
 
     private void OnBroadcast(SimulationEngine e, OwnShipState state) => WriteLine(new RecordState { State = state });
 

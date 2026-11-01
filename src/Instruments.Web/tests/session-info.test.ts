@@ -97,10 +97,10 @@ describe('sessionInfo 指令', () => {
 });
 
 describe('紀錄往返', () => {
-  it('教官站紀錄版本 3 含 sessionInfo;parseReplay 讀回 header.sessionInfo;未送出時為 null', () => {
+  it('教官站紀錄版本 4(含 sessionInfo、recordings);parseReplay 讀回 header.sessionInfo;未送出時為 null', () => {
     const base = { mode: 'full' as const, source: 'ws://x', scenario: null, shipId: 'FSB1', sampleInterval_s: 1, states: [defaultState('FSB1')], operations: [], markers: [], commands: [], summary: null };
     const record = buildSessionRecord({ ...base, sessionInfo: INFO });
-    expect(record.version).toBe(3);
+    expect(record.version).toBe(4);
     expect(record.sessionInfo).toEqual(INFO);
     expect(record.sessionInfo).not.toBe(INFO);
     const r = parseReplay(JSON.stringify(record));

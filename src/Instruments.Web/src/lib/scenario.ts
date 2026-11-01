@@ -7,6 +7,7 @@ import { SHIP_IDS, TELEGRAPH_POSITIONS, type LoadingCondition, type ShipId, type
 import { normalizeHeading } from './angles.js';
 import { parseAssessmentRules, type AssessmentRules } from './assessment.js';
 import { parseScenarioTugs, resolveScenarioBerth, type ScenarioBerth, type ScenarioTugDef } from './external-forces.js';
+import { parseCurrentField, type CurrentFieldSpec } from './current-field-plot.js';
 import { collectParamRefs, isParamRef, parseBriefing, parseRoute, parseTimeline, parseZones, type ScenarioBriefing, type ScenarioRoute, type ScenarioZone, type TimelineItem } from './timeline.js';
 
 const LOADINGS: readonly LoadingCondition[] = ['full', 'ballast', 'intermediate'];
@@ -74,6 +75,8 @@ export interface ScenarioSummary {
   berth?: ScenarioBerth;
   /** 錨的初始狀態有設定(情境 anchors.port/starboard;E12 錨泊) */
   anchorsInitial?: boolean;
+  /** 空間流場網格(情境 environment.current.field 解析後;航跡圖流場層畫箭頭;無或結構不合時省略;docs/design/instructor-plot.md 第 3 節) */
+  currentField?: CurrentFieldSpec;
   /** 解析時發現的問題(缺必要欄位、型別錯誤),空陣列表示通過最小檢查 */
   issues: string[];
 }
@@ -230,6 +233,10 @@ export function parseScenario(yamlText: string, path = ''): ScenarioSummary {
   const berth = resolveScenarioBerth(doc['berth'], AREA_FILES);
   if (berth) summary.berth = berth;
   if (isRecord(doc['anchors']) && (isRecord(doc['anchors']['port']) || isRecord(doc['anchors']['starboard']))) summary.anchorsInitial = true;
+  if (isRecord(env['current'])) {
+    const field = parseCurrentField(env['current']['field']);
+    if (field) summary.currentField = field;
+  }
   if (isRecord(doc['origin'])) {
     const olat = optNumber(doc['origin']['lat']);
     const olon = optNumber(doc['origin']['lon']);

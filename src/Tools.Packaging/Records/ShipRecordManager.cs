@@ -64,9 +64,12 @@ public sealed class OutstandingPackage
 }
 
 /// <summary>
-/// 船上紀錄管理(規劃書第 5.5 節「紀錄回傳」):把 build/records 的新紀錄(*.jsonl 與 reports/ 下的報告)打包成以裝置金鑰簽章的
+/// 船上紀錄管理(規劃書第 5.5 節「紀錄回傳」):把 build/records 的新紀錄(*.jsonl 與 reports/ 下的報告)與練習錄影
+/// (media/*.webm 與旁檔 media/*.json;docs/design/screen-recording.md 第 4 節)打包成以裝置金鑰簽章的
 /// 紀錄包(state/outbox/*.sbrec);原始檔保留到收到教官筆電的已備份回報才刪除。未取得回報的紀錄不自動清除;
 /// 累積超過 <see cref="PackagingConfig.MaxVisitIntervals"/> 個訪船間隔時於 status 與同步回報警告。
+/// 錄影超過 <see cref="MediaMaxBytes"/>(packaging.json mediaMaxMb / records pack --media-max-mb)時只放旁檔並標 omitted,錄影留在船上
+/// (<see cref="MediaOverLimit"/> 列出,供人工以外接碟搬移);尚未寫旁檔的 .webm(錄影進行中或核心未定稿)不打包。
 /// </summary>
 public sealed class ShipRecordManager
 {
@@ -81,6 +84,11 @@ public sealed class ShipRecordManager
 
     /// <summary>未寫 footer 且最近仍在修改的紀錄視為練習進行中,不打包。</summary>
     public TimeSpan InProgressGrace { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>單段錄影納入紀錄包的大小上限(位元組;預設 packaging.json mediaMaxMb,2048 MB)</summary>
+    public long MediaMaxBytes { get; init; } = -1;
+
+    private long EffectiveMediaMaxBytes => MediaMaxBytes >= 0 ? MediaMaxBytes : Math.Max(0, _layout.Config.MediaMaxMb) * 1024L * 1024L;
 
     private DateTime Now => _clock.GetUtcNow().UtcDateTime;
 
@@ -119,7 +127,10 @@ public sealed class ShipRecordManager
         return seq;
     }
 
-    /// <summary>候選檔案:紀錄目錄第一層 *.jsonl(record)與 reports/ 下所有檔案(report)。</summary>
+    /// <summary>
+    /// 候選檔案:紀錄目錄第一層 *.jsonl(record)、reports/ 下所有檔案(report)、media/ 第一層的 *.json 旁檔(media-meta)與
+    /// 已有旁檔的 *.webm(media;.part 與沒有旁檔的 .webm 為錄影進行中,略過)。
+    /// </summary>
     private IEnumerable<(string Full, string Rel, string Kind)> Candidates()
     {
         var dir = _layout.RecordsDir;
@@ -130,6 +141,22 @@ public sealed class ShipRecordManager
         if (Directory.Exists(reports))
             foreach (var f in Directory.EnumerateFiles(reports, "*", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal))
                 yield return (f, PackagePaths.Relative(dir, f), "report");
+        var media = Path.Combine(dir, "media");
+        if (Directory.Exists(media))
+        {
+            foreach (var f in Directory.EnumerateFiles(media, "*.json").OrderBy(f => f, StringComparer.Ordinal))
+                yield return (f, PackagePaths.Relative(dir, f), "media-meta");
+            // .webm 只在核心定稿時由 .part 改名,因此有旁檔即可打包;沒有旁檔(旁檔寫入失敗)者等 InProgressGrace 後仍打包,摘要標 error
+            foreach (var f in Directory.EnumerateFiles(media, "*.webm").OrderBy(f => f, StringComparer.Ordinal))
+                if (File.Exists(Path.ChangeExtension(f, ".json")) || Now - File.GetLastWriteTimeUtc(f) >= InProgressGrace) yield return (f, PackagePaths.Relative(dir, f), "media");
+        }
+    }
+
+    /// <summary>已定稿但超過紀錄包錄影上限的錄影(留在船上;records list 與 status 警告)。</summary>
+    public List<(string Path, long SizeBytes)> MediaOverLimit()
+    {
+        var max = EffectiveMediaMaxBytes;
+        return Candidates().Where(c => c.Kind == "media").Select(c => (c.Rel, new FileInfo(c.Full).Length)).Where(x => x.Length > max).ToList();
     }
 
     /// <summary>把尚未打包(或內容已變)的紀錄打包成一個紀錄包;沒有新紀錄時回傳 null。</summary>
@@ -142,24 +169,50 @@ public sealed class ShipRecordManager
             var ledger = LoadLedger();
             var known = ledger.Packages.SelectMany(p => p.Files).Select(f => f.Path + "\u0001" + f.Sha256.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
             var picked = new List<(string Full, RecordFileEntry Entry)>();
+            var mediaMax = EffectiveMediaMaxBytes;
+            // 超過上限的錄影:包內路徑 → 原因(只放旁檔;錄影留在船上)
+            var omittedMedia = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (full, rel, kind) in Candidates())
             {
                 if (kind == "record" && !RecordInspector.HasFooter(full) && Now - File.GetLastWriteTimeUtc(full) < InProgressGrace) continue;
-                var sha = Sha256Hex.OfFile(full);
                 var path = RecordPackageManifest.FilePrefix + rel;
+                var size = new FileInfo(full).Length;
+                if (kind == "media" && size > mediaMax)
+                {
+                    omittedMedia[path] = $"錄影 {size / (1024.0 * 1024):F0} MB 超過紀錄包上限 {mediaMax / (1024.0 * 1024):F0} MB,留在船上 {rel}";
+                    continue;
+                }
+                var sha = Sha256Hex.OfFile(full);
                 if (known.Contains(path + "\u0001" + sha)) continue;
-                picked.Add((full, new RecordFileEntry { Path = path, Sha256 = sha, Size = new FileInfo(full).Length, Kind = kind }));
+                picked.Add((full, new RecordFileEntry { Path = path, Sha256 = sha, Size = size, Kind = kind }));
             }
             if (picked.Count == 0) return null;
 
             var installed = InstalledState.LoadOrNew(_layout.InstalledStatePath);
             var exercises = picked.Where(p => p.Entry.Kind == "record").Select(p => RecordInspector.Inspect(p.Full, p.Entry.Path)).ToList();
+            // 錄影:本包每段錄影一筆摘要(旁檔或錄影檔任一在本包即列;旁檔先前已打包、這次只補錄影檔時仍自船上旁檔讀摘要)。
+            // 錄影檔在本包 → 正常;超過上限 / 先前已打包 / 不存在 → omitted(只有旁檔)
+            var pickedPaths = picked.Select(p => p.Entry.Path).ToHashSet(StringComparer.Ordinal);
+            var media = new List<MediaSummary>();
+            foreach (var (full, entry) in picked.Where(p => p.Entry.Kind is "media-meta" or "media").OrderBy(p => p.Entry.Path, StringComparer.Ordinal))
+            {
+                var basePath = entry.Kind == "media-meta" ? entry.Path[..^".json".Length] : entry.Path[..^".webm".Length];
+                var sidecarPath = basePath + ".json";
+                var webmPath = basePath + ".webm";
+                if (entry.Kind == "media" && pickedPaths.Contains(sidecarPath)) continue; // 旁檔那筆已涵蓋
+                var sidecarFull = entry.Kind == "media-meta" ? full : Path.ChangeExtension(full, ".json");
+                string? omit = null;
+                if (!pickedPaths.Contains(webmPath))
+                    omit = omittedMedia.TryGetValue(webmPath, out var why) ? why : known.Any(k => k.StartsWith(webmPath + "\u0001", StringComparison.Ordinal)) ? "錄影檔已於先前的紀錄包打包" : $"錄影檔不存在或尚未定稿:{webmPath}";
+                media.Add(RecordInspector.InspectMedia(sidecarFull, sidecarPath, webmPath, omit));
+            }
+            RecordInspector.AttachMedia(exercises, media);
             var now = Now;
             var manifest = new RecordPackageManifest
             {
                 PackageId = $"rec-{info.ShipId}-{now:yyyyMMdd'T'HHmmss}-{Guid.NewGuid().ToString("N")[..8]}",
                 ShipId = info.ShipId, DeviceId = info.DeviceId, CreatedUtc = now, VisitSeq = ledger.CurrentVisit,
-                Files = picked.Select(p => p.Entry).ToList(), Exercises = exercises, TrainingHours = RecordInspector.Summarize(exercises),
+                Files = picked.Select(p => p.Entry).ToList(), Exercises = exercises, TrainingHours = RecordInspector.Summarize(exercises), Media = media,
                 InstalledVersion = installed.Version, ParameterSetVersion = installed.ParameterSet?.Version,
                 Device = new DeviceKeyRef { KeyId = key.KeyId, PublicKey = key.PublicKeyPem },
             };
@@ -199,7 +252,7 @@ public sealed class ShipRecordManager
             };
             ledger.Packages.Add(lp);
             SaveLedger(ledger);
-            _layout.Audit(_clock).Write(AuditEvents.RecordsPacked, new { lp.PackageId, lp.Sha256, files = lp.Files.Count, lp.Exercises, trainingHours = manifest.TrainingHours.TotalHours });
+            _layout.Audit(_clock).Write(AuditEvents.RecordsPacked, new { lp.PackageId, lp.Sha256, files = lp.Files.Count, lp.Exercises, trainingHours = manifest.TrainingHours.TotalHours, media = media.Count, mediaOmitted = media.Count(m => m.Omitted) });
             return lp;
         }
     }
@@ -244,6 +297,9 @@ public sealed class ShipRecordManager
         var stale = l.Packages.Where(p => p.DeletedUtc is null && l.CurrentVisit - p.VisitSeq >= max).ToList();
         if (stale.Count > 0)
             warnings.Add($"{stale.Count} 個紀錄包已累積超過 {max} 個訪船間隔仍未取得教官筆電的已備份回報(不自動刪除;請取回並完成岸上備份):{string.Join(", ", stale.Select(s => s.PackageId))}");
+        var over = MediaOverLimit();
+        if (over.Count > 0)
+            warnings.Add($"{over.Count} 段錄影超過紀錄包上限 {EffectiveMediaMaxBytes / (1024.0 * 1024):F0} MB,未隨紀錄包回傳(旁檔已回傳;請以外接碟搬移後手動刪除):{string.Join(", ", over.Select(o => $"{o.Path}({o.SizeBytes / (1024.0 * 1024):F0} MB)"))}");
         return warnings;
     }
 
@@ -305,11 +361,23 @@ public sealed class ShipRecordManager
                         try
                         {
                             var full = PackagePaths.Combine(_layout.RecordsDir, rel);
+                            // 錄影旁檔:錄影檔仍在船上(超過上限未納入、尚未回傳)時保留旁檔,待錄影檔打包後一併刪除
+                            if (f.Kind == "media-meta" && File.Exists(Path.ChangeExtension(full, ".webm")) && !p.Files.Any(x => x.Kind == "media" && x.Path == f.Path[..^".json".Length] + ".webm"))
+                            {
+                                result.RetainedFiles.Add(rel);
+                                continue;
+                            }
                             // 只刪除內容與打包時相同的檔案(之後被改寫的檔案會在下一次打包時另行處理)
                             if (File.Exists(full) && Sha256Hex.Equal(Sha256Hex.OfFile(full), f.Sha256))
                             {
                                 FileDeleter(full);
                                 result.DeletedFiles.Add(rel);
+                                // 錄影檔刪除時連同旁檔(旁檔內容已在本包或先前紀錄包的 manifest)
+                                if (f.Kind == "media" && Path.ChangeExtension(full, ".json") is var side && File.Exists(side))
+                                {
+                                    FileDeleter(side);
+                                    result.DeletedFiles.Add(Path.ChangeExtension(rel, ".json"));
+                                }
                             }
                         }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)

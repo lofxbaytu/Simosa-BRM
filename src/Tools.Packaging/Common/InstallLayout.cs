@@ -83,7 +83,7 @@ public sealed class InstallLayout
 /// <code>
 /// { "role": "ship", "shipId": "FSB1", "deviceId": "FSB1-LT01",
 ///   "listen": "192.168.77.11", "port": 7300, "ships": { "FSB1": "192.168.77.11", "FSB2": "192.168.77.12" },
-///   "maxVisitIntervals": 2, "visitMergeHours": 12, "recordsDir": "build/records", "store": "store" }
+///   "maxVisitIntervals": 2, "visitMergeHours": 12, "recordsDir": "build/records", "store": "store", "mediaMaxMb": 2048 }
 /// </code>
 /// </summary>
 public sealed class PackagingConfig
@@ -106,6 +106,8 @@ public sealed class PackagingConfig
     public string? RecordsDir { get; set; }
     /// <summary>教官端紀錄庫目錄(相對安裝根目錄;預設 store)</summary>
     public string? Store { get; set; }
+    /// <summary>紀錄包納入單段錄影(build/records/media/*.webm)的大小上限(MB;預設 2048);超過者只放旁檔並標 omitted,錄影留在船上</summary>
+    public long MediaMaxMb { get; set; } = 2048;
 
     public static PackagingConfig LoadOrDefault(string path)
         => File.Exists(path) ? PackageJson.Load<PackagingConfig>(path, "packaging.json") : new PackagingConfig();
