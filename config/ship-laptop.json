@@ -40,11 +40,12 @@
     "enabled": true,
     "bind": "0.0.0.0",
     "shell": false,
-    "shellMonitors": [0, 0, 0],
+    "shellMonitors": [0, 0, 0, 0],
     "openPages": [
       "index.html?station=bridge",
       "instructor.html?mode=simple",
-      "radar.html?radar=x"
+      "radar.html?radar=x",
+      "ecdis.html"
     ]
   },
   "visual": {

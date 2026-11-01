@@ -29,7 +29,7 @@ export default defineConfig({
     sourcemap: true,
     target: 'es2022',
     rollupOptions: {
-      // 進入點:index.html(駕駛台儀器)與 instructor.html(教官站 / 簡化教官模式 / 重播檢視),共用程式庫與主題
+      // 進入點:index.html(駕駛台儀器)、instructor.html(教官站 / 簡化教官模式 / 重播檢視)、radar.html、report.html、ecdis.html,共用程式庫與主題
       input: {
         index: path.join(here, 'index.html'),
         instructor: path.join(here, 'instructor.html'),
@@ -37,6 +37,8 @@ export default defineConfig({
         radar: path.join(here, 'radar.html'),
         // 講評報告、行為標記評估表、個人訓練紀錄與課程班次紀錄(列印 / 另存 PDF;README「講評報告頁」)
         report: path.join(here, 'report.html'),
+        // 簡化 ECDIS 頁(同一 WebSocket 狀態來源;docs/design/ecdis-lite.md)
+        ecdis: path.join(here, 'ecdis.html'),
       },
     },
   },

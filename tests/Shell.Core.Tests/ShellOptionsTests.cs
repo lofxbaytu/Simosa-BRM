@@ -80,6 +80,21 @@ public class ShellOptionsTests
     }
 
     [Fact]
+    public void Ecdis_PassesStateService_LikeConning()
+    {
+        // 簡化 ECDIS 頁(docs/design/ecdis-lite.md):無專屬參數,只帶 ?ws=(狀態服務 8765);使用者資料夾與標題為 ecdis / ECDIS
+        var o = Parse("--page", "ecdis", "--ws", "ws://192.168.77.11:8765");
+        Assert.Equal(ShellPage.Ecdis, o.Page);
+        Assert.Equal("http://127.0.0.1:8080/ecdis.html?ws=ws%3A%2F%2F192.168.77.11%3A8765", o.BuildUrl());
+        Assert.Equal("ecdis", o.ProfileName);
+        Assert.Equal("Simosa BRM ECDIS", o.WindowTitle);
+        Assert.Equal("http://127.0.0.1:8080/ecdis.html", Parse("--page=ECDIS").BuildUrl());
+        Assert.Equal("ecdis.html", ShellOptions.PageFile(ShellPage.Ecdis));
+        Assert.Equal(ShellPage.Ecdis, ShellOptions.InferPage(new Uri("http://h/ecdis.html?ws=ws://a:1")));
+        Assert.Equal(ShellPage.Ecdis, Parse("--url", "http://127.0.0.1:8080/ecdis.html").Page);
+    }
+
+    [Fact]
     public void Report_HasNoQuery_EvenWithWs()
     {
         var o = Parse("--page", "report", "--ws", "ws://127.0.0.1:8765");
@@ -130,7 +145,7 @@ public class ShellOptionsTests
     }
 
     [Theory]
-    [InlineData(new[] { "--page", "ecdis" }, "--page")]
+    [InlineData(new[] { "--page", "chart" }, "--page")]
     [InlineData(new[] { "--station", "wing" }, "--station")]
     [InlineData(new[] { "--mode", "demo" }, "--mode")]
     [InlineData(new[] { "--radar", "k" }, "--radar")]
@@ -155,6 +170,7 @@ public class ShellOptionsTests
     {
         foreach (var k in new[] { "--url", "--page", "--station", "--ws", "--mode", "--radar", "--kiosk", "--monitor", "--profile", "--allow-devtools" })
             Assert.Contains(k, ShellOptions.Usage);
+        Assert.Contains("ecdis", ShellOptions.Usage);
         Assert.Contains("F11", ShellOptions.Usage);
         Assert.Contains("Alt+F4", ShellOptions.Usage);
         Assert.Contains("docs/ops/安裝與啟動.md", ShellOptions.Usage);

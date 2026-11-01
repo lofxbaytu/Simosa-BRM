@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using SimosaBRM.Gateway.Nmea;
 using SimosaBRM.SimCore.Contracts;
+using SimosaBRM.SimCore.Scenario;
 using Xunit;
 
 namespace SimosaBRM.SimCore.Tests;
@@ -115,5 +116,175 @@ public class NmeaTests
         Assert.All(sink.Sentences, x => Assert.True(NmeaSentence.Verify(x), x));
         // 時間欄位 = 起始 UTC + 模擬時間(第 2 秒 → 02:00:02.00)
         Assert.Contains(sink.Sentences, x => x.StartsWith("$GPGGA,020002.00,"));
+    }
+
+    /// <summary>IEC 61162-1 的欄位數(不含位址欄;與 Python nmea_check.SPECS 相同的表):GGA 14、RMC 12(NMEA 2.3)、VTG 9、VBW 10、DPT 3、MWV 5、HDT 2、ROT 2、RSA 4、TTM 15、ALR 5、VDM 6。</summary>
+    private static readonly IReadOnlyDictionary<string, int> Iec61162FieldCounts = new Dictionary<string, int>
+    {
+        ["GGA"] = 14, ["RMC"] = 12, ["VTG"] = 9, ["VBW"] = 10, ["DPT"] = 3, ["MWV"] = 5, ["HDT"] = 2, ["ROT"] = 2, ["RSA"] = 4, ["TTM"] = 15, ["ALR"] = 5, ["VDM"] = 6,
+    };
+
+    private static (string Talker, string Formatter, string[] Fields) Split(string sentence)
+    {
+        var body = sentence[1..sentence.LastIndexOf('*')];
+        var parts = body.Split(',');
+        return (parts[0][..2], parts[0][2..], parts[1..]);
+    }
+
+    [Fact]
+    public void AllGatewaySentencesHaveIecFieldCountsAndTalkers()
+    {
+        // 正常 + GNSS/電羅經/測深儀/計程儀失效(欄位空白但欄位數不變)+ 目標 TTM/AIS + 警報 ALR
+        var utc = new DateTime(2026, 1, 1, 2, 0, 12, 340, DateTimeKind.Utc);
+        var all = new List<string>();
+        var nominal = TestData.MinimalEngine();
+        nominal.Run(60);
+        var e = TestData.Engine(); // E01:T1(AIS)、T2
+        e.Run(60);
+        foreach (var f in new[] { "gpsFailure", "gyroFailure", "echoSounderFailure", "logFailure" }) e.Enqueue(SimCommand.InjectFault(f));
+        e.Run(10);
+        foreach (var st in new[] { nominal.BuildState(), e.BuildState() })
+        {
+            all.AddRange(NmeaEncoder.FastSentences(st));
+            all.AddRange(NmeaEncoder.SlowSentences(st, utc));
+            all.AddRange(NmeaEncoder.AlrSentences(st, utc));
+            all.AddRange(NmeaEncoder.TtmSentences(st, utc));
+            foreach (var t in st.Targets ?? Array.Empty<TargetState>())
+                if (t.Ais is { } ais)
+                {
+                    all.AddRange(AisEncoder.PositionReport(ais, utc));
+                    all.AddRange(AisEncoder.StaticAndVoyage(ais, 1));
+                }
+        }
+        Assert.Contains(all, x => x.StartsWith("$IIALR"));
+        Assert.Contains(all, x => x.StartsWith("!AIVDM,2,"));
+        Assert.Contains(all, x => x.StartsWith("$GPGGA") && x.Contains(",0,00,"));
+        var expectedTalker = new Dictionary<string, string> { ["GGA"] = "GP", ["RMC"] = "GP", ["VTG"] = "GP", ["HDT"] = "HE", ["ROT"] = "TI", ["VBW"] = "VD", ["DPT"] = "SD", ["MWV"] = "WI", ["RSA"] = "ER", ["TTM"] = "RA", ["ALR"] = "II", ["VDM"] = "AI" };
+        foreach (var s in all)
+        {
+            Assert.True(NmeaSentence.Verify(s), s);
+            Assert.True(s.Length <= 82, s);
+            var (talker, formatter, fields) = Split(s);
+            Assert.True(Iec61162FieldCounts.TryGetValue(formatter, out var n), $"未列入欄位數表的句型 {formatter}:{s}");
+            Assert.True(fields.Length == n, $"{formatter} 欄位數 {fields.Length} ≠ IEC 61162-1 的 {n}:{s}");
+            Assert.Equal(expectedTalker[formatter], talker);
+            Assert.All(fields, f => Assert.DoesNotContain(f, c => c is '$' or '!' or '*' or ',' or '\\' or '^' or '~' || c < 0x20 || c > 0x7E));
+        }
+    }
+
+    [Fact]
+    public void GatewayRatesForWholeSentenceSetOverTenSeconds()
+    {
+        // 10 s:HDT/ROT/RSA 各 100、GGA/RMC/VTG/VBW/DPT/MWV(R)/MWV(T) 各 10;電羅經故障後 HDT 停送、ALR 每警報 1 Hz(nmea_check 的 ±20% 以此為基準)
+        var engine = TestData.MinimalEngine();
+        var sink = new CollectingNmeaSink();
+        using var gw = new NmeaGateway(engine, sink, new DateTime(2026, 1, 1, 2, 0, 0, DateTimeKind.Utc));
+        engine.Run(500);
+        int Count(string prefix) => sink.Sentences.Count(x => x.StartsWith(prefix));
+        Assert.Equal(100, Count("$HEHDT"));
+        Assert.Equal(100, Count("$TIROT"));
+        Assert.Equal(100, Count("$ERRSA"));
+        foreach (var p in new[] { "$GPGGA", "$GPRMC", "$GPVTG", "$VDVBW", "$SDDPT" }) Assert.Equal(10, Count(p));
+        Assert.Equal(10, sink.Sentences.Count(x => x.StartsWith("$WIMWV") && x.Contains(",R,")));
+        Assert.Equal(10, sink.Sentences.Count(x => x.StartsWith("$WIMWV") && x.Contains(",T,")));
+        Assert.Equal(0, Count("$IIALR"));
+        Assert.Equal(370, sink.Sentences.Count); // 3 × 100 + 7 × 10
+        // 第 10 秒的批次:GGA 時刻 02:00:10.00;同批 RMC 時刻相同(nmea_check 的時間一致性檢查)
+        var gga = sink.Sentences.Last(x => x.StartsWith("$GPGGA"));
+        var rmc = sink.Sentences.Last(x => x.StartsWith("$GPRMC"));
+        Assert.Equal("020010.00", Split(gga).Fields[0]);
+        Assert.Equal("020010.00", Split(rmc).Fields[0]);
+
+        sink.Sentences.Clear();
+        engine.Enqueue(SimCommand.InjectFault("gyroFailure"));
+        engine.Run(500);
+        Assert.Equal(0, Count("$HEHDT"));
+        Assert.Equal(100, Count("$TIROT"));
+        Assert.Equal(10, Count("$IIALR"));
+        Assert.All(sink.Sentences.Where(x => x.StartsWith("$IIALR")), x => Assert.Equal("001", Split(x).Fields[1]));
+        Assert.All(sink.Sentences, x => Assert.True(NmeaSentence.Verify(x), x));
+    }
+
+    [Fact]
+    public void GatewayFollowsEngineStartUtcAfterScenarioLoad()
+    {
+        // 主控程序不給固定起點:NMEA 時刻 = 引擎 StartUtc + t;loadScenario 後改為新情境的 startTimeUtc(與 state.utc 同源)
+        var engine = TestData.Engine(); // E01:2026-01-01T02:00:00Z
+        var sink = new CollectingNmeaSink();
+        using var gw = new NmeaGateway(engine, sink);
+        Assert.Equal(new DateTime(2026, 1, 1, 2, 0, 0, DateTimeKind.Utc), gw.StartUtc);
+        engine.Run(50);
+        Assert.Contains(sink.Sentences, x => x.StartsWith("$GPGGA,020001.00,"));
+        sink.Sentences.Clear();
+        var e05 = Path.Combine(TestData.Root, "data", "scenarios", "E05_pilot_traffic.yaml");
+        Assert.True(engine.TryApplyScenarioLoad(ScenarioLoader.TryLoad(e05), TestData.Ship, "file"));
+        engine.Run(50);
+        Assert.Equal(new DateTime(2026, 5, 5, 22, 30, 0, DateTimeKind.Utc), gw.StartUtc);
+        var gga = sink.Sentences.Last(x => x.StartsWith("$GPGGA"));
+        Assert.StartsWith("$GPGGA,223001.00,", gga);
+        Assert.Equal(engine.UtcAt(engine.Time)!.Substring(11, 8).Replace(":", "") + ".00", Split(gga).Fields[0]);
+        // 固定起點時不跟隨
+        using var fixedGw = new NmeaGateway(engine, new CollectingNmeaSink(), new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        Assert.Equal(2030, fixedGw.StartUtc.Year);
+    }
+
+    [Fact]
+    public void FileSinkWritesSentencesWithCrLfAndCompositeFansOut()
+    {
+        var dir = Path.Combine(TestData.Root, "build", "test-tmp", "nmea");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"sink-{Guid.NewGuid():N}.nmea");
+        try
+        {
+            var collecting = new CollectingNmeaSink();
+            var file = new FileNmeaSink(path);
+            using (var composite = new CompositeNmeaSink(new INmeaSink[] { file, collecting }))
+            {
+                var engine = TestData.MinimalEngine();
+                using var gw = new NmeaGateway(engine, composite, new DateTime(2026, 1, 1, 2, 0, 0, DateTimeKind.Utc));
+                engine.Run(100);
+            }
+            Assert.Equal(collecting.Sentences.Count, file.SentencesWritten);
+            var bytes = File.ReadAllBytes(path);
+            Assert.All(bytes, b => Assert.InRange(b, (byte)0x0A, (byte)0x7E));
+            var text = System.Text.Encoding.ASCII.GetString(bytes);
+            Assert.EndsWith("\r\n", text);
+            Assert.DoesNotContain("\n", text.Replace("\r\n", ""));
+            var lines = text.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(collecting.Sentences, lines);
+            Assert.All(lines, l => Assert.True(NmeaSentence.Verify(l), l));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void FileSinkPathMustBeInsideProject()
+    {
+        var root = TestData.Root;
+        Assert.Equal(Path.GetFullPath(Path.Combine(root, "build", "nmea", "E05.nmea")), FileNmeaSink.Resolve(root, "build/nmea/E05.nmea"));
+        Assert.Equal(Path.GetFullPath(Path.Combine(root, "build", "x.nmea")), FileNmeaSink.Resolve(root, Path.Combine(root, "build", "x.nmea")));
+        Assert.Throws<ArgumentException>(() => FileNmeaSink.Resolve(root, Path.Combine(Path.GetTempPath(), "outside.nmea")));
+        Assert.Throws<ArgumentException>(() => FileNmeaSink.Resolve(root, "../outside.nmea"));
+        Assert.Throws<ArgumentException>(() => FileNmeaSink.Resolve(root, " "));
+    }
+
+    [Fact]
+    public void HostOptionsParseNmeaTargetBindAndFile()
+    {
+        var o = SimosaBRM.SimCore.Host.HostOptions.Parse(new[] { "--nmea-target", "192.168.77.21:10110", "--nmea-target", "192.168.77.21", "--nmea-bind", "192.168.77.11", "--nmea-file", "build/nmea/E05.nmea", "--no-nmea" });
+        Assert.Equal(2, o.NmeaTargets.Count);
+        Assert.Equal("192.168.77.21:10110", o.NmeaTargets[0].ToString());
+        Assert.Equal(10110, o.NmeaTargets[1].Port); // 未給埠 → 與 --nmea-port 相同
+        Assert.Equal(System.Net.IPAddress.Parse("192.168.77.11"), o.NmeaBind);
+        Assert.Equal("build/nmea/E05.nmea", o.NmeaFile);
+        Assert.False(o.EnableNmea);
+        Assert.Null(SimosaBRM.SimCore.Host.HostOptions.Parse(Array.Empty<string>()).NmeaFile);
+        Assert.Empty(SimosaBRM.SimCore.Host.HostOptions.Parse(Array.Empty<string>()).NmeaTargets);
+        Assert.Throws<ArgumentException>(() => SimosaBRM.SimCore.Host.HostOptions.Parse(new[] { "--nmea-target", "opencpn-laptop:10110" }));
+        Assert.Throws<ArgumentException>(() => SimosaBRM.SimCore.Host.HostOptions.Parse(new[] { "--nmea-bind", "eth0" }));
+        Assert.Contains("--nmea-file", SimosaBRM.SimCore.Host.HostOptions.Usage);
     }
 }

@@ -24,6 +24,7 @@
     "openPages": [
       "instructor.html?ws=ws://{ship}:{stateWs}",
       "radar.html?radar=x&ws=ws://{ship}:{radarWs}",
+      "ecdis.html?ws=ws://{ship}:{stateWs}",
       "report.html"
     ]
   },

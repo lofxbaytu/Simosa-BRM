@@ -1,6 +1,6 @@
 // WebView2 外殼的命令列參數與網址組合(規劃書第 5.2 節「WebView2 殼」、第 11.2 節 Instruments.Shell;需求 R1、R13)。
 // 網址規則與網頁一致:index.html ?station=bridge|portWing|stbdWing|ecr(src/Instruments.Web/src/lib/alerts.ts parseStation)、
-// instructor.html ?mode=simple|full|replay(instructor-app.ts readMode)、radar.html ?radar=x|s、各頁 ?ws=(狀態或雷達服務位址)。
+// instructor.html ?mode=simple|full|replay(instructor-app.ts readMode)、radar.html ?radar=x|s、ecdis.html(簡化 ECDIS,docs/design/ecdis-lite.md)、各頁 ?ws=(狀態或雷達服務位址)。
 namespace SimosaBRM.Shell.Core;
 
 /// <summary>外殼要開的頁面(--page)。</summary>
@@ -14,6 +14,8 @@ public enum ShellPage
     Radar,
     /// <summary>報告站 report.html</summary>
     Report,
+    /// <summary>簡化 ECDIS ecdis.html(與操船台同一狀態服務 ?ws=)</summary>
+    Ecdis,
 }
 
 /// <summary>工作站(--station;警報面板的確認/轉移依此;docs/design/sensors-alerts.md 第 3.6 節)。</summary>
@@ -33,7 +35,7 @@ public sealed record ShellParseResult(ShellOptions? Options, string? Error)
 
 /// <summary>
 /// WebView2 外殼的啟動選項。--url 給完整網址時優先(頁面與站別由網址推斷,用於視窗標題與使用者資料夾名稱);
-/// 否則由 --base + --page + --station/--ws/--mode/--radar 組合。
+/// 否則由 --base + --page + --station/--ws/--mode/--radar 組合(ecdis 只帶 ?ws=)。
 /// </summary>
 public sealed record ShellOptions
 {
@@ -43,7 +45,7 @@ public sealed record ShellOptions
     public string? Url { get; init; }
     /// <summary>--base:網頁伺服基底(預設 http://127.0.0.1:8080,即船上 simosa-web)。</summary>
     public string BaseUrl { get; init; } = DefaultBaseUrl;
-    /// <summary>--page:conning|instructor|radar|report(預設 conning)。</summary>
+    /// <summary>--page:conning|instructor|radar|report|ecdis(預設 conning)。</summary>
     public ShellPage Page { get; init; } = ShellPage.Conning;
     /// <summary>--station:bridge|portWing|stbdWing|ecr(預設 bridge;只有操船台頁才放進網址)。</summary>
     public ShellStation Station { get; init; } = ShellStation.Bridge;
@@ -71,11 +73,11 @@ public sealed record ShellOptions
     public static readonly IReadOnlyList<string> RadarValues = new[] { "x", "s" };
 
     public const string Usage =
-        "用法:SimosaBRM.Shell [--url <完整網址>] [--page conning|instructor|radar|report] [--station bridge|portWing|stbdWing|ecr]\n" +
+        "用法:SimosaBRM.Shell [--url <完整網址>] [--page conning|instructor|radar|report|ecdis] [--station bridge|portWing|stbdWing|ecr]\n" +
         "                      [--ws ws://主機:8765] [--mode simple|full|replay] [--radar x|s] [--base http://127.0.0.1:8080]\n" +
         "                      [--kiosk] [--monitor <n>] [--profile <資料夾>] [--allow-devtools] [--no-close-confirm] [--help]\n" +
         "  --url            直接開啟此網址(優先;頁面與站別由網址推斷)\n" +
-        "  --page           conning 操船台 index.html(預設)、instructor 教官站、radar 雷達、report 報告站\n" +
+        "  --page           conning 操船台 index.html(預設)、instructor 教官站、radar 雷達、report 報告站、ecdis 簡化 ECDIS\n" +
         "  --station        操船台的工作站(?station=;預設 bridge)\n" +
         "  --ws             狀態服務或雷達服務位址(?ws=;未給時網頁依頁面主機推定)\n" +
         "  --mode           教官站模式(?mode=;教官站未給時為 simple)\n" +
@@ -136,7 +138,7 @@ public sealed record ShellOptions
                     case "--page":
                         {
                             var p = Next("--page");
-                            o = o with { Page = ParsePage(p) ?? throw new ShellArgumentException($"--page 須為 conning|instructor|radar|report,實際:{p}") };
+                            o = o with { Page = ParsePage(p) ?? throw new ShellArgumentException($"--page 須為 conning|instructor|radar|report|ecdis,實際:{p}") };
                             break;
                         }
                     case "--station":
@@ -223,6 +225,7 @@ public sealed record ShellOptions
         ShellPage.Instructor => "instructor.html",
         ShellPage.Radar => "radar.html",
         ShellPage.Report => "report.html",
+        ShellPage.Ecdis => "ecdis.html",
         _ => throw new ArgumentOutOfRangeException(nameof(page)),
     };
 
@@ -233,6 +236,7 @@ public sealed record ShellOptions
         ShellPage.Instructor => "instructor",
         ShellPage.Radar => "radar",
         ShellPage.Report => "report",
+        ShellPage.Ecdis => "ecdis",
         _ => throw new ArgumentOutOfRangeException(nameof(page)),
     };
 
@@ -252,6 +256,7 @@ public sealed record ShellOptions
         ShellPage.Instructor => "教官站",
         ShellPage.Radar => "雷達",
         ShellPage.Report => "報告站",
+        ShellPage.Ecdis => "ECDIS",
         _ => throw new ArgumentOutOfRangeException(nameof(page)),
     };
 
@@ -271,6 +276,7 @@ public sealed record ShellOptions
         "instructor" => ShellPage.Instructor,
         "radar" => ShellPage.Radar,
         "report" => ShellPage.Report,
+        "ecdis" => ShellPage.Ecdis,
         _ => null,
     };
 
@@ -287,7 +293,7 @@ public sealed record ShellOptions
     public string EffectiveMode => Mode ?? "simple";
 
     /// <summary>
-    /// 要導向的網址:--url 原樣;否則 base/頁面檔 + 查詢字串(操船台 ?station=、教官站 ?mode=、雷達 ?radar=、各頁 ?ws=)。
+    /// 要導向的網址:--url 原樣;否則 base/頁面檔 + 查詢字串(操船台 ?station=、教官站 ?mode=、雷達 ?radar=、ECDIS 無專屬參數、各頁 ?ws=;報告站不帶 ?ws=)。
     /// 查詢值以 Uri.EscapeDataString 編碼。
     /// </summary>
     public string BuildUrl()
@@ -306,6 +312,7 @@ public sealed record ShellOptions
                 query.Add(new("radar", Radar ?? "x"));
                 break;
             case ShellPage.Report:
+            case ShellPage.Ecdis:
                 break;
         }
         if (Ws is not null && Page != ShellPage.Report) query.Add(new("ws", Ws));
@@ -324,7 +331,7 @@ public sealed record ShellOptions
         _ => $"Simosa BRM {PageLabel(Page)}",
     };
 
-    /// <summary>預設使用者資料夾名稱(同一台筆電同時開多個外殼時各用自己的資料夾):conning-bridge、instructor、radar-x…。</summary>
+    /// <summary>預設使用者資料夾名稱(同一台筆電同時開多個外殼時各用自己的資料夾):conning-bridge、instructor、radar-x、report、ecdis。</summary>
     public string ProfileName => Page switch
     {
         ShellPage.Conning => $"{PageName(Page)}-{StationName(Station).ToLowerInvariant()}",
@@ -344,6 +351,7 @@ public sealed record ShellOptions
             "instructor.html" => ShellPage.Instructor,
             "radar.html" => ShellPage.Radar,
             "report.html" => ShellPage.Report,
+            "ecdis.html" => ShellPage.Ecdis,
             _ => null,
         };
     }

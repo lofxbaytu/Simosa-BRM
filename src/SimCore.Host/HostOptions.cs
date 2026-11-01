@@ -19,6 +19,12 @@ public sealed class HostOptions
     public int NmeaPort { get; set; } = 10110;
     public string NmeaMulticastGroup { get; set; } = "239.192.0.1";
     public int NmeaMulticastPort { get; set; } = 60001;
+    /// <summary>額外的 NMEA 單播端點(--nmea-target ip:port,可重複;例如教官筆電 192.168.77.21:10110 的 OpenCPN;config/opencpn/README.md)</summary>
+    public List<System.Net.IPEndPoint> NmeaTargets { get; } = new();
+    /// <summary>NMEA 送出 socket 綁定的本機位址(--nmea-bind;多播由該介面送出,直連介面 192.168.77.11);null = 依路由表</summary>
+    public System.Net.IPAddress? NmeaBind { get; set; }
+    /// <summary>同時把送出的 NMEA 句型寫到檔案(--nmea-file;須在專案資料夾內;驗收 nmea_check 與 OpenCPN 離線重播);null = 不寫</summary>
+    public string? NmeaFile { get; set; }
     /// <summary>內建 VHF 角色扮演頻道(VhfRelayServer;ws://0.0.0.0:8767/;--no-vhf 關閉;docs/design/vhf-roleplay.md)</summary>
     public bool EnableVhf { get; set; } = true;
     public int VhfPort { get; set; } = 8767;
@@ -80,6 +86,10 @@ public sealed class HostOptions
           --multicast 239.255.70.1:7001     狀態匯流排多播群組
           --nmea-port 10110                 NMEA 單播埠(127.0.0.1,OpenCPN 預設)
           --nmea-multicast 239.192.0.1:60001
+          --nmea-target <ip:port>           額外的 NMEA 單播端點(可重複;教官筆電 OpenCPN 192.168.77.21:10110;config/opencpn/README.md)
+          --nmea-bind <ip>                  NMEA 送出 socket 綁定的本機位址,多播由該介面送出(船上直連介面 192.168.77.11)
+          --nmea-file <路徑>                同時把送出的 NMEA 句型寫檔(每句 CR LF;須在專案資料夾內,例如 build/nmea/E05.nmea;
+                                            供 uv run python -m simosa_brm.nmea_check --file 檢驗與 OpenCPN VDR 外掛離線重播;--no-nmea 時只寫檔)
           -h | --help
         """;
 
@@ -129,6 +139,21 @@ public sealed class HostOptions
                 case "--multicast": (o.MulticastGroup, o.MulticastPort) = SplitEndpoint(Next(), o.MulticastPort); break;
                 case "--nmea-port": o.NmeaPort = int.Parse(Next()); break;
                 case "--nmea-multicast": (o.NmeaMulticastGroup, o.NmeaMulticastPort) = SplitEndpoint(Next(), o.NmeaMulticastPort); break;
+                case "--nmea-target":
+                {
+                    var (host, port) = SplitEndpoint(Next(), o.NmeaPort);
+                    if (!System.Net.IPAddress.TryParse(host, out var ip)) throw new ArgumentException($"--nmea-target 需要 ip:port(IPv4 位址,不解析主機名稱):{host}");
+                    o.NmeaTargets.Add(new System.Net.IPEndPoint(ip, port));
+                    break;
+                }
+                case "--nmea-bind":
+                {
+                    var v = Next();
+                    if (!System.Net.IPAddress.TryParse(v, out var ip)) throw new ArgumentException($"--nmea-bind 需要本機 IP 位址:{v}");
+                    o.NmeaBind = ip;
+                    break;
+                }
+                case "--nmea-file": o.NmeaFile = Next(); break;
                 case "-h": case "--help": o.Help = true; break;
                 default: throw new ArgumentException($"未知參數:{a}\n{Usage}");
             }

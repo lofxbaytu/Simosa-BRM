@@ -2,7 +2,7 @@
 .SYNOPSIS
   教官筆電啟動(訪船船長;規劃書第 5.4 節):教官站網頁、雷達鏡像頁、直連檢查與 simosa-pkg sync 說明;離船時可單機執行 SimCore。
 .DESCRIPTION
-  依 config\instructor-laptop.json:本機 simosa-web 提供 app\web(教官站 instructor.html、雷達 radar.html、講評 report.html),
+  依 config\instructor-laptop.json:本機 simosa-web 提供 app\web(教官站 instructor.html、雷達 radar.html、簡化 ECDIS ecdis.html、講評 report.html),
   頁面的 ws 參數指向船上筆電(直連 IP);-Standalone(或 standalone.enabled)時改啟動本機 SimCore.Host 與雷達供岸上備課、審閱紀錄。
   直連前檢查 Wi-Fi/藍牙(第 5.4 節:直連期間停用;-CheckWifi 時 Wi-Fi 開啟則拒絕繼續)。同步不自動執行:顯示 simosa-pkg sync 指令
   (需硬體金鑰 --cert,且更新包產生前須完成受影響情境驗證;docs\design\packaging-sync.md 第 6.2–6.3 節)。

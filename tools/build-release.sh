@@ -136,7 +136,7 @@ note "Python 校正工具(src/Tools.Calibration)不隨發行版散布;係數檔 
 cat > "$OUT/README.txt" <<TXT
 Simosa BRM 發行版 $VERSION($RID,framework-dependent:需 .NET 8 執行階段)git ${GIT_REV:-?} ${GIT_BRANCH:-}
 app/simcore      SimCore.Host(50 Hz 核心、WebSocket 8765、UDP 多播、NMEA)   app/radar        Sensors.Radar.Host(雷達/ARPA 8766)
-app/web          網頁:index.html 儀器、instructor.html 教官站(?mode=simple 簡化教官模式)、radar.html、report.html
+app/web          網頁:index.html 儀器、instructor.html 教官站(?mode=simple 簡化教官模式)、radar.html、ecdis.html(簡化 ECDIS)、report.html
 app/web-server   simosa-web 靜態網頁伺服                                  app/launch       start-ship-laptop / start-instructor-laptop / stop-all
 app/visual       Godot 視景匯出檔(有匯出範本時)                           tools/updater    simosa-pkg(更新包、紀錄包、直連同步;放在 app/ 之外)
 app/shell        WebView2 操船台外殼 SimosaBRM.Shell.exe(win-x64 發行版;start-ship-laptop.ps1 -Shell)   tools/webview2   WebView2 Runtime 離線安裝檔放置處(README.txt)

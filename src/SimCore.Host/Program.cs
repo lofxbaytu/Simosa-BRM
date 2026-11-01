@@ -309,16 +309,38 @@ if (options.EnableUdpBus)
     Console.WriteLine($"  UDP 狀態匯流排:{options.MulticastGroup}:{options.MulticastPort}(JSON,25 Hz)");
 }
 
+// NMEA 閘道:UDP(單播 127.0.0.1 + --nmea-target、多播)與/或檔案(--nmea-file;驗收工具 simosa_brm.nmea_check 與 OpenCPN 離線重播);
+// 起始 UTC 跟隨引擎(startUtc = null):loadScenario 後與新情境的 state.utc 同步
 NmeaGateway? nmea = null;
-if (options.EnableNmea)
+if (options.EnableNmea || options.NmeaFile is not null)
 {
-    var sink = new UdpNmeaSender(new[]
+    var sinks = new List<INmeaSink>(2);
+    if (options.EnableNmea)
     {
-        new IPEndPoint(IPAddress.Loopback, options.NmeaPort),
-        new IPEndPoint(IPAddress.Parse(options.NmeaMulticastGroup), options.NmeaMulticastPort),
-    });
-    nmea = new NmeaGateway(engine, sink, startUtc);
-    Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV/ALR 1 Hz,指示值;目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,起始 UTC {startUtc:O})");
+        var endpoints = new List<IPEndPoint>
+        {
+            new(IPAddress.Loopback, options.NmeaPort),
+            new(IPAddress.Parse(options.NmeaMulticastGroup), options.NmeaMulticastPort),
+        };
+        endpoints.AddRange(options.NmeaTargets);
+        sinks.Add(new UdpNmeaSender(endpoints, options.NmeaBind));
+        Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}{(options.NmeaTargets.Count > 0 ? $" 與 {string.Join("、", options.NmeaTargets)}" : "")}{(options.NmeaBind is { } bind ? $"(綁定 {bind})" : "")}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV/ALR 1 Hz,指示值;目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,起始 UTC {startUtc:O})");
+    }
+    if (options.NmeaFile is { } nmeaFileOption)
+    {
+        try
+        {
+            var nmeaFile = new FileNmeaSink(FileNmeaSink.Resolve(root, nmeaFileOption));
+            sinks.Add(nmeaFile);
+            Console.WriteLine($"  NMEA 檔案:{RepositoryPaths.ToProjectRelative(nmeaFile.Path, root)}(與 UDP 相同句型,每句 CR LF)");
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 2;
+        }
+    }
+    nmea = new NmeaGateway(engine, sinks.Count == 1 ? sinks[0] : new CompositeNmeaSink(sinks));
 }
 
 // 內建 VHF 角色扮演頻道(docs/design/vhf-roleplay.md):獨立 WebSocket 轉送 PTT 語音/文字/DSC;通話結束、文字、DSC 寫紀錄 vhf 行(帶外、不進雜湊)
