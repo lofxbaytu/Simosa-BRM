@@ -7,6 +7,7 @@
 | `index.html` | 駕駛台儀器與操船台(規劃書第 7 章第一版 conning 顯示與操船台);船上筆電以瀏覽器全螢幕顯示,或以 WebView2 殼 `src/Shell.WebView2`(`start-ship-laptop.ps1 -Shell`;kiosk,docs/ops/安裝與啟動.md 第 4.5 節)顯示 |
 | `instructor.html` | 教官站(第 9.1 節;訪船船長直連時用)、船上簡化教官模式(`?mode=simple`)與重播檢視(`?mode=replay`,第 9.2 節講評站雛型),見下方「教官站」一節 |
 | `report.html` | 講評報告、行為標記評估表、個人訓練紀錄、課程班次紀錄與教官/證書(第 8.2、8.4、9.1、9.2 節;列印 / 另存 PDF、JSON/CSV 匯出),見下方「講評報告頁」一節 |
+| `ecdis.html` | 簡化 ECDIS(第 7.2 節 ECDIS 列;自建、顯示用、非型式認可、無 ENC):示意幾何底圖、S-52 風格水深著色與安全等深線、情境航線監控、AIS 目標 CPA/TCPA、EBL/VRM、頁面本地警報、GNSS 失效 DR 標示;唯讀、不送核心指令;設計 `docs/design/ecdis-lite.md` |
 
 技術:Vite + TypeScript(strict)+ Lit 3;pnpm;Node.js 22。**不使用** `@oicl/openbridge-webcomponents`(授權待核,規劃書附錄 C),所有元件與 CSS 自寫,配色參考 OpenBridge 設計指南的日/黃昏/夜三種主題;紅色只用於警報。字型只用系統字型(船上離線)。
 
@@ -287,7 +288,8 @@ src/Instruments.Web/
 ├─ index.html                 儀器頁入口(載入 theme.css 與 main.ts)
 ├─ instructor.html            教官站入口(載入 theme.css 與 instructor-main.ts)
 ├─ report.html                講評報告頁入口(載入 theme.css 與 report-main.ts)
-├─ vite.config.ts             進入點 index / instructor / radar / report;輸出到 build\web\instruments、快取到 .cache\vite、@data 別名指到 data\
+├─ ecdis.html                 簡化 ECDIS 頁入口(載入 theme.css 與 ecdis-main.ts;components/ecdis/*、lib/ecdis/*)
+├─ vite.config.ts             進入點 index / instructor / radar / report / ecdis;輸出到 build\web\instruments、快取到 .cache\vite、@data 別名指到 data\
 ├─ tsconfig.json              strict、Lit 裝飾器設定
 ├─ .npmrc                     pnpm 套件庫指到專案 .cache\pnpm
 ├─ src/
@@ -353,7 +355,7 @@ src/Instruments.Web/
 ## 已知限制(第一版)
 
 - 自動舵的開/關與設定航向由本頁面保存;C# 核心的 `state.autopilot` 目前只用於「不可用」標示與核心脫開時同步關閉(設定航向仍以本頁為準)。
-- 學員站儀器頁的操舵模式只有 FU/NFU/自動舵(舵機泵選擇與應急操舵目前只在教官站的操舵模式面板);航跡模式與第 7.2 節其他儀器(雷達、ECDIS、VHF)不在本版範圍;BAM 中央警報面板與 BNWAS 指示見上方「警報管理(BAM)與 BNWAS」(ALF/ALC 句型、責任轉移未實作)。
+- 學員站儀器頁的操舵模式只有 FU/NFU/自動舵(舵機泵選擇與應急操舵目前只在教官站的操舵模式面板);航跡模式不在本版範圍(雷達見 RADAR.md、簡化 ECDIS 見 `ecdis.html` 與 `docs/design/ecdis-lite.md`、VHF 見「內建 VHF」);BAM 中央警報面板與 BNWAS 指示見上方「警報管理(BAM)與 BNWAS」(ALF/ALC 句型、責任轉移未實作)。
 - 鳥瞰圖有自船、目標船與情境航線/區域,尚無海圖;目標船只畫真值位置(AIS 報告值 `ais` 已解析但未另畫 AIS 位置);3D 視景另見 `src/Visual.*`。
 - 示範模式為簡化運動學,不可用於訓練或驗證。
 - UKC 警報門檻先固定 1.0 m(警告 2.0 m),之後改由公司程序參數集提供(規劃書第 9.1 節)。
@@ -361,4 +363,4 @@ src/Instruments.Web/
 - 教官站:時間倍率與快照清單由本頁保存(狀態訊息沒有這些欄位),核心自動快照不會列出;學員操作紀錄由狀態推導,自動舵的舵令也會被記為舵令;`loadScenario` 在 Python 參考伺服器尚未實作;自船覆寫借用 `reset` 指令(C# 核心忽略 `args`);無通訊角色扮演;教官站紀錄與 BRM 標記未簽章、不含錄音錄影;本地推導的講評閾值為常數;重播檢視沒有儀器時序曲線。
 - 情境引擎(教官站側):`${params:…}` 不在教官站解析,引用的門檻顯示為「參數 key」,必要事件倒數在 `within_s` 為參數引用時需核心事件 data 帶 `deadline_t` 或 `within_s`(否則只顯示「計時中」);情境檔中的參數引用**必須加引號**(`"${params:x}"`)—— 未加引號時在 YAML 流式映射 `{ … }` 內是語法錯誤(`{`、`}` 為流式指示字元),教官站會把該情境標「有問題」;時間表項目的 `holdFor_s` / `delay_s` / `cooldown_s` 只顯示,不在教官站計時;語音音檔由 Vite 於建置時打包(新增音檔需重建),瀏覽器可能要求先有使用者互動才允許自動播放(紀錄標「被瀏覽器阻擋」,仍顯示文字);航線/區域疊圖的經緯度以情境 `origin` 平面近似換算(與核心的投影可能有公尺級差異,只供視覺參考);事件標記的位置取事件時刻的狀態抽樣(1 s)。
 
-雷達 PPI 顯示頁(`radar.html`,雷達服務 WebSocket、示範模式、EBL/VRM/PI、ARPA 表與試操船)見 [RADAR.md](RADAR.md)。
+雷達 PPI 顯示頁(`radar.html`,雷達服務 WebSocket、示範模式、EBL/VRM/PI、ARPA 表與試操船)見 [RADAR.md](RADAR.md)。簡化 ECDIS 頁(`ecdis.html`:北上/航向上、量程 0.25–24 nm、示意幾何底圖、四階水深著色與安全等深線(吃水 + UKC 下限)、情境航線 XTD/DTG/TTG/轉向點、AIS 目標、EBL/VRM ×2、本地警報、DR)見 [docs/design/ecdis-lite.md](../../docs/design/ecdis-lite.md);`?demo=1` 示範模式。

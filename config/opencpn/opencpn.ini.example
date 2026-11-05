@@ -1,0 +1,49 @@
+; OpenCPN 設定檔片段範例(Windows:%LOCALAPPDATA%\opencpn\opencpn.ini;Linux:~/.opencpn/opencpn.conf)
+; 只摘錄與 Simosa BRM 連線相關的區段;其他區段由 OpenCPN 自行產生。
+;
+; ASSUMED:DataConnections 的欄位順序依 OpenCPN 5.8 ConnectionParams::Serialize():
+;   Type;NetProtocol;NetworkAddress;NetworkPort;Protocol;SerialPort;Baudrate;ChecksumCheck;IOSelect;InputListType;InputList;
+;   OutputListType;OutputList;Priority;Garmin;GarminUpload;FurunoGP3X;Enabled;UserComment;AutoSKDiscover;socketCAN_port;...
+;   Type 1 = Network;NetProtocol 1 = UDP;Protocol 0 = NMEA 0183;ChecksumCheck 1;IOSelect 0 = 只輸入;ListType 0 = 白名單(空 = 不過濾);
+;   Priority 1;Enabled 1。不同版次欄位數不同,未在實機核對 — 請先用 GUI(Options → Connections)建立一次,再比對 OpenCPN 寫出的行;
+;   多個連線以 '|' 分隔。
+;
+; 連線 A:同機單播(船上筆電/岸上單機;Host --nmea-port 10110 預設)
+; 連線 B:教官筆電多播(Host --nmea-multicast 239.192.0.1:60001 預設;教官筆電只啟用直連介面)
+; 連線 C:教官筆電單播備援(Host 加 --nmea-target 192.168.77.21:10110)— 與 A 相同的設定,擇一
+; 連線 D:雷達服務 ARPA(Sensors.Radar.Host X 頻 $RATTM/$RATLL,UDP 10111)
+
+[Settings/NMEADataSource]
+DataConnections=1;1;0.0.0.0;10110;0;;0;1;0;0;;0;;1;0;0;0;1;Simosa BRM NMEA (unicast);0;|1;1;239.192.0.1;60001;0;;0;1;0;0;;0;;1;0;0;0;1;Simosa BRM NMEA (multicast 61162-450);0;|1;1;0.0.0.0;10111;0;;0;1;0;0;;0;;2;0;0;0;0;Simosa BRM radar ARPA X (TTM/TLL);0;
+
+[Settings/AIS]
+; 顯示 AIS 目標與名稱;位置報告每 10 s,失聯判定放寬到 60 s;CPA/TCPA 警報與情境 assessment.minCpa_nm 一致(E05 = 0.5 nm)
+ShowAIS=1
+ShowAISName=1
+bShowAreaNotices=0
+bDrawAISSize=1
+bDrawAISRealtime=0
+bAISRolloverShowClass=1
+bAISRolloverShowCOG=1
+bAISRolloverShowCPA=1
+bCPAMax=1
+CPAMaxNMi=1.0
+bCPAWarn=1
+CPAWarnNMi=0.5
+bTCPAMax=1
+TCPAMaxMinutes=12
+bMarkLost=1
+MarkLost_Minutes=1
+bRemoveLost=1
+RemoveLost_Minutes=10
+bShowARPATargets=1
+AISAlertAudio=1
+
+[Settings/Others]
+; 自船:顯示艏向線(HDT)與 COG 預測線;速度 kn、深度 m
+ShowHeadingLine=1
+OwnshipCOGPredictorMinutes=6
+SDMMFormat=0
+DistanceFormat=0
+SpeedFormat=0
+DepthUnit=0

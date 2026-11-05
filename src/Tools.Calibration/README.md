@@ -89,6 +89,22 @@ ws.send(JSON.stringify({ type: "injectFault", value: "steeringGear" }));
 - **結構檢查** `scenario.structural_issues(raw)`(C# `Scenario.StructuralIssues` 的便宜規則,第一個錯誤即 `ValueError`):時間表 `id` 唯一、`when` 條件型別/必要欄位/參照(區域、航點、目標)、`repeat`、動作名稱在允許清單(`loadScenario`/`reset`/`restore`/`snapshot` 不允許)與各動作必要欄位;航線航點 ≥ 2、`name` 唯一、位置、`startLeg`、相鄰航點不重合;區域 `id` 唯一、`type`、多邊形 3–64 點、水深為正;評估規則 `id` 唯一、`rule`/`metric`/`expect` 名稱、`lessThan`、`zoneId`/`itemId`/`waypoint` 參照、`within_s`;簡報 `roles[].role`、`minParticipants`、`duration_s`。不做初始狀態相關檢查(初始 UKC、禁區、多邊形自交等由 C# `ScenarioValidator` 負責)。
 - **跨語言一致性測試**:對 `data/scenarios/*.yaml` 以 Python 載入+解析,與 C# 紀錄夾具(`src/Instruments.Web/tests/fixtures/record-*-core.jsonl` 第一行 `header.scenario` / `header.parameterSet`)比對解析路徑集合、鍵集合、版次、各已解析數值(1e-9)與 route/zones/assessment/timeline/briefing 的全部葉值(Python 為 C# 輸出的子集)。E07 夾具錄製後 YAML 與參數集又改過(CPA 門檻改用 `navigation.cpa.channel_nm`、ecrPrompt 條件),差異列在測試的 `KNOWN_FIXTURE_DRIFT`,重新錄製夾具後可清空。
 
+### NMEA 一致性檢驗(`nmea_check.py`,2026-11;規劃書第 14 章「儀器 NMEA」列)
+
+```bash
+uv run python -m simosa_brm.nmea_check --file ../../build/nmea/E05.nmea --state ../../build/records/<紀錄>.jsonl --report ../../build/nmea/report.md
+uv run python -m simosa_brm.nmea_check --udp 10110 --seconds 30 --ws ws://127.0.0.1:8765        # 即時單播 + 連核心狀態比對
+uv run python -m simosa_brm.nmea_check --multicast 239.192.0.1:60001 --iface 192.168.77.21 --seconds 30
+```
+
+接收 SimCore.Host 的 NMEA(UDP 單播/多播即時擷取,或 Host `--nmea-file` 寫出的 .nmea)並檢查:校驗和、句長、talker、IEC 61162-1 欄位數(`SPECS`,
+與 C# `NmeaTests.Iec61162FieldCounts` 同表)、各句型速率(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV 1 Hz,每目標 TTM 1 Hz,每警報 ALR 1 Hz,
+AIS 類型 1 每 10 s;±20%,以完整秒窗計)、時間戳單調與同批一致、GNSS 失效的有效旗標一致(GGA 品質 0 ⇔ RMC V ⇔ VTG N ⇒ VBW 對地 V)、
+!AIVDM 多句組合與類型 1/5 解碼、ALR 欄位;`--ws`/`--state` 時以 RMC 日期 + GGA 時刻對上同一時刻的 state 比對位置(≤ 3 m)/航向/水深/SOG/COG(≤ 0.05 單位)
+與 `sensors.*Valid`。Markdown 報告 + 可選 JSON;結束碼 0 通過 / 1 不合格 / 2 輸入錯誤。
+夾具 `tests/fixtures/nmea/E05_gpsfailure_10s.nmea`(+ `.state.jsonl`)由 C# Host 以 `--nmea-file --record` 實跑 10 s 產生(第 5 秒注入 gpsFailure),
+測試 `tests/test_nmea_check.py`。OpenCPN 連線設定與實機驗收:`config/opencpn/README.md`、`tools/opencpn-check.md`。
+
 ## 套件結構
 
 | 模組 | 內容 |

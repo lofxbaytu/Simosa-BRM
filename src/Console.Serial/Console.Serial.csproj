@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- USB 實體操控台服務(規劃書第 5.4 節精簡版操控台;協定 src/Contracts/console-serial.md):
+       Teensy USB CDC 序列埠(或 ‑‑loopback 檔案/管道)的文字行 ↔ SimCore.Host 狀態/指令 WebSocket(ws://127.0.0.1:8765)。
+       命名空間用 SimosaBRM.ConsoleSerial(避免 SimosaBRM.Console 遮蔽 System.Console);組件名稱沿用資料夾 Console.Serial。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SimosaBRM.ConsoleSerial</RootNamespace>
+    <AssemblyName>SimosaBRM.Console.Serial</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 序列埠(固定版號;只在 ‑‑port 時實際使用,loopback 模式不載入) -->
+    <PackageReference Include="System.IO.Ports" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SimCore/SimCore.csproj" />
+  </ItemGroup>
+</Project>

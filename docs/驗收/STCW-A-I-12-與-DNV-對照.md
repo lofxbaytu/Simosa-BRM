@@ -19,7 +19,7 @@
 | 段 | 條文摘要 | 本系統對應(模組/情境/文件) | 狀態 | 缺項/備註 |
 |---|---|---|---|---|
 | 1.1 | 適合選定的目標與訓練任務 | 用途定為內部 BRM 複訓、船舶熟悉、靠離泊預演(規劃書第 1.4、8.0 節);情境庫 E01–E22、F01–F03 對應 A-II/1、A-II/2、A-VIII/2 與 1.22/1.39(第 8.1 節「對應法規」欄);`docs/訓練/BRM-課程大綱.md` | 部分 | 情境與課程大綱已有;適合性須由試行課程(第 14 章「課程」)確認 → 需實機 |
-| 1.2 | 以符合訓練目標的實體擬真程度模擬船上設備的操作能力,含能力、限制與可能誤差 | 儀器頁 `src/Instruments.Web/`(船上以 WebView2 外殼 `src/Shell.WebView2` kiosk 全螢幕顯示;已實作(軟體),實機需 Windows 驗證)、感測器真值/指示值與故障 `src/SimCore/Sensors/`、雷達/ARPA `src/Sensors.Radar/`、故障目錄 `src/Contracts/fault-catalogue.json`(R1);自船動態 `src/SimCore/Physics/`(R2) | 部分 | 同 R1:ECDIS(OpenCPN 整合/自建 S-52/ENC 管理)、磁羅經、機艙操作模式未實作(VHF/DSC 已以內建角色扮演頻道實作,`docs/design/vhf-roleplay.md`);同 R2:浪只有平均漂移力(`Physics/External/WaveDrift.cs`;一階振盪未實作,橫搖為解耦 1 自由度 `Physics/RollModel.cs`)、船間交互作用為單向細長體線源模型(`Physics/External/ShipInteraction.cs`;係數為文獻量級估計) |
+| 1.2 | 以符合訓練目標的實體擬真程度模擬船上設備的操作能力,含能力、限制與可能誤差 | 儀器頁 `src/Instruments.Web/`(船上以 WebView2 外殼 `src/Shell.WebView2` kiosk 全螢幕顯示;已實作(軟體),實機需 Windows 驗證)、感測器真值/指示值與故障 `src/SimCore/Sensors/`、雷達/ARPA `src/Sensors.Radar/`、故障目錄 `src/Contracts/fault-catalogue.json`(R1);自船動態 `src/SimCore/Physics/`(R2) | 部分 | 同 R1:ECDIS 僅自建簡化頁 `ecdis.html`(非認可、無 ENC;OpenCPN 整合需實機)、磁羅經、機艙操作模式未實作(VHF/DSC 已以內建角色扮演頻道實作,`docs/design/vhf-roleplay.md`);同 R2:浪只有平均漂移力(`Physics/External/WaveDrift.cs`;一階振盪未實作,橫搖為解耦 1 自由度 `Physics/RollModel.cs`)、船間交互作用為單向細長體線源模型(`Physics/External/ShipInteraction.cs`;係數為文獻量級估計) |
 | 1.3 | 足夠的行為擬真度使學員能習得符合訓練目標的技能 | MMG 3 自由度模型以 FSB1 試俥校正(`build/calibration/FSB1/validation.full.md`;23/26 在公差內),FSB2 以海報值;淺水/squat/岸壁/側推趨勢由自動測試固定 | 部分 / 需實機 | FSB2 試俥報告與兩船壓載實測待取得;船長/引水人主觀評價 ≥4/5 需實機(第 14 章物理) |
 | 1.4 | 可控制的操作環境,能產生各種情況,含與訓練目標相關的緊急、危險或異常情況 | 情境引擎 `src/SimCore/Scenario/`(時間表、觸發、動作、環境漸變)、交通/COLREG `src/SimCore/Traffic/`、故障注入 `src/SimCore/Engine/`;E07–E12、E19 緊急情境 | 已實作 | 時變流場(`TidalStreamTests`)與浪的平均漂移力(`WaveDriftTests`)已實作;浪的一階振盪/橫搖為 R2/R3 缺項,不影響本段的「可控制」要件 |
 | 1.5 | 學員與設備、模擬環境及教官互動的介面 | 操船台/儀器頁、雷達頁(WebView2 外殼 `src/Shell.WebView2` 全螢幕,`start-ship-laptop.ps1 -Shell`)、視景 `src/Visual.Godot/`;教官站 `instructor.html`;內建 VHF 角色扮演頻道 `<brm-vhf>`(`src/SimCore.Host/VhfRelayServer.cs`、`src/Instruments.Web/src/components/vhf-panel.ts`;`VhfRelayTests`、vitest `vhf*`) | 已實作 / 需實機 | VHF 為內建軟體模擬(PTT 語音 webm/opus、文字、DSC 簡化、雙守聽;非真實傳播,`docs/design/vhf-roleplay.md` 第 6 節),取代 Mumble;語音腳本仍可用(第 9.1 節);船上麥克風授權與耳麥配置需實機 |
@@ -139,7 +139,7 @@
 | 項目 | Class A 要求摘要 | 本系統對應 | 狀態 | 缺項/備註 |
 |---|---|---|---|---|
 | 雷達/ARPA | 符合 IMO 性能標準的功能 | `src/Sensors.Radar/`(第 2.3、2.4 節) | 部分 | 同第 2.3、2.4 節 |
-| ECDIS | 航線規劃/監控、警報、ENC | — | 未實作 | OpenCPN 整合未做整合測試;自建 S-52 未做;`data/charts/` 空(R1) |
+| ECDIS | 航線規劃/監控、警報、ENC | 自建簡化 ECDIS 頁 `src/Instruments.Web/ecdis.html`(`src/components/ecdis/`、`src/lib/ecdis/`;vitest `ecdis-*`;`docs/design/ecdis-lite.md`):情境航線監控(XTD/DTG/TTG/轉向點、抵達切換)、S-52 風格四階水深著色與安全等深線(最大吃水 + UKC 下限)、AIS 目標 CPA/TCPA、禁區/感測器本地警報、GNSS 失效 DR | 部分 | 非型式認可、非 S-57/S-63 ENC(底圖為 `data/areas` 示意幾何,`data/charts/` 空)、無航線規劃與 ENC 管理、警報為頁面本地(不送核心);OpenCPN 整合測試需實機(R1) |
 | 操舵系統 | FU/NFU/自動舵/航跡;應急操舵 | `ActuatorModel.cs` `steeringMode`(`SteeringModeTests`) | 已實作 | 航跡模式依 ECDIS,未實作 |
 | 主機控制 | 車鐘、轉速/螺距、控制位置、SBE/FWE | 車鐘與主機狀態(儀器頁) | 部分 | 機艙操作模式指示未實作(R1) |
 | 羅經 | 電羅經、磁羅經(自差) | 電羅經與故障(E08) | 部分 | 磁羅經未實作(R1) |
@@ -179,7 +179,7 @@
 |---|---|---|---|---|---|---|
 | A-I/12 第 1 部分(第 1–4 段) | 16 | 7 | 7 | 1 | 1 | 2(1.3、1.5) |
 | A-I/12 第 2 部分(第 5–8 段) | 15 | 5 | 10 | 0 | 0 | 3(6.4、7.2、7.5) |
-| DNV Class A 功能清單 | 47 | 23 | 17 | 1 | 3 | 4 |
+| DNV Class A 功能清單 | 47 | 23 | 18 | 0 | 3 | 4 |
 
 > 計數規則:依第 4 節各表「狀態」欄逐列點算(「已實作 / 需實機」計入已實作並同時計入需實機欄;「不適用 / 未實作」計入不適用);更新任一列狀態時須重新點算本表。
 

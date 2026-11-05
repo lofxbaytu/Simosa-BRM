@@ -246,11 +246,13 @@ export class EcdisStore {
       this.routeMonitor = null;
     }
     this.state = state;
-    const key = `${state.scenario?.id ?? ''}|${state.shipId}|${state.loading}|${this.chart.origin ? 1 : 0}`;
-    if (key !== this.chartKey || (!this.chart.origin && state.pos.lat !== 0)) {
+    // 底圖只在情境/船/裝載改變,或狀態首次帶有經緯度(可反推原點)時重建;不逐幀重建
+    const hasGeo = Number.isFinite(state.pos.lat) && Number.isFinite(state.pos.lon) && (state.pos.lat !== 0 || state.pos.lon !== 0);
+    const key = `${state.scenario?.id ?? ''}|${state.shipId}|${state.loading}|${hasGeo ? 'geo' : 'nogeo'}`;
+    if (key !== this.chartKey) {
       const summary = state.scenario?.id ? this.scenarios().find((s) => s.id === state.scenario!.id) ?? null : null;
       this.chart = buildChart(summary, state, this.areaFiles);
-      this.chartKey = `${state.scenario?.id ?? ''}|${state.shipId}|${state.loading}|${this.chart.origin ? 1 : 0}`;
+      this.chartKey = key;
       this.routeMonitor = this.chart.route ? new RouteMonitor(this.chart.route, 0) : null;
     }
     const posValid = state.sensors?.positionValid ?? true;

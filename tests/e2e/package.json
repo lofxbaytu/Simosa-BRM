@@ -1,0 +1,20 @@
+{
+  "name": "@simosa-brm/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Simosa BRM 端對端測試:真實 Chromium(Playwright)+ 真實 SimCore.Host / Sensors.Radar.Host / simosa-web(docs/design/testing.md)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "report": "playwright show-report ../../build/e2e/report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}
