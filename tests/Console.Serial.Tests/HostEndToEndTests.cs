@@ -68,6 +68,8 @@ public class HostEndToEndTests
             if (probe() is { } v) return v;
             await Task.Delay(50);
         }
+        // 執行緒池被擠時 Task.Delay 的接續可能晚很多才排到:逾時前再探一次,避免「條件已成立但最後一次探測早於它」被判逾時(CI run 55)
+        if (probe() is { } last) return last;
         throw new Xunit.Sdk.XunitException($"逾時 {timeout.TotalSeconds:0} s:{what()}");
     }
 
@@ -92,6 +94,7 @@ public class HostEndToEndTests
         };
         foreach (var a in new[] { hostDll, "--scenario", "data/scenarios/E05_pilot_traffic.yaml", "--port", port.ToString(), "--no-udp", "--no-nmea", "--no-vhf", "--no-media", "--no-stop-file", "--dynamics", "placeholder" })
             psi.ArgumentList.Add(a);
+        var started = Stopwatch.StartNew(); // 診斷用:log 帶自 Host 啟動起的秒數,逾時訊息能看出連線發生在第幾秒
         var host = Process.Start(psi)!;
         var stdout = host.StandardOutput.ReadToEndAsync();
         var stderr = host.StandardError.ReadToEndAsync();
@@ -112,8 +115,8 @@ public class HostEndToEndTests
             var sentLines = new List<string>();
             var sentCommands = new List<SimCommand>();
             core.FrameReceived += f => { if (ConsoleStateView.TryParse(f) is { } v) lock (frames) frames.Add(v); };
-            core.Log += m => { lock (logs) logs.Add($"[core] {m}"); };
-            var bridge = new ConsoleBridge(device, core, session, m => { lock (logs) logs.Add(m); });
+            core.Log += m => { lock (logs) logs.Add($"[{started.Elapsed.TotalSeconds:F1}s][core] {m}"); };
+            var bridge = new ConsoleBridge(device, core, session, m => { lock (logs) logs.Add($"[{started.Elapsed.TotalSeconds:F1}s]{m}"); });
             bridge.DeviceLineSent += l => { lock (sentLines) sentLines.Add(l); };
             bridge.CommandSent += c => { lock (sentCommands) sentCommands.Add(c); };
             using var cts = new CancellationTokenSource();
@@ -129,7 +132,8 @@ public class HostEndToEndTests
 
             // 等核心連線後握手(CS:之後每行帶校驗和,主機回寫亦帶)
             string Diag() { lock (logs) return string.Join("\n", logs.TakeLast(12)); }
-            await WaitUntilAsync(() => core.Connected ? "ok" : null, TimeSpan.FromSeconds(60), () => $"核心 WebSocket 連線(Host 已開埠 {port};log:\n{Diag()}\nHost stdout:\n{(host.HasExited ? stdout.Result : "(執行中)")})");
+            // Windows CI 的 runner 被其他測試主機擠時,從開埠到握手完成曾接近 60 s(run 55;本機 < 1 s):放寬到 120 s
+            await WaitUntilAsync(() => core.Connected ? "ok" : null, TimeSpan.FromSeconds(120), () => $"核心 WebSocket 連線(Host 已開埠 {port},開埠於 {started.Elapsed.TotalSeconds:F1} s 內;log:\n{Diag()}\nHost stdout:\n{(host.HasExited ? stdout.Result : "(執行中)")})");
             await deviceWriter.WriteLineAsync(LineChecksum.Append("HELLO,1.0.0,RUD+TEL+BTN+NFU+LED+DISP+BUZZ+CS"));
             var ack = await WaitUntilAsync(() => Received(l => l.StartsWith("ACK")), TimeSpan.FromSeconds(10), "ACK");
             Assert.Equal(LineChecksum.Append("ACK"), ack);
