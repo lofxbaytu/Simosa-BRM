@@ -8,6 +8,7 @@
   3) 啟動合成客戶端 tests\soak\clients.mjs(N 個;狀態幀 + 雷達 X 頻影像 + 網頁 GET;每秒統計幀率/延遲/斷線)與學員 tests\soak\student.mjs
      (每 10 s 舵令/車令、每 60 s 注入/清除故障、每 5 min 快照)
   4) 每 -SampleSeconds s 取樣主控程序 CPU%(TotalProcessorTime 差 / 牆鐘)、RSS(WorkingSet64)、執行緒數、steps/s 與掉拍(主控程序 stdout 行);雷達/網頁/客戶端程序的 CPU 與 RSS;
+     客戶端與學員都已結束(時間到)後取到的那一筆不寫(客戶端斷線時核心釋放連線常有 RSS 尖峰;report.mjs 另排除 elapsed 超過設定時長或 clients.alive=false 的樣本);
      dotnet-counters(PATH 或 .cache\dotnet-tools)可用時另收 System.Runtime GC 計數器,否則略過
   5) 時間到 → stop-all.ps1(停止檔讓核心寫完紀錄 footer)→ node tests\soak\report.mjs 寫 build\soak\report-<run>.md 與 .json 並判定
   全部輸出在 build\soak\(不寫 C:\);結束碼 0 合格、1 不合格(含中止)、2 前置條件錯誤。需獨佔 CPU,不要與整套測試併行。
@@ -232,6 +233,9 @@ try {
         $elapsed = [math]::Round($nowMs / 1000, 1)
         $hj = Get-ProcJson 'host' $script:hostProc $dWall; $rj = Get-ProcJson 'radar' $script:radarProc $dWall; $wj = Get-ProcJson 'web' $script:webProc $dWall; $cj = Get-ProcJson 'clients' $script:clientsProc $dWall
         $steps = Get-HostLogJson $hostLog
+        # 客戶端與學員都已結束(時間到、核心仍在)→ 這一筆是收尾樣本,不寫:客戶端斷線時核心釋放連線與訂閱常有 RSS 尖峰,不該混入 RSS 擬合
+        # (與 tools/soak-test.sh 同步;report.mjs 對舊紀錄另以 elapsed_s > 設定時長或 clients.alive=false 排除)
+        if ($script:clientsProc.HasExited -and $script:studentProc.HasExited -and -not $script:hostProc.HasExited) { Write-Host ("  {0,6}s  客戶端與學員已結束,本筆不寫(收尾)" -f $elapsed); break }
         $hj = $hj.Substring(0, $hj.Length - 1) + (',"stepsPerS":{0},"dropped":{1}}}' -f $steps, $script:dropped)
         $line = '{{"kind":"sample","wall":"{0}","elapsed_s":{1},"host":{2},"radar":{3},"web":{4},"clients":{5}}}' -f (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'), $elapsed.ToString([cultureinfo]::InvariantCulture), $hj, $rj, $wj, $cj
         Add-Content -Path $hostStats -Value $line -Encoding UTF8

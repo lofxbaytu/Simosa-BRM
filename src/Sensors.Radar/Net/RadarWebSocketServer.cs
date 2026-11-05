@@ -29,7 +29,9 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         public Channel<byte[]> Json { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest });
     }
 
-    private readonly HttpListener _listener = new();
+    /// <summary>已啟動的 listener(TryStart 成功後才有;Start 失敗的 listener 不保留,見 HttpListenerStarter)</summary>
+    private HttpListener? _listener;
+    private int _disposed;
     private readonly ConcurrentDictionary<Guid, Client> _clients = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly HashSet<string> _radars;
@@ -37,7 +39,12 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
     private Task? _acceptLoop;
 
     public int Port { get; }
+    /// <summary>實際監聽的前綴(所有介面,或僅 localhost);未啟動/啟動失敗為 null</summary>
     public string? Prefix { get; private set; }
+    /// <summary>啟動失敗的原因(埠被占用、無 URL ACL…;<see cref="TryStart"/> 回 false 後可讀);成功或尚未啟動為 null</summary>
+    public string? StartError { get; private set; }
+    /// <summary>已成功啟動(可接受連線)</summary>
+    public bool Started => _listener is not null;
     public ConcurrentQueue<RadarCommandRequest> Commands { get; } = new();
     public event Action<string>? Log;
     /// <summary>客戶端連線(radarId, clientId);主控程式據以送出 status。</summary>
@@ -98,37 +105,31 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
     public List<Guid> ClientIds(string radarId)
         => _clients.Where(kv => string.Equals(kv.Value.RadarId, radarId, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Key).OrderBy(g => g).ToList();
 
+    /// <summary>
+    /// 先試所有介面(allInterfaces),Windows 無 URL ACL 時以新的 HttpListener 退回 localhost + 127.0.0.1;
+    /// 皆失敗(典型為埠被占用)回 false 並設定 <see cref="StartError"/>,不拋例外;物件可直接 <see cref="DisposeAsync"/>。
+    /// </summary>
+    public bool TryStart(out string? error)
+    {
+        if (_listener is not null) throw new InvalidOperationException("RadarWebSocketServer 已啟動");
+        if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(RadarWebSocketServer));
+        var listener = HttpListenerStarter.StartWithFallback(Port, "radar/", _allInterfaces, msg => Log?.Invoke(msg), out var prefix, out error);
+        if (listener is null)
+        {
+            StartError = error;
+            return false;
+        }
+        _listener = listener;
+        Prefix = prefix;
+        StartError = null;
+        _acceptLoop = Task.Run(() => AcceptLoopAsync(listener));
+        return true;
+    }
+
+    /// <summary>同 <see cref="TryStart"/>,失敗時拋 <see cref="HttpListenerException"/>(訊息含埠與原因;物件仍可安全釋放)。</summary>
     public void Start()
     {
-        var wildcard = $"http://*:{Port}/radar/";
-        var local = $"http://localhost:{Port}/radar/";
-        var loopback = $"http://127.0.0.1:{Port}/radar/"; // HttpListener 以 Host 標頭比對前綴:ws://127.0.0.1 的客戶端需要這一條
-        if (_allInterfaces)
-        {
-            try
-            {
-                _listener.Prefixes.Add(wildcard);
-                _listener.Start();
-                Prefix = wildcard;
-            }
-            catch (HttpListenerException ex)
-            {
-                _listener.Prefixes.Clear();
-                _listener.Prefixes.Add(local);
-                _listener.Prefixes.Add(loopback);
-                _listener.Start();
-                Prefix = local;
-                Log?.Invoke($"無法監聽 {wildcard}({ex.Message});改為只監聽 {local}。遠端站別需設定 URL ACL:netsh http add urlacl url={wildcard} user=Everyone");
-            }
-        }
-        else
-        {
-            _listener.Prefixes.Add(local);
-            _listener.Prefixes.Add(loopback);
-            _listener.Start();
-            Prefix = local;
-        }
-        _acceptLoop = Task.Run(AcceptLoopAsync);
+        if (!TryStart(out var error)) throw new HttpListenerException(0, $"埠 {Port} 無法監聽:{error}");
     }
 
     public void PublishFrame(string radarId, byte[] frame)
@@ -154,12 +155,12 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         if (_clients.TryGetValue(clientId, out var c)) c.Frames.Writer.TryWrite(frame);
     }
 
-    private async Task AcceptLoopAsync()
+    private async Task AcceptLoopAsync(HttpListener listener)
     {
         while (!_cts.IsCancellationRequested)
         {
             HttpListenerContext ctx;
-            try { ctx = await _listener.GetContextAsync().ConfigureAwait(false); }
+            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
             catch (Exception) when (_cts.IsCancellationRequested) { break; }
             catch (HttpListenerException) { continue; }
             catch (ObjectDisposedException) { break; }
@@ -269,10 +270,13 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         catch (Exception) { }
     }
 
+    /// <summary>停止監聽並中止所有客戶端;可重複呼叫、啟動失敗後也可呼叫,不拋例外。</summary>
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
-        try { _listener.Stop(); } catch (Exception) { }
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { _cts.Cancel(); } catch (Exception) { }
+        var listener = _listener;
+        if (listener is not null) { try { listener.Stop(); } catch (Exception) { } }
         foreach (var c in _clients.Values)
         {
             try { c.Socket.Abort(); } catch (Exception) { }
@@ -281,7 +285,8 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         {
             try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { }
         }
-        _listener.Close();
+        HttpListenerStarter.Discard(listener);
+        _listener = null;
         _cts.Dispose();
     }
 }

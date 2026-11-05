@@ -80,7 +80,7 @@ if (options.Replay is { } replayPath)
         if (await rc.TryConnectAsync(TimeSpan.FromSeconds(1.5)))
         {
             radarReplay = rc;
-            Console.WriteLine($"  雷達服務已連線:{rc.Uri}(radarControl 行將重放;狀態推送 ws://0.0.0.0:{options.Port},步調 ×{options.TimeScale ?? 1:F1})");
+            Console.WriteLine($"  雷達服務已連線:{rc.Uri}(radarControl 行將重放;狀態推送埠 {options.Port} 於重播啟動時確認,步調 ×{options.TimeScale ?? 1:F1})");
         }
         else
         {
@@ -106,10 +106,19 @@ if (options.Replay is { } replayPath)
         if (radarReplay is null) return;
         if (options.EnableWebSocket)
         {
-            replayWs = new WebSocketStateServer(e, options.Port) { ReadOnly = true };
-            replayWs.Log += msg => Console.WriteLine($"  [ws] {msg}");
-            replayWs.Start();
-            e.Broadcast += (_, st) => replayWs.Publish(ContractJson.SerializeToUtf8Bytes(st));
+            var pushWs = new WebSocketStateServer(e, options.Port) { ReadOnly = true };
+            pushWs.Log += msg => Console.WriteLine($"  [ws] {msg}");
+            if (pushWs.TryStart(out var pushError))
+            {
+                replayWs = pushWs;
+                e.Broadcast += (_, st) => pushWs.Publish(ContractJson.SerializeToUtf8Bytes(st));
+            }
+            else
+            {
+                // 埠被占用(例如即時模式的核心仍在跑):雷達重播只少了狀態推送,radarControl 行仍重放,不中止重播
+                pushWs.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                replayNotes.Add($"埠 {options.Port} 被占用或無法監聽({pushError}):狀態 WebSocket 未啟動,雷達畫面不會跟著重播(以 --port 改埠)");
+            }
         }
         e.CommandApplied += (eng, cmd, _) => { if (cmd.Type == SimCommandType.RadarControl) radarReplay.Send(cmd, eng.Time); };
     }
@@ -275,7 +284,22 @@ if (options.EnableWebSocket)
 {
     ws = new WebSocketStateServer(engine, options.Port) { HostCommandHandler = router.Handle };
     ws.Log += msg => Console.WriteLine($"  [ws] {msg}");
-    ws.Start();
+    if (!ws.TryStart(out var wsError))
+    {
+        // 狀態 WebSocket 是各站(操船台/教官站/雷達/操控台)的唯一入口,無法監聽就沒有練習可做(交接紀錄第二十四輪待辦第 1 項):
+        // 印清楚訊息、已開的紀錄寫完 footer、釋放已建立的物件,以結束碼 2 優雅結束(不是未處理例外);選配的 VHF/錄影埠被占用則只停用該服務(下方)
+        Console.WriteLine($"埠 {options.Port} 被占用或無法監聽({wsError}):狀態 WebSocket 未啟動,核心無法提供服務,結束(結束碼 2)。以 --port 改埠,或以 stop-all 清掉占住埠的殘留程序後重新啟動");
+        Console.Error.WriteLine($"埠 {options.Port} 被占用或無法監聽:狀態 WebSocket 未啟動,核心結束(結束碼 2)");
+        await ws.DisposeAsync();
+        if (router.Recorder is { Closed: false } openRecord)
+        {
+            var footer = openRecord.Close();
+            Console.WriteLine($"紀錄已關閉:{openRecord.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…,檔案 SHA-256 {footer.Sha256[..16]}…)");
+        }
+        shutdown.MarkFinished();
+        Console.WriteLine("結束(原因:portInUse)。");
+        return 2;
+    }
     Console.WriteLine($"  WebSocket:{ws.Prefix!.Replace("http://", "ws://").Replace("*", "0.0.0.0")}(推送 OwnShipState JSON 每 40 ms;接收 SimCommand JSON;sessionInfo / shutdown 由主控程序回 ack)");
 }
 
@@ -298,15 +322,12 @@ if (options.EnableMedia)
         return 2;
     }
     media.Log += msg => Console.WriteLine($"  [media] {msg}");
-    try
-    {
-        media.Start();
+    if (media.TryStart(out var mediaError))
         Console.WriteLine($"  錄影上傳:{media.Prefix!.Replace("*", "0.0.0.0")}media/(POST start/chunk/stop;目錄 {RepositoryPaths.ToProjectRelative(media.MediaDir, root)},每段上限 {options.MediaMaxMb} MB;只接受本機/直連網段)");
-    }
-    catch (HttpListenerException ex)
+    else
     {
-        // 埠被占用(例如同機第二個核心程序)不影響練習:錄影停用,教官站面板會顯示無法連線
-        Console.WriteLine($"  錄影上傳端無法監聽埠 {options.MediaPort}({ex.Message}):錄影停用(以 --media-port 改埠或 --no-media 關閉)");
+        // 錄影為選配:埠被占用(例如同機第二個核心程序)不影響練習,錄影停用,核心照常執行(教官站錄影面板會顯示無法連線)
+        Console.WriteLine($"  埠 {options.MediaPort} 被占用或無法監聽({mediaError}):錄影上傳未啟動(錄影停用),核心照常執行;以 --media-port 改埠或 --no-media 關閉");
         await media.DisposeAsync();
         media = null;
     }
@@ -367,15 +388,12 @@ if (options.EnableVhf)
         router.Recorder?.WriteVhf(ev);
         ws?.PublishEvent(ContractJson.SerializeToUtf8Bytes(new { type = "event", @event = ev }));
     };
-    try
-    {
-        vhf.Start();
+    if (vhf.TryStart(out var vhfError))
         Console.WriteLine($"  VHF 角色扮演:{vhf.Prefix!.Replace("http://", "ws://").Replace("*", "0.0.0.0")}(頻道 {string.Join("/", VhfRelayServer.Channels)};PTT 語音 webm/opus、文字、DSC;通話寫紀錄 vhf 行)");
-    }
-    catch (Exception ex) when (ex is System.Net.HttpListenerException or ObjectDisposedException or InvalidOperationException)
+    else
     {
         // VHF 為選配:埠被占用等啟動失敗只提示,核心照常執行(學員站/教官站面板顯示「未連線」)
-        Console.Error.WriteLine($"  VHF 角色扮演未啟動(埠 {options.VhfPort}):{ex.Message};以 --vhf-port 改埠或 --no-vhf 關閉");
+        Console.WriteLine($"  埠 {options.VhfPort} 被占用或無法監聽({vhfError}):VHF 角色扮演未啟動,核心照常執行;以 --vhf-port 改埠或 --no-vhf 關閉");
         await vhf.DisposeAsync();
         vhf = null;
     }

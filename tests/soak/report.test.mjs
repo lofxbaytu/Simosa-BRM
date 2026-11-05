@@ -1,6 +1,6 @@
 // tests/soak/report.mjs 與 lib.mjs 的單元測試(Node 內建 test runner:node --test tests/soak/;無套件相依)。
 // 以合成的執行目錄(meta.json、stats/*.jsonl)驗證判定準則:合格案例、掉拍/延遲/RSS 成長/斷線/學員未確認/主控程序未寫 footer 各自不合格;
-// 直方圖分位數與延遲估計器的行為。暫存目錄在專案內 build/test-tmp/soak/(CLAUDE.md)。
+// 客戶端收尾後的樣本(elapsed_s 超過設定時長或 clients.alive=false)不入 RSS 擬合;直方圖分位數與延遲估計器的行為。暫存目錄在專案內 build/test-tmp/soak/(CLAUDE.md)。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,7 +12,7 @@ import { loadRun, renderMarkdown, slope, summarise } from './report.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TMP = path.join(ROOT, 'build', 'test-tmp', 'soak');
 
-function writeRun(name, { minutes = 10, clients = 3, dropped = 0, rssSlopeMbPerMin = 0, latencyP95 = 12, disconnects = 0, unconfirmed = 0, rejected = 0, footer = true, hostExit = 0, tickRate = 50.0 } = {}) {
+function writeRun(name, { minutes = 10, clients = 3, dropped = 0, rssSlopeMbPerMin = 0, latencyP95 = 12, disconnects = 0, unconfirmed = 0, rejected = 0, footer = true, hostExit = 0, tickRate = 50.0, tailSpikeMb = 0, clientsDeadFrom_s = Infinity, spikeAt_s = Infinity, spikeMb = 80 } = {}) {
   const dir = path.join(TMP, name);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, 'stats'), { recursive: true });
@@ -20,10 +20,16 @@ function writeRun(name, { minutes = 10, clients = 3, dropped = 0, rssSlopeMbPerM
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ run: name, scenario: 'E05_pilot_traffic', clients, minutes, startedUtc: '2026-11-05T00:00:00Z', endedUtc: '2026-11-05T00:10:00Z', platform: 'test', hostExit, footer, aborted: false, gitRev: 'abc' }));
   // 主控程序每 10 s 取樣:RSS = 120 MB + 斜率 × 分鐘(暖機 120 s 前多加 20 MB 的上升段)
   const host = [];
+  // clientsDeadFrom_s 起的樣本 clients.alive=false 並加 spikeMb;spikeAt_s 起(客戶端仍存活、時長內)加 spikeMb:對照組,應計入擬合
+  const clientsJson = (alive) => (alive ? { alive: true, cpu_pct: 2, rss_mb: 88, threads: 7 } : { alive: false, cpu_pct: null, rss_mb: null, threads: null });
   for (let e = 0; e <= minutes * 60; e += 10) {
     const warm = e < 120 ? (20 * e) / 120 : 20;
-    host.push({ kind: 'sample', elapsed_s: e, host: { alive: true, cpu_pct: 35.5, rss_mb: 120 + warm + (rssSlopeMbPerMin * e) / 60, threads: 30, stepsPerS: { n: 10, mean: 50, min: 48, max: 52 }, dropped: e >= minutes * 30 ? dropped : 0 }, radar: { alive: true, cpu_pct: 60, rss_mb: 200 } });
+    const dead = e >= clientsDeadFrom_s;
+    const spike = dead || e >= spikeAt_s ? spikeMb : 0;
+    host.push({ kind: 'sample', elapsed_s: e, host: { alive: true, cpu_pct: 35.5, rss_mb: 120 + warm + spike + (rssSlopeMbPerMin * e) / 60, threads: 30, stepsPerS: { n: 10, mean: 50, min: 48, max: 52 }, dropped: e >= minutes * 30 ? dropped : 0 }, radar: { alive: true, cpu_pct: 60, rss_mb: 200 }, clients: clientsJson(!dead) });
   }
+  // 收尾樣本:客戶端時間到結束後腳本仍取到的一筆(elapsed 超過設定時長、clients.alive=false、RSS 尖峰)
+  if (tailSpikeMb > 0) host.push({ kind: 'sample', elapsed_s: minutes * 60 + 6.2, host: { alive: true, cpu_pct: 12, rss_mb: 140 + tailSpikeMb, threads: 30, stepsPerS: { n: 10, mean: 50, min: 50, max: 50 }, dropped: 0 }, radar: { alive: true, cpu_pct: 60, rss_mb: 200 }, clients: clientsJson(false) });
   fs.writeFileSync(path.join(dir, 'stats', 'host.jsonl'), host.map((x) => JSON.stringify(x)).join('\n') + '\n');
   // 客戶端:每秒一筆 + 結束 summary(直方圖:p95 落在 latencyP95)
   const lines = [];
@@ -87,6 +93,43 @@ test('RSS 持續成長(斜率 3 MB/min)→ RSS 準則不合格;暖機段的上�
   // 暖機 120 s 內 +20 MB 的上升不應讓合格案例失敗(writeRun 預設已含暖機段)
   const ok = summarise(loadRun(writeRun('rss-warm')));
   assert.equal(ok.criteria.find((x) => x.id === 'rss').pass, true);
+});
+
+test('客戶端收尾後的樣本不入 RSS 擬合:elapsed 超過設定時長的尖峰、clients.alive=false 的段落皆排除;時長內客戶端存活的尖峰仍計入', () => {
+  // 1) 最後一筆在設定時長之後(實跑的典型:客戶端斷線時核心 +數十 MB):擬合排除、原始統計(最大值、樣本數)仍含
+  const s = summarise(loadRun(writeRun('tail', { tailSpikeMb: 80 })));
+  const rss = s.criteria.find((c) => c.id === 'rss');
+  assert.equal(rss.pass, true, rss.measured);
+  assert.ok(Math.abs(s.host.rssPostWarmup.slopeMbPerMin) < 0.01, `斜率應約 0:${s.host.rssPostWarmup.slopeMbPerMin}`);
+  assert.equal(s.host.rssPostWarmup.tailExcluded, 1);
+  assert.equal(s.host.rssPostWarmup.last, 140);
+  assert.equal(s.host.rssMb.max, 220);
+  assert.equal(s.host.samples, 62);
+  assert.equal(s.host.elapsed_s, 606.2);
+  assert.match(rss.measured, /排除收尾 1 筆/);
+  assert.match(renderMarkdown(s), /收尾 1 筆不入擬合/);
+  // 2) 時長內但 clients.alive=false(學員腳本仍在、客戶端已結束):該段落排除,斜率仍約 0
+  const s2 = summarise(loadRun(writeRun('tail-dead', { clientsDeadFrom_s: 540 })));
+  assert.equal(s2.criteria.find((c) => c.id === 'rss').pass, true);
+  assert.equal(s2.host.rssPostWarmup.tailExcluded, 7);
+  assert.ok(Math.abs(s2.host.rssPostWarmup.slopeMbPerMin) < 0.01, `斜率應約 0:${s2.host.rssPostWarmup.slopeMbPerMin}`);
+  // 3) 對照:時長內、客戶端存活的 +80 MB 階梯仍計入 → 增量超過 64 MB 不合格(排除只針對收尾)
+  const s3 = summarise(loadRun(writeRun('tail-ctl', { spikeAt_s: 540 })));
+  assert.equal(s3.criteria.find((c) => c.id === 'rss').pass, false);
+  assert.equal(s3.host.rssPostWarmup.tailExcluded, 0);
+  assert.doesNotMatch(s3.criteria.find((c) => c.id === 'rss').measured, /排除收尾/);
+  // 4) 全部樣本都是收尾(客戶端一開始就結束)→ 退回用全部樣本,RSS 準則仍有資料
+  const s4 = summarise(loadRun(writeRun('tail-all', { clientsDeadFrom_s: 0 })));
+  assert.equal(s4.host.rssPostWarmup.tailExcluded, 0);
+  assert.equal(s4.host.rssPostWarmup.samples > 2, true);
+  // 5) 舊 meta 無 minutes:只靠 clients.alive 排除
+  const dir = writeRun('tail-nomin', { tailSpikeMb: 80 });
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  delete meta.minutes;
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta));
+  const s5 = summarise(loadRun(dir));
+  assert.equal(s5.host.rssPostWarmup.tailExcluded, 1);
+  assert.equal(s5.criteria.find((c) => c.id === 'rss').pass, true);
 });
 
 test('客戶端斷線 → 連線準則不合格', () => {

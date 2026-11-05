@@ -173,6 +173,26 @@ describe('情境編輯器:範本與表單', () => {
     expect(el.lastValidation.summary.stats.paramRefs).toBe(1);
   });
 
+  it('船區段 MMSI(自船 AIS):填入寫到 ship.mmsi、超範圍顯示核心相同的驗證錯誤並停用載入、清空即移除', async () => {
+    const el = await mountEditor();
+    await applyTemplate(el, 'E07_mini');
+    expect(q<HTMLInputElement>(el, 'input.mmsi').value).toBe('');
+    setInput(el, 'input.mmsi', '416000001');
+    await el.updateComplete;
+    expect(el.lastValidation.scenario['ship']).toEqual({ id: 'FSB1', loading: 'full', mmsi: 416000001 });
+    expect(el.lastValidation.yaml).toContain('mmsi: 416000001');
+    expect(el.lastValidation.issues).toEqual([]);
+    setInput(el, 'input.mmsi', '1000000000');
+    await el.updateComplete;
+    expect(el.lastValidation.issues).toContain('ship.mmsi:mmsi 須為 0–999999999 的整數');
+    expect(text(el)).toContain('ship.mmsi:mmsi 須為 0–999999999 的整數');
+    expect(q<HTMLButtonElement>(el, 'button.load').disabled).toBe(true);
+    setInput(el, 'input.mmsi', '');
+    await el.updateComplete;
+    expect(el.lastValidation.scenario['ship']).toEqual({ id: 'FSB1', loading: 'full' });
+    expect(el.lastValidation.issues).toEqual([]);
+  });
+
   it('新增/編輯/刪除目標船;加入 2 個故障(時間觸發與手動、recordOnly);評估開關、硬性失敗、容許帶與通過分數', async () => {
     const el = await mountEditor();
     await applyTemplate(el, 'E07_mini');

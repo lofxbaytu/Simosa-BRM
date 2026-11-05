@@ -39,6 +39,7 @@ import {
   fromYaml,
   hardFailText,
   hasHardFail,
+  intFromText,
   loadDraft,
   numberOrRefFromText,
   numberOrRefText,
@@ -55,6 +56,7 @@ import {
   type DraftEnvironment,
   type DraftGeneral,
   type DraftInitial,
+  type DraftShip,
   type DraftStorage,
   type DraftTarget,
   type DraftValidation,
@@ -713,6 +715,9 @@ export class ScenarioEditor extends LitElement {
         <select class="loading" data-value=${d.ship.loading ?? 'ballast'} @change=${(e: Event) => this.setDraft({ ...this.draft, ship: { ...this.draft.ship, loading: textOf(e) as LoadingCondition } })}>
           ${LOADINGS.map((l) => html`<option value=${l}>${loadingLabel(l)}</option>`)}
         </select>
+        <label>MMSI(自船 AIS)</label>
+        <input class="mmsi" type="number" step="1" min="0" max="999999999" placeholder="(未填:不送 !AIVDO)" .value=${d.ship.mmsi === undefined ? '' : String(d.ship.mmsi)} @change=${(e: Event) => this.setDraft({ ...this.draft, ship: stripUndefined({ ...this.draft.ship, mmsi: intFromText(textOf(e)) }) as DraftShip })} />
+        <div class="full hint">自船 AIS !AIVDO(NMEA 閘道,類型 1/5)需要 9 位 MMSI;未填時閘道改用交船文件 particulars 的 mmsi,皆無則不送 VDO。不影響物理與雜湊</div>
         <label>初始位置</label>
         <div class="full-span pair">${renderPosition(() => this.draft.initial.position, 'own', (p) => this.patchInitial({ position: p }))}${plotEditButton(this.host, 'own-plot', { kind: 'own' }, '圖上')}</div>
         <label>航向 (°)</label>

@@ -92,7 +92,14 @@ List<RadarUnit> BuildUnits(OwnShipState s, ulong seed)
 
 var server = new RadarWebSocketServer(options.Port, options.Radars, allInterfaces: !options.LocalhostOnly);
 server.Log += m => Console.WriteLine(m);
-server.Start();
+if (!server.TryStart(out var serverError))
+{
+    // 埠被占用(殘留的雷達程序等):雷達服務的用途就是這個 WebSocket,印清楚訊息後以結束碼 2 結束(不是未處理例外);核心與其他站不受影響
+    Console.WriteLine($"埠 {options.Port} 被占用或無法監聽({serverError}):雷達 WebSocket 未啟動,雷達服務結束(結束碼 2)。以 --port 改埠,或以 stop-all 清掉占住埠的殘留程序後重新啟動");
+    Console.Error.WriteLine($"埠 {options.Port} 被占用或無法監聽:雷達 WebSocket 未啟動,雷達服務結束(結束碼 2)");
+    await server.DisposeAsync();
+    return 2;
+}
 Console.WriteLine($"雷達 WebSocket:{server.Prefix}{{{string.Join("|", options.Radars)}}}");
 NmeaOutputOptions? nmea = null;
 if (options.Nmea)

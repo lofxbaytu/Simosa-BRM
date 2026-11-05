@@ -5,6 +5,7 @@
 //   1) 核心 50 Hz 無掉拍:主控程序「掉拍」計數為 0,且客戶端以牆鐘量到的 tick 率在 50 ± --core-hz-tol;
 //   2) 延遲 < --max-latency-ms(預設 50):全部客戶端合併的狀態幀延遲 p95(最大值另列);
 //   3) RSS 不持續成長:暖機(--warmup-s)後最小平方斜率 ≤ --max-rss-slope-mb-per-min 且暖機後增量 ≤ --max-rss-growth-mb;
+//      擬合排除客戶端收尾後的樣本(elapsed_s > meta.minutes×60 或 clients.alive=false:客戶端斷線時核心釋放連線常有一筆尖峰);
 //   4) 無斷線/錯誤:客戶端斷線 0、錯誤 0、網頁失敗 0;學員指令全部於時限內生效、無 commandRejected;主控程序存活到結束並寫完紀錄 footer。
 // 結束碼:0 合格、1 不合格、2 讀檔/參數錯誤。可當模組匯入(summarise / renderMarkdown;tests/soak/report.test.mjs)。
 // 用法:node tests/soak/report.mjs --dir build/soak/<run> --md build/soak/report-<run>.md --json build/soak/report-<run>.json [門檻參數]
@@ -95,8 +96,16 @@ export function summarise(run, thresholds = {}) {
   const samples = run.host.filter((s) => s.kind === 'sample' && s.host);
   const elapsedMax = samples.length ? samples[samples.length - 1].elapsed_s : 0;
   const warmup = Math.min(th.warmupS, elapsedMax * 0.2);
-  const post = samples.filter((s) => s.elapsed_s >= warmup && Number.isFinite(s.host.rss_mb));
-  const rssSeries = post.length >= 3 ? post : samples.filter((s) => Number.isFinite(s.host.rss_mb));
+  // RSS 擬合排除客戶端收尾後的樣本:超過設定時長(meta.minutes×60)或合成客戶端程序已結束(clients.alive=false)——
+  // 客戶端斷線時核心釋放連線與訂閱常有一筆 RSS 尖峰,不代表持續成長;CPU/RSS 起訖/執行緒等原始統計與 hostSamples 仍含全部樣本。
+  // 全部都是收尾樣本時(客戶端提前結束)退回用全部樣本,免得 RSS 準則變成「無資料」
+  const plannedS = Number.isFinite(Number(meta.minutes)) && Number(meta.minutes) > 0 ? Number(meta.minutes) * 60 : Infinity;
+  const isTail = (s) => s.elapsed_s > plannedS || s.clients?.alive === false;
+  const kept = samples.filter((s) => !isTail(s));
+  const fitSamples = kept.length >= 2 ? kept : samples;
+  const tailExcluded = samples.length - fitSamples.length;
+  const post = fitSamples.filter((s) => s.elapsed_s >= warmup && Number.isFinite(s.host.rss_mb));
+  const rssSeries = post.length >= 3 ? post : fitSamples.filter((s) => Number.isFinite(s.host.rss_mb));
   const rssPts = rssSeries.map((s) => [s.elapsed_s / 60, s.host.rss_mb]);
   const rssAll = samples.map((s) => s.host.rss_mb).filter(Number.isFinite);
   const cpuAll = samples.map((s) => s.host.cpu_pct).filter(Number.isFinite);
@@ -113,6 +122,8 @@ export function summarise(run, thresholds = {}) {
     rssMb: rssAll.length ? { first: rssAll[0], last: rssAll[rssAll.length - 1], min: Math.min(...rssAll), max: Math.max(...rssAll) } : null,
     rssPostWarmup: rssSeries.length
       ? { first: rssSeries[0].host.rss_mb, last: rssSeries[rssSeries.length - 1].host.rss_mb, growthMb: round(rssSeries[rssSeries.length - 1].host.rss_mb - rssSeries[0].host.rss_mb, 1), slopeMbPerMin: round(slope(rssPts), 3), samples: rssSeries.length,
+          // 收尾樣本(elapsed_s > 設定時長或 clients.alive=false)數:不入擬合
+          tailExcluded,
           // 後半段斜率(參考值,不作判定):.NET GC 堆積在前幾分鐘常呈階梯式擴張,後半段仍上升才較可能是洩漏;短於 30 分鐘的執行請看 2 小時結果
           secondHalfSlopeMbPerMin: round(slope(rssPts.slice(Math.floor(rssPts.length / 2))), 3) }
       : null,
@@ -179,7 +190,7 @@ export function summarise(run, thresholds = {}) {
   add('latency', '狀態幀延遲 < 門檻', `p95 < ${th.maxLatencyMs} ms`, lat ? `p50 ${lat.p50} / p95 ${lat.p95} / p99 ${lat.p99} / max ${lat.max} ms(n = ${lat.n})` : '無資料', lat && lat.p95 < th.maxLatencyMs, '牆鐘估計:含核心序列化、WebSocket 與客戶端事件迴圈(lib.mjs LatencyEstimator)');
   const rp = hostSummary.rssPostWarmup;
   add('rss', 'RSS 不持續成長', `暖機 ${hostSummary.warmup_s} s 後斜率 ≤ ${th.maxRssSlopeMbPerMin} MB/min 且增量 ≤ ${th.maxRssGrowthMb} MB`,
-    rp ? `起 ${rp.first} → 訖 ${rp.last} MB(增量 ${rp.growthMb} MB;斜率 ${rp.slopeMbPerMin} MB/min,後半段 ${rp.secondHalfSlopeMbPerMin} MB/min;${rp.samples} 筆)` : '無資料',
+    rp ? `起 ${rp.first} → 訖 ${rp.last} MB(增量 ${rp.growthMb} MB;斜率 ${rp.slopeMbPerMin} MB/min,後半段 ${rp.secondHalfSlopeMbPerMin} MB/min;${rp.samples} 筆${rp.tailExcluded ? `,排除收尾 ${rp.tailExcluded} 筆` : ''})` : '無資料',
     rp && rp.samples >= 2 && Math.abs(rp.slopeMbPerMin ?? Infinity) <= th.maxRssSlopeMbPerMin && rp.growthMb <= th.maxRssGrowthMb);
   add('connections', '無斷線與錯誤', '客戶端斷線 0、錯誤 0、網頁失敗 0',
     `斷線 ${clientsSummary.disconnects}、錯誤 ${clientsSummary.errors}、網頁失敗 ${clientsSummary.web?.fail ?? 0}${clientsSummary.lastErrors.length ? `(${clientsSummary.lastErrors.join(';')})` : ''}`,
@@ -228,7 +239,7 @@ export function renderMarkdown(s) {
   const h = s.host;
   lines.push(`## 主控程序取樣(每 ${f(h.interval_s, 0)} s,共 ${h.samples} 筆;暖機 ${h.warmup_s} s)`, '', '| 項目 | 起 | 訖 | 最小 | 最大 | 平均 | 備註 |', '|---|---|---|---|---|---|---|');
   lines.push(`| CPU %(程序,可 > 100) | — | — | — | ${f(h.cpuPct?.max)} | ${f(h.cpuPct?.mean)} | utime+stime / 牆鐘 |`);
-  lines.push(`| RSS MB | ${f(h.rssMb?.first)} | ${f(h.rssMb?.last)} | ${f(h.rssMb?.min)} | ${f(h.rssMb?.max)} | — | 暖機後增量 ${f(h.rssPostWarmup?.growthMb)} MB、斜率 ${f(h.rssPostWarmup?.slopeMbPerMin, 3)} MB/min(後半段 ${f(h.rssPostWarmup?.secondHalfSlopeMbPerMin, 3)} MB/min,參考) |`);
+  lines.push(`| RSS MB | ${f(h.rssMb?.first)} | ${f(h.rssMb?.last)} | ${f(h.rssMb?.min)} | ${f(h.rssMb?.max)} | — | 暖機後增量 ${f(h.rssPostWarmup?.growthMb)} MB、斜率 ${f(h.rssPostWarmup?.slopeMbPerMin, 3)} MB/min(後半段 ${f(h.rssPostWarmup?.secondHalfSlopeMbPerMin, 3)} MB/min,參考)${h.rssPostWarmup?.tailExcluded ? `;收尾 ${h.rssPostWarmup.tailExcluded} 筆不入擬合` : ''} |`);
   lines.push(`| 執行緒 | ${f(h.threads?.first, 0)} | ${f(h.threads?.last, 0)} | — | — | — | |`);
   lines.push(`| steps/s(主控程序每秒輸出) | — | — | ${f(h.stepsPerS?.min, 0)} | ${f(h.stepsPerS?.max, 0)} | ${f(h.stepsPerS?.mean, 2)} | ${h.stepsPerS?.lines ?? 0} 行;每秒值因 1 s 輪詢對齊可 ±2 |`);
   lines.push(`| 掉拍(累計) | 0 | ${h.dropped} | — | — | — | RealtimeRunner.DroppedSteps |`);
@@ -246,7 +257,7 @@ export function renderMarkdown(s) {
   lines.push('## 方法與限制', '');
   lines.push('- 延遲為牆鐘估計(`tests/soak/lib.mjs` LatencyEstimator):核心以牆鐘推進,第 k 幀理想到達時刻 = 原點 + state.t,原點取連線初期最快一幀;量到的是核心序列化 + WebSocket 傳送 + 客戶端事件迴圈的總延遲,核心落後牆鐘也會反映為延遲上升。凍結幀不計;時間倍率須為 1。');
   lines.push('- tick 率以客戶端牆鐘量測(首末狀態幀的 tick 差 / 到達時間差),與主控程序每秒輸出的 `steps/s` 互相印證;「掉拍」取自主控程序輸出的累計值。');
-  lines.push('- RSS 斜率為暖機後樣本的最小平方直線;.NET GC 的堆積在前幾分鐘常呈階梯式擴張(每次 +數 MB),10 分鐘內的斜率可能只反映這個過程,後半段斜率為參考值;門檻為軟體面判準,是否洩漏以實機 2 小時(同一工具)為準。');
+  lines.push('- RSS 斜率為暖機後樣本的最小平方直線;超過設定時長或合成客戶端已結束(clients.alive=false)的收尾樣本不入擬合(客戶端斷線時核心釋放連線常有一筆尖峰;起訖/最大值等原始統計仍含)。.NET GC 的堆積在前幾分鐘常呈階梯式擴張(每次 +數 MB),10 分鐘內的斜率可能只反映這個過程,後半段斜率為參考值;門檻為軟體面判準,是否洩漏以實機 2 小時(同一工具)為準。');
   lines.push('- 合成客戶端在同一個 Node 程序內(N 條狀態連線 + N 條雷達連線),不含瀏覽器繪圖負載;視景幀率、內顯機 CPU/延遲數字需實機(docs/驗收/需求追溯表.md 第 14 章效能列)。');
   lines.push('');
   return lines.join('\n');

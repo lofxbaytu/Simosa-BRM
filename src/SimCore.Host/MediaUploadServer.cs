@@ -50,7 +50,9 @@ public sealed class MediaUploadServer : IAsyncDisposable
     /// <summary>HTTP 回應用單行 JSON(旁檔本身仍以 MediaSidecar.JsonOptions 縮排寫檔)</summary>
     private static readonly JsonSerializerOptions ReplyJson = new(MediaSidecar.JsonOptions) { WriteIndented = false };
 
-    private readonly HttpListener _listener = new();
+    /// <summary>已啟動的 listener(TryStart 成功後才有;Start 失敗的 listener 不保留,見 HttpListenerStarter)</summary>
+    private HttpListener? _listener;
+    private int _disposed;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<string, Session> _active = new(StringComparer.Ordinal);
     /// <summary>已定稿的旁檔(重複 stop 回同一份;最多保留 64 筆)</summary>
@@ -70,8 +72,12 @@ public sealed class MediaUploadServer : IAsyncDisposable
     public int Port { get; }
     /// <summary>每段錄影的上傳上限(位元組;--media-max-mb)</summary>
     public long MaxBytes { get; }
-    /// <summary>實際監聽的前綴(所有介面,或僅 localhost)</summary>
+    /// <summary>實際監聽的前綴(所有介面,或僅 localhost);未啟動/啟動失敗為 null</summary>
     public string? Prefix { get; private set; }
+    /// <summary>啟動失敗的原因(埠被占用、無 URL ACL…;<see cref="TryStart"/> 回 false 後可讀);成功或尚未啟動為 null</summary>
+    public string? StartError { get; private set; }
+    /// <summary>已成功啟動(可接受上傳)</summary>
+    public bool Started => _listener is not null;
     /// <summary>開始錄影時取得主控程序正在寫的紀錄路徑(null = 未開紀錄);旁檔以其檔名與 header.createdUtc 關聯練習</summary>
     public Func<string?>? CurrentRecordPath { get; set; }
     /// <summary>專案根目錄(旁檔的 record.path 相對此目錄;教官站給的 recordPath 也只能在此目錄內)</summary>
@@ -100,35 +106,40 @@ public sealed class MediaUploadServer : IAsyncDisposable
         return full;
     }
 
-    /// <summary>同 WebSocketStateServer:先試所有介面,Windows 無 URL ACL 時退回 localhost 並提示。</summary>
-    public void Start()
+    /// <summary>
+    /// 同 WebSocketStateServer:先試所有介面,Windows 無 URL ACL 時以新的 HttpListener 退回 localhost + 127.0.0.1 並提示;
+    /// 兩者皆失敗(典型為埠被占用)回 false 並設定 <see cref="StartError"/>,不拋例外(錄影為選配:主控程序印訊息後照常執行)。
+    /// </summary>
+    public bool TryStart(out string? error)
     {
+        if (_listener is not null) throw new InvalidOperationException("MediaUploadServer 已啟動");
+        if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(MediaUploadServer));
         Directory.CreateDirectory(MediaDir);
-        var wildcard = $"http://*:{Port}/";
-        try
+        var listener = HttpListenerStarter.StartWithFallback(Port, "", allInterfaces: true, msg => Log?.Invoke(msg), out var prefix, out error);
+        if (listener is null)
         {
-            _listener.Prefixes.Add(wildcard);
-            _listener.Start();
-            Prefix = wildcard;
+            StartError = error;
+            return false;
         }
-        catch (HttpListenerException ex)
-        {
-            _listener.Prefixes.Clear();
-            var local = $"http://localhost:{Port}/";
-            _listener.Prefixes.Add(local);
-            _listener.Start();
-            Prefix = local;
-            Log?.Invoke($"無法監聽 {wildcard}({ex.Message});改為只監聽 {local}。教官筆電直連需設定 URL ACL:netsh http add urlacl url={wildcard} user=Everyone");
-        }
-        _acceptLoop = Task.Run(AcceptLoopAsync);
+        _listener = listener;
+        Prefix = prefix;
+        StartError = null;
+        _acceptLoop = Task.Run(() => AcceptLoopAsync(listener));
+        return true;
     }
 
-    private async Task AcceptLoopAsync()
+    /// <summary>同 <see cref="TryStart"/>,失敗時拋 <see cref="HttpListenerException"/>(訊息含埠與原因;物件仍可安全釋放)。</summary>
+    public void Start()
+    {
+        if (!TryStart(out var error)) throw new HttpListenerException(0, $"埠 {Port} 無法監聽:{error}");
+    }
+
+    private async Task AcceptLoopAsync(HttpListener listener)
     {
         while (!_cts.IsCancellationRequested)
         {
             HttpListenerContext ctx;
-            try { ctx = await _listener.GetContextAsync().ConfigureAwait(false); }
+            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
             catch (Exception) when (_cts.IsCancellationRequested) { break; }
             catch (HttpListenerException) { continue; }
             catch (ObjectDisposedException) { break; }
@@ -528,11 +539,13 @@ public sealed class MediaUploadServer : IAsyncDisposable
         res.Close();
     }
 
-    /// <summary>停止監聽;進行中的錄影定稿(stopReason = hostShutdown),不留 .part。</summary>
+    /// <summary>停止監聽;進行中的錄影定稿(stopReason = hostShutdown),不留 .part。可重複呼叫、啟動失敗後也可呼叫,不拋例外。</summary>
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
-        try { _listener.Stop(); } catch (Exception) { }
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { _cts.Cancel(); } catch (Exception) { }
+        var listener = _listener;
+        if (listener is not null) { try { listener.Stop(); } catch (Exception) { } }
         if (_acceptLoop is not null)
         {
             try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { }
@@ -542,7 +555,8 @@ public sealed class MediaUploadServer : IAsyncDisposable
             try { Finalize(s, null, "hostShutdown"); }
             catch (Exception ex) { Log?.Invoke($"錄影 {s.MediaId} 定稿失敗:{ex.Message}"); }
         }
-        _listener.Close();
+        HttpListenerStarter.Discard(listener);
+        _listener = null;
         _cts.Dispose();
     }
 }

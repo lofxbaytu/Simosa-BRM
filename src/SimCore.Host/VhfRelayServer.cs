@@ -104,7 +104,9 @@ public sealed class VhfRelayServer : IAsyncDisposable
         [JsonPropertyName("category")] public string? Category { get; set; }
     }
 
-    private readonly HttpListener _listener = new();
+    /// <summary>已啟動的 listener(TryStart 成功後才有;Start 失敗的 listener 不保留,見 HttpListenerStarter)</summary>
+    private HttpListener? _listener;
+    private int _disposed;
     private readonly ConcurrentDictionary<string, Station> _stations = new();
     // 頻道佔用表與站的頻道/發話狀態:接收迴圈(多執行緒)與逾時檢查共用
     private readonly object _sync = new();
@@ -115,7 +117,12 @@ public sealed class VhfRelayServer : IAsyncDisposable
     private int _nextId;
 
     public int Port { get; }
+    /// <summary>實際監聽的前綴(所有介面,或僅 localhost);未啟動/啟動失敗為 null</summary>
     public string? Prefix { get; private set; }
+    /// <summary>啟動失敗的原因(埠被占用、無 URL ACL…;<see cref="TryStart"/> 回 false 後可讀);成功或尚未啟動為 null</summary>
+    public string? StartError { get; private set; }
+    /// <summary>已成功啟動(可接受連線)</summary>
+    public bool Started => _listener is not null;
     public int StationCount => _stations.Count;
     /// <summary>單次通話上限(秒);超過自動結束(卡住的 PTT 不會永久佔用頻道)</summary>
     public double MaxTransmitSeconds { get; set; } = 180;
@@ -132,36 +139,41 @@ public sealed class VhfRelayServer : IAsyncDisposable
         Port = port;
     }
 
-    /// <summary>與 WebSocketStateServer 相同:先試所有介面,Windows 無 URL ACL 時退回 localhost。</summary>
+    /// <summary>
+    /// 與 WebSocketStateServer 相同:先試所有介面,Windows 無 URL ACL 時以新的 HttpListener 退回 localhost + 127.0.0.1;
+    /// 兩者皆失敗(典型為埠被占用)回 false 並設定 <see cref="StartError"/>,不拋例外(VHF 為選配:主控程序印訊息後照常執行)。
+    /// </summary>
+    public bool TryStart(out string? error)
+    {
+        if (_listener is not null) throw new InvalidOperationException("VhfRelayServer 已啟動");
+        if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(VhfRelayServer));
+        var listener = HttpListenerStarter.StartWithFallback(Port, "", allInterfaces: true, msg => Log?.Invoke(msg), out var prefix, out error);
+        if (listener is null)
+        {
+            StartError = error;
+            return false;
+        }
+        _listener = listener;
+        Prefix = prefix;
+        StartError = null;
+        _acceptLoop = Task.Run(() => AcceptLoopAsync(listener));
+        _watchdog = Task.Run(WatchdogAsync);
+        return true;
+    }
+
+    /// <summary>同 <see cref="TryStart"/>,失敗時拋 <see cref="HttpListenerException"/>(訊息含埠與原因;物件仍可安全釋放)。</summary>
     public void Start()
     {
-        var wildcard = $"http://*:{Port}/";
-        try
-        {
-            _listener.Prefixes.Add(wildcard);
-            _listener.Start();
-            Prefix = wildcard;
-        }
-        catch (HttpListenerException ex)
-        {
-            _listener.Prefixes.Clear();
-            var local = $"http://localhost:{Port}/";
-            _listener.Prefixes.Add(local);
-            _listener.Start();
-            Prefix = local;
-            Log?.Invoke($"無法監聽 {wildcard}({ex.Message});改為只監聽 {local}。遠端站別需設定 URL ACL:netsh http add urlacl url={wildcard} user=Everyone");
-        }
-        _acceptLoop = Task.Run(AcceptLoopAsync);
-        _watchdog = Task.Run(WatchdogAsync);
+        if (!TryStart(out var error)) throw new HttpListenerException(0, $"埠 {Port} 無法監聽:{error}");
     }
 
     // ---------------------------------------------------------------- 連線
-    private async Task AcceptLoopAsync()
+    private async Task AcceptLoopAsync(HttpListener listener)
     {
         while (!_cts.IsCancellationRequested)
         {
             HttpListenerContext ctx;
-            try { ctx = await _listener.GetContextAsync().ConfigureAwait(false); }
+            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
             catch (Exception) when (_cts.IsCancellationRequested) { break; }
             catch (HttpListenerException) { continue; }
             catch (ObjectDisposedException) { break; }
@@ -523,17 +535,21 @@ public sealed class VhfRelayServer : IAsyncDisposable
         }
     }
 
+    /// <summary>停止監聽並中止所有站;可重複呼叫、啟動失敗後也可呼叫,不拋例外。</summary>
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
-        try { _listener.Stop(); } catch (Exception) { }
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { _cts.Cancel(); } catch (Exception) { }
+        var listener = _listener;
+        if (listener is not null) { try { listener.Stop(); } catch (Exception) { } }
         foreach (var s in _stations.Values)
         {
             try { s.Socket.Abort(); } catch (Exception) { }
         }
         if (_acceptLoop is not null) { try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { } }
         if (_watchdog is not null) { try { await _watchdog.ConfigureAwait(false); } catch (Exception) { } }
-        _listener.Close();
+        HttpListenerStarter.Discard(listener);
+        _listener = null;
         _cts.Dispose();
     }
 }

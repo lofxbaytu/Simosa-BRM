@@ -2,6 +2,13 @@
 
 > 版本號 = `VERSION` 檔(`<年>.<月>.<輪次>`,例如 2026.11.24;更新包只接受版本遞增,此方案大於舊的 `0.<日期>.<時分>` 後備與文件示例 2026.11.1,船上曾套用的任何版本都不會把它判為降版;`tools/build-release.*` 無 `--version` 時以此為發行版本,與更新包版本規則相同:1–4 段數字)。每輪一條,只列新增/修正/已知限制的摘要;細節、驗證指令與測試數見 `docs/dev-log/2026-10-08-工作階段交接.md` 各輪與各 `docs/design/*.md`。日期為該輪提交日。
 
+## 2026.11.25 — 2026-11-05(第二十五輪)
+
+- 修正:SimCore.Host 三個 HttpListener 伺服器與雷達服務在埠被占用時不再崩潰——每次嘗試用新的 HttpListener(萬用 → localhost+127.0.0.1),VHF/錄影埠失敗只停用該服務、核心照常執行;狀態埠失敗印訊息、寫完紀錄 footer 後結束碼 2;雷達服務埠失敗結束碼 2;`TryStart/StartError/Started`,DisposeAsync 可重複;PortInUseTests(SimCore 8、Radar 3)。
+- 新增:情境編輯器 `ship.mmsi` 欄位(驗證訊息與核心一致;字串數字可讀入;舊草稿由 raw 補回)。
+- 修正:soak 報告 RSS 擬合排除客戶端收尾樣本;sh/ps1 收尾不取樣;重播模式狀態推送訊息改於啟動時確認。
+- 已知限制:第二十五輪樹上 3 分鐘 soak 的核心與雷達 RSS 約 38 MB/min 線性成長(第二十四輪 10 分鐘為 1.8 MB/min、前 3 分鐘約 9 MB/min),是否為暖機期或本輪引入待 10–120 分鐘實跑比對;--port 被占用且有 --record 時留下只有 header+footer 的空紀錄;Windows http.sys 路徑未實機驗證。
+
 ## 2026.11.24 — 2026-11-05(第二十四輪)
 
 - 新增:Gateway.Nmea THS(10 Hz,電羅經失效為模式 V)、自船 `!AIVDO`(類型 1 每 10 s、類型 5 每 6 min;MMSI 取情境 `ship.mmsi` 或 particulars `mmsi`,皆無則不送並記 log)、IEC 61162-1 ed.5 ALF/ALC(ALR 保留);`nmea_check` 補四種句型與一致性檢查;夾具重錄(524 句)。

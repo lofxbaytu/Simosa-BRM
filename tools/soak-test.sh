@@ -7,6 +7,7 @@
 #   3) 啟動合成客戶端 tests/soak/clients.mjs(N 個:各訂閱狀態幀與雷達 X 頻影像、每 30 s GET 網頁;每秒統計幀率、延遲(state.t 與到達牆鐘差)、斷線)
 #      與「學員」tests/soak/student.mjs(每 10 s 舵令/車令、每 60 s 注入/清除一個故障、每 5 min 快照;每個指令以狀態幀確認生效)
 #   4) 每 --sample-s(預設 10)s 取樣:主控程序 CPU%、RSS、執行緒數(/proc)、steps/s 與掉拍(主控程序 stdout 行)、雷達/網頁/客戶端程序的 CPU 與 RSS;
+#      客戶端與學員都已結束(時間到)後取到的那一筆不寫(客戶端斷線時核心釋放連線常有 RSS 尖峰;report.mjs 另排除 elapsed 超過設定時長或 clients.alive=false 的樣本);
 #      dotnet-counters(PATH 或 .cache/dotnet-tools)可用時另收 System.Runtime GC 計數器到 stats/counters.csv,否則略過並註記
 #   5) 時間到(客戶端自行結束)→ tools/launch/stop-all.sh(停止檔讓核心寫完紀錄 footer)→ tests/soak/report.mjs 寫 build/soak/report-<run>.md 與 .json 並判定
 #      (掉拍 0 且 tick 率 50 ± 0.5;延遲 p95 < 50 ms;暖機後 RSS 斜率 ≤ 1 MB/min 且增量 ≤ 64 MB;無斷線/錯誤、學員指令皆生效、核心寫完 footer)
@@ -240,6 +241,11 @@ while :; do
   proc_json host "$HOST_PID" "$DWALL"; HJ="$PROC_JSON"; proc_json radar "$RADAR_PID" "$DWALL"; RJ="$PROC_JSON"
   proc_json web "$WEB_PID" "$DWALL"; WJ="$PROC_JSON"; proc_json clients "$CLIENTS_PID" "$DWALL"; CJ="$PROC_JSON"
   host_log_json
+  # 客戶端與學員都已結束(時間到、核心仍在)→ 這一筆是收尾樣本,不寫:客戶端斷線時核心釋放連線與訂閱常有 RSS 尖峰,不該混入 RSS 擬合
+  # (tools/soak-test.ps1 同步;report.mjs 對舊紀錄另以 elapsed_s > 設定時長或 clients.alive=false 排除)
+  if ! process_alive "$CLIENTS_PID" && ! process_alive "$STUDENT_PID" && process_alive "$HOST_PID"; then
+    printf '  %6ss  客戶端與學員已結束,本筆不寫(收尾)\n' "$ELAPSED"; break
+  fi
   HJ="${HJ%\}},\"stepsPerS\":$STEPS_JSON,\"dropped\":$DROPPED}"
   printf '{"kind":"sample","wall":"%s","elapsed_s":%s,"host":%s,"radar":%s,"web":%s,"clients":%s}\n' "$(date -u +%FT%TZ)" "$ELAPSED" "$HJ" "$RJ" "$WJ" "$CJ" >> "$STATS/host.jsonl"
   printf '  %6ss  核心 %s  steps/s %s  掉拍 %s\n' "$ELAPSED" "$(sed 's/^{"alive":true,//; s/,"threads".*//' <<<"$HJ")" "$(sed 's/.*"mean":\([0-9.]*\).*/\1/; s/^null$/-/' <<<"$STEPS_JSON")" "$DROPPED"

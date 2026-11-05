@@ -122,6 +122,24 @@ describe('草稿 round-trip(data/scenarios 全部情境)', () => {
     expect(parseScenario(toYaml(d), 'T').environment.current?.source).toBe('field+tidal');
   });
 
+  it('ship.mmsi(自船 AIS !AIVDO):讀入草稿、round-trip 不丟欄位、新增寫入 ship、清空即移除', () => {
+    const text = 'id: T\nship: { id: FSB2, loading: full, mmsi: 416000001 }\ninitial: { position: { lat: 23, lon: 120 }, heading: 0 }\nenvironment: { waterDepth: 10 }\n';
+    const d = fromYaml(text, 'T');
+    expect(d.ship).toEqual({ id: 'FSB2', loading: 'full', mmsi: 416000001 });
+    expect(parseYaml(toYaml(d))).toEqual(parseYaml(text));
+    expect((toScenarioObject(d)['ship'] as Record<string, unknown>)['mmsi']).toBe(416000001);
+    // 草稿序列化(localStorage)後仍保留
+    expect((JSON.parse(JSON.stringify(d)) as ScenarioDraft).ship.mmsi).toBe(416000001);
+    // 新增:空白範本沒有 mmsi,填入後 YAML 的 ship 含 mmsi 且通過驗證
+    const added = { ...blankDraft(), ship: { ...blankDraft().ship, mmsi: 416000002 } };
+    expect((toScenarioObject(added)['ship'] as Record<string, unknown>)).toEqual({ id: 'FSB1', loading: 'ballast', mmsi: 416000002 });
+    expect(toYaml(added)).toContain('mmsi: 416000002');
+    expect(validateDraft(added).issues).toEqual([]);
+    // 清空(undefined)→ 輸出移除 mmsi(範本 raw 的值不殘留)
+    const { mmsi: _removed, ...rest } = d.ship;
+    expect((toScenarioObject({ ...d, ship: rest })['ship'] as Record<string, unknown>)).toEqual({ id: 'FSB2', loading: 'full' });
+  });
+
   it('E07:草稿讀出環境、目標船、時間表與評估的涵蓋欄位', () => {
     const d = fromYaml(readFileSync(path.join(scenarioDir, 'E07_steering_failure.yaml'), 'utf-8'), 'E07_steering_failure');
     expect(d.general.id).toBe('E07_steering_failure');
@@ -262,9 +280,33 @@ describe('驗證問題', () => {
     expect(ok.issues).toEqual([]);
     expect(ok.warnings).toContain('時間表沒有項目(無故障、語音與結束條件;練習由教官手動結束)');
   });
+
+  it('ship.mmsi 超出 0–999999999 或非整數 → 與核心 Scenario.StructuralIssues 相同的訊息;範圍內通過', () => {
+    const msg = 'ship.mmsi:mmsi 須為 0–999999999 的整數';
+    const base = blankDraft();
+    for (const bad of [1_000_000_000, -1, 4160.5]) {
+      const v = validateDraft({ ...base, ship: { ...base.ship, mmsi: bad } });
+      expect(v.issues).toContain(msg);
+      expect(v.issues.filter((i) => i === msg)).toHaveLength(1);
+    }
+    for (const good of [0, 999_999_999, 416000001]) expect(validateDraft({ ...base, ship: { ...base.ship, mmsi: good } }).issues).not.toContain(msg);
+    // 範本 YAML 帶超範圍的 mmsi:讀入後驗證即指出(核心載入也會拒絕)
+    const d = fromYaml('id: T\nship: { id: FSB1, mmsi: 1000000000 }\ninitial: { position: { lat: 23, lon: 120 }, heading: 0 }\nenvironment: { waterDepth: 10 }\n', 'T');
+    expect(validateDraft(d).issues).toContain(msg);
+  });
 });
 
 describe('localStorage 草稿', () => {
+  it('加入 ship.mmsi 欄位前存下的版本 3 草稿:ship.mmsi 由 raw 補回', () => {
+    const storage = new MemoryStorage();
+    const d = fromYaml('id: T\nship: { id: FSB1, mmsi: 416000001 }\ninitial: { position: { lat: 23, lon: 120 }, heading: 0 }\nenvironment: { waterDepth: 10 }\n', 'T');
+    const { mmsi: _m, ...oldShip } = d.ship;
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...d, ship: oldShip }));
+    const loaded = loadDraft(storage);
+    expect(loaded?.ship).toEqual({ id: 'FSB1', mmsi: 416000001 });
+    expect((toScenarioObject(loaded!)['ship'] as Record<string, unknown>)['mmsi']).toBe(416000001);
+  });
+
   it('saveDraft / loadDraft 往返;壞資料或版本不合回 null;clearDraft 移除', () => {
     const storage = new MemoryStorage();
     expect(loadDraft(storage)).toBeNull();

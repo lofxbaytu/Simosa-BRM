@@ -153,6 +153,8 @@ tests/soak/report.test.mjs 判定準則與工具的單元測試:node --test test
 | 學員指令皆生效 | 未確認 0、`commandRejected` 0、斷線 0 | — |
 | 主控程序 | 存活到結束、結束碼 0、紀錄 footer 已寫(`紀錄已關閉`) | 優雅停止(第十六輪) |
 
+RSS 擬合排除**收尾樣本**:`elapsed_s` 超過設定時長(`meta.minutes × 60`)或合成客戶端已結束(`clients.alive = false`)的取樣不入斜率/增量計算(客戶端時間到斷線時核心釋放連線與訂閱常有一筆 +數 MB 的尖峰,不代表持續成長;報告列「排除收尾 N 筆」,起訖/最大值等原始統計與 `hostSamples` 仍含全部樣本);`tools/soak-test.sh` / `.ps1` 在客戶端與學員都已結束後取到的那一筆也不再寫入 `stats/host.jsonl`。
+
 ### 6.4 執行
 
 ```bash

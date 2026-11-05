@@ -57,6 +57,8 @@ export interface DraftShip {
   id: ShipId;
   /** 未給 = schema 預設 ballast(原樣不補) */
   loading?: LoadingCondition;
+  /** 自船 AIS MMSI(選填,0–999999999 整數):NMEA 閘道以此送 !AIVDO;未給時閘道改用 particulars 的 mmsi,皆無則不送 VDO。不影響物理與雜湊 */
+  mmsi?: number;
 }
 
 export interface DraftInitial {
@@ -272,6 +274,9 @@ export function fromScenarioObject(obj: Record<string, unknown>, template = ''):
   const shipRaw = recordOf(obj['ship']);
   const ship: DraftShip = { id: (SHIP_IDS as readonly string[]).includes(str(shipRaw['id'])) ? (shipRaw['id'] as ShipId) : 'FSB1' };
   if (shipRaw['loading'] === 'full' || shipRaw['loading'] === 'ballast' || shipRaw['loading'] === 'intermediate') ship.loading = shipRaw['loading'];
+  const mmsiRaw = shipRaw['mmsi'];
+  const mmsi = finite(typeof mmsiRaw === 'string' && mmsiRaw.trim() !== '' ? Number(mmsiRaw) : mmsiRaw); // YAML 寫成字串時也讀入(核心 ContractJson 允許字串數字)
+  if (mmsi !== undefined) ship.mmsi = mmsi;
 
   const initRaw = recordOf(obj['initial']);
   const initial: DraftInitial = { position: readPosition(initRaw['position']) };
@@ -471,6 +476,7 @@ export function toScenarioObject(draft: ScenarioDraft): Record<string, unknown> 
   const ship = recordOf(out['ship']);
   ship['id'] = draft.ship.id;
   setOrDelete(ship, 'loading', draft.ship.loading);
+  setOrDelete(ship, 'mmsi', draft.ship.mmsi);
   setOrDelete(ship, 'roll', nonEmpty(draft.roll));
   out['ship'] = ship;
 
@@ -2213,6 +2219,9 @@ export function validateDraft(draft: ScenarioDraft, catalogue: readonly FaultDef
   if (!draft.general.name.trim()) warnings.push('未填名稱(情境清單與簡報以 id 顯示)');
   if (!positionValid(draft.initial.position)) issues.push('initial.position 需完整的 lat/lon 或 x/y 數值');
   if (positionMode(draft.initial.position) === 'enu' && !isRecord(draft.raw['origin'])) issues.push('初始位置用 x/y 時需有 origin(範本未提供;請改用經緯度)');
+  // 自船 AIS MMSI(ship.mmsi;NMEA 閘道 !AIVDO):路徑與訊息與核心 Scenario.StructuralIssues / Python structural_issues 相同
+  const mmsi = draft.ship.mmsi;
+  if (mmsi !== undefined && (!Number.isInteger(mmsi) || mmsi < 0 || mmsi > 999_999_999)) issues.push('ship.mmsi:mmsi 須為 0–999999999 的整數');
 
   const seen = new Set<string>();
   draft.targets.forEach((t, i) => {
@@ -2508,7 +2517,11 @@ export function loadDraft(storage: DraftStorage | null = defaultStorage()): Scen
     if (!Array.isArray(v['zones']) || !isRecord(v['briefing']) || !Array.isArray(v['tugs'])) return null;
     if (v['version'] === 2) return migrateDraftV2(v);
     if (v['version'] !== DRAFT_VERSION || !isRecord(v['currentModel']) || !('tide' in v) || !('waves' in v) || !('shipInteraction' in v) || !('roll' in v)) return null;
-    return v as unknown as ScenarioDraft;
+    const draft = v as unknown as ScenarioDraft;
+    // 加入 ship.mmsi 欄位前存下的版本 3 草稿:範本的 ship.mmsi 只在 raw,由 raw 補回(否則輸出時 setOrDelete 會把它移除)
+    const rawMmsi = finite(recordOf(draft.raw['ship'])['mmsi']);
+    if (draft.ship.mmsi === undefined && rawMmsi !== undefined) draft.ship = { ...draft.ship, mmsi: rawMmsi };
+    return draft;
   } catch {
     return null;
   }
@@ -2539,7 +2552,8 @@ function migrateDraftV1(v: Record<string, unknown>): ScenarioDraft {
 function migrateDraftV2(v: Record<string, unknown>): ScenarioDraft {
   const old = v as unknown as ScenarioDraft;
   const base = fromScenarioObject(old.raw, typeof v['template'] === 'string' ? v['template'] : '');
-  return { ...old, version: 3, tide: base.tide, waves: base.waves, currentModel: base.currentModel, shipInteraction: base.shipInteraction, roll: base.roll };
+  const ship = old.ship.mmsi === undefined && base.ship.mmsi !== undefined ? { ...old.ship, mmsi: base.ship.mmsi } : old.ship; // 舊草稿的 ship.mmsi 只在 raw,由 raw 補回
+  return { ...old, version: 3, ship, tide: base.tide, waves: base.waves, currentModel: base.currentModel, shipInteraction: base.shipInteraction, roll: base.roll };
 }
 
 export function clearDraft(storage: DraftStorage | null = defaultStorage()): void {
