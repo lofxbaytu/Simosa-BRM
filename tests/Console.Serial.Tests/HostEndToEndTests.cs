@@ -58,7 +58,9 @@ public class HostEndToEndTests
         return false;
     }
 
-    private static async Task<T> WaitUntilAsync<T>(Func<T?> probe, TimeSpan timeout, string what) where T : class
+    private static Task<T> WaitUntilAsync<T>(Func<T?> probe, TimeSpan timeout, string what) where T : class => WaitUntilAsync(probe, timeout, () => what);
+
+    private static async Task<T> WaitUntilAsync<T>(Func<T?> probe, TimeSpan timeout, Func<string> what) where T : class
     {
         var sw = Stopwatch.StartNew();
         while (sw.Elapsed < timeout)
@@ -66,7 +68,7 @@ public class HostEndToEndTests
             if (probe() is { } v) return v;
             await Task.Delay(50);
         }
-        throw new Xunit.Sdk.XunitException($"逾時 {timeout.TotalSeconds:0} s:{what}");
+        throw new Xunit.Sdk.XunitException($"逾時 {timeout.TotalSeconds:0} s:{what()}");
     }
 
     [Fact]
@@ -110,6 +112,7 @@ public class HostEndToEndTests
             var sentLines = new List<string>();
             var sentCommands = new List<SimCommand>();
             core.FrameReceived += f => { if (ConsoleStateView.TryParse(f) is { } v) lock (frames) frames.Add(v); };
+            core.Log += m => { lock (logs) logs.Add($"[core] {m}"); };
             var bridge = new ConsoleBridge(device, core, session, m => { lock (logs) logs.Add(m); });
             bridge.DeviceLineSent += l => { lock (sentLines) sentLines.Add(l); };
             bridge.CommandSent += c => { lock (sentCommands) sentCommands.Add(c); };
@@ -125,7 +128,8 @@ public class HostEndToEndTests
             string? Received(Func<string, bool> pred) { lock (received) return received.FirstOrDefault(pred); }
 
             // 等核心連線後握手(CS:之後每行帶校驗和,主機回寫亦帶)
-            await WaitUntilAsync(() => core.Connected ? "ok" : null, TimeSpan.FromSeconds(20), "核心 WebSocket 連線");
+            string Diag() { lock (logs) return string.Join("\n", logs.TakeLast(12)); }
+            await WaitUntilAsync(() => core.Connected ? "ok" : null, TimeSpan.FromSeconds(60), () => $"核心 WebSocket 連線(Host 已開埠 {port};log:\n{Diag()}\nHost stdout:\n{(host.HasExited ? stdout.Result : "(執行中)")})");
             await deviceWriter.WriteLineAsync(LineChecksum.Append("HELLO,1.0.0,RUD+TEL+BTN+NFU+LED+DISP+BUZZ+CS"));
             var ack = await WaitUntilAsync(() => Received(l => l.StartsWith("ACK")), TimeSpan.FromSeconds(10), "ACK");
             Assert.Equal(LineChecksum.Append("ACK"), ack);

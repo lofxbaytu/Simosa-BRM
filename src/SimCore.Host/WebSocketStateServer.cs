@@ -84,6 +84,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
             _listener.Prefixes.Clear();
             var local = $"http://localhost:{Port}/";
             _listener.Prefixes.Add(local);
+            _listener.Prefixes.Add($"http://127.0.0.1:{Port}/"); // HttpListener 以 Host 標頭比對:ws://127.0.0.1 的客戶端也要能連
             _listener.Start();
             Prefix = local;
             Log?.Invoke($"無法監聽 {wildcard}({ex.Message});改為只監聽 {local}。遠端站別需設定 URL ACL:netsh http add urlacl url={wildcard} user=Everyone");
