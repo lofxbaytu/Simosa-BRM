@@ -123,6 +123,16 @@ launch_stop_file() {
 # process_alive <PID>:程序仍在執行
 process_alive() { kill -0 "$1" 2>/dev/null; }
 
+# console_service_args <埠規格> <鮑率> <ws 埠>:USB 操控台服務(app/console;src/Contracts/console-serial.md)的參數。
+#   規格為序列埠名稱(COM5、/dev/ttyACM0)→ --port <埠> --baud <鮑率>;loopback:<讀取檔>[,<寫入檔>] → --loopback <…>(測試用假裝置)。
+#   log 由 start_bg 收 stdout(--log -),不另寫檔。印出以換行分隔的參數列(呼叫端 mapfile -t)
+console_service_args() {
+  local spec="$1" baud="${2:-115200}" ws="${3:-8765}"
+  if [[ "$spec" == loopback:* ]]; then printf '%s\n' --loopback "${spec#loopback:}"
+  else printf '%s\n' --port "$spec" --baud "$baud"; fi
+  printf '%s\n' --ws "ws://127.0.0.1:$ws" --log -
+}
+
 # wait_tcp <host> <port> <秒> [PID]:等待埠開啟;給 PID 時程序已結束即回傳 2(不再等到逾時,也不會把別的程序的監聽當成自己的)
 wait_tcp() {
   local host="$1" port="$2" secs="${3:-20}" pid="${4:-}" i

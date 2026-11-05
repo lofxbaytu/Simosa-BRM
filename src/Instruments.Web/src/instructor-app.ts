@@ -242,7 +242,8 @@ export class InstructorApp extends LitElement {
         min-height: 0;
       }
       .col.left {
-        grid-template-rows: minmax(0, 0.9fr) minmax(0, 1fr) auto;
+        /* 四個面板(情境/時間表/…)各一列;端對端測試發現 1600×1000 下只有三列時情境面板的載入鈕被蓋住 */
+        grid-template-rows: minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 0.8fr) auto;
       }
       .col.center {
         grid-template-rows: minmax(0, 1fr) auto;

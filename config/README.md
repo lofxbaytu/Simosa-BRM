@@ -2,7 +2,7 @@
 
 | 檔案 | 用途 | 讀取者 |
 |---|---|---|
-| `ship-laptop.json` | 船上筆電:船舶/裝置 ID、直連固定 IP、各服務埠、預設練習、雷達、網頁、視景、同步、記錄目錄 | `tools/launch/start-ship-laptop.ps1`(`.sh`) |
+| `ship-laptop.json` | 船上筆電:船舶/裝置 ID、直連固定 IP、各服務埠、預設練習、雷達、USB 操控台序列埠(`console.port`)、網頁、視景、同步、記錄目錄 | `tools/launch/start-ship-laptop.ps1`(`.sh`) |
 | `instructor-laptop.json` | 教官筆電:直連 IP、兩船 IP、教官站/雷達鏡像頁、離船單機模式、同步說明 | `tools/launch/start-instructor-laptop.ps1`(`.sh`) |
 | `packaging.ship.example.json` | 船上 `config/packaging.json`(simosa-pkg serve/apply/records) | `simosa-pkg` |
 | `packaging.instructor.example.json` | 教官 `config/packaging.json`(simosa-pkg sync/store/export/import) | `simosa-pkg` |

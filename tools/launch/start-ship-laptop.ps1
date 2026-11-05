@@ -2,7 +2,7 @@
 .SYNOPSIS
   船上筆電啟動(Windows;規劃書第 5.4–5.5 節、第 14 章「船上部署」):依 config\ship-laptop.json 啟動全部服務,Ctrl+C 一併結束。
 .DESCRIPTION
-  啟動:SimCore.Host(WebSocket 8765、UDP 多播、NMEA)、Sensors.Radar.Host(8766)、靜態網頁 simosa-web(app\web,8080)、
+  啟動:SimCore.Host(WebSocket 8765、UDP 多播、NMEA)、USB 操控台服務(app\console;config console.port 非 null 或 -Console 時)、Sensors.Radar.Host(8766)、靜態網頁 simosa-web(app\web,8080)、
   視景(app\visual\SimosaBRM.Visual.exe 匯出檔,或 Godot 編輯器 --path src\Visual.Godot;每個 views[] 一個程序,依 --view/--monitor)、
   直連同步服務 simosa-pkg serve(7300;需安裝時完成 config\packaging.json 與 device init)。各程序 log 在 build\logs\(上一次的輪替為 <元件>.1.log…,
   啟動標頭在 launch.log)。啟動前檢查各埠未被殘留程序占住(占用即報錯),SimCore.Host 啟動後若程序結束立即回報失敗。
@@ -10,19 +10,23 @@
 .PARAMETER Scenario   覆寫預設情境(例如 data\scenarios\E05_pilot_traffic.yaml)
 .PARAMETER Duration   模擬秒數到達後 SimCore 自動結束並一併結束其他程序(煙霧測試)
 .PARAMETER NoWait     啟動後即返回(預設前景等待 Ctrl+C;之後以 stop-all.ps1 結束:先寫停止檔讓核心寫完紀錄 footer,逾時才強制結束)
+.PARAMETER Console    USB 實體操控台的序列埠(例如 COM5;覆寫 config 的 console.port;協定 src\Contracts\console-serial.md、安裝文件第 4.6 節);
+                      loopback:<讀取檔>,<寫入檔> 為測試用假裝置。-NoConsole 停用
 .PARAMETER Shell      以 WebView2 操船台外殼(app\shell\SimosaBRM.Shell.exe;kiosk 全螢幕,每個 web.openPages 一個程序)開啟網頁,取代預設瀏覽器;
                       config 的 web.shell=true 同義;找不到外殼時退回瀏覽器(docs\ops\安裝與啟動.md 第 4.5 節)
 .EXAMPLE
   .\start-ship-laptop.ps1
   .\start-ship-laptop.ps1 -Scenario data\scenarios\E05_pilot_traffic.yaml -Duration 60 -NoVisual
   .\start-ship-laptop.ps1 -Shell
+  .\start-ship-laptop.ps1 -Console COM5
 #>
 [CmdletBinding()]
 param(
     [string]$Config = 'config\ship-laptop.json',
     [string]$Scenario,
     [double]$Duration = 0,
-    [switch]$NoVisual, [switch]$NoWeb, [switch]$NoRadar, [switch]$NoSync, [switch]$NoBrowser, [switch]$NoWait, [switch]$CheckOnly, [switch]$Shell
+    [string]$Console,
+    [switch]$NoVisual, [switch]$NoWeb, [switch]$NoRadar, [switch]$NoSync, [switch]$NoConsole, [switch]$NoBrowser, [switch]$NoWait, [switch]$CheckOnly, [switch]$Shell
 )
 . (Join-Path $PSScriptRoot 'launch-common.ps1')
 $root = Get-LaunchRoot
@@ -52,6 +56,12 @@ $webDll = $null; if (-not $NoWeb -and (Get-Cfg $cfg 'web.enabled' $true)) { $web
 $pkgDll = $null; if (-not $NoSync -and (Get-Cfg $cfg 'sync.enabled' $true)) { $pkgDll = Find-LaunchDll 'simosa-pkg' 'Tools.Packaging.Cli' 'simosa-pkg.dll' $root; if (-not $pkgDll) { Write-Warning '找不到 simosa-pkg,略過同步服務' } }
 $webDir = $null
 foreach ($d in @((Join-Path $root 'app\web'), (Join-Path $root 'build\web\instruments'))) { if (Test-Path (Join-Path $d 'index.html')) { $webDir = $d; break } }
+# USB 操控台服務:-Console 覆寫 config console.port($null/空 = 不啟動);-NoConsole 或 console.enabled=false 停用
+$consoleSpec = $null; $consoleDll = $null
+if (-not $NoConsole -and (Get-Cfg $cfg 'console.enabled' $true)) {
+    $consoleSpec = if ($Console) { $Console } else { Get-Cfg $cfg 'console.port' }
+    if ($consoleSpec) { $consoleDll = Find-LaunchDll 'console' 'Console.Serial' 'SimosaBRM.Console.Serial.dll' $root; if (-not $consoleDll) { Write-Warning "找不到 Console.Serial(app\console),略過操控台 $consoleSpec"; $consoleSpec = $null } }
+}
 # WebView2 外殼(-Shell 或 config web.shell=true;預設仍為瀏覽器)
 $useShell = $Shell -or [bool](Get-Cfg $cfg 'web.shell' $false)
 $shellExe = $null; if ($useShell) { $shellExe = Find-LaunchShellExe $root; if (-not $shellExe) { Write-Warning '找不到 WebView2 外殼 app\shell\SimosaBRM.Shell.exe,改用預設瀏覽器' } }
@@ -60,6 +70,7 @@ if ($CheckOnly) {
     Write-Host "SimCore.Host:$hostDll"; Write-Host "雷達:$(if ($radarDll) { $radarDll } else { '略過' })"
     Write-Host "網頁:$(if ($webDll) { $webDll } else { '略過' }) ← $(if ($webDir) { $webDir } else { '(找不到 app\web)' })"; Write-Host "同步:$(if ($pkgDll) { $pkgDll } else { '略過' })"
     Write-Host "外殼:$(if ($shellExe) { $shellExe } elseif ($useShell) { '(找不到,將用瀏覽器)' } else { '未啟用(-Shell 或 web.shell=true)' })"
+    Write-Host "操控台:$(if ($consoleDll) { "$consoleDll ← $consoleSpec" } else { '略過(-Console <COM 埠> 或 config console.port)' })"
     return
 }
 
@@ -91,6 +102,14 @@ try {
     if (-not (Wait-LaunchTcp '127.0.0.1' $wsPort 30 -Process $hostProc)) {
         if ($hostProc.HasExited) { throw "SimCore.Host 已結束(啟動失敗,結束碼 $($hostProc.ExitCode)),見 $logs\simcore.log、simcore.err.log" }
         throw "SimCore.Host 未在 30 s 內開啟 ws 埠 $wsPort,見 $logs\simcore.log"
+    }
+
+    # 1b) USB 操控台服務(序列行 ↔ 核心 WebSocket;log 走 stdout → console.log;stop-all.ps1 結束)
+    if ($consoleDll) {
+        $consoleArgs = @($consoleDll) + (Get-LaunchConsoleArgs $consoleSpec $wsPort (Get-Cfg $cfg 'console.baud' 115200))
+        $consoleProc = Start-LaunchProcess -Name 'console' -Log (Join-Path $logDir 'console.log') -File 'dotnet' -Arguments $consoleArgs -WorkDir $root
+        Start-Sleep -Seconds 1
+        if ($consoleProc.HasExited) { Write-Warning "操控台服務已結束(序列埠 $consoleSpec 無法開啟?),見 $logs\console.log、console.err.log" }
     }
 
     # 2) 雷達服務

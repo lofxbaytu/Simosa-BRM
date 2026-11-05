@@ -29,6 +29,7 @@ public sealed class RealtimeRunner
         var last = sw.Elapsed;
         var next = sw.Elapsed + Period;
         double accumulator = 0.0;
+        var lastFrozenBroadcast = TimeSpan.FromSeconds(-1); // 不用 MinValue:Elapsed − MinValue 會溢位
 
         while (!ct.IsCancellationRequested)
         {
@@ -40,6 +41,8 @@ public sealed class RealtimeRunner
             {
                 accumulator = 0.0;
                 _engine.ProcessPendingCommands();
+                // 凍結心跳:每 200 ms 廣播一次目前狀態(frozen 旗標),教官站/儀表才不會誤判為資料逾時
+                if ((sw.Elapsed - lastFrozenBroadcast).TotalMilliseconds >= 200) { lastFrozenBroadcast = sw.Elapsed; _engine.BroadcastNow(); }
             }
             else
             {

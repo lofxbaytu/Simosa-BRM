@@ -66,3 +66,45 @@ jobs:
         run: dotnet build SimosaBRM.sln -c Release
       - name: 測試
         run: dotnet test SimosaBRM.sln -c Release --no-build --logger "trx;LogFileName=test.trx"
+  e2e:
+    name: 端對端(Playwright + 真實核心)
+    needs: detect
+    if: needs.detect.outputs.web == 'true' && needs.detect.outputs.dotnet == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Playwright 瀏覽器、NuGet、dotnet CLI 的快取都留在工作目錄內(CLAUDE.md:不寫到專案外)
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/pw-browsers
+      PWTEST_CACHE_DIR: ${{ github.workspace }}/.cache/playwright-transform
+      NUGET_PACKAGES: ${{ github.workspace }}/.cache/nuget/packages
+      DOTNET_CLI_HOME: ${{ github.workspace }}/.cache/dotnet-home
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 安裝端對端測試套件與 Chromium
+        working-directory: tests/e2e
+        run: |
+          pnpm install --frozen-lockfile
+          npx playwright install chromium --with-deps
+      - name: 建置網頁與 .NET、執行端對端測試(tools/run-e2e.sh)
+        run: bash tools/run-e2e.sh
+      - name: 上傳失敗截圖、trace 與程序 log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failures
+          path: |
+            build/e2e/test-results/
+            build/e2e/report/
+            build/e2e/results.json
+            build/e2e/logs/
+          if-no-files-found: ignore
+          retention-days: 14

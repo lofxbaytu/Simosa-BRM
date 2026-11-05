@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- USB 實體操控台服務的測試(協定 src/Contracts/console-serial.md;規劃書第 5.4 節):
+       協定解析/校驗和、指令對應、去抖、回寫格式、心跳斷線判定、串流連結,以及與真 SimCore.Host 子程序的端對端(HostEndToEndTests)。 -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>SimosaBRM.ConsoleSerial.Tests</RootNamespace>
+    <AssemblyName>SimosaBRM.Console.Serial.Tests</AssemblyName>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Console.Serial/Console.Serial.csproj" />
+    <ProjectReference Include="../../src/SimCore/SimCore.csproj" />
+  </ItemGroup>
+</Project>

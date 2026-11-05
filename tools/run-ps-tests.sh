@@ -97,11 +97,13 @@ step_tests() {
 }
 step_whatif() {
   local out="$TMP/build-release.whatif.out"
-  "$PWSH" -NoProfile -File tools/build-release.ps1 -WhatIf -SkipGodot -Installer -Version 0.0.1 > "$out" 2>&1; local code=$?
+  # 專屬版號 0.0.0 並前後清理:避免機器上先前的真實發行組裝(例如 0.0.1)讓斷言誤判(審查第二十三輪)
+  rm -rf build/release/0.0.0
+  "$PWSH" -NoProfile -File tools/build-release.ps1 -WhatIf -SkipGodot -Installer -Version 0.0.0 > "$out" 2>&1; local code=$?
   sed 's/^/    /' "$out"
   [[ $code == 0 ]] || return 1
   grep -q '^WhatIf:' "$out" && grep -q '8/8 安裝程式' "$out" && grep -q 'tools\\installer\\SimosaBRM.iss' "$out" || { echo "    -WhatIf 輸出缺少計畫內容"; return 1; }
-  [[ ! -d build/release/0.0.1 ]] || { echo "    -WhatIf 不應建立 build/release/0.0.1"; return 1; }
+  [[ ! -d build/release/0.0.0 ]] || { echo "    -WhatIf 不應建立 build/release/0.0.0"; rm -rf build/release/0.0.0; return 1; }
   # 參數錯誤仍須以非 0 結束
   if "$PWSH" -NoProfile -File tools/build-release.ps1 -WhatIf -Version bad.version > "$TMP/build-release.whatif-bad.out" 2>&1; then echo "    -Version 不合法時應失敗"; return 1; fi
   grep -q '1–4 段數字' "$TMP/build-release.whatif-bad.out"

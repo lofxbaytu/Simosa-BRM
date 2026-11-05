@@ -224,6 +224,9 @@ public sealed class SimulationEngine
     public event Action<SimulationEngine>? Stepped;
     /// <summary>每 BroadcastDivider 步(25 Hz)</summary>
     public event Action<SimulationEngine, OwnShipState>? Broadcast;
+
+    /// <summary>凍結時由即時執行器以低頻呼叫:不推進、不改雜湊,只把目前狀態(flags.frozen = true)廣播給客戶端(端對端測試發現凍結後無任何狀態幀)。</summary>
+    public void BroadcastNow() => Broadcast?.Invoke(this, BuildState());
     /// <summary>快照產生(自動或指令)</summary>
     public event Action<SimulationEngine, EngineSnapshot>? SnapshotTaken;
     /// <summary>loadScenario 指令(引擎本身不讀檔,由主控程序載入後呼叫 <see cref="LoadScenario"/>)</summary>

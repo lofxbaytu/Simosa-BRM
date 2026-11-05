@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # 船上筆電啟動(Linux/容器煙霧版;正式為 start-ship-laptop.ps1,參數與行為相同;規劃書第 5.4–5.5 節、第 14 章「船上部署」):
-#   依 config/ship-laptop.json 啟動 SimCore.Host(WebSocket/UDP 多播/NMEA)、Sensors.Radar.Host、靜態網頁(simosa-web 提供 app/web)、
-#   視景(匯出檔或 Godot 編輯器,每個 views[] 一個程序)、直連同步服務 simosa-pkg serve;各程序 log 在 build/logs/;Ctrl+C 一併結束。
+#   依 config/ship-laptop.json 啟動 SimCore.Host(WebSocket/UDP 多播/NMEA)、USB 操控台服務(config console.port 非 null 或 --console 時)、
+#   Sensors.Radar.Host、靜態網頁(simosa-web 提供 app/web)、視景(匯出檔或 Godot 編輯器,每個 views[] 一個程序)、直連同步服務 simosa-pkg serve;
+#   各程序 log 在 build/logs/;Ctrl+C 一併結束。
 # 用法:start-ship-laptop.sh [--config config/ship-laptop.json] [--scenario <yaml>] [--duration <秒>] [--no-visual] [--no-web] [--no-radar] [--no-sync]
+#       [--console <序列埠|loopback:<讀取檔>[,<寫入檔>]>] [--no-console]
 #       [--check-only] [--wait](前景等待 Ctrl+C;預設啟動後即返回,之後用 stop-all.sh 結束:先寫停止檔讓核心寫完紀錄 footer,逾時才強制結束)
+#       --console:USB 實體操控台的序列埠(覆寫 config console.port;協定 src/Contracts/console-serial.md),loopback:… 為測試用假裝置
 #       --duration:模擬秒數到達後 SimCore 自動結束,本腳本於同一時間結束其他程序(煙霧測試;容器以 E05 60 s 驗證)。
 #   啟動前檢查各埠未被殘留程序占住(占用即報錯 exit 1),SimCore.Host 啟動後若程序結束(而非只是埠未開)立即回報失敗;測試見 tests/launch-tests.sh。
 source "$(dirname "${BASH_SOURCE[0]}")/launch-common.sh"
 ROOT="$(launch_root)"
 CONFIG="$ROOT/config/ship-laptop.json"
-SCENARIO=""; DURATION=""; VISUAL=1; WEB=1; RADAR=1; SYNC=1; WAIT=0; CHECK_ONLY=0
+SCENARIO=""; DURATION=""; VISUAL=1; WEB=1; RADAR=1; SYNC=1; WAIT=0; CHECK_ONLY=0; CONSOLE=""; CONSOLE_ON=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; shift 2 ;;
@@ -19,9 +22,11 @@ while [[ $# -gt 0 ]]; do
     --no-web) WEB=0; shift ;;
     --no-radar) RADAR=0; shift ;;
     --no-sync) SYNC=0; shift ;;
+    --console) CONSOLE="$2"; shift 2 ;;
+    --no-console) CONSOLE_ON=0; shift ;;
     --wait) WAIT=1; shift ;;
     --check-only) CHECK_ONLY=1; shift ;;
-    -h|--help) sed -n 2,8p "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n 2,11p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
@@ -41,10 +46,17 @@ HOST_DLL="$(find_dll simcore SimCore.Host SimosaBRM.SimCore.Host.dll "$ROOT")" |
 RADAR_DLL=""; [[ $RADAR == 1 && "$(cfg radar_enabled true)" == true ]] && { RADAR_DLL="$(find_dll radar Sensors.Radar.Host SimosaBRM.Sensors.Radar.Host.dll "$ROOT")" || echo "警告:找不到 Sensors.Radar.Host,略過雷達" >&2; }
 WEB_DLL=""; [[ $WEB == 1 && "$(cfg web_enabled true)" == true ]] && { WEB_DLL="$(find_dll web-server StaticWeb simosa-web.dll "$ROOT")" || echo "警告:找不到 simosa-web,略過網頁伺服" >&2; }
 PKG_DLL=""; [[ $SYNC == 1 && "$(cfg sync_enabled true)" == true ]] && { PKG_DLL="$(find_dll simosa-pkg Tools.Packaging.Cli simosa-pkg.dll "$ROOT")" || echo "警告:找不到 simosa-pkg,略過同步服務" >&2; }
+# USB 操控台服務:--console 覆寫 config console.port(null/空 = 不啟動);--no-console 或 console.enabled=false 停用
+CONSOLE_SPEC=""; CONSOLE_DLL=""
+if [[ $CONSOLE_ON == 1 && "$(cfg console_enabled true)" == true ]]; then
+  CONSOLE_SPEC="${CONSOLE:-$(cfg console_port)}"
+  [[ -n "$CONSOLE_SPEC" ]] && { CONSOLE_DLL="$(find_dll console Console.Serial SimosaBRM.Console.Serial.dll "$ROOT")" || { echo "警告:找不到 Console.Serial(app/console),略過操控台 $CONSOLE_SPEC" >&2; CONSOLE_SPEC=""; }; }
+fi
 WEB_DIR=""; for d in "$ROOT/app/web" "$ROOT/build/web/instruments"; do [[ -f "$d/index.html" ]] && { WEB_DIR="$d"; break; }; done
 
 if [[ $CHECK_ONLY == 1 ]]; then
   echo "SimCore.Host:$HOST_DLL"; echo "雷達:${RADAR_DLL:-略過}"; echo "網頁:${WEB_DLL:-略過} ← ${WEB_DIR:-(找不到 app/web)}"; echo "同步:${PKG_DLL:-略過}"
+  echo "操控台:${CONSOLE_DLL:-略過}${CONSOLE_SPEC:+ ← $CONSOLE_SPEC}"
   exit 0
 fi
 
@@ -79,6 +91,13 @@ if [[ $rc != 0 ]]; then
   if [[ $rc == 2 ]]; then echo "SimCore.Host 已結束(啟動失敗),見 $LOGS/simcore.log 最後幾行:" >&2; tail -n 5 "$ROOT/$LOGS/simcore.log" >&2
   else echo "SimCore.Host 未在 30 s 內開啟 ws 埠 $WS_PORT,見 $LOGS/simcore.log" >&2; fi
   "$LAUNCH_DIR/stop-all.sh" --logs "$LOGS"; exit 1
+fi
+
+# 1b) USB 操控台服務(序列行 ↔ 核心 WebSocket;log 走 stdout → console.log;stop-all 送 SIGINT 即結束)
+if [[ -n "$CONSOLE_DLL" ]]; then
+  mapfile -t CONSOLE_ARGS < <(console_service_args "$CONSOLE_SPEC" "$(cfg console_baud 115200)" "$WS_PORT")
+  start_bg console "$ROOT/$LOGS/console.log" dotnet "$CONSOLE_DLL" "${CONSOLE_ARGS[@]}"
+  sleep 1; process_alive "$LAST_PID" || echo "警告:操控台服務已結束(序列埠 $CONSOLE_SPEC 無法開啟?),見 $LOGS/console.log" >&2
 fi
 
 # 2) 雷達服務

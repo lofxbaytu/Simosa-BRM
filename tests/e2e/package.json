@@ -8,7 +8,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "test": "playwright test",
+    "test": "PWTEST_CACHE_DIR=../../.cache/playwright-transform playwright test",
+    "test:e2e": "bash ../../tools/run-e2e.sh",
+    "test:e2e:quick": "bash ../../tools/run-e2e.sh --skip-build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "report": "playwright show-report ../../build/e2e/report"
   },

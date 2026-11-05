@@ -13,6 +13,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "bash ../../tools/run-e2e.sh",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

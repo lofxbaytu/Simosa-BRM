@@ -3,7 +3,7 @@
   發行組裝(Windows,win-x64;Linux/容器版為 build-release.sh,參數相同):規劃書第 5.4–5.5 節、第 11.2 節、第 12.1 節 M4 交付。
 .DESCRIPTION
   1) dotnet build SimosaBRM.sln -c Release;2) 網頁 pnpm build;3) dotnet publish(framework-dependent,需 .NET 8 執行階段):
-     SimCore.Host → app\simcore、Sensors.Radar.Host → app\radar、simosa-web → app\web-server、simosa-pkg → tools\updater、
+     SimCore.Host → app\simcore、Sensors.Radar.Host → app\radar、Console.Serial → app\console(USB 操控台服務)、simosa-web → app\web-server、simosa-pkg → tools\updater、
      WebView2 殼 Shell.WebView2 → app\shell\SimosaBRM.Shell.exe(win-x64;需 .NET 8 Desktop Runtime 與 WebView2 Runtime,docs\ops\安裝與啟動.md 第 4.5 節)
      (simosa-pkg 放在 app\ 之外:套用軟體更新包時 app\ 整個被替換,執行中的更新工具不可位於其中;docs\design\packaging-sync.md 第 5 節;
       Gateway.Nmea 為類別庫隨 SimCore.Host 發布;Python 校正工具不打包,附說明於 docs\);
@@ -79,7 +79,7 @@ if ($WhatIfPreference) {
     Write-Host "WhatIf:Simosa BRM 發行組裝 $Version(git $Git $Branch;$Rid)→ $outDir"
     Write-Host "  1/7 dotnet build SimosaBRM.sln -c Release(dotnet $(& dotnet --version))"
     Write-Host "  2/7 網頁:$(if ($SkipWeb) { '略過(-SkipWeb)' } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) { 'pnpm build' } else { '找不到 pnpm,沿用 build\web\instruments' })"
-    Write-Host "  3/7 dotnet publish ${Rid}:app\simcore、app\radar、app\web-server、tools\updater$(if ($Rid -eq 'win-x64') { '、app\shell(WebView2 外殼)' } else { '(外殼僅建置)' })"
+    Write-Host "  3/7 dotnet publish ${Rid}:app\simcore、app\radar、app\console、app\web-server、tools\updater$(if ($Rid -eq 'win-x64') { '、app\shell(WebView2 外殼)' } else { '(外殼僅建置)' })"
     Write-Host '  4/7 app\web、app\launch、data\(排除 confidential)、contracts\、docs\、config\、tools\installer\SimosaBRM.iss'
     Write-Host "  5/7 Godot 視景:$(if ($SkipGodot) { '略過(-SkipGodot)' } elseif ($Godot -or $env:GODOT -or $env:SIMOSA_GODOT) { '匯出' } else { '自 .cache\godot 偵測' })"
     Write-Host "  6/7 簽章更新包:$(if ($NoPackage) { '略過(-NoPackage)' } else { "packages\simosa-$Version-software.sbupd(開發金鑰 $keys)" })"
@@ -113,6 +113,7 @@ function Publish([string]$proj, [string]$dest) {
 }
 Publish 'src\SimCore.Host\SimCore.Host.csproj' (Join-Path $outDir 'app\simcore')
 Publish 'src\Sensors.Radar.Host\Sensors.Radar.Host.csproj' (Join-Path $outDir 'app\radar')
+Publish 'src\Console.Serial\Console.Serial.csproj' (Join-Path $outDir 'app\console')
 Publish 'tools\launch\StaticWeb\StaticWeb.csproj' (Join-Path $outDir 'app\web-server')
 Publish 'src\Tools.Packaging.Cli\Tools.Packaging.Cli.csproj' (Join-Path $outDir 'tools\updater')
 # WebView2 操船台外殼(src\Shell.WebView2,net8.0-windows WinForms):win-x64 發布 app\shell\SimosaBRM.Shell.exe;其他 RID 只在步驟 1 建置、不發布
@@ -133,6 +134,7 @@ app\shell\SimosaBRM.Shell.exe(WebView2 操船台外殼)偵測不到 Runtime 時�
 $pkgDll = Join-Path $outDir 'tools\updater\simosa-pkg.dll'
 function Pkg([string[]]$a) { & dotnet $pkgDll @a; if ($LASTEXITCODE -ne 0) { throw "simosa-pkg $($a[0]) 失敗(結束碼 $LASTEXITCODE)" } }
 $components.AddRange([string[]]@("simcore=$Version=app/simcore", "radar=$Version=app/radar", "web-server=$Version=app/web-server", "simosa-pkg=$Version=tools/updater", "gateway-nmea=$Version=app/simcore=類別庫,隨 SimCore.Host 發布"))
+$components.Add("console=$Version=app/console=USB 實體操控台服務(--port <序列埠>;協定 contracts/console-serial.md;Teensy 參考韌體 firmware/teensy-console,硬體待製作)")
 
 Step '4/7 網頁、啟動腳本、資料、契約、文件、設定範例'
 Copy-Item -Recurse 'build\web\instruments' (Join-Path $outDir 'app\web')
@@ -153,6 +155,10 @@ $paramVersion = ((Select-String -Path 'data\parameters\company-procedures.yaml' 
 $components.Add("data=$paramVersion=data=參數集 company-procedures.yaml 版次;ships/*/confidential 已排除")
 New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'contracts') | Out-Null
 Copy-Item 'src\Contracts\*' (Join-Path $outDir 'contracts')
+# Teensy 參考韌體原始碼(以 Arduino IDE + Teensyduino 燒錄;不在此編譯)
+New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'firmware\teensy-console') | Out-Null
+Copy-Item 'firmware\teensy-console\teensy-console.ino', 'firmware\teensy-console\README.md' (Join-Path $outDir 'firmware\teensy-console')
+$components.Add("firmware-teensy=$Version=firmware/teensy-console=參考韌體原始碼(Arduino IDE/Teensyduino 燒錄;接腳 ASSUMED)")
 $components.Add("contracts=$Version=contracts")
 foreach ($d in @('docs\design', 'docs\ops', 'docs\驗收', 'docs\訓練', 'docs\components')) { New-Item -ItemType Directory -Force -Path (Join-Path $outDir $d) | Out-Null }
 Copy-Item 'docs\Simosa-BRM-操船模擬器規劃書.md', 'README.md' (Join-Path $outDir 'docs')
@@ -176,6 +182,7 @@ Note 'Python 校正工具(src/Tools.Calibration)不隨發行版散布;係數檔 
 @"
 Simosa BRM 發行版 $Version($Rid,framework-dependent:需 .NET 8 執行階段)git $Git $Branch
 app\simcore      SimCore.Host(50 Hz 核心、WebSocket 8765、UDP 多播、NMEA)   app\radar        Sensors.Radar.Host(雷達/ARPA 8766)
+app\console      SimosaBRM.Console.Serial(USB 操控台序列埠 ↔ 核心;start-ship-laptop.ps1 -Console COM5)   firmware\teensy-console  Teensy 4.0 參考韌體(.ino + README)
 app\web          網頁:index.html 儀器、instructor.html 教官站(?mode=simple 簡化教官模式)、radar.html、ecdis.html(簡化 ECDIS)、report.html
 app\web-server   simosa-web 靜態網頁伺服                                  app\launch       start-ship-laptop / start-instructor-laptop / stop-all
 app\visual       Godot 視景匯出檔(有匯出範本時)                           tools\updater    simosa-pkg(更新包、紀錄包、直連同步;放在 app\ 之外)

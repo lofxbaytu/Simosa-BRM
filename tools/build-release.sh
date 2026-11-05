@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 發行組裝(Linux/容器;Windows 版 build-release.ps1 同參數):規劃書第 5.4–5.5 節(船上部署)、第 11.2 節(資料夾結構)、第 12.1 節 M4 交付(安裝程式)。
 #   1) dotnet build SimosaBRM.sln -c Release;2) 網頁 pnpm build;3) dotnet publish(framework-dependent,需 .NET 8 執行階段)
-#      SimCore.Host → app/simcore、Sensors.Radar.Host → app/radar、simosa-web → app/web-server、simosa-pkg → tools/updater、
+#      SimCore.Host → app/simcore、Sensors.Radar.Host → app/radar、Console.Serial → app/console(USB 操控台服務)、simosa-web → app/web-server、simosa-pkg → tools/updater、
 #      WebView2 殼 Shell.WebView2 → app/shell(只在 --rid win-x64;linux-x64 僅於步驟 1 以 EnableWindowsTargeting 建置、不發布可執行檔)
 #      (simosa-pkg 放在 app/ 之外:套用軟體更新包時 app/ 整個被替換,執行中的更新工具不可位於其中;docs/design/packaging-sync.md 第 5 節);
 #      Gateway.Nmea 為類別庫,隨 SimCore.Host 一併發布;Python 校正工具不打包,附說明於 docs/;
@@ -82,6 +82,7 @@ publish() { # <專案路徑> <目的地>
 }
 publish src/SimCore.Host/SimCore.Host.csproj "$OUT/app/simcore"
 publish src/Sensors.Radar.Host/Sensors.Radar.Host.csproj "$OUT/app/radar"
+publish src/Console.Serial/Console.Serial.csproj "$OUT/app/console"
 publish tools/launch/StaticWeb/StaticWeb.csproj "$OUT/app/web-server"
 publish src/Tools.Packaging.Cli/Tools.Packaging.Cli.csproj "$OUT/tools/updater"
 # WebView2 操船台外殼(src/Shell.WebView2,net8.0-windows WinForms):只有 win-x64 發行版發布 app/shell/SimosaBRM.Shell.exe;
@@ -103,6 +104,7 @@ app/shell/SimosaBRM.Shell.exe(WebView2 操船台外殼)偵測不到 Runtime 時�
 TXT
 PKG="dotnet $OUT/tools/updater/simosa-pkg.dll"
 COMPONENTS+=("simcore=$VERSION=app/simcore" "radar=$VERSION=app/radar" "web-server=$VERSION=app/web-server" "simosa-pkg=$VERSION=tools/updater" "gateway-nmea=$VERSION=app/simcore=類別庫,隨 SimCore.Host 發布")
+COMPONENTS+=("console=$VERSION=app/console=USB 實體操控台服務(--port <序列埠>;協定 contracts/console-serial.md;Teensy 參考韌體 firmware/teensy-console,硬體待製作)")
 
 step "4/7 網頁、啟動腳本、資料、契約、文件、設定範例"
 cp -r build/web/instruments "$OUT/app/web"
@@ -116,6 +118,9 @@ PARAM_VERSION="$(sed -n 's/^version: *"\([^"]*\)".*/\1/p' data/parameters/compan
 COMPONENTS+=("data=${PARAM_VERSION:-$VERSION}=data=參數集 company-procedures.yaml 版次;ships/*/confidential 已排除")
 mkdir -p "$OUT/contracts" && cp src/Contracts/* "$OUT/contracts/"
 COMPONENTS+=("contracts=$VERSION=contracts")
+# Teensy 參考韌體原始碼(船上/岸上以 Arduino IDE + Teensyduino 燒錄;不在容器編譯)
+mkdir -p "$OUT/firmware/teensy-console" && cp firmware/teensy-console/teensy-console.ino firmware/teensy-console/README.md "$OUT/firmware/teensy-console/"
+COMPONENTS+=("firmware-teensy=$VERSION=firmware/teensy-console=參考韌體原始碼(Arduino IDE/Teensyduino 燒錄;接腳 ASSUMED)")
 mkdir -p "$OUT/docs/design" "$OUT/docs/ops" "$OUT/docs/驗收" "$OUT/docs/訓練" "$OUT/docs/components"
 cp docs/Simosa-BRM-操船模擬器規劃書.md README.md "$OUT/docs/"
 cp docs/design/*.md "$OUT/docs/design/"
@@ -136,6 +141,7 @@ note "Python 校正工具(src/Tools.Calibration)不隨發行版散布;係數檔 
 cat > "$OUT/README.txt" <<TXT
 Simosa BRM 發行版 $VERSION($RID,framework-dependent:需 .NET 8 執行階段)git ${GIT_REV:-?} ${GIT_BRANCH:-}
 app/simcore      SimCore.Host(50 Hz 核心、WebSocket 8765、UDP 多播、NMEA)   app/radar        Sensors.Radar.Host(雷達/ARPA 8766)
+app/console      SimosaBRM.Console.Serial(USB 操控台序列埠 ↔ 核心;start-ship-laptop --console COM5)   firmware/teensy-console  Teensy 4.0 參考韌體(.ino + README)
 app/web          網頁:index.html 儀器、instructor.html 教官站(?mode=simple 簡化教官模式)、radar.html、ecdis.html(簡化 ECDIS)、report.html
 app/web-server   simosa-web 靜態網頁伺服                                  app/launch       start-ship-laptop / start-instructor-laptop / stop-all
 app/visual       Godot 視景匯出檔(有匯出範本時)                           tools/updater    simosa-pkg(更新包、紀錄包、直連同步;放在 app/ 之外)

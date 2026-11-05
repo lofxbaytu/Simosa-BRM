@@ -18,7 +18,7 @@
   `command.schema.json` 指令(含 `acknowledge`/`alertAcknowledge`),因此不影響核心狀態、評估與狀態雜湊(確定性驗收不受影響)。
 - **與 OpenCPN 的分工**(規劃書第 7.2 節「第一階段 OpenCPN」):OpenCPN 仍是「真 ENC 海圖 + NMEA 輸入」的路線,需要 Windows 實機、ENC 授權與
   `src/Gateway.Nmea` 的句子;本頁是離線、零安裝、與其他儀器頁同一套建置與主題的替代/補充顯示,可在 OpenCPN 整合測試完成前供訓練使用,
-  並提供 OpenCPN 不方便做的情境耦合(情境航線/區域/禁區、公司 UKC 政策推得的安全等深線、與核心一致的 CPA 門檻)。兩者可並存。
+  並提供 OpenCPN 不方便做的情境耦合(情境航線/區域/禁區、公司 UKC 政策推得的安全等深線、與核心一致的 CPA 警報:即時模式的危險目標取自核心 cpaAlarm/cpaClear 事件)。兩者可並存。
 - **情境耦合**:依 `state.scenario.id` 在建置時匯入的情境清單(`lib/scenario.ts loadScenarioList`,與教官站同一來源)找到情境,取 `origin`、
   `route`、`zones`、`assessment.minCpa_nm`、`assessment.ukc.min`、`environment.waterDepth`。情境不明(無 `scenario` 或清單找不到)時由狀態的
   `pos.lat/lon` 與 `pos.x/y` 反推核心原點(`projection.inferOrigin`),示意幾何仍可疊到正確位置,但無航線監控(頂列顯示「原點推估」)。
@@ -72,7 +72,7 @@
 |---|---|---|
 | 安全等深線 `safetyContour` | alarm | 前方掃描命中(第 3 節) |
 | 航跡偏差 `xtd` | warning | \|XTD\| > 走廊半寬(走廊未知時不判) |
-| CPA/TCPA `cpa:<id>` | alarm | AIS 目標 CPA < 門檻且 0 ≤ TCPA < 12 分;門檻 = 情境 `assessment.minCpa_nm`(可解析時)否則 0.5 nm |
+| CPA/TCPA `cpa:<id>` | alarm | **即時模式**:目標處於核心 `cpaAlarm` 狀態(與操船台/教官站同源;核心排除跟隨自船的引水船/拖船,`cpaClear` 解除、重設/倒帶清空)。**示範模式/無事件來源**:本頁門檻 CPA < 門檻且 0 ≤ TCPA < 12 分(門檻 = 情境 `assessment.minCpa_nm` 可解析時,否則 0.5 nm;TCPA < 12 分為本頁額外條件);CPA/TCPA 數值顯示兩種模式皆用本頁計算 |
 | 區域進入 `zone:<id>` | alarm | 自船位置在 `noGo` 區域內 |
 | GNSS `gnss` | warning | `sensors.positionValid = false`(位置凍結於最後有效值,符號標 DR) |
 | 電羅經 `gyro` | warning | `sensors.headingValid = false`(航向線隱藏、航向上不可用) |

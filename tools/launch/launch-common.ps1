@@ -95,6 +95,14 @@ function Start-LaunchProcess([string]$Name, [string]$Log, [string]$File, [string
     return $p
 }
 
+# Get-LaunchConsoleArgs <埠規格> <ws 埠> [鮑率]:USB 操控台服務(app\console;src\Contracts\console-serial.md)的參數。
+#   規格為序列埠名稱(COM5)→ --port <埠> --baud <鮑率>;loopback:<讀取檔>[,<寫入檔>] → --loopback <…>(測試用假裝置);
+#   log 由 Start-LaunchProcess 收 stdout(--log -),不另寫檔。與 launch-common.sh 的 console_service_args 相同規則。
+function Get-LaunchConsoleArgs([string]$Spec, [int]$WsPort, [int]$Baud = 115200) {
+    $a = if ($Spec -like 'loopback:*') { @('--loopback', $Spec.Substring(9)) } else { @('--port', $Spec, '--baud', "$Baud") }
+    return $a + @('--ws', "ws://127.0.0.1:$WsPort", '--log', '-')
+}
+
 # Get-LaunchStopFile <根目錄> <logs>:SimCore.Host 的停止檔路徑(--stop-file;stop-all.ps1 先寫此檔讓核心自行結束並寫完紀錄 footer — Windows 的
 # Stop-Process 不會送 Ctrl+C,主控台程序收不到訊號)。路徑記在 <logs>\simcore.stopfile 供 stop-all.ps1 讀取;殘留的停止檔先刪。
 function Get-LaunchStopFile([string]$Root, [string]$Logs) {

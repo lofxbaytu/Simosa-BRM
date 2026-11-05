@@ -102,6 +102,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
     {
         var wildcard = $"http://*:{Port}/radar/";
         var local = $"http://localhost:{Port}/radar/";
+        var loopback = $"http://127.0.0.1:{Port}/radar/"; // HttpListener 以 Host 標頭比對前綴:ws://127.0.0.1 的客戶端需要這一條
         if (_allInterfaces)
         {
             try
@@ -114,6 +115,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
             {
                 _listener.Prefixes.Clear();
                 _listener.Prefixes.Add(local);
+                _listener.Prefixes.Add(loopback);
                 _listener.Start();
                 Prefix = local;
                 Log?.Invoke($"無法監聽 {wildcard}({ex.Message});改為只監聽 {local}。遠端站別需設定 URL ACL:netsh http add urlacl url={wildcard} user=Everyone");
@@ -122,6 +124,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         else
         {
             _listener.Prefixes.Add(local);
+            _listener.Prefixes.Add(loopback);
             _listener.Start();
             Prefix = local;
         }

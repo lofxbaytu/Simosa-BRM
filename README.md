@@ -78,6 +78,21 @@ pnpm build && pnpm test
 - 需求追溯表(R1–R14、第 14 章驗收表 → 模組/測試/狀態、需實機項目):[docs/驗收/需求追溯表.md](docs/驗收/需求追溯表.md)
 - 更新包、紀錄包與直連同步設計:[docs/design/packaging-sync.md](docs/design/packaging-sync.md)
 
+## 測試
+
+四個層級(`docs/design/testing.md`):黃金/夾具(試俥公差、C#↔Python、確定性雜湊)、單元(`dotnet test`、`pnpm test`、`uv run pytest`)、子程序(Host 實跑/重播、雷達 WebSocket、NMEA 檢驗、啟動腳本)、端對端(真實 Chromium + 真實核心)。
+
+```bash
+. /etc/profile.d/dotnet.sh && dotnet build SimosaBRM.sln -c Release && dotnet test tests/SimCore.Tests -c Release --no-build
+cd src/Instruments.Web && pnpm test && pnpm exec tsc --noEmit -p .
+cd src/Tools.Calibration && uv run pytest -q
+bash tools/launch/tests/launch-tests.sh && bash tools/run-ps-tests.sh
+bash tools/run-e2e.sh            # 端對端:建置網頁與 .NET → Playwright(tests/e2e;操船台、教官站載入/拒絕/舵令/凍結、VHF 文字與 PTT、錄影、雷達、ECDIS、報告、情境編輯器)→ 摘要;輸出 build/e2e/
+bash tools/run-e2e.sh --skip-build -- --grep 雷達   # 已建置時只跑部分案例
+```
+
+端對端用 Playwright 管理的 Chromium(`PLAYWRIGHT_BROWSERS_PATH`,容器為 `/opt/pw-browsers`,CI 裝到 `.cache/pw-browsers`),失敗的截圖與 trace 在 `build/e2e/test-results/`,HTML 報告 `pnpm --dir tests/e2e report`。
+
 ## 持續整合
 
-GitHub Actions(`.github/workflows/ci.yml`):Python 測試(Ubuntu)、網頁建置與測試(Ubuntu)、.NET 建置與測試(Windows)。
+GitHub Actions(`.github/workflows/ci.yml`):Python 測試(Ubuntu)、網頁建置與測試(Ubuntu)、.NET 建置與測試(Windows)、端對端(Ubuntu;Playwright + 真實核心,`tools/run-e2e.sh`,失敗時上傳截圖/trace/log)。

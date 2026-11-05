@@ -8,6 +8,8 @@ import type { TargetState } from '../../types/target.js';
 import type { ConnectionStatus, SimSource } from '../../net/sim-source.js';
 import { AlertSounder } from '../alert-sound.js';
 import { normalizeHeading } from '../angles.js';
+import { CpaAlarmTracker } from '../targets.js';
+import { eventFromFrame } from '../sim-event.js';
 import { TrackHistory } from '../track-history.js';
 import { latLonToEnu } from '../timeline.js';
 import type { ScenarioSummary } from '../scenario.js';
@@ -211,8 +213,28 @@ export class EcdisStore {
     for (const l of this.listeners) l();
   }
 
+  /**
+   * CPA 危險判定來源:'core' = 核心 cpaAlarm/cpaClear 事件(與操船台/教官站一致,核心會排除跟隨自船的引水船/拖船);
+   * 'local' = 本頁門檻(示範模式或來源不送事件時)。attach 時依來源是否支援 onMessage 自動選擇。
+   */
+  cpaSource: 'local' | 'core' = 'local';
+  private readonly cpaTracker = new CpaAlarmTracker();
+
+  /** 核心事件框(cpaAlarm/cpaClear 更新危險目標集合;其他事件忽略)。 */
+  onMessage(frame: unknown): void {
+    if (!frame || typeof frame !== 'object') return;
+    const f = frame as Record<string, unknown>;
+    if (f['type'] !== 'event') return;
+    const ev = eventFromFrame(f);
+    if (ev && (ev.kind === 'cpaAlarm' || ev.kind === 'cpaClear')) this.cpaTracker.apply(ev);
+  }
+
   attach(source: SimSource): void {
     this.detach();
+    if (source.onMessage) {
+      this.cpaSource = 'core';
+      this.unsubs.push(source.onMessage((m) => this.onMessage(m)));
+    } else this.cpaSource = 'local';
     this.unsubs.push(source.onStatus((s, d) => {
       this.conn = s;
       this.connDetail = d ?? '';
@@ -243,6 +265,7 @@ export class EcdisStore {
       // 重設/倒帶:清航跡與警報,航線監控重來
       this.trail.clear();
       this.alarms.clear();
+      this.cpaTracker.clear();
       this.routeMonitor = null;
     }
     this.state = state;
@@ -260,6 +283,8 @@ export class EcdisStore {
     this.routeStatus = this.routeMonitor ? this.routeMonitor.update(state.pos, state.sog) : null;
     this.ahead = scanAhead(this.chart.depth, state.tideHeight_m, state.pos, state.cog, state.sog, this.chart.contours.safety_m, this.settings.vectorMinutes);
     this.targets = ecdisTargets(state, this.chart.origin, this.chart.minCpa_nm, this.chart.tcpaLimit_min);
+    // 即時模式:危險目標 = 核心 cpaAlarm 中者(本地門檻只用於數值顯示;審查第二十三輪 major:E05 引水船跟隨自船會被本地門檻誤判)
+    if (this.cpaSource === 'core') this.targets = this.targets.map((t) => (t.dangerous === this.cpaTracker.has(t.id) ? t : { ...t, dangerous: this.cpaTracker.has(t.id) }));
     if (this.selectedTargetId && !this.targets.some((t) => t.id === this.selectedTargetId)) this.selectedTargetId = null;
     this.alarms.update(evaluateConditions({ state, chart: this.chart, route: this.routeStatus, targets: this.targets, ahead: this.ahead }), state.t);
     this.sounder.update(this.alarms.toAlertItems());

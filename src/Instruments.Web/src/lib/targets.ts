@@ -25,6 +25,11 @@ export function cpaAlarmTargets(events: readonly SimEvent[], tMax = Number.POSIT
 export class CpaAlarmTracker {
   private readonly ids = new Set<string>();
 
+  /** 目標是否處於 cpaAlarm 狀態。 */
+  has(id: string): boolean {
+    return this.ids.has(id);
+  }
+
   /** 套用一筆事件;回傳集合是否改變。 */
   apply(e: SimEvent): boolean {
     if (!e.targetId) return false;

@@ -30,6 +30,16 @@ if (options.Help)
 }
 
 var root = RepositoryPaths.FindRoot();
+// --nmea-file 路徑在建立任何伺服器/紀錄之前驗證(否則失敗時已開的 listener 與紀錄無法優雅收尾;審查第二十三輪)
+if (options.NmeaFile is { } nmeaFileArg)
+{
+    try { FileNmeaSink.Resolve(root, nmeaFileArg); }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 2;
+    }
+}
 ShipParticulars LoadShip(string id) => ShipParticulars.LoadFromDataRoot(root, id);
 
 // 動力學工廠(規劃書第 6.2 節):預設 MMG 完整模型(係數檔由 src/Tools.Calibration 產生);--dynamics placeholder 切回 Nomoto 暫代模型
@@ -324,7 +334,7 @@ if (options.EnableNmea || options.NmeaFile is not null)
         };
         endpoints.AddRange(options.NmeaTargets);
         sinks.Add(new UdpNmeaSender(endpoints, options.NmeaBind));
-        Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}{(options.NmeaTargets.Count > 0 ? $" 與 {string.Join("、", options.NmeaTargets)}" : "")}{(options.NmeaBind is { } bind ? $"(綁定 {bind})" : "")}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV/ALR 1 Hz,指示值;目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,起始 UTC {startUtc:O})");
+        Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}{(options.NmeaTargets.Count > 0 ? $" 與 {string.Join("、", options.NmeaTargets)}" : "")}{(options.NmeaBind is { } bind ? $"(綁定 {bind})" : "")}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV/ALR 1 Hz,指示值;目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,起始 UTC 跟隨引擎,目前 {startUtc:O})");
     }
     if (options.NmeaFile is { } nmeaFileOption)
     {

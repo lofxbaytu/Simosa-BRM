@@ -5,7 +5,9 @@
   驗證:Start-LaunchProcess 不覆寫既有 log(輪替保留歷史、啟動標頭寫入 launch.log)、Test-LaunchPortFree 偵測被占用的埠、
   Wait-LaunchTcp -Process 在程序結束時立即回傳、stop-all.ps1 -KeepSync 保留同步服務、stop-all.ps1 先寫停止檔(Get-LaunchStopFile)再逾時強制結束、
   WebView2 外殼:Find-LaunchShellExe 搜尋順序、Start-LaunchShellPages 參數組合(--url/--kiosk/--no-close-confirm/--monitor)與 simosa.pids 登錄、
-  找不到外殼時退回 Open-LaunchPages(以假 exe 於 build\test-tmp\launch-ps\app\shell\SimosaBRM.Shell.exe)。所有輸出留在 build\test-tmp\launch-ps\。
+  找不到外殼時退回 Open-LaunchPages(以假 exe 於 build\test-tmp\launch-ps\app\shell\SimosaBRM.Shell.exe)、
+  USB 操控台服務:Get-LaunchConsoleArgs 的參數規則(序列埠 / loopback:)與以 loopback 假裝置實跑 app\console 服務(ACK、LED,LINK,0 回寫;無核心)。
+  所有輸出留在 build\test-tmp\launch-ps\。
   用法:pwsh -NoProfile -File tools\launch\tests\launch-common.tests.ps1(tools\launch\tests\launch-tests.sh 為 .sh 版測試;
   容器/開發機沒有 pwsh 時以 tools\run-ps-tests.sh 自 .cache\dotnet-tools 取用 dotnet 全域工具版 PowerShell)
 #>
@@ -240,6 +242,37 @@ Invoke-Test 'Start-LaunchShellPages 找不到外殼時退回 Open-LaunchPages �
     Assert-True ($pidLines.Count -eq 0) "退回瀏覽器時不應登錄任何 PID:$($pidLines -join '、')"
     Assert-True (-not (Get-ChildItem $logDir -Filter 'shell-*.log')) '退回瀏覽器時不應產生 shell-*.log'
     Assert-True (-not (Test-Path (Join-Path $logDir 'launch.log'))) '退回瀏覽器時不應寫啟動標頭'
+}
+
+# ---- USB 操控台服務(src\Contracts\console-serial.md;start-ship-laptop.ps1 -Console)----
+Invoke-Test 'Get-LaunchConsoleArgs:序列埠與 loopback 規格;loopback 假裝置實跑服務回寫 ACK/LED' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $a = Get-LaunchConsoleArgs 'COM5' 18765
+    Assert-True (($a -join ' ') -eq '--port COM5 --baud 115200 --ws ws://127.0.0.1:18765 --log -') "序列埠規格應為 --port/--baud/--ws/--log -:$($a -join ' ')"
+    $a = Get-LaunchConsoleArgs '/dev/ttyACM0' 8765 9600
+    Assert-True (($a -join ' ') -eq '--port /dev/ttyACM0 --baud 9600 --ws ws://127.0.0.1:8765 --log -') "鮑率應可覆寫:$($a -join ' ')"
+    $a = Get-LaunchConsoleArgs 'loopback:in.txt,out.txt' 18765
+    Assert-True (($a -join ' ') -eq '--loopback in.txt,out.txt --ws ws://127.0.0.1:18765 --log -') "loopback 規格應為 --loopback <讀,寫>:$($a -join ' ')"
+    # 實跑服務(需建置好的 Console.Serial;Find-LaunchDll 缺少時會建置):無核心 → LED,LINK,0;HELLO 宣告 CS → 回寫帶校驗和
+    $dll = Find-LaunchDll 'console' 'Console.Serial' 'SimosaBRM.Console.Serial.dll' $root
+    Assert-True ([bool]$dll) '應找到或建置 SimosaBRM.Console.Serial.dll'
+    $logs = 'build\test-tmp\launch-ps\logs6'
+    $logDir = Join-Path $root $logs
+    Remove-Item -Recurse -Force $logDir -ErrorAction SilentlyContinue
+    Initialize-LaunchLogs $root $logs
+    $inFile = Join-Path $tmp 'console-in.txt'; $outFile = Join-Path $tmp 'console-out.txt'
+    Remove-Item $outFile -ErrorAction SilentlyContinue
+    Set-Content -Path $inFile -Value "HELLO,1.0.0,RUD+LED+DISP+CS*48`nRUD,10*6E`n" -Encoding ascii -NoNewline
+    $args = @($dll) + (Get-LaunchConsoleArgs "loopback:$inFile,$outFile" ($PortBase + 9)) + @('--duration', '3')
+    $p = Start-LaunchProcess -Name 'console' -Log (Join-Path $logDir 'console.log') -File 'dotnet' -Arguments $args -WorkDir $root
+    $p.WaitForExit()
+    Assert-True ($p.ExitCode -eq 0) "服務應以 0 結束(--duration),實際 $($p.ExitCode):$(Get-Content -Raw (Join-Path $logDir 'console.log'))"
+    $out = @(Get-Content $outFile | Where-Object { $_ })
+    Assert-True ($out -contains 'ACK*49') "回寫應有帶校驗和的 ACK*49:$($out -join '、')"
+    Assert-True ($out -contains 'LED,LINK,0*7D') "無核心時應回寫 LED,LINK,0(帶校驗和):$($out -join '、')"
+    $log = Get-Content -Raw (Join-Path $logDir 'console.log')
+    Assert-True ($log.Contains('HELLO 韌體 1.0.0') -and $log.Contains('"type":"rudder","value":10')) "console.log 應有 HELLO 與轉送的 rudder 指令:$log"
+    Assert-True ((Get-Content (Join-Path $logDir 'simosa.pids') | Where-Object { $_ }) -like 'console:*') 'simosa.pids 應登錄 console'
 }
 
 Write-Host "通過 $pass,失敗 $fail$(if ($failed) { '(' + ($failed -join '、') + ')' })"

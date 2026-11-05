@@ -78,7 +78,8 @@ const host = '127.0.0.1';
 export const stateWsUrl = (e: E2eEnv): string => `ws://${host}:${e.wsPort}`;
 export const vhfWsUrl = (e: E2eEnv): string => `ws://${host}:${e.vhfPort}/`;
 export const mediaHttpUrl = (e: E2eEnv): string => `http://${host}:${e.mediaPort}`;
-export const radarWsUrl = (e: E2eEnv): string => `ws://${host}:${e.radarPort}`;
+// 雷達服務以 --localhost-only 啟動時 HttpListener 只接受 Host: localhost(RadarWebSocketServer.Start),故雷達頁用 localhost 而非 127.0.0.1
+export const radarWsUrl = (e: E2eEnv): string => `ws://localhost:${e.radarPort}`;
 export const webBase = (e: E2eEnv): string => `http://${host}:${e.webPort}`;
 
 function withQuery(base: string, page: string, q: Record<string, string | undefined>): string {
@@ -111,4 +112,9 @@ export function radarUrl(e: E2eEnv, radar: 'x' | 's' = 'x'): string {
 /** 講評報告頁 report.html */
 export function reportUrl(e: E2eEnv, tab?: string): string {
   return withQuery(webBase(e), 'report.html', tab ? { tab } : {});
+}
+
+/** 簡化 ECDIS 頁 ecdis.html(?ws 狀態 WebSocket;唯讀) */
+export function ecdisUrl(e: E2eEnv, opts: { range?: number } = {}): string {
+  return withQuery(webBase(e), 'ecdis.html', { ws: stateWsUrl(e), ...(opts.range ? { range: String(opts.range) } : {}) });
 }

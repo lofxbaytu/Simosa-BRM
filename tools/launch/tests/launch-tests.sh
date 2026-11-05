@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 啟動腳本測試(Linux/容器;規劃書第 5.4–5.5 節、第 14 章「船上部署」):以真實的 SimCore.Host / simosa-web 與假程序驗證
-#   tools/launch/*.sh 的失敗回報、埠檢查、stop-all --keep-sync、--logs 傳遞、--ship <IP>、--check-wifi、停止檔優雅停止(footer),以及 docs/驗收/需求追溯表.md 的數字。
+#   tools/launch/*.sh 的失敗回報、埠檢查、stop-all --keep-sync、--logs 傳遞、--ship <IP>、--check-wifi、停止檔優雅停止(footer)、
+#   USB 操控台服務 --console loopback:…(假裝置:ACK/LED/DISP 回寫、指令轉送核心、stop-all 結束),以及 docs/驗收/需求追溯表.md 的數字。
 # 用法:tools/launch/tests/launch-tests.sh [--only <測試名>] [--list]
 #   所有輸出留在專案內:build/test-tmp/launch/(設定檔、假 PID 檔)、build/logs-test*/(各測試的 log);埠自 LAUNCH_TEST_PORT_BASE(預設 18760)起。
 #   Windows 版(launch-common.ps1、stop-all.ps1)另見 launch-common.tests.ps1(pwsh 7 於 Linux 亦可執行)。
@@ -224,6 +225,33 @@ PYCHK
   return 0
 }
 
+# USB 操控台服務(src/Contracts/console-serial.md):--console loopback:<讀取檔>,<寫入檔> 以檔案假裝置啟動 app/console 服務,
+# 預先寫入 HELLO/RUD/TEL/HB 行 → 回寫檔應有 ACK、LED,LINK,1、DISP,TEL,HAH;console.log 應有轉送到核心的 rudder/telegraph 指令;
+# PID 登錄為 console、stop-all(SIGINT)後服務以「結束(原因:SIGINT)」收尾、無 Unhandled exception
+test_console_loopback() {
+  local cfg; cfg="$(ship_cfg ship-console.json)"
+  local infile="$TMP/console-in.txt" outfile="$TMP/console-out.txt"
+  rm -f "$outfile" "$ROOT/$LOGS/console.log"
+  printf 'HELLO,1.0.0,RUD+TEL+BTN+LED+DISP\nRUD,10\nTEL,SAH\nBTN,ACK,1\nHB\n' > "$infile"
+  run_launch "$TMP/console.out" bash "$LAUNCH/start-ship-laptop.sh" --config "$cfg" --console "loopback:$infile,$outfile" --no-radar --no-web --no-sync --no-visual --duration 4
+  [[ $CODE == 0 ]] || fail "結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "啟動 console" <<<"$OUT" || fail "應啟動 console 服務;輸出:$OUT" || return 1
+  grep -q "操控台服務已結束" <<<"$OUT" && { fail "操控台服務不應提早結束;log:$(tail -5 "$ROOT/$LOGS/console.log")"; return 1; }
+  [[ -f "$outfile" ]] || fail "應有回寫檔 $outfile" || return 1
+  grep -q "^ACK$" "$outfile" || fail "回寫檔應有 ACK:$(head -5 "$outfile")" || return 1
+  grep -q "^LED,LINK,1$" "$outfile" || fail "回寫檔應有 LED,LINK,1(已連上核心):$(head -20 "$outfile")" || return 1
+  grep -q "^DISP,TEL,SAH$" "$outfile" || fail "回寫檔應有 DISP,TEL,SAH(車鐘指令已到核心):$(grep DISP,TEL "$outfile")" || return 1
+  grep -q "^LED,FU,1$" "$outfile" || fail "回寫檔應有 LED,FU,1:$(head -20 "$outfile")" || return 1
+  local log="$ROOT/$LOGS/console.log"
+  grep -q '"type":"rudder","value":10' "$log" || fail "console.log 應有轉送的 rudder 指令:$(tail -10 "$log")" || return 1
+  grep -q '"type":"telegraph","value":"SAH"' "$log" || fail "console.log 應有轉送的 telegraph 指令" || return 1
+  grep -q '"type":"alertAcknowledge"' "$log" || fail "console.log 應有轉送的 alertAcknowledge 指令" || return 1
+  grep -q "結束(原因:SIGINT)" "$log" || fail "stop-all 後 console.log 應有「結束(原因:SIGINT)」:$(tail -3 "$log")" || return 1
+  grep -q "Unhandled exception" "$log" && { fail "console.log 不得有 Unhandled exception"; return 1; }
+  [[ ! -f "$ROOT/$LOGS/simosa.pids" ]] || fail "PID 檔應被移除" || return 1
+  return 0
+}
+
 # 發現 8:需求追溯表的情境檔數與 xfail 歸屬須與儲存庫一致
 test_traceability_numbers() {
   local doc="$ROOT/docs/驗收/需求追溯表.md"
@@ -237,7 +265,7 @@ test_traceability_numbers() {
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_traceability_numbers)
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_traceability_numbers)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers
