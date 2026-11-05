@@ -1,12 +1,18 @@
 # 變更紀錄(CHANGELOG)
 
-> 版本號 = `VERSION` 檔(`0.<輪次>.<修訂>`;`tools/build-release.*` 無 `--version` 時以此為發行版本,與更新包版本規則相同:1–4 段數字)。每輪一條,只列新增/修正/已知限制的摘要;細節、驗證指令與測試數見 `docs/dev-log/2026-10-08-工作階段交接.md` 各輪與各 `docs/design/*.md`。日期為該輪提交日。
+> 版本號 = `VERSION` 檔(`<年>.<月>.<輪次>`,例如 2026.11.24;更新包只接受版本遞增,此方案大於舊的 `0.<日期>.<時分>` 後備與文件示例 2026.11.1,船上曾套用的任何版本都不會把它判為降版;`tools/build-release.*` 無 `--version` 時以此為發行版本,與更新包版本規則相同:1–4 段數字)。每輪一條,只列新增/修正/已知限制的摘要;細節、驗證指令與測試數見 `docs/dev-log/2026-10-08-工作階段交接.md` 各輪與各 `docs/design/*.md`。日期為該輪提交日。
+
+## 2026.11.24 — 2026-11-05(第二十四輪)
+
+- 新增:Gateway.Nmea THS(10 Hz,電羅經失效為模式 V)、自船 `!AIVDO`(類型 1 每 10 s、類型 5 每 6 min;MMSI 取情境 `ship.mmsi` 或 particulars `mmsi`,皆無則不送並記 log)、IEC 61162-1 ed.5 ALF/ALC(ALR 保留);`nmea_check` 補四種句型與一致性檢查;夾具重錄(524 句)。
+- 新增:config `ports.nmeaTargets/nmeaBind/nmeaFile/vhfWs/mediaHttp`,啟動腳本傳 `--nmea-target/--nmea-bind/--nmea-file`,埠預檢加 8767/8768。
+- 新增:長時間穩定性(soak)測試工具 `tools/soak-test.{sh,ps1}`、`tests/soak/`(合成客戶端、學員腳本、報告與判定;容器 10 分鐘:掉拍 0、tick 50.001/s、延遲 p95 8 ms、RSS 斜率 1.8 MB/min 未達準則)、`VERSION`(方案改為 年.月.輪次)、本檔、README「目前狀態」、`docs/design/testing.md` 第 6 節。
+- 已知限制:兩船真實 MMSI 未填(正式情境不送 VDO);網頁情境編輯器存檔會丟 `ship.mmsi`;ALF 製造商碼 SIM 非標準識別碼;Host 在 VHF/錄影埠被占用時仍會崩潰(由啟動腳本預檢避免);soak 延遲量到的是相對最快一幀的額外延遲,固定鏈路延遲以學員指令往返(p50 26 ms)補充;2 小時與內顯機需實機。
 
 ## 0.23.0 — 2026-11-05(第二十三輪)
 
 - 新增:USB 序列操控台服務補完(`src/Console.Serial` 主程式/橋接、83 項測試、Teensy 4.0 參考韌體、啟動腳本 `--console`、發行版 app/console)。
 - 新增:Playwright 端對端 8 個 spec 14 案例、`tools/run-e2e.sh`、CI 工作「端對端」、`docs/design/testing.md`。
-- 新增:長時間穩定性(soak)測試工具 `tools/soak-test.{sh,ps1}`、`tests/soak/`(合成客戶端、學員腳本、報告與判定)、`VERSION`、本檔、README「目前狀態」。
 - 修正:核心凍結時 200 ms 心跳幀(教官站「已凍結/恢復」可用)、教官站左欄四列、雷達 `--localhost-only` 接受 127.0.0.1、run-ps-tests 的 -WhatIf 斷言、ConsoleBridge 重開訂閱、ECDIS 本地 CPA 誤判引水船。
 - 已知限制:操控台硬體與韌體未實機;e2e 的 CI 工作未在 GitHub 實跑;ECDIS 示範模式仍用本地 CPA 門檻;soak 的 2 小時與內顯機結果需實機。
 

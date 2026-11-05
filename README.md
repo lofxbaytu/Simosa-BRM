@@ -4,9 +4,9 @@
 
 - 規劃書:[docs/Simosa-BRM-操船模擬器規劃書.md](docs/Simosa-BRM-操船模擬器規劃書.md)(需求 R1–R14、決策 D1–D20)
 - 開發守則:[CLAUDE.md](CLAUDE.md)
-- 版本:`VERSION`(目前 0.23.0;變更紀錄 [CHANGELOG.md](CHANGELOG.md),每輪一條;發行組裝 `tools/build-release.*` 無 `--version` 時讀此檔)
+- 版本:`VERSION`(目前 2026.11.24(年.月.輪次);變更紀錄 [CHANGELOG.md](CHANGELOG.md),每輪一條;發行組裝 `tools/build-release.*` 無 `--version` 時讀此檔)
 
-## 目前狀態(第二十三輪,2026-11-05)
+## 目前狀態(第二十四輪,2026-11-05)
 
 **已實作(軟體,含自動測試;容器與開發機可跑)**:C# 50 Hz 確定性核心(MMG 3-DOF、拖船/錨/繫纜/碰墊、岸壁、潮汐/時變與空間流場、浪漂移力、船間交互作用、解耦橫搖;C#↔Python 黃金夾具)、感測器故障層與 BAM/BNWAS、情境引擎(時間表/評估/參數集;E01–E22、F01–F03 共 37 個情境)、目標船/AIS/COLREG、紀錄/重播/重新評分、雷達/ARPA 服務與 PPI 頁、NMEA/AIS 閘道與 `nmea_check` 檢驗、網頁操船台/教官站(完整/簡化/重播、靠離泊預演組題、情境編輯器與海圖點選)/報告站/簡化 ECDIS、內建 VHF 角色扮演與練習錄影、3D 視景(Godot,品質分級)、WebView2 外殼、USB 序列操控台服務與 Teensy 參考韌體、簽章更新包/紀錄包/直連同步、發行組裝與 Inno Setup 腳本、啟動腳本、Playwright 端對端、長時間穩定性(soak)測試工具。
 

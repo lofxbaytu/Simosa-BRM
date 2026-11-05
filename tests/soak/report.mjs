@@ -172,7 +172,7 @@ export function summarise(run, thresholds = {}) {
   const criteria = [];
   const add = (id, name, threshold, measured, pass, note) => criteria.push({ id, name, threshold, measured, pass: !!pass, note: note ?? null });
   const tr = clientsSummary.tickRate;
-  add('coreRate', '核心 50 Hz 無掉拍', `掉拍 0;tick 率 ${th.coreHz} ± ${th.coreHzTol}`,
+  add('coreRate', '核心 50 Hz 無掉拍', `掉拍 0;tick 率平均 ${th.coreHz} ± ${th.coreHzTol}、各客戶端 ± ${th.coreHzTol + 0.5}`,
     `掉拍 ${dropped};tick 率 ${tr ? `${tr.mean}(${tr.min}–${tr.max})` : '無資料'};主控程序 steps/s ${hostSummary.stepsPerS ? `${hostSummary.stepsPerS.mean}(${hostSummary.stepsPerS.min}–${hostSummary.stepsPerS.max})` : '無資料'}`,
     dropped === 0 && tr && Math.abs(tr.mean - th.coreHz) <= th.coreHzTol && tr.min >= th.coreHz - th.coreHzTol - 0.5 && tr.max <= th.coreHz + th.coreHzTol + 0.5);
   const lat = clientsSummary.latencyMs;

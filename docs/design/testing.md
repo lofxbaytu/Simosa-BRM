@@ -137,7 +137,7 @@ tests/soak/report.test.mjs 判定準則與工具的單元測試:node --test test
 
 ### 6.2 量測方法
 
-- **延遲**:核心以牆鐘推進(`RealtimeRunner`),第 k 幀的理想到達時刻 = 原點 + `state.t`;原點取連線初期(前 50 幀)「到達時刻 − t」的最小值(最快送達的那一幀),之後每幀延遲 = 到達 − t − 原點(≥ 0)。量到的是核心序列化 + WebSocket 傳送 + 客戶端事件迴圈的總延遲,核心落後牆鐘(掉拍)也會反映為延遲上升;凍結幀不計、時間倍率須為 1。因為核心每 20 ms 週期才推進一步,延遲的底值約 0–20 ms 均勻分布(p50 ≈ 10–20 ms 屬正常)。
+- **延遲**:核心以牆鐘推進(`RealtimeRunner`),第 k 幀的理想到達時刻 = 原點 + `state.t`;原點取連線初期(前 50 幀)「到達時刻 − t」的最小值(最快送達的那一幀),之後每幀延遲 = 到達 − t − 原點(≥ 0)。量到的是核心序列化 + WebSocket 傳送 + 客戶端事件迴圈的總延遲,核心落後牆鐘(掉拍)也會反映為延遲上升;凍結幀不計、時間倍率須為 1。因為核心每 20 ms 週期才推進一步,延遲的底值約 0–20 ms 均勻分布(p50 ≈ 10–20 ms 屬正常)。。**注意**:因此量到的是相對於最快一幀的額外延遲(抖動與落後),固定的鏈路延遲與 RealtimeRunner 的固定相位不計;絕對往返以學員腳本的指令生效時間(送出 → 狀態幀反映,容器 p50 26 ms、max 82 ms)補充,2 小時實機請同時看這兩項
 - **tick 率**:客戶端首末狀態幀的 tick 差 / 到達時間差(與主控程序每秒輸出的 `steps/s` 互相印證);**掉拍**取自主控程序輸出的累計值(`RealtimeRunner.DroppedSteps`)。
 - **CPU%**:`/proc/<pid>/stat` 的 utime+stime 差 / 牆鐘差(Windows:`TotalProcessorTime`),多執行緒可 > 100;**RSS**:`VmRSS`(Windows:`WorkingSet64`)。
 - **GC**:`dotnet-counters`(PATH 或 `.cache/dotnet-tools`)存在時收 System.Runtime 計數器到 `stats/counters.csv`(容器未安裝 → 略過並在報告註記)。
@@ -146,9 +146,9 @@ tests/soak/report.test.mjs 判定準則與工具的單元測試:node --test test
 
 | 準則 | 門檻 | 來源 |
 |---|---|---|
-| 核心 50 Hz 無掉拍 | 掉拍 0;客戶端量到的 tick 率 50 ± 0.5(`--core-hz-tol`) | 第 14 章效能「核心 50 Hz 無掉拍」 |
+| 核心 50 Hz 無掉拍 | 掉拍 0;客戶端量到的 tick 率平均 50 ± 0.5(`--core-hz-tol`)、各客戶端 50 ± 1.0 | 第 14 章效能「核心 50 Hz 無掉拍」 |
 | 延遲 | 全部客戶端合併的 p95 < 50 ms(`--max-latency-ms`;max 另列) | 「網路延遲 <50 ms」 |
-| RSS 不持續成長 | 暖機(`--warmup-s` 120,短於 5 分鐘的執行取 20%)後最小平方斜率 ≤ 1 MB/min(`--max-rss-slope-mb-per-min`)且增量 ≤ 64 MB(`--max-rss-growth-mb`) | 「連續 2 小時」的軟體面近似 |
+| RSS 不持續成長 | 暖機(`--warmup-s` 120,短於 10 分鐘的執行取總時長 × 20%)後最小平方斜率 ≤ 1 MB/min(`--max-rss-slope-mb-per-min`)且增量 ≤ 64 MB(`--max-rss-growth-mb`) | 「連續 2 小時」的軟體面近似 |
 | 無斷線與錯誤 | 客戶端斷線 0、JSON/幀格式錯誤 0、網頁 GET 失敗 0 | — |
 | 學員指令皆生效 | 未確認 0、`commandRejected` 0、斷線 0 | — |
 | 主控程序 | 存活到結束、結束碼 0、紀錄 footer 已寫(`紀錄已關閉`) | 優雅停止(第十六輪) |
@@ -164,7 +164,7 @@ node tests/soak/report.mjs --dir build/soak/<run> --md x.md --json x.json --max-
 
 輸出:`build/soak/<run>/`(`bin/` 建置輸出複本、`logs/`(simcore/radar/web/clients/student)、`stats/`(host/clients/student.jsonl)、`records/`、`media/`、`meta.json`)與 `build/soak/report-<run>.{md,json}`。Ctrl+C 會提前收尾並仍產生報告(標示中止、結束碼 1)。Windows 版 `soak-test.ps1 -WhatIf` 只檢查參數與工具鏈(`tools/run-ps-tests.sh` 的 `soak` 步驟);實跑在 Windows 以同參數執行。
 
-### 6.5 容器結果(2026-11-05,第二十三輪;`--minutes 10 --clients 3`,4 vCPU Linux 容器)
+### 6.5 容器結果(2026-11-05,第二十四輪;`--minutes 10 --clients 3`,4 vCPU Linux 容器)
 
 `bash tools/soak-test.sh --minutes 10 --clients 3 --skip-build`(執行 `20261105-052453`,報告 `build/soak/report-20261105-052453.md`;不進版控):**不合格**(不通過:RSS 不持續成長)。
 

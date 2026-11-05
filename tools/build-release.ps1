@@ -35,9 +35,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $root
-# 版本:-Version > 專案根目錄 VERSION 檔(CHANGELOG.md 同步)> 0.<日期>.<時分>
+# 版本:-Version > 專案根目錄 VERSION 檔(<年>.<月>.<輪次>,CHANGELOG.md 同步)。沒有 VERSION 也沒有 -Version 時直接失敗:
+# 更新包只接受版本遞增,舊的 0.<日期>.<時分> 後備若再被使用會讓之後的正式版本被船上判為降版(審查第二十四輪)
 if (-not $Version -and (Test-Path 'VERSION')) { $Version = (Get-Content 'VERSION' -Raw).Trim() }
-if (-not $Version) { $Version = '0.{0:yyyyMMdd}.{1}' -f (Get-Date).ToUniversalTime(), [int](Get-Date).ToUniversalTime().ToString('HHmm') }
+if (-not $Version) { throw '找不到 VERSION 檔且未給 -Version(版本方案 <年>.<月>.<輪次>,見 CHANGELOG.md)' }
 if ($Version -notmatch '^[0-9]+(\.[0-9]+){0,3}$') { throw "-Version 須為 1–4 段數字(與更新包版本規則相同):$Version" }
 
 # git 版次:不執行 git,直接讀 .git\HEAD → refs\heads\<分支> 或 packed-refs

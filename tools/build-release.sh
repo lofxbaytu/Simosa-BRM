@@ -11,7 +11,7 @@
 #   7) 發行清單 manifest.json(版本、git 版次、每檔 SHA-256、元件版本)→ release verify、更新包 verify(暫時船上根目錄);
 #   8) --installer:Windows 安裝程式腳本(tools/installer/SimosaBRM.iss,Inno Setup 6.3+)— Linux 無 ISCC,只做靜態檢查並把腳本、說明與編譯指令
 #      複製到 build/release/installer/(Windows 的 build-release.ps1 -Installer 會實際編譯;docs/ops/安裝與啟動.md 第 2.8 節)。
-# 用法:tools/build-release.sh [--version <1–4 段數字>(預設讀專案根目錄 VERSION 檔;無檔時 0.<日期>.<時分>)] [--git <版次>] [--branch <分支>] [--rid linux-x64|win-x64] [--out build/release]
+# 用法:tools/build-release.sh [--version <1–4 段數字>(預設讀專案根目錄 VERSION 檔 <年>.<月>.<輪次>;無檔且未給時失敗)] [--git <版次>] [--branch <分支>] [--rid linux-x64|win-x64] [--out build/release]
 #       [--skip-web] [--skip-godot] [--godot <Godot 執行檔>] [--no-package] [--zip] [--installer]
 # 所有輸出留在專案內(build/release/、.cache/);不執行任何 git 指令(版次由 --git 或直接讀 .git/HEAD)。
 set -euo pipefail
@@ -35,9 +35,10 @@ while [[ $# -gt 0 ]]; do
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
-# 版本:--version > 專案根目錄 VERSION 檔(CHANGELOG.md 同步)> 0.<日期>.<時分>
+# 版本:--version > 專案根目錄 VERSION 檔(<年>.<月>.<輪次>,CHANGELOG.md 同步)。沒有 VERSION 也沒有 --version 時直接失敗:
+# 更新包只接受版本遞增,舊的 0.<日期>.<時分> 後備若再被使用會讓之後的正式版本被船上判為降版(審查第二十四輪)
 [[ -n "$VERSION" ]] || { [[ -f VERSION ]] && VERSION="$(tr -d '[:space:]' < VERSION)" || true; }
-[[ -n "$VERSION" ]] || VERSION="0.$(date -u +%Y%m%d).$(date -u +%H%M | sed 's/^0*//;s/^$/0/')"
+[[ -n "$VERSION" ]] || { echo "找不到 VERSION 檔且未給 --version(版本方案 <年>.<月>.<輪次>,見 CHANGELOG.md)" >&2; exit 2; }
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]] || { echo "--version 須為 1–4 段數字(與更新包版本規則相同):$VERSION" >&2; exit 2; }
 
 # git 版次:不執行 git,直接讀 .git/HEAD → refs/heads/<分支> 或 packed-refs
