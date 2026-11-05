@@ -103,7 +103,7 @@ public class HostEndToEndTests
             using var fromServiceW = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None);
             using var fromServiceR = new AnonymousPipeClientStream(PipeDirection.In, fromServiceW.ClientSafePipeHandle);
             var device = new StreamDeviceLink(toServiceR, fromServiceW, "記憶體管線", pollAtEof: false);
-            var session = new ConsoleSession();
+            var session = new ConsoleSession(heartbeatTimeoutMs: 30000); // Windows CI 的 Host 啟動較慢,預設 3 s 會先逾時一次
             var core = new CoreLink(new Uri($"ws://127.0.0.1:{port}/"));
             var logs = new List<string>();
             var frames = new List<ConsoleStateView>();

@@ -42,7 +42,7 @@ public class StreamDeviceLinkTests
         File.AppendAllText(inPath, "RUD,5\n");
         Assert.Equal("RUD,5", await pending);
         await link.WriteLineAsync("ACK", CancellationToken.None);
-        Assert.Equal("ACK\n", File.ReadAllText(outPath));
+        Assert.Equal("ACK\n", ReadShared(outPath)); // Windows:檔案仍由連結以 FileShare.ReadWrite 開著,File.ReadAllText(share Read)會被拒
         File.Delete(inPath);
         File.Delete(outPath);
     }
@@ -70,5 +70,12 @@ public class StreamDeviceLinkTests
         Assert.Throws<ArgumentException>(() => ConsoleOptions.Parse(new[] { "--port", "COM1", "--baud", "0" }));
         Assert.Throws<ArgumentException>(() => ConsoleOptions.Parse(new[] { "--port", "COM1", "--ws", "http://x" }));
         Assert.Throws<ArgumentException>(() => ConsoleOptions.Parse(new[] { "--bogus" }));
+    }
+
+    private static string ReadShared(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(fs);
+        return reader.ReadToEnd();
     }
 }

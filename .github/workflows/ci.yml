@@ -70,7 +70,7 @@ jobs:
     name: 端對端(Playwright + 真實核心)
     needs: detect
     if: needs.detect.outputs.web == 'true' && needs.detect.outputs.dotnet == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright 1.56 尚不支援 ubuntu-latest(26.04)的系統相依
     timeout-minutes: 30
     env:
       # Playwright 瀏覽器、NuGet、dotnet CLI 的快取都留在工作目錄內(CLAUDE.md:不寫到專案外)
