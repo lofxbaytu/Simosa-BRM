@@ -133,6 +133,17 @@ console_service_args() {
   printf '%s\n' --ws "ws://127.0.0.1:$ws" --log -
 }
 
+# nmea_host_args:config ports.nmeaTargets[](可多個)/nmeaBind/nmeaFile → SimCore.Host 的 --nmea-target <ip:port>(可重複)、--nmea-bind <ip>、--nmea-file <路徑>;
+#   null/空字串 = 不加該參數(nmeaFile 相對路徑由 Host 以安裝根目錄解析且必須在根目錄內)。印出以換行分隔的參數列(呼叫端 mapfile -t;無參數時不印)
+nmea_host_args() {
+  local n i v
+  n="$(cfg ports_nmeaTargets__n 0)"
+  for ((i = 0; i < n; i++)); do v="$(cfg "ports_nmeaTargets_$i")"; [[ -n "$v" ]] && printf '%s\n' --nmea-target "$v"; done
+  v="$(cfg ports_nmeaBind)"; [[ -n "$v" ]] && printf '%s\n' --nmea-bind "$v"
+  v="$(cfg ports_nmeaFile)"; [[ -n "$v" ]] && printf '%s\n' --nmea-file "$v"
+  return 0
+}
+
 # wait_tcp <host> <port> <秒> [PID]:等待埠開啟;給 PID 時程序已結束即回傳 2(不再等到逾時,也不會把別的程序的監聽當成自己的)
 wait_tcp() {
   local host="$1" port="$2" secs="${3:-20}" pid="${4:-}" i

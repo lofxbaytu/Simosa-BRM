@@ -5,7 +5,9 @@
   啟動:SimCore.Host(WebSocket 8765、UDP 多播、NMEA)、USB 操控台服務(app\console;config console.port 非 null 或 -Console 時)、Sensors.Radar.Host(8766)、靜態網頁 simosa-web(app\web,8080)、
   視景(app\visual\SimosaBRM.Visual.exe 匯出檔,或 Godot 編輯器 --path src\Visual.Godot;每個 views[] 一個程序,依 --view/--monitor)、
   直連同步服務 simosa-pkg serve(7300;需安裝時完成 config\packaging.json 與 device init)。各程序 log 在 build\logs\(上一次的輪替為 <元件>.1.log…,
-  啟動標頭在 launch.log)。啟動前檢查各埠未被殘留程序占住(占用即報錯),SimCore.Host 啟動後若程序結束立即回報失敗。
+  啟動標頭在 launch.log)。啟動前檢查各埠未被殘留程序占住(SimCore ws、VHF 8767、錄影 8768、雷達、網頁、同步;USB 操控台服務無監聽埠;占用即報錯),
+  SimCore.Host 啟動後若程序結束立即回報失敗。NMEA 額外單播目標/綁定 IP/寫檔依 config ports.nmeaTargets/nmeaBind/nmeaFile(--nmea-target/--nmea-bind/--nmea-file;
+  config\opencpn\README.md 第 5 節)。
   安裝根目錄為本檔上兩層(發行版 app\launch\..\..;儲存庫 tools\launch\..\..),所有輸出留在根目錄內,不寫 C:\。
 .PARAMETER Scenario   覆寫預設情境(例如 data\scenarios\E05_pilot_traffic.yaml)
 .PARAMETER Duration   模擬秒數到達後 SimCore 自動結束並一併結束其他程序(煙霧測試)
@@ -45,6 +47,8 @@ $wsPort = Get-Cfg $cfg 'ports.stateWs' 8765
 $radarPort = Get-Cfg $cfg 'ports.radarWs' 8766
 $webPort = Get-Cfg $cfg 'ports.web' 8080
 $syncPort = Get-Cfg $cfg 'ports.sync' 7300
+$vhfPort = Get-Cfg $cfg 'ports.vhfWs' 8767       # SimCore.Host 內建 VHF 頻道(預設與 Host 相同)
+$mediaPort = Get-Cfg $cfg 'ports.mediaHttp' 8768  # SimCore.Host 錄影上傳端
 
 Write-Host "Simosa BRM 船上筆電啟動 — $(Get-Cfg $cfg 'shipId') / $(Get-Cfg $cfg 'deviceId');安裝根目錄 $root;設定 $Config"
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '找不到 dotnet(需安裝 .NET 8 執行階段;docs\ops\安裝與啟動.md)' }
@@ -78,7 +82,8 @@ Set-DirectLinkIp (Get-Cfg $cfg 'network.adapterName') $shipIp (Get-Cfg $cfg 'net
 Initialize-LaunchLogs $root $logs
 $logDir = Join-Path $root $logs
 # 啟動前確認各埠沒有被殘留的舊程序占住(否則 SimCore.Host 於 WebSocketStateServer.Start() 崩潰,而 Wait-LaunchTcp 連到的是別的程序);同時查直連 IP
-$ports = @{ 'SimCore ws' = $wsPort }
+# VHF 8767 與錄影 8768 都在 SimCore.Host 內;USB 操控台服務只開序列埠與對核心的 WebSocket 客戶端,沒有監聽埠,不列
+$ports = @{ 'SimCore ws' = $wsPort; 'VHF ws' = $vhfPort; '錄影 HTTP' = $mediaPort }
 if ($radarDll) { $ports['雷達 ws'] = $radarPort }
 if ($webDll -and $webDir) { $ports['網頁'] = $webPort }
 if ($pkgDll -and (Test-Path (Join-Path $root 'config\packaging.json')) -and (Test-Path (Join-Path $root 'config\device'))) { $ports['同步服務'] = $syncPort }
@@ -89,9 +94,12 @@ try {
     $scen = if ($Scenario) { $Scenario } else { Get-Cfg $cfg 'simcore.scenario' 'data\scenarios\E01_baseline.yaml' }
     $hostArgs = @($hostDll, '--scenario', $scen, '--port', $wsPort)
     foreach ($pair in @(@('simcore.ship', '--ship'), @('simcore.loading', '--loading'), @('simcore.dynamics', '--dynamics'), @('simcore.timescale', '--timescale'),
-                        @('ports.stateMulticast', '--multicast'), @('ports.nmeaUdp', '--nmea-port'), @('ports.nmeaMulticast', '--nmea-multicast'))) {
+                        @('ports.stateMulticast', '--multicast'), @('ports.nmeaUdp', '--nmea-port'), @('ports.nmeaMulticast', '--nmea-multicast'),
+                        @('ports.vhfWs', '--vhf-port'), @('ports.mediaHttp', '--media-port'))) {
         $v = Get-Cfg $cfg $pair[0]; if ($null -ne $v -and "$v" -ne '') { $hostArgs += @($pair[1], "$v") }
     }
+    # NMEA 額外單播目標(教官筆電 OpenCPN)、綁定直連介面、寫檔(config ports.nmeaTargets/nmeaBind/nmeaFile;空 = 不加)
+    $hostArgs += @(Get-LaunchNmeaArgs $cfg)
     $params = Get-Cfg $cfg 'simcore.parameters'
     if ($params -and (Test-Path (Join-Path $root $params))) { $hostArgs += @('--parameters', $params) }
     if (Get-Cfg $cfg 'simcore.record' $false) { $hostArgs += '--record' }

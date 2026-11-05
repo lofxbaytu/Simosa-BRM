@@ -48,7 +48,11 @@ try {
     if ($standalone) {
         $hostDll = Find-LaunchDll 'simcore' 'SimCore.Host' 'SimosaBRM.SimCore.Host.dll' $root
         if (-not $hostDll) { throw '找不到 SimCore.Host' }
-        $hostArgs = @($hostDll, '--scenario', (Get-Cfg $cfg 'standalone.scenario' 'data\scenarios\E01_baseline.yaml'), '--port', $wsPort, '--no-nmea')
+        $hostArgs = @($hostDll, '--scenario', (Get-Cfg $cfg 'standalone.scenario' 'data\scenarios\E01_baseline.yaml'), '--port', $wsPort)
+        # NMEA:ports.nmeaUdp 給本機 OpenCPN($null = --no-nmea,與舊版相同);nmeaTargets/nmeaBind/nmeaFile 同船上腳本(nmeaFile 於 --no-nmea 時仍寫檔)
+        $nmeaUdp = Get-Cfg $cfg 'ports.nmeaUdp'
+        if ($null -ne $nmeaUdp -and "$nmeaUdp" -ne '') { $hostArgs += @('--nmea-port', "$nmeaUdp") } else { $hostArgs += '--no-nmea' }
+        $hostArgs += @(Get-LaunchNmeaArgs $cfg)
         foreach ($pair in @(@('standalone.ship', '--ship'), @('standalone.loading', '--loading'))) { $v = Get-Cfg $cfg $pair[0]; if ($v) { $hostArgs += @($pair[1], "$v") } }
         if (Get-Cfg $cfg 'standalone.record' $false) { $hostArgs += '--record' }
         $hostArgs += @('--stop-file', (Get-LaunchStopFile $root $logs))  # stop-all.ps1 以停止檔讓核心寫完紀錄 footer

@@ -6,7 +6,9 @@
   Wait-LaunchTcp -Process 在程序結束時立即回傳、stop-all.ps1 -KeepSync 保留同步服務、stop-all.ps1 先寫停止檔(Get-LaunchStopFile)再逾時強制結束、
   WebView2 外殼:Find-LaunchShellExe 搜尋順序、Start-LaunchShellPages 參數組合(--url/--kiosk/--no-close-confirm/--monitor)與 simosa.pids 登錄、
   找不到外殼時退回 Open-LaunchPages(以假 exe 於 build\test-tmp\launch-ps\app\shell\SimosaBRM.Shell.exe)、
-  USB 操控台服務:Get-LaunchConsoleArgs 的參數規則(序列埠 / loopback:)與以 loopback 假裝置實跑 app\console 服務(ACK、LED,LINK,0 回寫;無核心)。
+  USB 操控台服務:Get-LaunchConsoleArgs 的參數規則(序列埠 / loopback:)與以 loopback 假裝置實跑 app\console 服務(ACK、LED,LINK,0 回寫;無核心)、
+  NMEA 選項 Get-LaunchNmeaArgs(ports.nmeaTargets/nmeaBind/nmeaFile → --nmea-target/--nmea-bind/--nmea-file;空/null 不加)與
+  Assert-LaunchPortsFree 對 VHF 8767 / 錄影 8768 埠名稱的回報(第二十四輪)。
   所有輸出留在 build\test-tmp\launch-ps\。
   用法:pwsh -NoProfile -File tools\launch\tests\launch-common.tests.ps1(tools\launch\tests\launch-tests.sh 為 .sh 版測試;
   容器/開發機沒有 pwsh 時以 tools\run-ps-tests.sh 自 .cache\dotnet-tools 取用 dotnet 全域工具版 PowerShell)
@@ -273,6 +275,44 @@ Invoke-Test 'Get-LaunchConsoleArgs:序列埠與 loopback 規格;loopback 假裝�
     $log = Get-Content -Raw (Join-Path $logDir 'console.log')
     Assert-True ($log.Contains('HELLO 韌體 1.0.0') -and $log.Contains('"type":"rudder","value":10')) "console.log 應有 HELLO 與轉送的 rudder 指令:$log"
     Assert-True ((Get-Content (Join-Path $logDir 'simosa.pids') | Where-Object { $_ }) -like 'console:*') 'simosa.pids 應登錄 console'
+}
+
+# ---- NMEA 選項與 VHF/錄影埠預檢(第二十四輪;config\ship-laptop.json ports.nmeaTargets/nmeaBind/nmeaFile、vhfWs/mediaHttp)----
+Invoke-Test 'Get-LaunchNmeaArgs:nmeaTargets/nmeaBind/nmeaFile → Host 參數;空陣列/null 不加;Assert-LaunchPortsFree 回報 VHF 埠' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $cfg = '{"ports":{"nmeaTargets":["192.168.77.21:10110","192.168.77.22"],"nmeaBind":"192.168.77.11","nmeaFile":"build/nmea/E05.nmea"}}' | ConvertFrom-Json
+    $a = @(Get-LaunchNmeaArgs $cfg)
+    Assert-True (($a -join ' ') -eq '--nmea-target 192.168.77.21:10110 --nmea-target 192.168.77.22 --nmea-bind 192.168.77.11 --nmea-file build/nmea/E05.nmea') "參數組合不符:$($a -join ' ')"
+    $empty = '{"ports":{"nmeaTargets":[],"nmeaBind":null,"nmeaFile":null}}' | ConvertFrom-Json
+    Assert-True (@(Get-LaunchNmeaArgs $empty).Count -eq 0) "空陣列/null 不應產生參數:$(@(Get-LaunchNmeaArgs $empty) -join ' ')"
+    Assert-True (@(Get-LaunchNmeaArgs ('{"ports":{}}' | ConvertFrom-Json)).Count -eq 0) '沒有 nmea 鍵時不應產生參數'
+    $one = '{"ports":{"nmeaTargets":["127.0.0.1:19110"]}}' | ConvertFrom-Json
+    Assert-True ((@(Get-LaunchNmeaArgs $one) -join ' ') -eq '--nmea-target 127.0.0.1:19110') '單一目標、無 bind/file'
+    $hostArgs = @('x.dll', '--port', '8765'); $hostArgs += @(Get-LaunchNmeaArgs $empty)
+    Assert-True ($hostArgs.Count -eq 3) "空輸出時 += @(…) 不得加入 `$null/空元素(實際 $($hostArgs.Count) 個)"
+    $hostArgs += @(Get-LaunchNmeaArgs $cfg)
+    Assert-True ($hostArgs.Count -eq 11 -and $hostArgs[3] -eq '--nmea-target' -and $hostArgs[10] -eq 'build/nmea/E05.nmea') "有參數時應逐一加入 8 個(實際共 $($hostArgs.Count) 個)"
+    # 儲存庫的 config:預設不產生 NMEA 參數;VHF/錄影埠預設 8767/8768;教官 config 的 nmeaUdp 為 null(standalone 時 --no-nmea)
+    $ship = Read-LaunchConfig (Join-Path $root 'config\ship-laptop.json')
+    Assert-True (@(Get-LaunchNmeaArgs $ship).Count -eq 0) 'config\ship-laptop.json 預設(nmeaTargets 空、nmeaBind/nmeaFile null)不應產生參數'
+    Assert-True ((Get-Cfg $ship 'ports.vhfWs') -eq 8767 -and (Get-Cfg $ship 'ports.mediaHttp') -eq 8768) 'config\ship-laptop.json 應有 ports.vhfWs 8767 與 ports.mediaHttp 8768'
+    $instr = Read-LaunchConfig (Join-Path $root 'config\instructor-laptop.json')
+    Assert-True ($null -eq (Get-Cfg $instr 'ports.nmeaUdp') -and @(Get-LaunchNmeaArgs $instr).Count -eq 0) 'config\instructor-laptop.json 預設 nmeaUdp null、無 NMEA 參數'
+    # 啟動腳本把 VHF/錄影埠列入預檢並傳 --vhf-port/--media-port;操控台不在預檢清單
+    $ps1 = Get-Content -Raw (Join-Path $launch 'start-ship-laptop.ps1')
+    Assert-True ($ps1.Contains("'VHF ws' = `$vhfPort") -and $ps1.Contains("'錄影 HTTP' = `$mediaPort")) 'start-ship-laptop.ps1 應把 VHF ws 與錄影 HTTP 列入埠預檢'
+    Assert-True ($ps1.Contains("@('ports.vhfWs', '--vhf-port')") -and $ps1.Contains("@('ports.mediaHttp', '--media-port')") -and $ps1.Contains('$hostArgs += @(Get-LaunchNmeaArgs $cfg)')) 'start-ship-laptop.ps1 應傳 --vhf-port/--media-port 與 NMEA 參數(以 @() 包住,空輸出時不加 $null)'
+    Assert-True (-not $ps1.Contains("`$ports['操控台']")) '操控台服務無監聽埠,不應在預檢清單'
+    # Assert-LaunchPortsFree:VHF 埠被占用時訊息含名稱
+    $port = $PortBase + 3
+    $l = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback), $port
+    $l.Start()
+    try {
+        $msg = $null
+        try { Assert-LaunchPortsFree @{ 'SimCore ws' = ($PortBase + 4); 'VHF ws' = $port; '錄影 HTTP' = ($PortBase + 5) } } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg -and $msg.Contains("埠 $port 已被占用(VHF ws")) "應以名稱回報 VHF 埠被占用:$msg"
+    } finally { $l.Stop() }
+    Assert-LaunchPortsFree @{ 'VHF ws' = $port; '錄影 HTTP' = ($PortBase + 5) }
 }
 
 Write-Host "通過 $pass,失敗 $fail$(if ($failed) { '(' + ($failed -join '、') + ')' })"

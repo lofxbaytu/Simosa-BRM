@@ -251,19 +251,32 @@ BNWAS 警報不需確認(重設即解除指示,第 3.2 節):`bnwasReset` 事件(
 | 句型 | 正常 | 無效 |
 |---|---|---|
 | HDT(HE) | 指示航向 | 電羅經無效:**停送** |
+| THS(HE,IEC 61162-1 ed.5;與 HDT 同批 10 Hz) | 指示航向、模式 A(自主;漂移/凍結等仍「有效」的故障亦為 A) | 電羅經無效:航向欄空白、模式 **V**(不停送,接收端據此判斷) |
 | GGA(GP) | 品質 1 | GNSS 無效:品質 0、衛星 00、位置/HDOP 空白 |
 | RMC(GP) | 狀態 A、模式 A | 狀態 V、模式 N、位置/SOG/COG 空白(日期保留) |
 | VTG(GP) | 模式 A | 數值空白、模式 N |
 | VBW(VD) | 對水/對地狀態 A | 計程儀無效:對水欄位空白 + V;GNSS 或電羅經無效:對地欄位空白 + V |
 | DPT(SD) | 龍骨下水深 | 測深儀無效:**停送** |
 | ALR(II) | — | 每個非 normal 警報 1 Hz 一句:`$IIALR,hhmmss.ss,nnn,A/V(條件),A/V(確認),英文文字*hh` |
+| ALF(II,IEC 61162-1 ed.5 / IEC 62923-1 BAM) | — | 每個 `state.alerts[]` 警報 1 Hz 一句(與 ALR 同批):`$IIALF,1,1,序號 0–9,最近一次狀態改變時刻,類別 A/B/C,優先序 E/A/W/C,狀態 V/S/A/O/U/N,SIM,識別碼 nnn(= ALR 編號),實例 1,修訂 1–99,升級 0/1,英文文字*hh` |
+| ALC(II,IEC 61162-1 ed.5 週期警報清單) | — | 第 1 秒、之後每 30 s,以及清單或任一修訂改變的那一秒:`$IIALC,句數,句號,序號 00–99,本句項目數,{SIM,識別碼,實例,修訂}…*hh`;每句 ≤ 4 項、無警報時 0 項(接收端據此知道清單為空) |
+| VDO(AI) | 自船 AIS:類型 1 位置報告每 10 s(sec ≡ 0 mod 10)、類型 5 靜態資料第 1 秒後每 6 min;MMSI 取情境 `ship.mmsi`,無則 `particulars.mmsi`,皆無則**不送**並記一次 log | GNSS 無效:位置 91°/181°、COG 360.0、SOG 102.3、定位精度 0(ITU-R M.1371「無資料」值);電羅經無效:航向 511;ROT 仍送 |
 
 ```
 $IIALR,133800.00,001,A,V,GYRO FAILURE*hh
 $IIALR,133800.00,010,V,V,BOW THRUSTER FAILURE*hh
+$IIALF,1,1,3,133800.00,B,A,V,SIM,001,1,1,0,GYRO FAILURE*hh
+$IIALC,01,01,05,2,SIM,001,1,1,SIM,010,1,2*hh
+$HETHS,274.1,A*hh        $HETHS,,V*hh(電羅經失效)
+!AIVDO,1,1,,A,16<lf`@0ww<tSF0l4Q@>41JD0000,0*hh
 ```
 
-ALR 文字取警報目錄的 ASCII `NmeaText`(中文不進 NMEA)。ALF/ALC(IEC 61162-1 Ed.5 BAM 句型)本版未實作。ROT(TI)不受電羅經故障影響。
+ALR/ALF 文字取警報目錄的 ASCII `NmeaText`(中文不進 NMEA)。ALF 的狀態字元:V 成立未確認、S 已靜音、A 已確認、O 責任已轉移(`transferredTo`)、
+U 已解除未確認、N 正常;「最近一次狀態改變時刻」首次出現用 `raisedAt_s`、確認用 `acknowledgedAt_s`(核心精確值),靜音/解除用閘道偵測到的整秒;
+修訂計數每次狀態改變 +1(99 後回 1);升級計數 = `escalated`;製造商代碼 SIM(非 IEC 62923-2 標準識別碼);`loadScenario` 後警報追蹤與序號重設。
+ALC 每句最多 4 項(14 個警報 → 4 句),序號 00–99 每次清單 +1。THS 的 E/M/S 模式本版不用(模擬器對外扮演真實電羅經)。
+自船 VDO 的船名/呼號/IMO 取 particulars,船型 80(油輪;FSB1/FSB2 為瀝青船),天線視為船舯、吃水取 `state.draft` 最大者;OpenCPN 須把該 MMSI 標為 Own ship
+(`config/opencpn/README.md`)。ROT(TI)不受電羅經故障影響。
 
 ## 7. E08 情境(`data/scenarios/E08_gyro_failure.yaml`)
 
@@ -320,7 +333,7 @@ bnwas:
 6. E09 情境檔註解仍寫 gyroFailure「只記錄」;實際已 modelled(E09 不在本任務檔案範圍,待更新註解)。
 7. Python 參考實作(`src/Tools.Calibration`)尚未實作感測器層/警報/BNWAS(不輸出 truth/sensors/alerts/bnwas,新指令應回 ok=false),
    `METRIC_NAMES`、情境 `sensors/alerts/bnwas` 區段待補;網頁儀器/教官站待讀取 `state.truth/sensors/alerts/bnwas` 與送新指令。
-8. ALF/ALC 句型、HDG(磁羅經)句型未輸出。
+8. HDG(磁羅經)、XDR 句型未輸出;ALF/ALC/THS/VDO 已於第二十四輪加入(第 6 節),ALF 的靜音/解除改變時刻只有整秒精度、實例恆為 1。
 9. E08 必要事件 `alarmAck` 的 `expect` 為 `{ event: { kind: alertAcknowledged } }`,未限定 `itemId`:變化題(`alerts.headingMonitor_deg: 5`)下只確認
    headingMonitor 也會判 met,而 gyroFailure 警報仍未確認(`faultResponses` 的 `alertAckAt_s` 為 null)。應改為 `itemId: gyroFailure`
    (`data/scenarios/E08_gyro_failure.yaml` 與 Python 情境檢查由另一位工程師負責,`GyroFailureScenarioTests` 的 by 標籤不變),待該檔更新。

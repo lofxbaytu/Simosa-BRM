@@ -355,7 +355,7 @@ src/Instruments.Web/
 ## 已知限制(第一版)
 
 - 自動舵的開/關與設定航向由本頁面保存;C# 核心的 `state.autopilot` 目前只用於「不可用」標示與核心脫開時同步關閉(設定航向仍以本頁為準)。
-- 學員站儀器頁的操舵模式只有 FU/NFU/自動舵(舵機泵選擇與應急操舵目前只在教官站的操舵模式面板);航跡模式不在本版範圍(雷達見 RADAR.md、簡化 ECDIS 見 `ecdis.html` 與 `docs/design/ecdis-lite.md`、VHF 見「內建 VHF」);BAM 中央警報面板與 BNWAS 指示見上方「警報管理(BAM)與 BNWAS」(ALF/ALC 句型、責任轉移未實作)。
+- 學員站儀器頁的操舵模式只有 FU/NFU/自動舵(舵機泵選擇與應急操舵目前只在教官站的操舵模式面板);航跡模式不在本版範圍(雷達見 RADAR.md、簡化 ECDIS 見 `ecdis.html` 與 `docs/design/ecdis-lite.md`、VHF 見「內建 VHF」);BAM 中央警報面板與 BNWAS 指示見上方「警報管理(BAM)與 BNWAS」(ALR/ALF/ALC 句型由核心 NMEA 閘道輸出,網頁不顯示 NMEA)。
 - 鳥瞰圖有自船、目標船與情境航線/區域,尚無海圖;目標船只畫真值位置(AIS 報告值 `ais` 已解析但未另畫 AIS 位置);3D 視景另見 `src/Visual.*`。
 - 示範模式為簡化運動學,不可用於訓練或驗證。
 - UKC 警報門檻先固定 1.0 m(警告 2.0 m),之後改由公司程序參數集提供(規劃書第 9.1 節)。

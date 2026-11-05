@@ -338,7 +338,7 @@ def test_vdo_own_ship_checks_detected():
         bits += format(int(v) & ((1 << n) - 1), f"0{n}b")
     u(1, 6); u(0, 2); u(416100001, 30); u(0, 4); u(0, 8); u(81, 10); u(1, 1)
     u(round((120 + 12.3014 / 60) * 600000), 28); u(round((22 + 29.7018 / 60) * 600000), 27); u(365, 12); u(45, 9); u(10, 6); u(0, 2); u(0, 3); u(0, 1); u(0, 19)
-    payload = "".join(nc.SIX_BIT_TABLE[int(bits[i:i + 6], 2)] and chr(int(bits[i:i + 6], 2) + (48 if int(bits[i:i + 6], 2) < 40 else 56)) for i in range(0, 168, 6))
+    payload = "".join(chr(v + (48 if v < 40 else 56)) for v in (int(bits[i:i + 6], 2) for i in range(0, 168, 6)))  # 6 位元裝甲(AisEncoder.ArmorChar)
     vdo = rebuild(f"!AIVDO,1,1,,A,{payload},0*00")
     lines = fixture_lines()
     k10 = next(i for i, l in enumerate(lines) if l.startswith("!AIVDO,1,1"))
@@ -373,8 +373,9 @@ def test_state_mismatch_detected():
     msgs = [i.message for i in r.errors]
     assert any("GGA 位置與 state.pos 相差" in m for m in msgs)
     assert any("HDT" in m and "state.heading" in m for m in msgs)
+    assert any("THS" in m and "state.heading" in m for m in msgs)  # 第二十四輪:THS 亦與 state.heading 比對
     assert any("positionValid=False 不一致" in m for m in msgs)
-    assert r.state_compare is not None and r.state_compare.mismatches == 3
+    assert r.state_compare is not None and r.state_compare.mismatches == 4
     # 時間對不上的狀態 → warning,不比對
     shifted = [dict(s, utc=s["utc"].replace("2026-05-05", "2026-05-06")) for s in nc.read_states(STATE)]
     r2 = nc.check_file(NMEA, states=shifted)

@@ -103,6 +103,19 @@ function Get-LaunchConsoleArgs([string]$Spec, [int]$WsPort, [int]$Baud = 115200)
     return $a + @('--ws', "ws://127.0.0.1:$WsPort", '--log', '-')
 }
 
+# Get-LaunchNmeaArgs $cfg:config ports.nmeaTargets[](可多個)/nmeaBind/nmeaFile → SimCore.Host 的 --nmea-target <ip:port>(可重複)、--nmea-bind <ip>、--nmea-file <路徑>;
+#   $null/空字串 = 不加該參數(nmeaFile 相對路徑由 Host 以安裝根目錄解析且必須在根目錄內)。與 launch-common.sh 的 nmea_host_args 相同規則;
+#   無參數時不輸出任何東西:呼叫端以 @(Get-LaunchNmeaArgs $cfg) 取陣列(直接 += 函式輸出會在空輸出時加入 $null 元素 → 空參數)
+function Get-LaunchNmeaArgs($Config) {
+    $a = @()
+    foreach ($t in @(Get-Cfg $Config 'ports.nmeaTargets' @())) { if ($null -ne $t -and "$t" -ne '') { $a += @('--nmea-target', "$t") } }
+    $bind = Get-Cfg $Config 'ports.nmeaBind'
+    if ($bind) { $a += @('--nmea-bind', "$bind") }
+    $file = Get-Cfg $Config 'ports.nmeaFile'
+    if ($file) { $a += @('--nmea-file', "$file") }
+    return $a
+}
+
 # Get-LaunchStopFile <根目錄> <logs>:SimCore.Host 的停止檔路徑(--stop-file;stop-all.ps1 先寫此檔讓核心自行結束並寫完紀錄 footer — Windows 的
 # Stop-Process 不會送 Ctrl+C,主控台程序收不到訊號)。路徑記在 <logs>\simcore.stopfile 供 stop-all.ps1 讀取;殘留的停止檔先刪。
 function Get-LaunchStopFile([string]$Root, [string]$Logs) {

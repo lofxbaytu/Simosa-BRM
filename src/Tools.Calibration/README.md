@@ -98,11 +98,12 @@ uv run python -m simosa_brm.nmea_check --multicast 239.192.0.1:60001 --iface 192
 ```
 
 接收 SimCore.Host 的 NMEA(UDP 單播/多播即時擷取,或 Host `--nmea-file` 寫出的 .nmea)並檢查:校驗和、句長、talker、IEC 61162-1 欄位數(`SPECS`,
-與 C# `NmeaTests.Iec61162FieldCounts` 同表)、各句型速率(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV 1 Hz,每目標 TTM 1 Hz,每警報 ALR 1 Hz,
-AIS 類型 1 每 10 s;±20%,以完整秒窗計)、時間戳單調與同批一致、GNSS 失效的有效旗標一致(GGA 品質 0 ⇔ RMC V ⇔ VTG N ⇒ VBW 對地 V)、
-!AIVDM 多句組合與類型 1/5 解碼、ALR 欄位;`--ws`/`--state` 時以 RMC 日期 + GGA 時刻對上同一時刻的 state 比對位置(≤ 3 m)/航向/水深/SOG/COG(≤ 0.05 單位)
+與 C# `NmeaTests.Iec61162FieldCounts` 同表)、各句型速率(HDT/THS/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV 1 Hz,每目標 TTM 1 Hz,每警報 ALR 與 ALF 1 Hz,
+AIS 類型 1 每 10 s(VDM 目標與 VDO 自船),ALC 週期清單 ≤ 30 s;±20%,以完整秒窗計)、時間戳單調與同批一致、GNSS 失效的有效旗標一致(GGA 品質 0 ⇔ RMC V ⇔ VTG N ⇒ VBW 對地 V;
+THS 模式 V ⇔ 無 HDT)、!AIVDM/!AIVDO 多句組合與類型 1/5 解碼(自船 VDO 與同批 GGA/THS 一致、GNSS 失效時為無資料值)、ALR 欄位、ALF 欄位(IEC 61162-1 ed.5)與 ALR 一致、
+ALC 項目數與 ALF 清單一致;`--ws`/`--state` 時以 RMC 日期 + GGA 時刻對上同一時刻的 state 比對位置(≤ 3 m)/航向/水深/SOG/COG(≤ 0.05 單位)
 與 `sensors.*Valid`。Markdown 報告 + 可選 JSON;結束碼 0 通過 / 1 不合格 / 2 輸入錯誤。
-夾具 `tests/fixtures/nmea/E05_gpsfailure_10s.nmea`(+ `.state.jsonl`)由 C# Host 以 `--nmea-file --record` 實跑 10 s 產生(第 5 秒注入 gpsFailure),
+夾具 `tests/fixtures/nmea/E05_gpsfailure_10s.nmea`(+ `.state.jsonl`)由 C# Host 以 `--nmea-file --record` 實跑 10 s 產生(E05 複本加 `ship.mmsi: 416100001`,第 5 秒注入 gpsFailure;524 句),
 測試 `tests/test_nmea_check.py`。OpenCPN 連線設定與實機驗收:`config/opencpn/README.md`、`tools/opencpn-check.md`。
 
 ## 套件結構

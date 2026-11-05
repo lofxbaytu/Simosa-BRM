@@ -144,7 +144,7 @@
 | 主機控制 | 車鐘、轉速/螺距、控制位置、SBE/FWE | 車鐘與主機狀態(儀器頁) | 部分 | 機艙操作模式指示未實作(R1) |
 | 羅經 | 電羅經、磁羅經(自差) | 電羅經與故障(E08) | 部分 | 磁羅經未實作(R1) |
 | GNSS/AIS/測深/計程儀 | 顯示與故障 | `src/SimCore/Sensors/`、`src/Gateway.Nmea/` | 已實作 | — |
-| BNWAS、BAM | MSC.128(75)、MSC.302(87) | `src/SimCore/Alerts/`(`BnwasTests`、`AlertManagerTests`) | 部分 | ALF/ALC 句型、responsibility transferred 未實作 |
+| BNWAS、BAM | MSC.128(75)、MSC.302(87) | `src/SimCore/Alerts/`(`BnwasTests`、`AlertManagerTests`);NMEA ALR 與 IEC 61162-1 ed.5 ALF/ALC `src/Gateway.Nmea/`(`NmeaTests`) | 部分 | responsibility transferred 未實作(ALF 狀態 O 已預留);ALF/ALC 已輸出但只以 `nmea_check` 檢驗,未接真實 BAM 設備 |
 | VHF/DSC、內線、PA | 頻道、DSC、角色扮演語音 | 內建 VHF 角色扮演頻道:`src/SimCore.Host/VhfRelayServer.cs`(ws 8767,`--vhf-port`/`--no-vhf`)、`<brm-vhf>` `src/Instruments.Web/src/components/vhf-panel.ts`、`lib/vhf.ts`、`lib/vhf-client.ts`;紀錄 `vhf` 行;協定 `src/Contracts/vhf-protocol.md`(`VhfRelayTests`;vitest `vhf`、`vhf-client`、`vhf-panel`、`vhf-record`) | 已實作(軟體,內建) | 14 個頻道旋鈕、PTT(滑鼠/觸控/空白鍵)語音、同頻道才聽得到、同時發話後發者收「頻道佔用」、文字備援、DSC 簡化(DISTRESS/URGENCY 文字警示)、教官雙守聽、通話/文字/DSC 進紀錄與講評;非真實 VHF 傳播、無 DSC 編碼、內線/PA 無獨立介面(以工作頻道/文字模擬);麥克風授權需實機(`docs/design/vhf-roleplay.md`) |
 | 風、傾斜、NAVTEX、航行燈面板、汽笛 | 顯示與操作 | 風向風速、汽笛事件 | 部分 | NAVTEX、航行燈面板、傾斜儀未實作 |
 | 實體操控台與駕駛台配置 | 實體舵輪、車鐘、面板,駕駛台空間與照明 | 精簡版操控台(規劃書第 5.4 節):USB 序列操控台服務 `src/Console.Serial`(序列行 ↔ 核心指令與燈號/顯示回寫)、協定 `src/Contracts/console-serial.md`、Teensy 4.0 參考韌體 `firmware/teensy-console`(接腳 ASSUMED)已實作,loopback 與 Host 端對端測試通過;舵輪/車鐘/側推/按鈕實體待製作並實機驗證;兩螢幕顯示以 WebView2 外殼 kiosk 全螢幕(`src/Shell.WebView2`,`--monitor`;已實作(軟體),實機需 Windows 驗證);駕駛台空間與照明為桌面配置(D6) | 部分 / 需實機 | 服務與協定已實作、硬體待製作(追溯表第 4 節);安裝文件第 4.6 節(接線、COM 埠、實機核對第 6 項);外殼驗證列於第 4.5 節第 6 項 |
@@ -168,7 +168,7 @@
 
 | 項目 | Class A 要求摘要 | 本系統對應 | 狀態 | 缺項/備註 |
 |---|---|---|---|---|
-| 即時性 | 即時執行、無掉拍 | 核心 50 Hz 固定步長(容器煙霧 `steps/s`) | 需實機 | 2 小時連續需實機(第 14 章效能) |
+| 即時性 | 即時執行、無掉拍 | 核心 50 Hz 固定步長;長時間穩定性工具 `tools/soak-test.*`(容器 10 分鐘:掉拍 0、tick 率 50.001/s、延遲 p95 8 ms;`docs/design/testing.md` 第 6 節) | 需實機 | 2 小時連續與內顯機需實機以同一工具重跑(第 14 章效能) |
 | 確定性與重現 | 相同輸入得相同結果 | 雜湊鏈(`EngineDeterminismTests`) | 已實作 | — |
 | 文件 | 使用手冊、技術文件、變更紀錄、QA | `docs/ops/`、`docs/design/`、各 README、`docs/dev-log/`;本表 | 部分 | 使用手冊無船上帶領者手冊;驗證報告未簽核(R12) |
 | 變更管理 | 版本與變更紀錄 | 簽章更新包含版本號/雜湊/變更摘要(R13、R14) | 已實作 | — |

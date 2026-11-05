@@ -52,7 +52,11 @@ fi
 
 if [[ "$STANDALONE" == true || "$STANDALONE" == 1 ]]; then
   HOST_DLL="$(find_dll simcore SimCore.Host SimosaBRM.SimCore.Host.dll "$ROOT")" || { echo "找不到 SimCore.Host" >&2; exit 2; }
-  HOST_ARGS=(--scenario "$(cfg standalone_scenario data/scenarios/E01_baseline.yaml)" --port "$WS_PORT" --no-nmea)
+  HOST_ARGS=(--scenario "$(cfg standalone_scenario data/scenarios/E01_baseline.yaml)" --port "$WS_PORT")
+  # NMEA:ports.nmeaUdp 給本機 OpenCPN(null = --no-nmea,與舊版相同);nmeaTargets/nmeaBind/nmeaFile 同船上腳本(nmeaFile 於 --no-nmea 時仍寫檔)
+  if [[ -n "$(cfg ports_nmeaUdp)" ]]; then HOST_ARGS+=(--nmea-port "$(cfg ports_nmeaUdp)"); else HOST_ARGS+=(--no-nmea); fi
+  mapfile -t NMEA_ARGS < <(nmea_host_args)
+  HOST_ARGS+=(${NMEA_ARGS[@]+"${NMEA_ARGS[@]}"})
   [[ -n "$(cfg standalone_ship)" ]] && HOST_ARGS+=(--ship "$(cfg standalone_ship)")
   [[ -n "$(cfg standalone_loading)" ]] && HOST_ARGS+=(--loading "$(cfg standalone_loading)")
   [[ "$(cfg standalone_record false)" == true ]] && HOST_ARGS+=(--record)

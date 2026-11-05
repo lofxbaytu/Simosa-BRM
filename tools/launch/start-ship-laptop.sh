@@ -8,7 +8,9 @@
 #       [--check-only] [--wait](前景等待 Ctrl+C;預設啟動後即返回,之後用 stop-all.sh 結束:先寫停止檔讓核心寫完紀錄 footer,逾時才強制結束)
 #       --console:USB 實體操控台的序列埠(覆寫 config console.port;協定 src/Contracts/console-serial.md),loopback:… 為測試用假裝置
 #       --duration:模擬秒數到達後 SimCore 自動結束,本腳本於同一時間結束其他程序(煙霧測試;容器以 E05 60 s 驗證)。
-#   啟動前檢查各埠未被殘留程序占住(占用即報錯 exit 1),SimCore.Host 啟動後若程序結束(而非只是埠未開)立即回報失敗;測試見 tests/launch-tests.sh。
+#   啟動前檢查各埠未被殘留程序占住(SimCore ws、VHF 8767、錄影 8768、雷達、網頁、同步;USB 操控台服務無監聽埠;占用即報錯 exit 1),
+#   SimCore.Host 啟動後若程序結束(而非只是埠未開)立即回報失敗;NMEA 額外單播目標/綁定 IP/寫檔依 config ports.nmeaTargets/nmeaBind/nmeaFile
+#   (--nmea-target/--nmea-bind/--nmea-file;config/opencpn/README.md 第 5 節);測試見 tests/launch-tests.sh。
 source "$(dirname "${BASH_SOURCE[0]}")/launch-common.sh"
 ROOT="$(launch_root)"
 CONFIG="$ROOT/config/ship-laptop.json"
@@ -38,6 +40,7 @@ export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}" NUGET_PACK
 LOGS="$(cfg logs build/logs)"
 SHIP_IP="$(cfg network_directLinkIp 127.0.0.1)"
 WS_PORT="$(cfg ports_stateWs 8765)"; RADAR_PORT="$(cfg ports_radarWs 8766)"; WEB_PORT="$(cfg ports_web 8080)"; SYNC_PORT="$(cfg ports_sync 7300)"
+VHF_PORT="$(cfg ports_vhfWs 8767)"; MEDIA_PORT="$(cfg ports_mediaHttp 8768)"   # SimCore.Host 內建的 VHF 頻道與錄影上傳端(預設值與 Host 相同)
 
 echo "Simosa BRM 船上筆電啟動 — $(cfg shipId) / $(cfg deviceId);安裝根目錄 $ROOT;設定 $CONFIG"
 command -v dotnet >/dev/null || { echo "找不到 dotnet(需 .NET 8 執行階段)" >&2; exit 2; }
@@ -63,8 +66,9 @@ fi
 launch_init_logs "$ROOT" "$LOGS"
 trap 'echo; echo "結束全部程序…"; "$LAUNCH_DIR/stop-all.sh" --logs "$LOGS"' INT TERM
 
-# 啟動前確認各埠沒有被殘留的舊程序占住(否則 SimCore.Host 會立刻崩潰,而 wait_tcp 連到的是別的程序);同時查 127.0.0.1 與直連 IP
-PORTS=("SimCore ws:$WS_PORT")
+# 啟動前確認各埠沒有被殘留的舊程序占住(否則 SimCore.Host 會立刻崩潰,而 wait_tcp 連到的是別的程序);同時查 127.0.0.1 與直連 IP。
+# VHF 8767 與錄影 8768 都在 SimCore.Host 內(第二十一輪);USB 操控台服務只開序列埠與對核心的 WebSocket 客戶端,沒有監聽埠,不列
+PORTS=("SimCore ws:$WS_PORT" "VHF ws:$VHF_PORT" "錄影 HTTP:$MEDIA_PORT")
 [[ -n "$RADAR_DLL" ]] && PORTS+=("雷達 ws:$RADAR_PORT")
 [[ -n "$WEB_DLL" && -n "$WEB_DIR" ]] && PORTS+=("網頁:$WEB_PORT")
 [[ -n "$PKG_DLL" && -f "$ROOT/config/packaging.json" && -d "$ROOT/config/device" ]] && PORTS+=("同步服務:$SYNC_PORT")
@@ -81,6 +85,11 @@ HOST_ARGS=(--scenario "${SCENARIO:-$(cfg simcore_scenario data/scenarios/E01_bas
 [[ -n "$(cfg ports_stateMulticast)" ]] && HOST_ARGS+=(--multicast "$(cfg ports_stateMulticast)")
 [[ -n "$(cfg ports_nmeaUdp)" ]] && HOST_ARGS+=(--nmea-port "$(cfg ports_nmeaUdp)")
 [[ -n "$(cfg ports_nmeaMulticast)" ]] && HOST_ARGS+=(--nmea-multicast "$(cfg ports_nmeaMulticast)")
+[[ -n "$(cfg ports_vhfWs)" ]] && HOST_ARGS+=(--vhf-port "$VHF_PORT")
+[[ -n "$(cfg ports_mediaHttp)" ]] && HOST_ARGS+=(--media-port "$MEDIA_PORT")
+# NMEA 額外單播目標(教官筆電 OpenCPN)、綁定直連介面、寫檔(config ports.nmeaTargets/nmeaBind/nmeaFile;空 = 不加)
+mapfile -t NMEA_ARGS < <(nmea_host_args)
+HOST_ARGS+=(${NMEA_ARGS[@]+"${NMEA_ARGS[@]}"})
 [[ -n "$DURATION" ]] && HOST_ARGS+=(--duration "$DURATION")
 # 停止檔(優雅停止;stop-all.sh 先寫此檔讓核心寫完紀錄 footer):路徑記在 $LOGS/simcore.stopfile
 HOST_ARGS+=(--stop-file "$(launch_stop_file "$ROOT" "$LOGS")")

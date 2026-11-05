@@ -12,10 +12,15 @@
   },
   "ship": "FSB1",
   "ports": {
+    "$comment": "stateWs/radarWs 直連時指向船上筆電、-Standalone 時為本機 SimCore/雷達的埠。nmeaUdp/nmeaTargets/nmeaBind/nmeaFile 只在 -Standalone(本機 SimCore.Host)時使用:nmeaUdp 給本機 OpenCPN 的 UDP 單播埠(null = 本機核心不送 NMEA,--no-nmea);nmeaTargets 額外單播目標陣列;nmeaBind 綁定 IP(null = 依路由表);nmeaFile 專案內的 NMEA 檔(null = 不寫)。直連模式的 NMEA 由船上筆電 config/ship-laptop.json 的 ports.nmeaTargets 指到本機 OpenCPN(docs/ops/安裝與啟動.md 第 3 節)",
     "stateWs": 8765,
     "radarWs": 8766,
     "web": 8080,
-    "sync": 7300
+    "sync": 7300,
+    "nmeaUdp": null,
+    "nmeaTargets": [],
+    "nmeaBind": null,
+    "nmeaFile": null
   },
   "web": {
     "$comment": "教官站網頁由教官筆電自己的 simosa-web 提供(app/web),但 ws 參數指向船上筆電;雷達鏡像頁同樣指向船上雷達服務",

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 啟動腳本測試(Linux/容器;規劃書第 5.4–5.5 節、第 14 章「船上部署」):以真實的 SimCore.Host / simosa-web 與假程序驗證
 #   tools/launch/*.sh 的失敗回報、埠檢查、stop-all --keep-sync、--logs 傳遞、--ship <IP>、--check-wifi、停止檔優雅停止(footer)、
-#   USB 操控台服務 --console loopback:…(假裝置:ACK/LED/DISP 回寫、指令轉送核心、stop-all 結束),以及 docs/驗收/需求追溯表.md 的數字。
+#   USB 操控台服務 --console loopback:…(假裝置:ACK/LED/DISP 回寫、指令轉送核心、stop-all 結束)、
+#   NMEA 選項(config ports.nmeaTargets/nmeaBind/nmeaFile → --nmea-target/--nmea-bind/--nmea-file;UDP 單播目標真的收到、檔案寫出)、
+#   VHF 8767/錄影 8768 埠預檢(第二十四輪),以及 docs/驗收/需求追溯表.md 的數字。
 # 用法:tools/launch/tests/launch-tests.sh [--only <測試名>] [--list]
 #   所有輸出留在專案內:build/test-tmp/launch/(設定檔、假 PID 檔)、build/logs-test*/(各測試的 log);埠自 LAUNCH_TEST_PORT_BASE(預設 18760)起。
 #   Windows 版(launch-common.ps1、stop-all.ps1)另見 launch-common.tests.ps1(pwsh 7 於 Linux 亦可執行)。
@@ -16,7 +18,7 @@ export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}" NUGET_PACK
 
 TMP="$ROOT/build/test-tmp/launch"; mkdir -p "$TMP"
 BASE="${LAUNCH_TEST_PORT_BASE:-18760}"
-WS=$((BASE + 5)); RADAR=$((BASE + 6)); WEB=$((BASE + 7)); SYNC=$((BASE + 8))
+WS=$((BASE + 5)); RADAR=$((BASE + 6)); WEB=$((BASE + 7)); SYNC=$((BASE + 8)); VHF=$((BASE + 9)); MEDIA=$((BASE + 10)); NMEA_T=$((BASE + 11))
 LOGS="build/logs-test"           # 相對安裝根目錄(與 config 的 logs 欄位相同用法)
 ONLY=""; LIST=0
 while [[ $# -gt 0 ]]; do
@@ -56,7 +58,7 @@ PY
 }
 ship_cfg() {  # ship_cfg <檔名> [覆寫…]
   local out="$TMP/$1"; shift
-  make_cfg ship-laptop.json "$out" "ports.stateWs=$WS" "ports.radarWs=$RADAR" "ports.web=$WEB" "ports.sync=$SYNC" \
+  make_cfg ship-laptop.json "$out" "ports.stateWs=$WS" "ports.radarWs=$RADAR" "ports.web=$WEB" "ports.sync=$SYNC" "ports.vhfWs=$VHF" "ports.mediaHttp=$MEDIA" \
     'ports.stateMulticast=""' 'ports.nmeaUdp=""' 'ports.nmeaMulticast=""' "logs=\"$LOGS\"" 'simcore.scenario="data/scenarios/E01_baseline.yaml"' \
     'simcore.record=false' 'simcore.parameters=""' 'web.bind="127.0.0.1"' 'visual.enabled=false' "$@"
   echo "$out"
@@ -67,10 +69,10 @@ instructor_cfg() {
   echo "$out"
 }
 tcp_open() { timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
-# 以 python 佔住一個埠(假的殘留程序)
+# 以 python 佔住一個埠(假的殘留程序;不 accept,backlog 16 讓 hold_port 的等待探測與腳本預檢的多次連線都能成功 — backlog 1 只容許約 2 次)
 hold_port() {
   python3 -I -c 'import socket,sys,time
-s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1)
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(16)
 print("held", flush=True)
 time.sleep(600)' "$1" >/dev/null 2>&1 &
   HELPERS+=("$!"); disown
@@ -252,6 +254,64 @@ test_console_loopback() {
   return 0
 }
 
+# 第二十四輪:VHF 8767 / 錄影 8768 在 SimCore.Host 內,啟動前一併預檢(占用即 exit 1、不啟動核心);操控台服務無監聽埠不在清單
+test_port_busy_vhf_media_fails() {
+  local cfg; cfg="$(ship_cfg ship-portbusy-vhf.json)"
+  hold_port "$VHF" || fail "測試前置:無法佔住埠 $VHF" || return 1
+  run_launch "$TMP/portbusy-vhf.out" bash "$LAUNCH/start-ship-laptop.sh" --config "$cfg" --no-radar --no-web --no-sync --no-visual
+  [[ $CODE == 1 ]] || fail "結束碼應為 1,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "埠 $VHF 已被占用(VHF ws)" <<<"$OUT" || fail "應回報「埠 $VHF 已被占用(VHF ws)」;輸出:$OUT" || return 1
+  grep -q "已啟動" <<<"$OUT" && { fail "不得印「已啟動」;輸出:$OUT"; return 1; }
+  [[ ! -s "$ROOT/$LOGS/simosa.pids" ]] || fail "PID 檔應為空或不存在(核心不應啟動)" || return 1
+  cleanup_helpers
+  hold_port "$MEDIA" || fail "測試前置:無法佔住埠 $MEDIA" || return 1
+  run_launch "$TMP/portbusy-media.out" bash "$LAUNCH/start-ship-laptop.sh" --config "$cfg" --no-radar --no-web --no-sync --no-visual
+  [[ $CODE == 1 ]] || fail "結束碼應為 1,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "埠 $MEDIA 已被占用(錄影 HTTP)" <<<"$OUT" || fail "應回報「埠 $MEDIA 已被占用(錄影 HTTP)」;輸出:$OUT" || return 1
+  # 腳本的預檢清單不含操控台(無監聽埠)
+  grep -n 'PORTS=(' "$LAUNCH/start-ship-laptop.sh" | grep -q "操控台" && { fail "埠預檢清單不應含操控台"; return 1; }
+  return 0
+}
+
+# 第二十四輪:config ports.nmeaTargets/nmeaBind/nmeaFile → Host --nmea-target(可重複)/--nmea-bind/--nmea-file;以本機 UDP 接收端確認單播目標真的收到
+# 完整句型集(含 THS/ALF/ALC;E01 無 ship.mmsi → 無 VDO 並記一次 log),檔案亦寫出;nmea_host_args 的輸出規則(空陣列/null 不加參數)
+test_nmea_options_passed() {
+  local cfg; cfg="$(ship_cfg ship-nmea.json "ports.nmeaTargets=[\"127.0.0.1:$NMEA_T\", \"127.0.0.1\"]" 'ports.nmeaBind="127.0.0.1"' 'ports.nmeaFile="build/test-tmp/launch/nmea-opts.nmea"')"
+  # 純函式:nmea_host_args 的輸出(逐行);預設 config(空陣列/null)不印任何參數
+  local args; args="$(bash -c "source '$LAUNCH/launch-common.sh'; load_config '$cfg'; nmea_host_args" 2>&1 | tr '\n' ' ')" || fail "nmea_host_args 出錯:$args" || return 1
+  [[ "$args" == "--nmea-target 127.0.0.1:$NMEA_T --nmea-target 127.0.0.1 --nmea-bind 127.0.0.1 --nmea-file build/test-tmp/launch/nmea-opts.nmea " ]] || fail "nmea_host_args 輸出不符:$args" || return 1
+  local none; none="$(bash -c "source '$LAUNCH/launch-common.sh'; load_config '$ROOT/config/ship-laptop.json'; nmea_host_args" 2>&1)" || fail "nmea_host_args(預設 config)出錯:$none" || return 1
+  [[ -z "$none" ]] || fail "預設 config(nmeaTargets 空、nmeaBind/nmeaFile null)不應產生參數:$none" || return 1
+  # 本機 UDP 接收端(假的教官筆電 OpenCPN):收到的資料包寫到檔案
+  local got="$TMP/nmea-udp-got.txt"; : > "$got"
+  python3 -I -c 'import socket,sys,time
+s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(sys.argv[1]))); s.settimeout(1.0)
+t0=time.time(); n=0
+with open(sys.argv[2], "w") as f:
+    while time.time()-t0 < 40:
+        try: d,_=s.recvfrom(65535)
+        except socket.timeout: continue
+        f.write(d.decode("ascii", "replace")); f.flush(); n+=1
+        if n >= 60: break' "$NMEA_T" "$got" >/dev/null 2>&1 &
+  HELPERS+=("$!"); disown
+  run_launch "$TMP/nmea-opts.out" bash "$LAUNCH/start-ship-laptop.sh" --config "$cfg" --no-radar --no-web --no-sync --no-visual --duration 3
+  [[ $CODE == 0 ]] || fail "結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  local log="$ROOT/$LOGS/simcore.log"
+  grep -q -- "--nmea-target 127.0.0.1:$NMEA_T --nmea-target 127.0.0.1 --nmea-bind 127.0.0.1 --nmea-file build/test-tmp/launch/nmea-opts.nmea" "$log" || fail "simcore.log 的啟動列應含 NMEA 參數:$(grep -m1 '^#' "$log")" || return 1
+  grep -q -- "--vhf-port $VHF --media-port $MEDIA" "$log" || fail "啟動列應含 --vhf-port/--media-port:$(grep -m1 '^#' "$log")" || return 1
+  grep -q "與 127.0.0.1:$NMEA_T、127.0.0.1:10110(綁定 127.0.0.1)" "$log" || fail "Host 應回報額外單播端點與綁定位址:$(grep 'NMEA 0183' "$log")" || return 1
+  grep -q "NMEA 檔案:build/test-tmp/launch/nmea-opts.nmea" "$log" || fail "Host 應回報 NMEA 檔案路徑:$(grep 'NMEA' "$log")" || return 1
+  grep -q "NMEA:自船 AIS !AIVDO 不送" "$log" || fail "E01 無 ship.mmsi:Host 應記一次「自船 AIS !AIVDO 不送」:$(grep 'NMEA' "$log")" || return 1
+  local f="$ROOT/build/test-tmp/launch/nmea-opts.nmea"
+  [[ -s "$f" ]] || fail "應寫出 NMEA 檔 $f" || return 1
+  grep -q '^\$GPGGA' "$f" && grep -q '^\$HETHS' "$f" && grep -q '^\$IIALC,01,01,00,0' "$f" || fail "NMEA 檔應含 GGA/THS/ALC:$(head -3 "$f")" || return 1
+  grep -q 'AIVDO' "$f" && { fail "E01 無 MMSI 不應有 VDO"; return 1; }
+  local i; for ((i = 0; i < 20; i++)); do [[ -s "$got" ]] && grep -q '^\$GPGGA' "$got" && break; sleep 0.25; done
+  grep -q '^\$GPGGA' "$got" || fail "UDP 單播目標 127.0.0.1:$NMEA_T 應收到 GGA(收到:$(head -c 200 "$got" 2>/dev/null))" || return 1
+  grep -q '^\$HETHS' "$got" || fail "UDP 單播目標應收到 THS" || return 1
+  return 0
+}
+
 # 發現 8:需求追溯表的情境檔數與 xfail 歸屬須與儲存庫一致
 test_traceability_numbers() {
   local doc="$ROOT/docs/驗收/需求追溯表.md"
@@ -265,7 +325,7 @@ test_traceability_numbers() {
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_traceability_numbers)
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers

@@ -112,7 +112,9 @@ export function summarise(run, thresholds = {}) {
     cpuPct: cpuAll.length ? { mean: round(mean(cpuAll), 1), max: round(Math.max(...cpuAll), 1) } : null,
     rssMb: rssAll.length ? { first: rssAll[0], last: rssAll[rssAll.length - 1], min: Math.min(...rssAll), max: Math.max(...rssAll) } : null,
     rssPostWarmup: rssSeries.length
-      ? { first: rssSeries[0].host.rss_mb, last: rssSeries[rssSeries.length - 1].host.rss_mb, growthMb: round(rssSeries[rssSeries.length - 1].host.rss_mb - rssSeries[0].host.rss_mb, 1), slopeMbPerMin: round(slope(rssPts), 3), samples: rssSeries.length }
+      ? { first: rssSeries[0].host.rss_mb, last: rssSeries[rssSeries.length - 1].host.rss_mb, growthMb: round(rssSeries[rssSeries.length - 1].host.rss_mb - rssSeries[0].host.rss_mb, 1), slopeMbPerMin: round(slope(rssPts), 3), samples: rssSeries.length,
+          // 後半段斜率(參考值,不作判定):.NET GC 堆積在前幾分鐘常呈階梯式擴張,後半段仍上升才較可能是洩漏;短於 30 分鐘的執行請看 2 小時結果
+          secondHalfSlopeMbPerMin: round(slope(rssPts.slice(Math.floor(rssPts.length / 2))), 3) }
       : null,
     threads: samples.length ? { first: samples[0].host.threads ?? null, last: samples[samples.length - 1].host.threads ?? null } : null,
     stepsPerS: stepsMeans.length ? { mean: round(mean(stepsMeans), 2), min: Math.min(...stepsMin), max: Math.max(...stepsMax), lines: samples.reduce((a, s) => a + (s.host.stepsPerS?.n ?? 0), 0) } : null,
@@ -177,7 +179,7 @@ export function summarise(run, thresholds = {}) {
   add('latency', '狀態幀延遲 < 門檻', `p95 < ${th.maxLatencyMs} ms`, lat ? `p50 ${lat.p50} / p95 ${lat.p95} / p99 ${lat.p99} / max ${lat.max} ms(n = ${lat.n})` : '無資料', lat && lat.p95 < th.maxLatencyMs, '牆鐘估計:含核心序列化、WebSocket 與客戶端事件迴圈(lib.mjs LatencyEstimator)');
   const rp = hostSummary.rssPostWarmup;
   add('rss', 'RSS 不持續成長', `暖機 ${hostSummary.warmup_s} s 後斜率 ≤ ${th.maxRssSlopeMbPerMin} MB/min 且增量 ≤ ${th.maxRssGrowthMb} MB`,
-    rp ? `起 ${rp.first} → 訖 ${rp.last} MB(增量 ${rp.growthMb} MB;斜率 ${rp.slopeMbPerMin} MB/min;${rp.samples} 筆)` : '無資料',
+    rp ? `起 ${rp.first} → 訖 ${rp.last} MB(增量 ${rp.growthMb} MB;斜率 ${rp.slopeMbPerMin} MB/min,後半段 ${rp.secondHalfSlopeMbPerMin} MB/min;${rp.samples} 筆)` : '無資料',
     rp && rp.samples >= 2 && Math.abs(rp.slopeMbPerMin ?? Infinity) <= th.maxRssSlopeMbPerMin && rp.growthMb <= th.maxRssGrowthMb);
   add('connections', '無斷線與錯誤', '客戶端斷線 0、錯誤 0、網頁失敗 0',
     `斷線 ${clientsSummary.disconnects}、錯誤 ${clientsSummary.errors}、網頁失敗 ${clientsSummary.web?.fail ?? 0}${clientsSummary.lastErrors.length ? `(${clientsSummary.lastErrors.join(';')})` : ''}`,
@@ -226,7 +228,7 @@ export function renderMarkdown(s) {
   const h = s.host;
   lines.push(`## 主控程序取樣(每 ${f(h.interval_s, 0)} s,共 ${h.samples} 筆;暖機 ${h.warmup_s} s)`, '', '| 項目 | 起 | 訖 | 最小 | 最大 | 平均 | 備註 |', '|---|---|---|---|---|---|---|');
   lines.push(`| CPU %(程序,可 > 100) | — | — | — | ${f(h.cpuPct?.max)} | ${f(h.cpuPct?.mean)} | utime+stime / 牆鐘 |`);
-  lines.push(`| RSS MB | ${f(h.rssMb?.first)} | ${f(h.rssMb?.last)} | ${f(h.rssMb?.min)} | ${f(h.rssMb?.max)} | — | 暖機後增量 ${f(h.rssPostWarmup?.growthMb)} MB、斜率 ${f(h.rssPostWarmup?.slopeMbPerMin, 3)} MB/min |`);
+  lines.push(`| RSS MB | ${f(h.rssMb?.first)} | ${f(h.rssMb?.last)} | ${f(h.rssMb?.min)} | ${f(h.rssMb?.max)} | — | 暖機後增量 ${f(h.rssPostWarmup?.growthMb)} MB、斜率 ${f(h.rssPostWarmup?.slopeMbPerMin, 3)} MB/min(後半段 ${f(h.rssPostWarmup?.secondHalfSlopeMbPerMin, 3)} MB/min,參考) |`);
   lines.push(`| 執行緒 | ${f(h.threads?.first, 0)} | ${f(h.threads?.last, 0)} | — | — | — | |`);
   lines.push(`| steps/s(主控程序每秒輸出) | — | — | ${f(h.stepsPerS?.min, 0)} | ${f(h.stepsPerS?.max, 0)} | ${f(h.stepsPerS?.mean, 2)} | ${h.stepsPerS?.lines ?? 0} 行;每秒值因 1 s 輪詢對齊可 ±2 |`);
   lines.push(`| 掉拍(累計) | 0 | ${h.dropped} | — | — | — | RealtimeRunner.DroppedSteps |`);
@@ -244,7 +246,7 @@ export function renderMarkdown(s) {
   lines.push('## 方法與限制', '');
   lines.push('- 延遲為牆鐘估計(`tests/soak/lib.mjs` LatencyEstimator):核心以牆鐘推進,第 k 幀理想到達時刻 = 原點 + state.t,原點取連線初期最快一幀;量到的是核心序列化 + WebSocket 傳送 + 客戶端事件迴圈的總延遲,核心落後牆鐘也會反映為延遲上升。凍結幀不計;時間倍率須為 1。');
   lines.push('- tick 率以客戶端牆鐘量測(首末狀態幀的 tick 差 / 到達時間差),與主控程序每秒輸出的 `steps/s` 互相印證;「掉拍」取自主控程序輸出的累計值。');
-  lines.push('- RSS 斜率為暖機後樣本的最小平方直線;.NET GC 的堆積會先上升再平穩,門檻為軟體面判準,實機 2 小時請以同一工具重跑。');
+  lines.push('- RSS 斜率為暖機後樣本的最小平方直線;.NET GC 的堆積在前幾分鐘常呈階梯式擴張(每次 +數 MB),10 分鐘內的斜率可能只反映這個過程,後半段斜率為參考值;門檻為軟體面判準,是否洩漏以實機 2 小時(同一工具)為準。');
   lines.push('- 合成客戶端在同一個 Node 程序內(N 條狀態連線 + N 條雷達連線),不含瀏覽器繪圖負載;視景幀率、內顯機 CPU/延遲數字需實機(docs/驗收/需求追溯表.md 第 14 章效能列)。');
   lines.push('');
   return lines.join('\n');

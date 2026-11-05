@@ -44,7 +44,7 @@ SimCore(類別庫)
 - **核心 50 Hz**:`SimulationEngine.Step()` = 套用佇列中的指令 → 陣風亂數(每秒) → 自動舵 → 致動器(MMG:主機換向狀態機 + 舵角/軸轉速/側推的一階 ODE 以 RK4 積分並回傳四個階段的控制量;暫代:顯式更新) → 環境取樣 → `Rk4Integrator.Step(IShipDynamics, …, ControlStages, …)` → tick++ → 擱淺檢查 → **目標船**(`TrafficManager.Step`:觸發 → 行為 → 運動模型 → 自船會遇指標 → 碰撞;與自船同 dt,依自船推進後的狀態) → 狀態鏈雜湊 → 事件。
 - **廣播 25 Hz**:每 2 步觸發 `Broadcast` 事件(`OwnShipState`);Host 序列化一次後同時送 WebSocket 與 UDP 多播。
 - **快照每 10 s**:每 500 步 `TakeSnapshot()`(含亂數計數與雜湊鏈),保留最近 60 份供倒帶;`snapshot` / `restore` 指令可手動觸發。
-- **NMEA**:`NmeaGateway` 掛在 `Stepped` 事件:HDT/ROT/RSA 每 5 步(10 Hz),GGA/RMC/VTG/VBW/DPT/MWV 每 50 步(1 Hz);每目標 `$RATTM` 1 Hz、AIS `!AIVDM` 類型 1 每 10 s、類型 5 於出現後數秒與其後每 6 分(第 6 節)。
+- **NMEA**:`NmeaGateway` 掛在 `Stepped` 事件:HDT/THS/ROT/RSA 每 5 步(10 Hz),GGA/RMC/VTG/VBW/DPT/MWV/ALR/ALF 每 50 步(1 Hz),ALC 第 1 秒、每 30 s 與警報清單改變時;每目標 `$RATTM` 1 Hz、AIS `!AIVDM` 類型 1 每 10 s、類型 5 於出現後數秒與其後每 6 分(第 6 節);自船 `!AIVDO` 同週期(情境 `ship.mmsi` 或 particulars `mmsi`,皆無則不送;docs/design/sensors-alerts.md 第 6 節)。
 - **即時驅動**:`RealtimeRunner` 以 20 ms 週期依時間倍率推進應到的步數(×1 … ×10;凍結時只處理指令);落後時丟棄並計數,不無限追趕。
 
 ### 1.2 確定性(CLAUDE.md、規劃書第 14 章)
@@ -230,7 +230,7 @@ targets:
 - 暫代模型的 squat 用 Barrass 開闊水域簡式(`Cb·V²/100`),比海報值偏保守(MMG 用 ICORELS);UKC 由常數水深(含 `zones` 覆寫)加情境 `environment.tide` 的潮高計算(`Environment/TideModel.cs`:潮高表/調和潮,只由 Tick 決定、不進快照;無 tide 時為 0,數值不變;`IDepthProvider` 已可接水深網格 callback,但 callback 無法進快照)。
 - `restore` 只能回到記憶體內的快照歷史;從紀錄檔任意快照接續的講評功能尚未接到 Host。
 - WebSocket 以 `System.Net.HttpListener` 實作(無 ASP.NET Core 相依),無 TLS 與驗證(船上/直連區網使用)。Windows 上非管理員且未設 URL ACL 時會退回只監聽 localhost;教官筆電直連前請執行一次 `netsh http add urlacl url=http://*:8765/ user=Everyone`(安裝程式應代為設定)。
-- NMEA 多播尚未加 IEC 61162-450 TAG block;無自船 AIS(VDO)、THS、XDR、ALF/ALC、HDG(警報以 ALR 輸出,第 9 節)。
+- NMEA 多播尚未加 IEC 61162-450 TAG block;無 XDR、HDG(警報以 ALR + ALF/ALC 輸出,THS 與自船 VDO 已加入,第 9 節)。
 - 目標船(第 6 節):運動模型為簡化的一階響應(無 MMG、無風壓/淺水、不能倒退);COLREG 只對自船判定(目標間互不避碰),不含第 19 條限制能見度、不含燈號/聲號的自動邏輯(聲號只能由指令觸發);跟隨模式無拖纜動力;錨泊為確定性迴盪(非走錨模型);碰撞只偵測自船與目標外形相交(不偵測目標之間),無碰撞力學;AIS 報告率固定(不依航速/轉向縮短)且無 SOTDMA 時槽模擬;水深、岸線與固定物尚未納入目標船避讓。
 - 主機模型無起動空氣次數上限的實際阻擋(只遞減 `startsRemaining`)、臨界轉速區;換向/起動延遲已在 MMG 模式的狀態機實作,暫代模式仍為一階滯後。
 - 時間倍率只影響即時驅動;高倍率下若物理負荷過高會丟步(`RealtimeRunner.DroppedSteps`)。

@@ -4,7 +4,7 @@ OpenCPN 是獨立的 GPL 程式,只經 NMEA 0183 over UDP 接收 SimCore.Host �
 本資料夾說明如何讓 OpenCPN 顯示模擬器的自船、AIS 目標與水深,以及已知限制;實機驗收步驟見 `tools/opencpn-check.md`,
 自動檢驗(校驗和、欄位數、速率、AIS 解碼、與核心狀態一致)用 `uv run python -m simosa_brm.nmea_check`(`src/Tools.Calibration`)。
 
-> 狀態(2026-11):NMEA 的校驗和/欄位數/速率/時間/AIS/ALR/狀態一致性已由 `nmea_check` 在容器自動檢驗通過(UDP 單播、多播、檔案三種來源);
+> 狀態(2026-11):NMEA 的校驗和/欄位數/速率/時間/AIS(VDM 與自船 VDO)/ALR/ALF/ALC/THS/狀態一致性已由 `nmea_check` 在容器自動檢驗通過(UDP 單播、多播、檔案三種來源);
 > **OpenCPN 的實際顯示尚未在實機核對**(容器無 OpenCPN),`docs/驗收/需求追溯表.md` 第 14 章「儀器 NMEA」列標為需實機。
 
 ## 1. 資料流
@@ -19,8 +19,9 @@ Sensors.Radar.Host
   └─ UDP 單播 127.0.0.1:10111(X)/10112(S) ARPA 追蹤目標 $RATTM/$RATLL(docs/design/radar-arpa.md 第 6 節)
 ```
 
-`tools/launch/start-ship-laptop.*` 目前只帶 `--nmea-port`/`--nmea-multicast`(`config/ship-laptop.json` `ports.nmeaUdp`/`ports.nmeaMulticast`);
-`--nmea-target`、`--nmea-bind`、`--nmea-file` 需手動加到啟動命令(或在 PowerShell 腳本的 `$hostArgs` 後追加),見第 5 節。
+`tools/launch/start-ship-laptop.*` 依 `config/ship-laptop.json` 的 `ports.nmeaUdp`/`ports.nmeaMulticast` 帶 `--nmea-port`/`--nmea-multicast`,
+並依 `ports.nmeaTargets`(陣列,可多個 `ip:port`)、`ports.nmeaBind`、`ports.nmeaFile`(null = 不寫)帶 `--nmea-target`(可重複)/`--nmea-bind`/`--nmea-file`
+(第二十四輪;教官筆電離船備課 `-Standalone` 時 `config/instructor-laptop.json` 的同名鍵給本機核心),見第 5 節。
 
 ## 2. 句型與 OpenCPN 顯示
 
@@ -30,6 +31,7 @@ Sensors.Radar.Host
 | RMC | GP | 1 Hz | 狀態 A/V、位置、SOG、COG、日期、模式 A/N | 自船 SOG/COG、時間;狀態 V 時忽略位置 |
 | VTG | GP | 1 Hz | COG/SOG(kn、km/h)、模式 A/N | SOG/COG 備援 |
 | HDT | HE | 10 Hz | 真航向(電羅經失效時**停送**) | 自船艏向線;停送後 OpenCPN 數秒後改用 COG 畫艏向(可見差異) |
+| THS | HE | 10 Hz | 真艏向 + 模式 A(自主);電羅經失效時航向空白、模式 V(IEC 61162-1 ed.5) | 自船艏向(OpenCPN 5.x 接受 THS,模式 V 視為無效) |
 | ROT | TI | 10 Hz | 迴轉率 度/分 | 儀表板 ROT |
 | RSA | ER | 10 Hz | 舵角(右正) | 儀表板舵角(Dashboard 外掛) |
 | VBW | VD | 1 Hz | 對水/對地縱橫速度、狀態 A/V | 儀表板 STW |
@@ -37,12 +39,16 @@ Sensors.Radar.Host
 | MWV | WI | 各 1 Hz | 相對風(R)與真風(T;相對船艏) | 儀表板風向/風速 |
 | TTM | RA | 每目標 1 Hz | 情境目標的真值(距離、方位、CPA/TCPA、船名) | 「ARPA」目標(Options → Ships → AIS Targets 勾 *Show ARPA targets*) |
 | AIVDM | AI | 類型 1 每 10 s/目標;類型 5 出現後 2+i s 一次、再每 6 min | 情境目標的 AIS(MMSI、位置、COG/SOG/HDG、船名、呼號、尺寸、吃水、目的港) | AIS 目標三角形、名稱、CPA/TCPA 警報 |
+| AIVDO | AI | 類型 1 每 10 s;類型 5 第 1 秒後每 6 min | 自船 AIS(MMSI 取情境 `ship.mmsi`,無則 `particulars.mmsi`,皆無則不送;GNSS 失效時位置為無資料值 91°/181°,電羅經失效時航向 511) | 須在 OpenCPN 把該 MMSI 標為 Own ship(第 3 節第 3 項),否則多一個與自船重合的 AIS 目標 |
 | ALR | II | 每警報 1 Hz | 模擬器警報(編號、條件、確認、英文文字) | OpenCPN 不顯示(供外接 BAM/VDR;nmea_check 檢查) |
+| ALF | II | 每警報 1 Hz | IEC 61162-1 ed.5 BAM 警報句(改變時刻、類別、優先序、狀態 V/S/A/O/U/N、SIM、識別碼 = ALR 編號、實例、修訂、升級、文字) | OpenCPN 不顯示(供外接 BAM;nmea_check 檢查與 ALR 一致) |
+| ALC | II | 第 1 秒、每 30 s、清單改變時 | 週期警報清單(每句 ≤ 4 項;無警報時 0 項) | OpenCPN 不顯示(nmea_check 檢查項目與 ALF 一致、間隔 ≤ 30 s) |
 
 - 時間 = 情境 `startTimeUtc` + 模擬時間;`loadScenario` 切換情境後 NMEA 與 `state.utc` 一起改為新情境的起點。
-- Host **不送 `!AIVDO`(自船 AIS)**,所以 OpenCPN 的自船只來自 GGA/RMC,不會與 AIS 目標重複;若日後加 VDO,須在 OpenCPN 的
-  MMSI 屬性(Options → Ships → AIS Targets → *MMSI Properties* → 該 MMSI 勾 *Own ship*)把自船 MMSI 標為自船。
-  兩船的 MMSI 不在 `data/ships/*/particulars.json`(交船文件未載),情境目標的 MMSI 在各 `data/scenarios/*.yaml` `targets[].mmsi`(例如 E05 416300101–103)。
+- 自船 `!AIVDO` 只在情境 `ship.mmsi` 或 `data/ships/<ID>/particulars.json` 的 `mmsi` 有值時送出(皆無則 Host 記一行「NMEA:自船 AIS !AIVDO 不送」,
+  OpenCPN 的自船只來自 GGA/RMC);有送時須在 OpenCPN 的 MMSI 屬性(Options → Ships → AIS Targets → *MMSI Properties* → 該 MMSI 勾 *Own ship*)
+  把自船 MMSI 標為自船,否則會多一個與自船重合的 AIS 目標。兩船的 MMSI 目前不在 particulars(交船文件未載,待取得後填入 `mmsi`),
+  情境目標的 MMSI 在各 `data/scenarios/*.yaml` `targets[].mmsi`(例如 E05 416300101–103;未指定時自 416000001 起配置,自船 MMSI 應避開)。
 - 一批句型(同一 tick 的 HDT/ROT/RSA + 每秒的 GGA…TTM/AIVDM)合成**一個 UDP 資料包**;目標多時可能超過 1472 bytes 而被 IP 分段,OpenCPN 仍能收。
 
 ## 3. OpenCPN 設定步驟(GUI;OpenCPN 5.8,其他 5.x 版畫面相近)
@@ -56,7 +62,7 @@ Sensors.Radar.Host
    - 教官筆電(單播備援):Host 加 `--nmea-target 192.168.77.21:10110`,OpenCPN 連線同「同機」設定(Address `0.0.0.0`、DataPort 10110)。
    - ARPA(選用):再加一個 UDP 連線 DataPort **10111**(X 頻雷達的 `$RATTM/$RATLL`),與 AIS 目標比較。
 3. *Options → Ships → AIS Targets*:勾 *Show AIS targets*、*Show target names*、CPA/TCPA 警報依訓練需求(例如 CPA 0.5 nm / TCPA 12 min,與情境 `assessment.minCpa_nm` 一致);
-   *Mark targets as lost after* 建議 ≥ 60 s(位置報告間隔 10 s)。
+   *Mark targets as lost after* 建議 ≥ 60 s(位置報告間隔 10 s)。情境有 `ship.mmsi`(或 particulars 有 `mmsi`)時 *MMSI Properties* 把該 MMSI 設為 *Own ship*。
 4. *Options → Ships → Own Ship*:勾 *Show heading line*、COG predictor 依需求;*Display → Units*:速度 kn、深度 m。
 5. *Dashboard* 外掛加儀表:Depth、Rudder angle、Rate of turn、True wind、STW、SOG/COG、GPS status。
 6. Windows 防火牆:允許 `opencpn.exe` 的入站 UDP 10110/10111/60001(安裝文件第 2.2 節的規則涵蓋全部設定檔;教官筆電另在第 3 節登錄)。
@@ -76,7 +82,11 @@ Sensors.Radar.Host
 ## 5. 常用命令
 
 ```powershell
-# 船上筆電:啟動核心並同時把 NMEA 送到教官筆電、寫檔(驗收時)
+# 船上筆電(正式):config\ship-laptop.json 的 ports 區段設定後由啟動腳本帶給核心(docs/ops/安裝與啟動.md 第 3 節)
+#   "nmeaTargets": ["192.168.77.21:10110"],   # 教官筆電 OpenCPN 的單播目標(多播收不到時;可多個)
+#   "nmeaBind": "192.168.77.11",              # 直連介面(多播由此送出)
+#   "nmeaFile": "build/nmea/session.nmea"     # 驗收時寫檔;平時 null
+# 船上筆電(手動):啟動核心並同時把 NMEA 送到教官筆電、寫檔(驗收時)
 dotnet app\simcore\SimosaBRM.SimCore.Host.dll --scenario data\scenarios\E05_pilot_traffic.yaml --record `
   --nmea-bind 192.168.77.11 --nmea-target 192.168.77.21:10110 --nmea-file build\nmea\E05.nmea
 

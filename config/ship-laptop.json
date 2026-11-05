@@ -10,13 +10,19 @@
     "adapterName": "直連-教官筆電"
   },
   "ports": {
+    "$comment": "stateWs/radarWs/web/sync/vhfWs/mediaHttp 為 TCP 監聽埠,啟動腳本先檢查未被占用(USB 操控台服務不監聽任何埠,不檢查)。nmeaTargets:額外的 NMEA UDP 單播目標 ip:port 陣列(例如教官筆電 OpenCPN \"192.168.77.21:10110\";埠省略時同 nmeaUdp;空陣列 = 只有本機 127.0.0.1:nmeaUdp 與多播);nmeaBind:NMEA 送出 socket 綁定的本機 IP(直連介面 192.168.77.11,多播由此介面送出;null = 依路由表);nmeaFile:同時把 NMEA 寫到專案內的檔案(例如 build/nmea/session.nmea,供 nmea_check --file 與 OpenCPN VDR 重播;null = 不寫)。config/opencpn/README.md 第 5 節",
     "stateWs": 8765,
     "radarWs": 8766,
     "web": 8080,
     "sync": 7300,
+    "vhfWs": 8767,
+    "mediaHttp": 8768,
     "stateMulticast": "239.255.70.1:7001",
     "nmeaUdp": 10110,
     "nmeaMulticast": "239.192.0.1:60001",
+    "nmeaTargets": [],
+    "nmeaBind": null,
+    "nmeaFile": null,
     "radarNmeaX": 10111,
     "radarNmeaS": 10112
   },
