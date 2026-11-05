@@ -175,3 +175,43 @@ internal static class RadarFactory
         return img;
     }
 }
+
+/// <summary>
+/// 目前執行緒的 CPU 時間(Windows:GetThreadTimes;Linux/macOS:clock_gettime(CLOCK_THREAD_CPUTIME_ID))。
+/// 效能測試以此取代牆鐘時間:CI 常同時跑多個測試主機,牆鐘時間會把排程等待算進去,與「單核心佔用」的驗收意義不符。
+/// 取不到時回傳 null,呼叫端改用 Stopwatch。
+/// </summary>
+internal static class ThreadCpuClock
+{
+    public static TimeSpan? Now()
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                if (!GetThreadTimes(GetCurrentThread(), out _, out _, out var kernel, out var user)) return null;
+                return TimeSpan.FromTicks(kernel + user); // FILETIME 單位 100 ns = TimeSpan tick
+            }
+            var clockId = OperatingSystem.IsMacOS() ? 16 : 3; // CLOCK_THREAD_CPUTIME_ID
+            if (clock_gettime(clockId, out var ts) != 0) return null;
+            return TimeSpan.FromSeconds(ts.tv_sec) + TimeSpan.FromTicks(ts.tv_nsec / 100);
+        }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException or PlatformNotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentThread();
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetThreadTimes(IntPtr thread, out long creation, out long exit, out long kernel, out long user);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct Timespec { public long tv_sec; public long tv_nsec; }
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int clock_gettime(int clockId, out Timespec ts);
+}

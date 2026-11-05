@@ -187,11 +187,16 @@ public class DeterminismAndFormatTests
         radar.Apply("{\"cmd\":\"rain\",\"value\":40}");
         var scene = BusyScene();
         scene.Run(radar, 0, 1); // 暖機(JIT)
+        // 以本執行緒 CPU 時間衡量(雷達處理為單執行緒):CI 同時跑多個測試主機時,牆鐘時間會含排程等待,曾在 Windows 量到 160% 而誤判
+        var cpu0 = ThreadCpuClock.Now();
         var sw = System.Diagnostics.Stopwatch.StartNew();
         scene.Run(radar, 1.04, 1.0 + 3 * radar.Config.ScanPeriodS);
         sw.Stop();
-        var perScan = sw.Elapsed.TotalSeconds / 3;
-        _out.WriteLine($"每圈處理 {perScan * 1000:F0} ms(掃描週期 {radar.Config.ScanPeriodS * 1000:F0} ms)→ 約 {perScan / radar.Config.ScanPeriodS * 100:F1}% 單核");
-        Assert.True(perScan < radar.Config.ScanPeriodS, $"每圈 {perScan:F2} s ≥ 掃描週期");
+        var cpu1 = ThreadCpuClock.Now();
+        var wallPerScan = sw.Elapsed.TotalSeconds / 3;
+        var perScan = cpu0 is { } c0 && cpu1 is { } c1 ? (c1 - c0).TotalSeconds / 3 : wallPerScan;
+        var basis = cpu0 is null || cpu1 is null ? "牆鐘(取不到執行緒 CPU 時間)" : "執行緒 CPU 時間";
+        _out.WriteLine($"每圈處理 {perScan * 1000:F0} ms({basis};牆鐘 {wallPerScan * 1000:F0} ms;掃描週期 {radar.Config.ScanPeriodS * 1000:F0} ms)→ 約 {perScan / radar.Config.ScanPeriodS * 100:F1}% 單核");
+        Assert.True(perScan < radar.Config.ScanPeriodS, $"每圈 {perScan:F2} s ≥ 掃描週期({basis})");
     }
 }
