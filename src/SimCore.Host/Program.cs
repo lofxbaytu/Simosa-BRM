@@ -334,7 +334,7 @@ if (options.EnableNmea || options.NmeaFile is not null)
         };
         endpoints.AddRange(options.NmeaTargets);
         sinks.Add(new UdpNmeaSender(endpoints, options.NmeaBind));
-        Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}{(options.NmeaTargets.Count > 0 ? $" 與 {string.Join("、", options.NmeaTargets)}" : "")}{(options.NmeaBind is { } bind ? $"(綁定 {bind})" : "")}(HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV/ALR 1 Hz,指示值;目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,起始 UTC 跟隨引擎,目前 {startUtc:O})");
+        Console.WriteLine($"  NMEA 0183:udp://127.0.0.1:{options.NmeaPort} 與 {options.NmeaMulticastGroup}:{options.NmeaMulticastPort}{(options.NmeaTargets.Count > 0 ? $" 與 {string.Join("、", options.NmeaTargets)}" : "")}{(options.NmeaBind is { } bind ? $"(綁定 {bind})" : "")}(HDT/THS/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV/ALR/ALF 1 Hz,ALC 每 30 s 與清單改變時,指示值;目標 TTM 1 Hz、AIS VDM 位置 10 s/靜態 6 min,自船 VDO 同週期(情境 ship.mmsi 或 particulars.mmsi),起始 UTC 跟隨引擎,目前 {startUtc:O})");
     }
     if (options.NmeaFile is { } nmeaFileOption)
     {
@@ -351,6 +351,7 @@ if (options.EnableNmea || options.NmeaFile is not null)
         }
     }
     nmea = new NmeaGateway(engine, sinks.Count == 1 ? sinks[0] : new CompositeNmeaSink(sinks));
+    nmea.Log += msg => Console.WriteLine($"  NMEA:{msg}");
 }
 
 // 內建 VHF 角色扮演頻道(docs/design/vhf-roleplay.md):獨立 WebSocket 轉送 PTT 語音/文字/DSC;通話結束、文字、DSC 寫紀錄 vhf 行(帶外、不進雜湊)

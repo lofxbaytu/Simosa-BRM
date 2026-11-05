@@ -5,10 +5,11 @@
 #   3) pwsh 解析器:全部 .ps1 以 System.Management.Automation.Language.Parser 解析,無語法錯誤
 #   4) tools/launch/tests/launch-common.tests.ps1(啟動腳本、stop-all、WebView2 外殼案例)
 #   5) tools/build-release.ps1 -WhatIf -SkipGodot -Installer(參數與工具鏈檢查,不建置、不寫檔)
+#   6) tools/soak-test.ps1 -WhatIf(長時間穩定性測試的 Windows 版:參數、工具鏈與建置輸出檢查,不啟動程序、不寫檔;實跑以 tools/soak-test.sh 為準)
 # pwsh 來源:.cache/dotnet-tools/pwsh(dotnet 全域工具版 PowerShell,固定版 PWSH_VERSION,留在專案內)→ PATH 的 pwsh;
 #   沒有時只做 1)、2) 並回報略過(--install 以 dotnet tool install 安裝到 .cache/dotnet-tools;NuGet 走 nuget.config 與 .cache/nuget)。
 #   PowerShell 7.4 以 .NET 8 建置;機器只有較新的執行階段(例如容器的 .NET 10)時以 DOTNET_ROLL_FORWARD=Major 執行。
-# 用法:tools/run-ps-tests.sh [--install] [--require-pwsh] [--only pscheck|iss|syntax|tests|whatif] [--list]
+# 用法:tools/run-ps-tests.sh [--install] [--require-pwsh] [--only pscheck|iss|syntax|tests|whatif|soak] [--list]
 #   所有輸出留在專案內(build/test-tmp/launch-ps/、build/tmp/ps-tests/);結束碼 0 = 全部通過(略過不算失敗,--require-pwsh 時無 pwsh 為 2)。
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,7 +28,7 @@ while [[ $# -gt 0 ]]; do
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
-STEPS=(pscheck iss syntax tests whatif)
+STEPS=(pscheck iss syntax tests whatif soak)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${STEPS[@]}"; exit 0; fi
 
 # dotnet 與快取(全部留在專案內);dotnet 全域工具的 apphost 需要 DOTNET_ROOT 才找得到執行階段
@@ -113,6 +114,19 @@ run_step pscheck 0 step_pscheck
 run_step iss 0 step_iss
 run_step syntax 1 step_syntax
 run_step tests 1 step_tests
+step_soak() {
+  local out="$TMP/soak-test.whatif.out"
+  "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Minutes 1 -Clients 2 -SkipBuild -Run ps-whatif > "$out" 2>&1; local code=$?
+  sed 's/^/    /' "$out"
+  [[ $code == 0 ]] || return 1
+  grep -q '^WhatIf:' "$out" && grep -q 'clients.mjs ×2' "$out" && grep -q 'report.mjs' "$out" || { echo "    -WhatIf 輸出缺少計畫內容"; return 1; }
+  [[ ! -d build/soak/ps-whatif ]] || { echo "    -WhatIf 不應建立 build/soak/ps-whatif"; rm -rf build/soak/ps-whatif; return 1; }
+  # 參數錯誤仍須以非 0 結束(情境不存在)
+  if "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Scenario does-not-exist > "$TMP/soak-test.whatif-bad.out" 2>&1; then echo "    情境不存在時應失敗"; return 1; fi
+  grep -q '找不到' "$TMP/soak-test.whatif-bad.out"
+}
+
 run_step whatif 1 step_whatif
+run_step soak 1 step_soak
 echo "通過 $PASS,失敗 $FAIL,略過 $SKIP${FAILED[*]:+(${FAILED[*]})}"
 [[ $FAIL == 0 ]]

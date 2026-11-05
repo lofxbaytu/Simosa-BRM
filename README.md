@@ -4,7 +4,15 @@
 
 - 規劃書:[docs/Simosa-BRM-操船模擬器規劃書.md](docs/Simosa-BRM-操船模擬器規劃書.md)(需求 R1–R14、決策 D1–D20)
 - 開發守則:[CLAUDE.md](CLAUDE.md)
-- 目前狀態:**第 1 階段(垂直切片)實作中**
+- 版本:`VERSION`(目前 0.23.0;變更紀錄 [CHANGELOG.md](CHANGELOG.md),每輪一條;發行組裝 `tools/build-release.*` 無 `--version` 時讀此檔)
+
+## 目前狀態(第二十三輪,2026-11-05)
+
+**已實作(軟體,含自動測試;容器與開發機可跑)**:C# 50 Hz 確定性核心(MMG 3-DOF、拖船/錨/繫纜/碰墊、岸壁、潮汐/時變與空間流場、浪漂移力、船間交互作用、解耦橫搖;C#↔Python 黃金夾具)、感測器故障層與 BAM/BNWAS、情境引擎(時間表/評估/參數集;E01–E22、F01–F03 共 37 個情境)、目標船/AIS/COLREG、紀錄/重播/重新評分、雷達/ARPA 服務與 PPI 頁、NMEA/AIS 閘道與 `nmea_check` 檢驗、網頁操船台/教官站(完整/簡化/重播、靠離泊預演組題、情境編輯器與海圖點選)/報告站/簡化 ECDIS、內建 VHF 角色扮演與練習錄影、3D 視景(Godot,品質分級)、WebView2 外殼、USB 序列操控台服務與 Teensy 參考韌體、簽章更新包/紀錄包/直連同步、發行組裝與 Inno Setup 腳本、啟動腳本、Playwright 端對端、長時間穩定性(soak)測試工具。
+
+**需實機/實資料才能完成**(`docs/驗收/需求追溯表.md` 第 3 節):內顯筆電視景幀率與 2 小時連續(soak 工具已可實跑)、ENC 與港方座標校正、實船 3D 模型、FSB2 試俥資料與各物理係數校正、OpenCPN 顯示、WebView2 外殼/安裝程式/VHF 麥克風/錄影的 Windows 實機驗證、操控台硬體製作與韌體燒錄、評估者校準與課程試行、三份訓練文件核准。
+
+**如何開始**:`git clone` 到 `D:\Simosa BRM` → 系統管理員 PowerShell 執行 `.\tools\setup-windows.ps1`(工具與快取設定,見下節)→ `dotnet build SimosaBRM.sln -c Release` 與 `cd src\Instruments.Web && pnpm install && pnpm build` → 啟動 `.\tools\launch\start-ship-laptop.ps1`(船上)或 `.\tools\launch\start-instructor-laptop.ps1 -Standalone`(單機教官站),瀏覽器開 `http://127.0.0.1:8080/instructor.html?mode=simple`;結束用 `.\tools\launch\stop-all.ps1`。發行版改用 `.\tools\build-release.ps1` 產出 `build\release\<版本>\` 後依 `docs/ops/安裝與啟動.md` 安裝。
 
 ## 已決定的事項(摘要)
 
@@ -70,7 +78,7 @@ pnpm build && pnpm test
 ## 建置發行版與安裝
 
 ```powershell
-.\tools\build-release.ps1 -Version 2026.11.1      # Windows(win-x64);Linux/容器:tools/build-release.sh --version 2026.11.1
+.\tools\build-release.ps1                        # Windows(win-x64);版本讀 VERSION 檔(-Version 2026.11.1 可覆寫);Linux/容器:tools/build-release.sh [--version …]
 ```
 建置全部(sln Release、網頁)、`dotnet publish`(framework-dependent)到 `build\release\<版本>\`:`app\{simcore,radar,web,web-server,launch,visual}`、`tools\updater`(simosa-pkg)、`data\`(不含 `ships\*\confidential`)、`contracts\`、`docs\`、`config\` 範例、`manifest.json`(每檔 SHA-256、git 版次、元件版本)與簽章軟體更新包 `packages\*.sbupd`(開發金鑰,僅供測試);Godot 視景在有匯出範本時匯出,否則記入清單註記。啟動腳本 `tools\launch\start-ship-laptop.ps1`、`start-instructor-laptop.ps1`、`stop-all.ps1`(與 `.sh` 版)依 `config\ship-laptop.json`、`config\instructor-laptop.json` 啟動核心、雷達、網頁、視景與直連同步服務(啟動前檢查埠占用;`stop-all -KeepSync`/`--keep-sync` 於推送軟體更新包時保留同步服務);啟動腳本測試:`tools/launch/tests/launch-tests.sh`、`pwsh -File tools/launch/tests/launch-common.tests.ps1`。
 
@@ -89,6 +97,8 @@ cd src/Tools.Calibration && uv run pytest -q
 bash tools/launch/tests/launch-tests.sh && bash tools/run-ps-tests.sh
 bash tools/run-e2e.sh            # 端對端:建置網頁與 .NET → Playwright(tests/e2e;操船台、教官站載入/拒絕/舵令/凍結、VHF 文字與 PTT、錄影、雷達、ECDIS、報告、情境編輯器)→ 摘要;輸出 build/e2e/
 bash tools/run-e2e.sh --skip-build -- --grep 雷達   # 已建置時只跑部分案例
+bash tools/soak-test.sh --minutes 120 --clients 3   # 長時間穩定性(soak):核心 + 雷達 + 網頁 + N 個合成客戶端 + 學員腳本,每 10 s 取樣 CPU/RSS/steps/s/掉拍,
+                                                    # 結束寫 build/soak/report-<時間>.md/.json 並判定(50 Hz 無掉拍、延遲 p95 < 50 ms、RSS 不持續成長);Windows:tools\soak-test.ps1
 ```
 
 端對端用 Playwright 管理的 Chromium(`PLAYWRIGHT_BROWSERS_PATH`,容器為 `/opt/pw-browsers`,CI 裝到 `.cache/pw-browsers`),失敗的截圖與 trace 在 `build/e2e/test-results/`,HTML 報告 `pnpm --dir tests/e2e report`。

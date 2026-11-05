@@ -16,6 +16,7 @@
   所有輸出留在專案內(build\release\、.cache\),不寫 C:\;不執行 git 指令(版次由 -Git 或直接讀 .git\HEAD)。
   -WhatIf:只檢查參數與工具鏈(dotnet、pnpm、Godot、ISCC)並印出各步驟計畫,不建置、不寫任何檔案(tools\run-ps-tests.sh 以此做語法/參數檢查)。
 .EXAMPLE
+  .\tools\build-release.ps1                      # 版本讀專案根目錄 VERSION 檔
   .\tools\build-release.ps1 -Version 2026.11.1 -Git (git rev-parse HEAD)
   .\tools\build-release.ps1 -Version 2026.11.1 -SkipGodot -Zip
   .\tools\build-release.ps1 -Version 2026.11.1 -Installer
@@ -34,6 +35,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $root
+# 版本:-Version > 專案根目錄 VERSION 檔(CHANGELOG.md 同步)> 0.<日期>.<時分>
+if (-not $Version -and (Test-Path 'VERSION')) { $Version = (Get-Content 'VERSION' -Raw).Trim() }
 if (-not $Version) { $Version = '0.{0:yyyyMMdd}.{1}' -f (Get-Date).ToUniversalTime(), [int](Get-Date).ToUniversalTime().ToString('HHmm') }
 if ($Version -notmatch '^[0-9]+(\.[0-9]+){0,3}$') { throw "-Version 須為 1–4 段數字(與更新包版本規則相同):$Version" }
 

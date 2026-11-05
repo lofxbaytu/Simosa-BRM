@@ -5,7 +5,7 @@ using SimosaBRM.SimCore.Contracts;
 namespace SimosaBRM.Gateway.Nmea;
 
 /// <summary>
-/// AIS 訊息的位元組裝與 NMEA 封裝(ITU-R M.1371 類型 1 位置報告、類型 5 靜態與航程資料;IEC 61162-1 !AIVDM)。
+/// AIS 訊息的位元組裝與 NMEA 封裝(ITU-R M.1371 類型 1 位置報告、類型 5 靜態與航程資料;IEC 61162-1 !AIVDM 他船 / !AIVDO 自船)。
 /// 位元由高位到低位依序寫入;6 位元 ASCII 裝甲:值 0–39 → '0'+值、40–63 → '0'+值+8;最後一句的填充位元數寫在 fill 欄位。
 /// </summary>
 public static class AisEncoder
@@ -100,8 +100,12 @@ public static class AisEncoder
         return rotDegPerMin > 0 ? v : -v;
     }
 
-    /// <summary>類型 1 位置報告的 168 位元。</summary>
-    public static BitWriter PositionReportBits(AisReport a, int utcSecond, int repeat = 0)
+    /// <summary>
+    /// 類型 1 位置報告的 168 位元。<paramref name="positionAvailable"/> = false(自船 GNSS 失效的 VDO)時位置/COG/SOG 以 ITU-R M.1371 的
+    /// 「無資料」值送出(經度 181°、緯度 91°、COG 360.0、SOG 102.3、定位精度 0);<paramref name="headingAvailable"/> = false(電羅經失效)時航向 511。
+    /// 預設皆為 true,目標船的輸出逐位元不變。
+    /// </summary>
+    public static BitWriter PositionReportBits(AisReport a, int utcSecond, int repeat = 0, bool positionAvailable = true, bool headingAvailable = true)
     {
         var w = new BitWriter();
         w.Unsigned(1, 6);                                  // 訊息類型
@@ -109,12 +113,12 @@ public static class AisEncoder
         w.Unsigned((ulong)a.Mmsi, 30);
         w.Unsigned((ulong)Math.Clamp(a.NavStatus, 0, 15), 4);
         w.Signed(EncodeRot(a.Rot), 8);
-        w.Unsigned((ulong)Math.Clamp((long)Math.Round(a.Sog * 10.0), 0, 1022), 10);
-        w.Unsigned(1, 1);                                  // 定位精度:高(DGPS 等級,模擬器)
-        w.Signed((long)Math.Round(a.Lon * 600000.0), 28);
-        w.Signed((long)Math.Round(a.Lat * 600000.0), 27);
-        w.Unsigned((ulong)(Math.Clamp((long)Math.Round(a.Cog * 10.0), 0, 3600) % 3600), 12);
-        w.Unsigned((ulong)(Math.Clamp((long)Math.Round(a.Heading), 0, 360) % 360), 9);
+        w.Unsigned(positionAvailable ? (ulong)Math.Clamp((long)Math.Round(a.Sog * 10.0), 0, 1022) : 1023UL, 10);
+        w.Unsigned(positionAvailable ? 1UL : 0UL, 1);      // 定位精度:高(DGPS 等級,模擬器);無定位時 0
+        w.Signed(positionAvailable ? (long)Math.Round(a.Lon * 600000.0) : 181L * 600000L, 28);
+        w.Signed(positionAvailable ? (long)Math.Round(a.Lat * 600000.0) : 91L * 600000L, 27);
+        w.Unsigned(positionAvailable ? (ulong)(Math.Clamp((long)Math.Round(a.Cog * 10.0), 0, 3600) % 3600) : 3600UL, 12);
+        w.Unsigned(headingAvailable ? (ulong)(Math.Clamp((long)Math.Round(a.Heading), 0, 360) % 360) : 511UL, 9);
         w.Unsigned((ulong)Math.Clamp(utcSecond, 0, 63), 6);
         w.Unsigned(0, 2);                                  // 操船指示:無
         w.Unsigned(0, 3);                                  // 備用
@@ -155,7 +159,13 @@ public static class AisEncoder
     /// 封裝成 !AIVDM 句(多句時 sequential id 為 <paramref name="seqId"/> 1–9、通道 A/B);
     /// 每句最多 60 個酬載字元,填充位元只在最後一句。
     /// </summary>
-    public static IReadOnlyList<string> Vdm(BitWriter bits, char channel = 'A', int seqId = 1)
+    public static IReadOnlyList<string> Vdm(BitWriter bits, char channel = 'A', int seqId = 1) => Encapsulate("VDM", bits, channel, seqId);
+
+    /// <summary>封裝成 !AIVDO 句(自船 AIS 的輸出;欄位與 VDM 相同,IEC 61162-1 ed.5 第 8.3.xx 節)。</summary>
+    public static IReadOnlyList<string> Vdo(BitWriter bits, char channel = 'A', int seqId = 1) => Encapsulate("VDO", bits, channel, seqId);
+
+    /// <summary>封裝成 !AI<paramref name="formatter"/>(VDM 他船 / VDO 自船)。</summary>
+    public static IReadOnlyList<string> Encapsulate(string formatter, BitWriter bits, char channel = 'A', int seqId = 1)
     {
         var (payload, fill) = bits.Armor();
         var count = Math.Max(1, (payload.Length + MaxPayloadCharsPerSentence - 1) / MaxPayloadCharsPerSentence);
@@ -164,7 +174,7 @@ public static class AisEncoder
         {
             var chunk = payload.Substring(i * MaxPayloadCharsPerSentence, Math.Min(MaxPayloadCharsPerSentence, payload.Length - i * MaxPayloadCharsPerSentence));
             var last = i == count - 1;
-            list.Add(NmeaSentence.Build('!', "AI", "VDM",
+            list.Add(NmeaSentence.Build('!', "AI", formatter,
                 count.ToString(CultureInfo.InvariantCulture),
                 (i + 1).ToString(CultureInfo.InvariantCulture),
                 count > 1 ? seqId.ToString(CultureInfo.InvariantCulture) : "",
@@ -182,4 +192,12 @@ public static class AisEncoder
     /// <summary>類型 5 靜態與航程資料 !AIVDM(兩句)。</summary>
     public static IReadOnlyList<string> StaticAndVoyage(AisReport a, int seqId, char channel = 'A')
         => Vdm(StaticAndVoyageBits(a), channel, seqId);
+
+    /// <summary>自船類型 1 位置報告 !AIVDO(單句;GNSS/電羅經失效時位置/航向欄位為「無資料」值)。</summary>
+    public static IReadOnlyList<string> OwnPositionReport(AisReport a, DateTime utc, bool positionAvailable = true, bool headingAvailable = true, char channel = 'A')
+        => Vdo(PositionReportBits(a, utc.Second, 0, positionAvailable, headingAvailable), channel);
+
+    /// <summary>自船類型 5 靜態與航程資料 !AIVDO(兩句)。</summary>
+    public static IReadOnlyList<string> OwnStaticAndVoyage(AisReport a, int seqId, char channel = 'A')
+        => Vdo(StaticAndVoyageBits(a), channel, seqId);
 }

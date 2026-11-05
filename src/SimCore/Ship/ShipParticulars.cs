@@ -15,6 +15,8 @@ public sealed class ShipParticulars
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("imo")] public string? Imo { get; set; }
     [JsonPropertyName("callSign")] public string? CallSign { get; set; }
+    /// <summary>自船 AIS MMSI(9 位;交船文件未載時 null:NMEA 閘道改用情境 ship.mmsi,皆無則不送 !AIVDO)</summary>
+    [JsonPropertyName("mmsi")] public int? Mmsi { get; set; }
     [JsonPropertyName("hull")] public HullParticulars Hull { get; set; } = new();
     [JsonPropertyName("loadingConditions")] public Dictionary<string, LoadingParticulars> LoadingConditions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [JsonPropertyName("engine")] public EngineParticulars Engine { get; set; } = new();

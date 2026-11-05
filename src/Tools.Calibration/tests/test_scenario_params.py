@@ -528,6 +528,9 @@ def _full_tree() -> dict[str, Any]:
 
 def test_structural_check_accepts_valid_tree() -> None:
     assert structural_issues(_full_tree()) == []
+    assert structural_issues(_mutate(lambda t: t["ship"].update(mmsi=416100001))) == []
+    assert validate_scenario(_mutate(lambda t: t["ship"].update(mmsi=416100001)))["ship"]["mmsi"] == 416100001
+    assert validate_scenario(_full_tree())["ship"]["mmsi"] is None
     sc = validate_scenario(_full_tree())
     assert sc["route"]["waypoints"][1]["name"] == "B" and sc["zones"][0]["id"] == "z1" and len(sc["timeline"]) == 2
     assert sc["assessment"]["bands"][0]["fail"] == "2x" and sc["briefing"]["minParticipants"] == 2 and sc["parameterSet"] is None
@@ -599,6 +602,10 @@ def _mutate(fn: Any) -> dict[str, Any]:
         (lambda t: t.update(bnwas={"dormant_s": None}), "bnwas.dormant_s", "須為數值"),
         (lambda t: t.update(bnwas="on"), "bnwas", "bnwas 須為物件"),
         (lambda t: t.update(sensors={"magneticCompassError_deg": [1]}), "sensors.magneticCompassError_deg", "須為數值"),
+        # 自船 AIS MMSI(ship.mmsi;C# Scenario.StructuralIssues 同路徑與訊息)
+        (lambda t: t["ship"].update(mmsi=1_000_000_000), "ship.mmsi", "0–999999999"),
+        (lambda t: t["ship"].update(mmsi=-1), "ship.mmsi", "0–999999999"),
+        (lambda t: t["ship"].update(mmsi="416100001"), "ship.mmsi", "0–999999999"),
     ],
 )
 def test_structural_check_errors(mutate: Any, path: str, message: str) -> None:

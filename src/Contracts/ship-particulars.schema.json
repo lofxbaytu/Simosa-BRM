@@ -8,6 +8,9 @@
   "properties": {
     "id": { "type": "string" },
     "name": { "type": "string" },
+    "imo": { "type": ["string", "null"] },
+    "callSign": { "type": ["string", "null"] },
+    "mmsi": { "type": ["integer", "null"], "minimum": 0, "maximum": 999999999, "description": "自船 AIS MMSI(9 位);交船文件未載時 null:NMEA 閘道改用情境 ship.mmsi,皆無則不送 !AIVDO" },
     "hull": { "type": "object", "required": ["lengthOverall_m", "lengthBetweenPerpendiculars_m", "breadth_m", "depth_m"] },
     "loadingConditions": { "type": "object", "required": ["full", "ballast"] },
     "engine": { "type": "object", "required": ["mcr_kW", "mcr_rpm", "telegraph"] },

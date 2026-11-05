@@ -59,6 +59,12 @@
           ],
           "default": "ballast"
         },
+        "mmsi": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999999,
+          "description": "自船 AIS MMSI(選填):NMEA 閘道以此送 !AIVDO(類型 1 位置報告每 10 s、類型 5 靜態資料第 1 秒後每 6 min);未給時取 data/ships/<ID>/particulars.json 的 mmsi,皆無則不送 VDO。不影響物理與雜湊"
+        },
         "roll": {
           "type": "object",
           "description": "解耦 1 自由度橫搖(選填、預設關閉;docs/design/physics-roll.md):enabled 時核心以線性橫搖方程式 φ'' + 2ζω φ' + ω² φ = ω²(φ_turn + φ_wind) + 浪激勵 計算橫搖(φ_turn 迴轉離心傾角 −atan(v_c·r/g)·turnHeelGain,右轉向外 = 左傾;φ_wind 風傾力矩等效靜傾角(側面積、視風速平方、GM)·windHeelGain;浪激勵為 environment.waves 的有效波斜率,5 個浪譜成分的正弦和,相位由情境種子產生一次並進快照,遭遇頻率由船在波場中移動自然產生),輸出 state.roll、雜湊追加 ROLLDOF1 區塊。不回饋到 3 自由度運動(u/v/r/x/y/ψ 與未啟用時逐位元相同)。未給或 enabled = false 時 state.roll 省略、數值與雜湊與舊版相同。C# 與 Python 參考實作同公式(夾具 tests/SimCore.Tests/Golden/roll_run.csv)",

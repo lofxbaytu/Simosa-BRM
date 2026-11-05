@@ -25,7 +25,8 @@ public class NmeaSensorTests
     public void NominalSentencesUnchanged()
     {
         var s = Engine().BuildState();
-        Assert.Equal(new[] { "HDT", "ROT", "RSA" }, NmeaEncoder.FastSentences(s).Select(x => x[3..6]));
+        Assert.Equal(new[] { "HDT", "ROT", "RSA", "THS" }, NmeaEncoder.FastSentences(s).Select(x => x[3..6]));
+        Assert.EndsWith(",A*" + NmeaEncoder.Ths(s)[^2..], NmeaEncoder.Ths(s)); // THS 模式 A(自主)
         Assert.Equal(new[] { "GGA", "RMC", "VTG", "VBW", "DPT", "MWV", "MWV" }, NmeaEncoder.SlowSentences(s, Utc).Select(x => x[3..6]));
         Assert.Empty(NmeaEncoder.AlrSentences(s, Utc));
     }
@@ -50,7 +51,8 @@ public class NmeaSensorTests
     {
         var s = Engine("gyroFailure").BuildState();
         Assert.False(s.Sensors!.HeadingValid);
-        Assert.Equal(new[] { "ROT", "RSA" }, NmeaEncoder.FastSentences(s).Select(x => x[3..6]));
+        Assert.Equal(new[] { "ROT", "RSA", "THS" }, NmeaEncoder.FastSentences(s).Select(x => x[3..6])); // HDT 停送、THS 改送模式 V
+        Assert.Equal(new[] { "", "V" }, Fields(NmeaEncoder.Ths(s))[1..]);
         var vbw = Fields(NmeaEncoder.Vbw(s));
         Assert.Equal("A", vbw[3]);           // 對水仍有效
         Assert.Equal(("", "", "V"), (vbw[4], vbw[5], vbw[6]));

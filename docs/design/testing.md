@@ -111,3 +111,65 @@ pnpm --dir tests/e2e report           # 開 HTML 報告(build/e2e/report)
 2. 新頁面或新面板先在 vitest 寫元件測試,端對端只加載入與關鍵互動。
 3. 不改核心狀態雜湊:端對端只透過既有指令與頁面操作,不加後門。
 4. 需要新的 Host 旗標或埠時同步改 `global-setup.ts`、`tools/run-e2e.sh`、本文與 `README.md`「測試」一節。
+
+## 6. 長時間穩定性(soak)
+
+規劃書第 14 章「效能」列:核心 50 Hz 無掉拍、網路延遲 < 50 ms、連續 2 小時(1 次於實機);追溯表第 2 節效能列。`tools/soak-test.sh`(Windows:`tools\soak-test.ps1`,參數相同)把整套服務和合成負載跑一段時間,每 10 s 取樣,結束後產生報告並判定;容器只能證明**軟體面**(50 Hz、延遲量級、記憶體不洩漏),幀率與內顯機 CPU 仍需實機。
+
+### 6.1 組成
+
+```
+tools/soak-test.sh         建置(--skip-build 略過)→ 把 build/bin 的三個輸出複製到 build/soak/<run>/bin/(執行中有人 dotnet build 不會覆寫執行中的 dll)
+                           → SimCore.Host(--scenario 預設 E05;--record build/soak/<run>/records/;VHF 與錄影端開啟;--no-udp --no-nmea;--stop-file)
+                           → Sensors.Radar.Host(x+s)→ simosa-web(build/web/instruments)→ clients.mjs ×N + student.mjs
+                           → 每 --sample-s 取樣 /proc(CPU%、RSS、執行緒)與主控程序 stdout 的 steps/s、掉拍 → stats/host.jsonl
+                           → 時間到 stop-all.sh(停止檔 → footer)→ report.mjs → 結束碼
+tests/soak/clients.mjs     一個 Node 程序內 N 個客戶端:各一條狀態連線(25 Hz 狀態幀 + 事件框)+ 一條雷達 X 頻連線(SRAD 二進位幀)+ 每 30 s GET index.html;
+                           每秒寫幀數、tick 區間、延遲 p50/p95/max、雷達幀數/位元組、斷線/錯誤;結束寫整場延遲直方圖(1 ms 格)
+tests/soak/student.mjs     每 10 s 輪流舵令(±10° 以內)/車令(SAH/DSAH/STOP)、每 60 s 輪流注入/清除感測器故障(gyroDrift、radarDegraded、gpsOffset…)、每 5 min snapshot;
+                           每個指令以後續狀態幀確認(rudderOrder / telegraph / faults[])在 3 s 內生效,計 commandRejected
+tests/soak/report.mjs      讀 meta.json 與 stats/*.jsonl(選配 dotnet-counters 的 counters.csv)→ build/soak/report-<run>.md 與 .json;可匯入(summarise / renderMarkdown)
+tests/soak/lib.mjs         參數解析、JSON Lines、毫秒直方圖、延遲估計器
+tests/soak/report.test.mjs 判定準則與工具的單元測試:node --test tests/soak/report.test.mjs(11 案例;合成執行目錄在 build/test-tmp/soak/)
+```
+
+只用 Node 22 內建模組(WebSocket、fetch、node:test),無套件相依;不加任何核心後門、不改狀態雜湊(學員指令皆為 `command.schema.json` 既有指令)。
+
+### 6.2 量測方法
+
+- **延遲**:核心以牆鐘推進(`RealtimeRunner`),第 k 幀的理想到達時刻 = 原點 + `state.t`;原點取連線初期(前 50 幀)「到達時刻 − t」的最小值(最快送達的那一幀),之後每幀延遲 = 到達 − t − 原點(≥ 0)。量到的是核心序列化 + WebSocket 傳送 + 客戶端事件迴圈的總延遲,核心落後牆鐘(掉拍)也會反映為延遲上升;凍結幀不計、時間倍率須為 1。因為核心每 20 ms 週期才推進一步,延遲的底值約 0–20 ms 均勻分布(p50 ≈ 10–20 ms 屬正常)。
+- **tick 率**:客戶端首末狀態幀的 tick 差 / 到達時間差(與主控程序每秒輸出的 `steps/s` 互相印證);**掉拍**取自主控程序輸出的累計值(`RealtimeRunner.DroppedSteps`)。
+- **CPU%**:`/proc/<pid>/stat` 的 utime+stime 差 / 牆鐘差(Windows:`TotalProcessorTime`),多執行緒可 > 100;**RSS**:`VmRSS`(Windows:`WorkingSet64`)。
+- **GC**:`dotnet-counters`(PATH 或 `.cache/dotnet-tools`)存在時收 System.Runtime 計數器到 `stats/counters.csv`(容器未安裝 → 略過並在報告註記)。
+
+### 6.3 判定(結束碼 1 = 不合格;門檻可用參數調整)
+
+| 準則 | 門檻 | 來源 |
+|---|---|---|
+| 核心 50 Hz 無掉拍 | 掉拍 0;客戶端量到的 tick 率 50 ± 0.5(`--core-hz-tol`) | 第 14 章效能「核心 50 Hz 無掉拍」 |
+| 延遲 | 全部客戶端合併的 p95 < 50 ms(`--max-latency-ms`;max 另列) | 「網路延遲 <50 ms」 |
+| RSS 不持續成長 | 暖機(`--warmup-s` 120,短於 5 分鐘的執行取 20%)後最小平方斜率 ≤ 1 MB/min(`--max-rss-slope-mb-per-min`)且增量 ≤ 64 MB(`--max-rss-growth-mb`) | 「連續 2 小時」的軟體面近似 |
+| 無斷線與錯誤 | 客戶端斷線 0、JSON/幀格式錯誤 0、網頁 GET 失敗 0 | — |
+| 學員指令皆生效 | 未確認 0、`commandRejected` 0、斷線 0 | — |
+| 主控程序 | 存活到結束、結束碼 0、紀錄 footer 已寫(`紀錄已關閉`) | 優雅停止(第十六輪) |
+
+### 6.4 執行
+
+```bash
+bash tools/soak-test.sh --minutes 10 --clients 3 --skip-build        # 容器/開發機(≈ 11 分鐘;需獨佔 CPU,不要與整套測試併行)
+bash tools/soak-test.sh --minutes 120 --clients 3 --note "船上筆電"  # 實機 2 小時(第 14 章)
+node --test tests/soak/report.test.mjs                               # 報告/判定單元測試
+node tests/soak/report.mjs --dir build/soak/<run> --md x.md --json x.json --max-latency-ms 80   # 以不同門檻重新判定既有執行
+```
+
+輸出:`build/soak/<run>/`(`bin/` 建置輸出複本、`logs/`(simcore/radar/web/clients/student)、`stats/`(host/clients/student.jsonl)、`records/`、`media/`、`meta.json`)與 `build/soak/report-<run>.{md,json}`。Ctrl+C 會提前收尾並仍產生報告(標示中止、結束碼 1)。Windows 版 `soak-test.ps1 -WhatIf` 只檢查參數與工具鏈(`tools/run-ps-tests.sh` 的 `soak` 步驟);實跑在 Windows 以同參數執行。
+
+### 6.5 容器結果(2026-11-05,第二十三輪;`--minutes 10 --clients 3`,4 vCPU Linux 容器)
+
+SOAK_RESULT_PLACEHOLDER
+
+### 6.6 限制
+
+- 合成客戶端在同一個 Node 程序內,不含瀏覽器繪圖與視景 GPU 負載;內顯筆電的幀率、CPU 與延遲需實機以同一工具(`--minutes 120`)重跑,並與視景同時執行(`start-ship-laptop.ps1` 啟動視景後再跑 `soak-test.ps1 -SkipBuild`,或改用 `--port-base` 避開 8765 系列埠)。
+- 延遲為牆鐘估計而非封包往返;教官筆電直連的網路延遲需實機(追溯表第 3 節)。
+- 情境固定(預設 E05,不切換情境);學員腳本只做溫和操作,不涵蓋倒帶/重播/情境載入的記憶體行為。

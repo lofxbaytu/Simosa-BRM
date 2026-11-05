@@ -657,8 +657,13 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
     # ---- 船間交互作用(environment.shipInteraction;C# 在浪之後檢查)
     if isinstance(env, dict) and env.get("shipInteraction") is not None:
         ship_interaction_issues(env.get("shipInteraction"), error)
-    # ---- 橫搖(ship.roll;C# 在船間交互作用之後檢查)
+    # ---- 自船 AIS MMSI(ship.mmsi;C# 在橫搖之前檢查):0–999999999 的整數(NMEA 閘道 VDO 用;不影響物理)
     ship = raw.get("ship")
+    if isinstance(ship, dict) and ship.get("mmsi") is not None:
+        m = ship.get("mmsi")
+        if isinstance(m, bool) or not isinstance(m, int) or m < 0 or m > 999_999_999:
+            error("ship.mmsi", "mmsi 須為 0–999999999 的整數")
+    # ---- 橫搖(ship.roll;C# 在船間交互作用之後檢查)
     if isinstance(ship, dict) and ship.get("roll") is not None:
         roll_issues(ship.get("roll"), error)
     return issues
@@ -1161,7 +1166,9 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         "startTimeUtc": str(raw["startTimeUtc"]) if raw.get("startTimeUtc") is not None else None,
         "timeScale": ts,
         # 橫搖(roll.normalise_roll;結構檢查已於 roll_issues 通過;未給 None):apply_scenario 交給 MMGShip.configure_roll
-        "ship": {"id": ship_id, "loading": loading, "roll": normalise_roll(ship.get("roll"))},
+        # 自船 AIS MMSI(選填;NMEA 閘道 VDO 用,Python 參考實作不輸出 NMEA,只保留)
+        "ship": {"id": ship_id, "loading": loading, "roll": normalise_roll(ship.get("roll")),
+                 "mmsi": int(ship["mmsi"]) if ship.get("mmsi") is not None else None},
         "origin": origin,
         "initial": {"lat": lat, "lon": lon, "x": x, "y": y, "heading": heading % 360.0, "speed": speed,
                     "telegraph": telegraph, "rpm": rpm, "rudder": rudder},

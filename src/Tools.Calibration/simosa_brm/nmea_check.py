@@ -3,11 +3,13 @@
 接收 SimCore.Host 的 NMEA(UDP 單播/多播即時擷取,或 Host ``--nmea-file`` 寫出的 .nmea 檔)並檢查:
 
 - 校驗和、句長(≤ 82)、位址欄(talker + 句型)、IEC 61162-1 欄位數(``SPECS``);
-- 各句型速率:HDT/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV 1 Hz(規劃書第 5.3 節),每警報 ALR 1 Hz(sensors-alerts.md 第 6 節),
-  每目標 TTM 1 Hz(radar-arpa.md 第 6 節),AIS 類型 1 位置報告每 10 s、類型 5 靜態資料(NmeaGateway);容差 ±20%;
+- 各句型速率:HDT/THS/ROT/RSA 10 Hz,GGA/RMC/VTG/VBW/DPT/MWV 1 Hz(規劃書第 5.3 節),每警報 ALR 與 ALF 1 Hz(sensors-alerts.md 第 6 節),
+  每目標 TTM 1 Hz(radar-arpa.md 第 6 節),AIS 類型 1 位置報告每 10 s、類型 5 靜態資料(NmeaGateway;自船 !AIVDO 同週期);
+  ALC 週期清單每 30 s 與清單改變時;容差 ±20%;
 - 時間戳單調(GGA 時刻遞增、同批 RMC/TTM/ALR 時刻相同、RMC 日期可解析);
-- 有效旗標一致(GGA 品質 0 ⇔ RMC 狀態 V ⇔ VTG 模式 N ⇒ VBW 對地 V;故障注入後 GGA 品質欄位變化逐秒列出);
-- !AIVDM 可解碼(多句組合、6 位元解裝甲、類型 1 的 MMSI/位置/COG/SOG/航向/UTC 秒、類型 5 的船名/呼號)、ALR 欄位;
+- 有效旗標一致(GGA 品質 0 ⇔ RMC 狀態 V ⇔ VTG 模式 N ⇒ VBW 對地 V;THS 模式 V ⇔ 無 HDT;故障注入後 GGA 品質欄位變化逐秒列出);
+- !AIVDM / !AIVDO 可解碼(多句組合、6 位元解裝甲、類型 1 的 MMSI/位置/COG/SOG/航向/UTC 秒、類型 5 的船名/呼號;自船 VDO 與同批 GGA/THS 一致)、
+  ALR 欄位、ALF 欄位(IEC 61162-1 ed.5)與 ALR 一致、ALC 項目數與 ALF 清單一致;
 - 可選:同時連 WebSocket 狀態(``--ws``)或離線狀態 .jsonl(``--state``,核心紀錄或 WebSocket 擷取)比對同一時刻的位置/航向/水深/SOG/COG。
 
 輸出 Markdown 報告(``--report``,預設 build/nmea/report.md)與可選 JSON;結束碼 0 = 全部通過、1 = 有不合格項、2 = 參數/輸入錯誤。
@@ -69,6 +71,8 @@ class SentenceSpec:
     """自船必送(感測器有效時);缺少即 error"""
     talker: str | None = None
     """閘道的預期 talker(不同只 warning;OpenCPN 不依 talker 篩選)"""
+    ident_index: int | None = None
+    """target/alert 範圍的識別欄索引(不含位址欄;None = target 0、alert 1)"""
 
 
 SPECS: dict[str, SentenceSpec] = {
@@ -80,14 +84,16 @@ SPECS: dict[str, SentenceSpec] = {
     "MWV-R": SentenceSpec((5,), 1.0, "own", "NmeaEncoder.SlowSentences 1 Hz(相對風)", True, "WI"),
     "MWV-T": SentenceSpec((5,), 1.0, "own", "NmeaEncoder.SlowSentences 1 Hz(真風)", True, "WI"),
     "HDT": SentenceSpec((2,), 10.0, "own", "規劃書 5.3(HDT 10 Hz;電羅經失效停送)", False, "HE"),
-    "THS": SentenceSpec((2,), 10.0, "own", "IEC 61162-1(本版閘道未送;若有則 10 Hz)", False, "HE"),
+    "THS": SentenceSpec((2,), 10.0, "own", "NmeaEncoder.FastSentences 10 Hz(與 HDT 同批;電羅經無效時航向空白、模式 V)", True, "HE"),
     "ROT": SentenceSpec((2,), 10.0, "own", "NmeaEncoder.FastSentences 10 Hz", True, "TI"),
     "RSA": SentenceSpec((4,), 10.0, "own", "NmeaEncoder.FastSentences 10 Hz", True, "ER"),
     "ALR": SentenceSpec((5,), 1.0, "alert", "sensors-alerts.md 第 6 節(每個非 normal 警報 1 Hz)", False, "II"),
+    "ALF": SentenceSpec((13,), 1.0, "alert", "sensors-alerts.md 第 6 節(IEC 61162-1 ed.5;每個 state.alerts[] 警報 1 Hz)", False, "II", 8),
+    "ALC": SentenceSpec(tuple(4 + 4 * n for n in range(0, 25)), None, "none", "NmeaGateway(週期清單:第 1 秒、每 30 s、清單或修訂改變時;每句 ≤ 4 項)", False, "II"),
     "TTM": SentenceSpec((15,), 1.0, "target", "radar-arpa.md 第 6 節 / NmeaGateway(每目標 1 Hz)", False, "RA"),
     "TLL": SentenceSpec((9,), 1.0, "target", "radar-arpa.md 第 6 節(雷達服務每目標 1 Hz)", False, "RA"),
     "VDM": SentenceSpec((6,), None, "ais", "NmeaGateway(類型 1 每 10 s、類型 5 出現後數秒再每 6 min)", False, "AI"),
-    "VDO": SentenceSpec((6,), None, "none", "IEC 61162-1(自船 AIS;本版未送)", False, "AI"),
+    "VDO": SentenceSpec((6,), None, "ais", "NmeaGateway(自船 AIS:類型 1 每 10 s、類型 5 第 1 秒後每 6 min;情境 ship.mmsi 或 particulars mmsi,皆無則不送)", False, "AI"),
     "DBT": SentenceSpec((6,), None, "none", "IEC 61162-1", False, "SD"),
     "VHW": SentenceSpec((8,), None, "none", "IEC 61162-1", False, "VD"),
     "HDG": SentenceSpec((5,), None, "none", "IEC 61162-1", False, "HE"),
@@ -117,7 +123,7 @@ class Issue:
     severity: str
     """error | warning | info"""
     check: str
-    """checksum | format | fields | rate | time | content | ais | alr | state | input"""
+    """checksum | format | fields | rate | time | content | ais | alr | alf | alc | state | input"""
     message: str
     line: int | None = None
     sentence: str | None = None
@@ -379,6 +385,8 @@ class AisTrack:
     positions: list[AisMessage] = field(default_factory=list)
     static: AisMessage | None = None
     intervals_s: list[int] = field(default_factory=list)
+    own: bool = False
+    """由 !AIVDO(自船)而來"""
 
     @property
     def name(self) -> str:
@@ -431,6 +439,10 @@ class CheckResult:
     last_time: str | None
     state_compare: StateCompare | None = None
     capture_seconds: float | None = None
+    alf: list[dict[str, Any]] = field(default_factory=list)
+    """ALF 逐警報彙總(識別碼、文字、句數、狀態集合、修訂範圍、類別/優先序)"""
+    alc: dict[str, Any] | None = None
+    """ALC 彙總(句數、出現秒窗、最大間隔、最後清單)"""
 
     @property
     def errors(self) -> list[Issue]:
@@ -554,7 +566,7 @@ def check_sentences(
         elif spec.scope in ("target", "alert"):
             if not group:
                 continue
-            idx = 0 if spec.scope == "target" else 1
+            idx = spec.ident_index if spec.ident_index is not None else (0 if spec.scope == "target" else 1)
             per: dict[str, list[Sentence]] = {}
             for s in group:
                 if len(s.fields) > idx:
@@ -579,7 +591,7 @@ def check_sentences(
             rates.append(RateRow(key, talkers, len(group), windows, None, spec.rate_hz, worst, "、".join(notes) or spec.source))
         elif spec.scope == "ais":
             if group:
-                rates.append(RateRow(key, talkers, len(group), windows, None, None, "n/a", f"類型 1 每 {ais_interval_s} s/目標;見 AIS 表"))
+                rates.append(RateRow(key, talkers, len(group), windows, None, None, "n/a", f"類型 1 每 {ais_interval_s} s/{'自船' if key == 'VDO' else '目標'};見 AIS 表"))
         elif group:
             rates.append(RateRow(key, talkers, len(group), windows, None, None, "n/a", spec.source))
 
@@ -680,6 +692,19 @@ def check_sentences(
             h = _num(s.fields[0])
             if (s.fields[1] != "V" and (h is None or not (0 <= h <= 360))) or s.fields[1] not in ("A", "E", "M", "S", "V"):
                 issues.append(Issue("error", "content", "THS 航向或模式欄無效", s.index, s.raw))
+            elif s.fields[1] == "V" and s.fields[0]:
+                issues.append(Issue("warning", "content", "THS 模式 V(無效)但航向欄非空", s.index, s.raw))
+            # 與同批(同一 tick:HDT、ROT、RSA、THS 相鄰)的 HDT 比對;HDT 停送(電羅經失效)時 THS 應為模式 V
+            prev_hdt = last_fast.get("HDT")
+            same_batch = prev_hdt is not None and 0 < s.index - prev_hdt.index <= 3
+            if s.fields[1] == "A" and same_batch and h is not None:
+                hh = _num(prev_hdt.fields[0]) if prev_hdt is not None else None
+                if hh is not None and angle_diff(h, hh) > 0.051:
+                    issues.append(Issue("error", "content", f"THS 航向 {h} ≠ 同批 HDT {hh}", s.index, s.raw))
+            elif s.fields[1] == "A" and not same_batch and "HDT" in by_key:
+                issues.append(Issue("error", "content", "THS 模式 A 但同批沒有 HDT(電羅經失效時 THS 應為模式 V)", s.index, s.raw))
+            elif s.fields[1] == "V" and same_batch:
+                issues.append(Issue("error", "content", "THS 模式 V 但同批仍送 HDT", s.index, s.raw))
         elif s.formatter == "ROT" and len(s.fields) >= 2:
             if s.fields[1] not in ("A", "V") or (s.fields[1] == "A" and _num(s.fields[0]) is None):
                 issues.append(Issue("error", "content", "ROT 數值或狀態欄無效", s.index, s.raw))
@@ -741,6 +766,7 @@ def check_sentences(
         {"number": a["number"], "text": a["text"], "count": a["count"], "conditions": "/".join(sorted(a["conditions"])), "acks": "/".join(sorted(a["acks"])), "seconds": a["last"] - a["first"] + 1}
         for a in sorted(alerts.values(), key=lambda x: x["number"])
     ]
+    alf_rows, alc_summary = _check_alf_alc(sentences, issues, win_time, lo, hi, n_windows)
 
     # ---- AIS
     tracks: dict[int, AisTrack] = {}
@@ -752,7 +778,34 @@ def check_sentences(
             if la is not None and lo_ is not None:
                 own_pos[sec] = (la, lo_)
 
+    own_mmsi: set[int] = set()
+
+    def _check_own_position(msg: AisMessage, first: Sentence) -> None:
+        """自船 VDO 類型 1 與同批 GGA(位置)/ THS(航向)一致:GNSS 失效 → 無資料值 91/181;電羅經失效 → 航向 511。"""
+        gga = gga_by_sec.get(msg.sec)
+        if gga is not None and len(gga.fields) >= 14:
+            if gga.fields[5] == "0":
+                if not (msg.lat == 91.0 and msg.lon == 181.0):
+                    issues.append(Issue("error", "ais", f"自船 VDO 位置 {msg.lat},{msg.lon} 但同批 GGA 品質 0(應為無資料值 91/181)", msg.line, first.raw))
+                if msg.cog != 360.0 or (msg.sog is not None and msg.sog < 102.3):
+                    issues.append(Issue("error", "ais", "自船 VDO 於 GNSS 失效時 COG/SOG 應為無資料值(360.0 / 102.3)", msg.line, first.raw))
+            elif msg.sec in own_pos and msg.lat is not None and msg.lon is not None and abs(msg.lat) <= 90 and abs(msg.lon) <= 180:
+                d = distance_m(own_pos[msg.sec][0], own_pos[msg.sec][1], msg.lat, msg.lon)
+                if d > 3.0:
+                    issues.append(Issue("error", "ais", f"自船 VDO 位置與同批 GGA 相差 {d:.1f} m(> 3 m;1/10000′ 量化 ≈ 0.19 m)", msg.line, first.raw))
+        ths = batch_fast.get(msg.sec, {}).get("THS")
+        if ths is not None and len(ths.fields) >= 2 and msg.heading is not None:
+            if ths.fields[1] == "V":
+                if msg.heading != 511:
+                    issues.append(Issue("error", "ais", f"自船 VDO 航向 {msg.heading} 但同批 THS 模式 V(應為 511)", msg.line, first.raw))
+            else:
+                hh = _num(ths.fields[0])
+                if hh is not None and msg.heading != 511 and angle_diff(float(msg.heading), hh) > 0.51:
+                    issues.append(Issue("error", "ais", f"自船 VDO 航向 {msg.heading} ≠ 同批 THS {hh}(容許 0.5°)", msg.line, first.raw))
+
     def _decode_group(parts: list[Sentence]) -> None:
+        own = parts[0].formatter == "VDO"
+        label = "AIVDO" if own else "AIVDM"
         try:
             payload = "".join(p.fields[4] for p in parts)
             fill = int(parts[-1].fields[5] or "0")
@@ -761,11 +814,20 @@ def check_sentences(
                 bits = bits[:-fill]
             msg = decode_ais(bits, parts[-1].sec, parts[0].index)
         except (ValueError, IndexError) as ex:
-            issues.append(Issue("error", "ais", f"AIVDM 無法解碼:{ex}", parts[0].index, parts[0].raw))
+            issues.append(Issue("error", "ais", f"{label} 無法解碼:{ex}", parts[0].index, parts[0].raw))
             return
         if not (100_000_000 <= msg.mmsi <= 999_999_999):
             issues.append(Issue("error", "ais", f"AIS MMSI {msg.mmsi} 非 9 位數", msg.line, parts[0].raw))
         tr = tracks.setdefault(msg.mmsi, AisTrack(msg.mmsi))
+        if own:
+            tr.own = True
+            own_mmsi.add(msg.mmsi)
+            if len(own_mmsi) > 1:
+                issues.append(Issue("error", "ais", f"自船 VDO 的 MMSI 不一致:{sorted(own_mmsi)}", msg.line, parts[0].raw))
+            if msg.msg_type in (1, 2, 3):
+                _check_own_position(msg, parts[0])
+        elif tr.own:
+            issues.append(Issue("error", "ais", f"MMSI {msg.mmsi} 同時出現在 VDM(他船)與 VDO(自船)", msg.line, parts[0].raw))
         if msg.msg_type in (1, 2, 3):
             if msg.bit_length != 168:
                 issues.append(Issue("warning", "ais", f"類型 {msg.msg_type} 位元數 {msg.bit_length} ≠ 168", msg.line, parts[0].raw))
@@ -785,7 +847,7 @@ def check_sentences(
                 t = parse_hms(gga_t)
                 if t is not None and int(round(t)) % 60 != msg.utc_second:
                     issues.append(Issue("warning", "ais", f"MMSI {msg.mmsi} 位置報告 UTC 秒 {msg.utc_second} ≠ 同批 GGA 秒 {int(round(t)) % 60}", msg.line, parts[0].raw))
-            if msg.sec in own_pos and msg.lat is not None and msg.lon is not None and abs(msg.lat) <= 90 and abs(msg.lon) <= 180:
+            if not own and msg.sec in own_pos and msg.lat is not None and msg.lon is not None and abs(msg.lat) <= 90 and abs(msg.lon) <= 180:
                 d = distance_m(own_pos[msg.sec][0], own_pos[msg.sec][1], msg.lat, msg.lon)
                 if d > 200 * 1852:
                     issues.append(Issue("error", "ais", f"MMSI {msg.mmsi} 距自船 {d / 1852:.0f} nm(> 200 nm,編碼錯誤?)", msg.line, parts[0].raw))
@@ -809,7 +871,7 @@ def check_sentences(
             continue
         total, num = s.fields[0], s.fields[1]
         if not (total.isdigit() and num.isdigit()) or int(total) < 1 or not (1 <= int(num) <= int(total)):
-            issues.append(Issue("error", "ais", f"AIVDM 句數/序號 '{total}/{num}' 無效", s.index, s.raw))
+            issues.append(Issue("error", "ais", f"AI{s.formatter} 句數/序號 '{total}/{num}' 無效", s.index, s.raw))
             continue
         if s.fields[3] not in ("A", "B", "1", "2", ""):
             issues.append(Issue("warning", "ais", f"AIVDM 通道 '{s.fields[3]}'", s.index, s.raw))
@@ -819,7 +881,7 @@ def check_sentences(
         if int(total) == 1:
             _decode_group([s])
             continue
-        key = (s.fields[2], s.fields[3])
+        key = (s.formatter + ":" + s.fields[2], s.fields[3])
         lst = pending.setdefault(key, [])
         if int(num) != len(lst) + 1:
             issues.append(Issue("warning", "ais", f"AIVDM 多句序號不連續(seq {key[0]} 第 {num} 句)", s.index, s.raw))
@@ -860,7 +922,136 @@ def check_sentences(
         last_time=last_time,
         state_compare=compare,
         capture_seconds=capture_seconds,
+        alf=alf_rows,
+        alc=alc_summary,
     )
+
+
+ALF_STATES = ("V", "S", "A", "O", "U", "N")
+"""ALF 警報狀態(IEC 61162-1 ed.5):V 成立未確認、S 已靜音、A 已確認、O 責任已轉移、U 已解除未確認、N 正常"""
+ALF_ACTIVE_STATES = ("V", "S", "A", "O")
+"""條件仍成立的狀態(對應 ALR 條件 A)"""
+ALF_ACKED_STATES = ("A", "O")
+"""已確認(對應 ALR 確認 A)"""
+ALC_MAX_GAP_S = 30
+"""ALC 週期(NmeaGateway.AlcIntervalS;第 1 秒起每 30 s,清單改變時另送)"""
+
+
+def _check_alf_alc(sentences: list[Sentence], issues: list[Issue], win_time: dict[int, str], lo: int, hi: int, n_windows: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """ALF(IEC 61162-1 ed.5 警報句)欄位、與同秒窗 ALR 的一致性;ALC 項目數、項目與同秒窗 ALF 清單一致、週期 ≤ 30 s。"""
+    alr_by_sec: dict[int, dict[str, tuple[str, str]]] = {}
+    for s in sentences:
+        if s.formatter == "ALR" and len(s.fields) >= 5:
+            alr_by_sec.setdefault(s.sec, {})[s.fields[1]] = (s.fields[2], s.fields[3])
+    alf_by_sec: dict[int, dict[str, str]] = {}
+    alf: dict[str, dict[str, Any]] = {}
+    for s in sentences:
+        if s.formatter != "ALF" or len(s.fields) < 13:
+            continue
+        f = s.fields
+        if not (f[0] in ("1", "2") and f[1] in ("1", "2") and f[1] <= f[0]):
+            issues.append(Issue("error", "alf", f"ALF 句數/句號 '{f[0]}/{f[1]}' 無效(1–2)", s.index, s.raw))
+        if not (len(f[2]) == 1 and f[2].isdigit()):
+            issues.append(Issue("error", "alf", f"ALF 序號 '{f[2]}' 應為 0–9", s.index, s.raw))
+        if parse_hms(f[3]) is None:
+            issues.append(Issue("error", "alf", f"ALF 改變時刻 '{f[3]}' 無法解析", s.index, s.raw))
+        if f[4] not in ("A", "B", "C"):
+            issues.append(Issue("error", "alf", f"ALF 類別 '{f[4]}' 非 A/B/C", s.index, s.raw))
+        if f[5] not in ("E", "A", "W", "C"):
+            issues.append(Issue("error", "alf", f"ALF 優先序 '{f[5]}' 非 E/A/W/C", s.index, s.raw))
+        if f[6] not in ALF_STATES:
+            issues.append(Issue("error", "alf", f"ALF 狀態 '{f[6]}' 非 V/S/A/O/U/N", s.index, s.raw))
+        if len(f[7]) > 3:
+            issues.append(Issue("error", "alf", f"ALF 製造商代碼 '{f[7]}' 超過 3 字", s.index, s.raw))
+        if not f[8].isdigit():
+            issues.append(Issue("error", "alf", f"ALF 警報識別碼 '{f[8]}' 應為數字", s.index, s.raw))
+        if not (f[9].isdigit() and 1 <= int(f[9]) <= 999999):
+            issues.append(Issue("error", "alf", f"ALF 實例 '{f[9]}' 應為 1–999999", s.index, s.raw))
+        if not (f[10].isdigit() and 1 <= int(f[10]) <= 99):
+            issues.append(Issue("error", "alf", f"ALF 修訂計數 '{f[10]}' 應為 1–99", s.index, s.raw))
+        if not (len(f[11]) == 1 and f[11].isdigit()):
+            issues.append(Issue("error", "alf", f"ALF 升級計數 '{f[11]}' 應為 0–9", s.index, s.raw))
+        if not f[12] or any(ord(c) > 0x7E or ord(c) < 0x20 for c in f[12]):
+            issues.append(Issue("error", "alf", "ALF 說明文字須為非空 ASCII", s.index, s.raw))
+        ident = f[8]
+        alf_by_sec.setdefault(s.sec, {})[ident] = f[10]
+        a = alf.setdefault(ident, {"identifier": ident, "text": f[12], "count": 0, "states": set(), "category": f[4], "priority": f[5], "revisions": set(), "first": s.sec, "last": s.sec})
+        a["count"] += 1
+        a["states"].add(f[6])
+        a["revisions"].add(f[10])
+        a["last"] = s.sec
+        if a["text"] != f[12]:
+            issues.append(Issue("warning", "alf", f"ALF {ident} 文字改變:'{a['text']}' → '{f[12]}'", s.index, s.raw))
+        # 與同秒窗 ALR 一致(閘道兩者同批送出;識別碼 = ALR 編號)
+        alr = alr_by_sec.get(s.sec, {}).get(ident)
+        if alr_by_sec.get(s.sec) is not None:
+            if alr is None:
+                issues.append(Issue("error", "alf", f"ALF {ident} 在同秒窗沒有對應的 ALR", s.index, s.raw))
+            else:
+                cond, ack = alr
+                if (cond == "A") != (f[6] in ALF_ACTIVE_STATES):
+                    issues.append(Issue("error", "alf", f"ALF {ident} 狀態 {f[6]} 與 ALR 條件 {cond} 不一致", s.index, s.raw))
+                if (ack == "A") != (f[6] in ALF_ACKED_STATES):
+                    issues.append(Issue("error", "alf", f"ALF {ident} 狀態 {f[6]} 與 ALR 確認 {ack} 不一致", s.index, s.raw))
+    for sec, numbers in alr_by_sec.items():
+        for number in numbers:
+            if number not in alf_by_sec.get(sec, {}) and any(x.formatter == "ALF" for x in sentences):
+                issues.append(Issue("error", "alf", f"第 {sec} 秒窗的 ALR {number} 沒有對應的 ALF"))
+    alf_rows = [
+        {"identifier": a["identifier"], "text": a["text"], "count": a["count"], "states": "/".join(sorted(a["states"])), "category": a["category"], "priority": a["priority"],
+         "revisions": "/".join(sorted(a["revisions"], key=int)), "seconds": a["last"] - a["first"] + 1}
+        for a in sorted(alf.values(), key=lambda x: x["identifier"])
+    ]
+    # ---- ALC
+    alc_secs: list[int] = []
+    last_list: list[str] = []
+    groups: dict[tuple[int, str], dict[int, Sentence]] = {}
+    for s in sentences:
+        if s.formatter != "ALC":
+            continue
+        f = s.fields
+        if len(f) < 4 or not (f[0].isdigit() and f[1].isdigit() and f[2].isdigit() and f[3].isdigit()):
+            issues.append(Issue("error", "alc", "ALC 句數/句號/序號/項目數欄無效", s.index, s.raw))
+            continue
+        total, num, n = int(f[0]), int(f[1]), int(f[3])
+        if total < 1 or not (1 <= num <= total):
+            issues.append(Issue("error", "alc", f"ALC 句數/句號 '{f[0]}/{f[1]}' 無效", s.index, s.raw))
+        if len(f) != 4 + 4 * n:
+            issues.append(Issue("error", "alc", f"ALC 項目數 {n} 與欄位數 {len(f)} 不符(應為 4 + 4n)", s.index, s.raw))
+            continue
+        idents: list[str] = []
+        for k in range(n):
+            code, ident, inst, rev = f[4 + 4 * k], f[5 + 4 * k], f[6 + 4 * k], f[7 + 4 * k]
+            if len(code) > 3 or not ident.isdigit() or not (inst.isdigit() and int(inst) >= 1) or not (rev.isdigit() and 1 <= int(rev) <= 99):
+                issues.append(Issue("error", "alc", f"ALC 項目 {k + 1} 欄位無效:{code},{ident},{inst},{rev}", s.index, s.raw))
+            idents.append(ident)
+            expected_rev = alf_by_sec.get(s.sec, {}).get(ident)
+            if expected_rev is None and alf_by_sec.get(s.sec) is not None:
+                issues.append(Issue("error", "alc", f"ALC 項目 {ident} 在同秒窗沒有對應的 ALF", s.index, s.raw))
+            elif expected_rev is not None and expected_rev != rev:
+                issues.append(Issue("error", "alc", f"ALC 項目 {ident} 修訂 {rev} ≠ 同秒窗 ALF 的 {expected_rev}", s.index, s.raw))
+        g = groups.setdefault((s.sec, f[2]), {})
+        g[num] = s
+        if len(g) == total:
+            listed = []
+            for i in range(1, total + 1):
+                gf = g[i].fields
+                listed += [gf[5 + 4 * k] for k in range(int(gf[3]))]
+            missing = sorted(set(alf_by_sec.get(s.sec, {})) - set(listed))
+            if missing:
+                issues.append(Issue("error", "alc", f"ALC(序號 {f[2]})缺少同秒窗 ALF 的警報 {missing}", s.index, s.raw))
+            last_list = listed
+            alc_secs.append(s.sec)
+    alc_summary: dict[str, Any] | None = None
+    if alc_secs:
+        gaps = [b - a for a, b in zip(alc_secs, alc_secs[1:])]
+        max_gap = max(gaps) if gaps else 0
+        if max_gap > ALC_MAX_GAP_S:
+            issues.append(Issue("error", "alc", f"ALC 間隔 {max_gap} s > {ALC_MAX_GAP_S} s(週期清單)"))
+        alc_summary = {"count": len(alc_secs), "seconds": alc_secs, "maxGap_s": max_gap, "lastList": last_list}
+    elif n_windows >= ALC_MAX_GAP_S + 2 and any(x.formatter == "ALF" for x in sentences):
+        issues.append(Issue("warning", "alc", f"{n_windows} 個秒窗內沒有 ALC(週期清單每 {ALC_MAX_GAP_S} s)"))
+    return alf_rows, alc_summary
 
 
 def _parse_state_utc(s: str) -> datetime | None:
@@ -952,6 +1143,8 @@ def _compare_states(
                         cmp.mismatches += 1
                         issues.append(Issue("error", "state", f"{gga.fields[0]} RMC COG {cog} 與 state.cog {float(best['cog']):.2f} 相差 {d:.2f}°", rmc.index, rmc.raw))
         hdt = batch_fast.get(sec, {}).get("HDT")
+        if hdt is not None and gga.index - hdt.index > 60:
+            hdt = None  # HDT 已停送(batch_fast 保留的是更早秒窗的句子)
         heading_valid = bool(sensors.get("headingValid", True))
         if hdt is not None and heading_valid and "heading" in best:
             h = _num(hdt.fields[0])
@@ -964,6 +1157,19 @@ def _compare_states(
         elif hdt is not None and not heading_valid:
             cmp.mismatches += 1
             issues.append(Issue("error", "state", f"{gga.fields[0]} state.sensors.headingValid=false 但仍送 HDT", hdt.index, hdt.raw))
+        ths = batch_fast.get(sec, {}).get("THS")
+        if ths is not None and len(ths.fields) >= 2:
+            if heading_valid and ths.fields[1] == "A" and "heading" in best:
+                h = _num(ths.fields[0])
+                if h is not None:
+                    d = angle_diff(h, float(best["heading"]))
+                    cmp.max_heading_deg = max(cmp.max_heading_deg, d)
+                    if d > 0.051:
+                        cmp.mismatches += 1
+                        issues.append(Issue("error", "state", f"{gga.fields[0]} THS {h} 與 state.heading {float(best['heading']):.2f} 相差 {d:.2f}°", ths.index, ths.raw))
+            elif heading_valid != (ths.fields[1] != "V"):
+                cmp.mismatches += 1
+                issues.append(Issue("error", "state", f"{gga.fields[0]} THS 模式 {ths.fields[1]} 與 state.sensors.headingValid={heading_valid} 不一致", ths.index, ths.raw))
         dpt = dpt_by_sec.get(sec)
         depth_valid = bool(sensors.get("depthValid", True))
         if dpt is not None and depth_valid and "depthBelowKeel" in best:
@@ -1145,23 +1351,37 @@ def render_markdown(r: CheckResult) -> str:
         lines.append(f"| {q['time']} | {q['quality']} | {q['satellites']} | {q['hdop'] or '—'} |")
     if len(r.gga_quality) > 120:
         lines.append(f"| … | 共 {len(r.gga_quality)} 秒 | | |")
-    lines += ["", "## 5. AIS(!AIVDM 解碼)", ""]
+    lines += ["", "## 5. AIS(!AIVDM 他船 / !AIVDO 自船解碼)", ""]
     if r.ais:
-        lines += ["| MMSI | 船名(類型 5) | 呼號 | 位置報告數 | 間隔 s | 最後位置 | COG / SOG / HDG | 航行狀態 |", "|---|---|---|---|---|---|---|---|"]
+        lines += ["| MMSI | 來源 | 船名(類型 5) | 呼號 | 位置報告數 | 間隔 s | 最後位置 | COG / SOG / HDG | 航行狀態 |", "|---|---|---|---|---|---|---|---|---|"]
         for t in r.ais:
             last = t.positions[-1] if t.positions else None
             pos = f"{last.lat:.4f}, {last.lon:.4f}" if last and last.lat is not None else "—"
             mot = f"{last.cog:.1f} / {last.sog:.1f} / {last.heading}" if last else "—"
-            lines.append(f"| {t.mmsi} | {t.name or '—'} | {(t.static.call_sign if t.static else '') or '—'} | {len(t.positions)} | {','.join(map(str, t.intervals_s)) or '—'} | {pos} | {mot} | {last.nav_status if last else '—'} |")
+            lines.append(f"| {t.mmsi} | {'VDO 自船' if t.own else 'VDM'} | {t.name or '—'} | {(t.static.call_sign if t.static else '') or '—'} | {len(t.positions)} | {','.join(map(str, t.intervals_s)) or '—'} | {pos} | {mot} | {last.nav_status if last else '—'} |")
+        if not any(t.own for t in r.ais):
+            lines.append("")
+            lines.append("- 無 AIVDO(自船 AIS):情境無 ship.mmsi 且 particulars 無 mmsi")
     else:
-        lines.append("- 無 AIVDM(情境無 AIS 目標或 AIS 關閉)")
-    lines += ["", "## 6. 警報 ALR", ""]
+        lines.append("- 無 AIVDM/AIVDO(情境無 AIS 目標或 AIS 關閉;自船未設定 MMSI)")
+    lines += ["", "## 6. 警報 ALR / ALF / ALC", ""]
     if r.alerts:
         lines += ["| 編號 | 文字 | 句數 | 出現秒數 | 條件 | 確認 |", "|---|---|---|---|---|---|"]
         for a in r.alerts:
             lines.append(f"| {a['number']} | {a['text']} | {a['count']} | {a['seconds']} | {a['conditions']} | {a['acks']} |")
     else:
         lines.append("- 無 ALR(無警報)")
+    lines.append("")
+    if r.alf:
+        lines += ["| ALF 識別碼 | 文字 | 句數 | 出現秒數 | 狀態 | 類別/優先序 | 修訂 |", "|---|---|---|---|---|---|---|"]
+        for a in r.alf:
+            lines.append(f"| {a['identifier']} | {a['text']} | {a['count']} | {a['seconds']} | {a['states']} | {a['category']}/{a['priority']} | {a['revisions']} |")
+    else:
+        lines.append("- 無 ALF(無警報)")
+    if r.alc:
+        lines.append(f"- ALC 週期清單:{r.alc['count']} 次(秒窗 {','.join(map(str, r.alc['seconds'][:20]))}{'…' if len(r.alc['seconds']) > 20 else ''};最大間隔 {r.alc['maxGap_s']} s;最後清單 {r.alc['lastList'] or '空'})")
+    else:
+        lines.append("- 無 ALC")
     lines += ["", "## 7. 與核心狀態比對", ""]
     if r.state_compare is None:
         lines.append("- 未提供狀態(`--ws` 或 `--state`),略過")
@@ -1185,7 +1405,7 @@ def render_markdown(r: CheckResult) -> str:
         "## 9. 結論",
         "",
         f"- 自動檢驗:{verdict}。",
-        "- OpenCPN 顯示(自船/AIS/深度、GNSS 失效後顯示)需實機核對:`tools/opencpn-check.md`;連線設定 `config/opencpn/README.md`。",
+        "- OpenCPN 顯示(自船/AIS/深度、GNSS 失效後顯示;自船 VDO 的 MMSI 須在 OpenCPN 標為 Own ship)需實機核對:`tools/opencpn-check.md`;連線設定 `config/opencpn/README.md`。",
         "",
     ]
     return "\n".join(lines)
@@ -1204,10 +1424,12 @@ def result_to_json(r: CheckResult) -> dict[str, Any]:
         "rates": [asdict(x) for x in r.rates],
         "issues": [asdict(x) for x in r.issues],
         "ais": [
-            {"mmsi": t.mmsi, "name": t.name, "positions": len(t.positions), "intervals_s": t.intervals_s, "static": t.static is not None}
+            {"mmsi": t.mmsi, "own": t.own, "name": t.name, "positions": len(t.positions), "intervals_s": t.intervals_s, "static": t.static is not None}
             for t in r.ais
         ],
         "alerts": r.alerts,
+        "alf": r.alf,
+        "alc": r.alc,
         "ggaQuality": r.gga_quality,
         "stateCompare": asdict(r.state_compare) if r.state_compare else None,
     }
@@ -1230,7 +1452,7 @@ def _default_report() -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="python -m simosa_brm.nmea_check", description="SimCore.Host NMEA 0183 一致性檢驗(校驗和/欄位數/速率/時間/AIS/ALR/狀態比對)")
+    p = argparse.ArgumentParser(prog="python -m simosa_brm.nmea_check", description="SimCore.Host NMEA 0183 一致性檢驗(校驗和/欄位數/速率/時間/AIS VDM+VDO/ALR+ALF+ALC/狀態比對)")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--udp", type=int, metavar="PORT", help="接收 UDP 單播(Host --nmea-port 或 --nmea-target 的埠)")
     src.add_argument("--multicast", metavar="GROUP:PORT", help="加入多播群組接收(Host --nmea-multicast,預設 239.192.0.1:60001)")

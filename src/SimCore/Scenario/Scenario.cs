@@ -424,6 +424,8 @@ public sealed class Scenario
             if (si.CoefficientScale is { } scale && (!double.IsFinite(scale) || scale < 0)) Error($"{sp}.coefficientScale", "coefficientScale 必須為 ≥ 0 的有限數值");
             if (si.EventThresholdT is { } thr && (!double.IsFinite(thr) || thr < 0)) Error($"{sp}.eventThreshold_t", "eventThreshold_t 必須為 ≥ 0 的有限數值");
         }
+        // 自船 AIS MMSI(ship.mmsi;NMEA 閘道 VDO):0–999999999。與 Python structural_issues 一致
+        if (Ship.Mmsi is { } mmsi && (mmsi < 0 || mmsi > 999_999_999)) Error("ship.mmsi", "mmsi 須為 0–999999999 的整數");
         // 橫搖(ship.roll;設計文件 physics-roll.md 第 2 節):naturalPeriod_s > 0、0 < dampingRatio < 1、各 gain ≥ 0(皆有限;enabled 與否都檢查)。與 Python roll_issues 一致
         if (Ship.Roll is { } roll)
         {
@@ -581,6 +583,11 @@ public sealed class ScenarioShip
     /// <summary>FSB1 / FSB2</summary>
     public string Id { get; set; } = "FSB1";
     public LoadingCondition Loading { get; set; } = LoadingCondition.Ballast;
+    /// <summary>
+    /// 自船 AIS MMSI(選填,0–999999999):NMEA 閘道以此送 !AIVDO(自船 AIS 類型 1/5);未給時取 particulars.mmsi,皆無則不送 VDO 並記一次 log。
+    /// 不影響物理與雜湊(docs/design/sensors-alerts.md 第 6 節)。
+    /// </summary>
+    public int? Mmsi { get; set; }
     /// <summary>
     /// 解耦 1 自由度橫搖(選填、預設關閉;設計文件 docs/design/physics-roll.md):enabled 時核心以線性橫搖方程式計算迴轉/風傾靜傾與浪激勵橫搖,
     /// 輸出 state.roll、雜湊追加 ROLLDOF1 區塊;不回饋到 3 自由度運動。未給或 enabled = false 時與舊版逐位元相同。

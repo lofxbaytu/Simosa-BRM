@@ -12,7 +12,8 @@ namespace SimosaBRM.SimCore.Tests;
 public class AisTests
 {
     /// <summary>簡易解碼器:去裝甲 → 位元串 → 欄位(測試專用,與編碼器獨立撰寫)。</summary>
-    private sealed class AisDecoder
+    /// <summary>測試用 AIS 解碼(!AIVDM 與 !AIVDO 皆可;NmeaTests 的自船 VDO 亦用)。</summary>
+    internal sealed class AisDecoder
     {
         private readonly string _bits;
         public int Length => _bits.Length;
@@ -26,7 +27,7 @@ public class AisTests
                 Assert.True(NmeaSentence.Verify(s), s);
                 var body = s[1..s.LastIndexOf('*')];
                 var f = body.Split(',');
-                Assert.Equal("AIVDM", f[0]);
+                Assert.True(f[0] is "AIVDM" or "AIVDO", f[0]);
                 foreach (var c in f[5])
                 {
                     var v = c - 48;
