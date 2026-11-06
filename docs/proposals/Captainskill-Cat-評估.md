@@ -3,7 +3,32 @@
 > 日期:2026-11-06。依據:Google Drive 上 Maritime Handy Tool Seagull(以下簡稱 MHT)的 `CURRENT_STATUS.md`(v128,2026-11-01)、`實機測試清單.md`(51 項)、`擴充性檢查_2026-10-22.md`,以及本儲存庫(Simosa-BRM)的現況。
 > 本文只談架構與範圍,不含任何金鑰、專案 ID、帳號等識別資訊;可自行搬到 MHT 的 docs 資料夾。
 
-## 0. 結論
+## 0. 結論(2026-11-06 評審後修正版)
+
+> 本節先寫第二輪評審工作流(三位辯護、三位質疑、一位綜合,全部讀過 MHT 狀態快照)的修正結論;原第一版結論保留在 0.2 節供對照。
+
+### 0.1 修正後的建議:直接在 MHT 內擴充,不另做 App,也先不出第二支 APK
+
+**回答「直接在 MHT 內擴充,還是做新 App 再串接 MHT?」:直接在 MHT 內擴充。** 做法是加第三種導覽版面 `NavProfile.captain` 與船長儀表板,船長模組各自一個 feature 資料夾登記進 `kAppModules`;平板寬版元件放共用層。約 1 天就能在業主的平板上看到「船長模式」。
+
+評審找出的關鍵事實(都出自 MHT 狀態快照,第一版評估沒看到或看錯):
+
+1. **MHT 在 2026-06 已經做過「兩 flavor」然後作廢**,最終定案「單一 App、執行期判定身分」。第一版建議的方案 B(product flavor)等於重走一次被放棄的路;另外 gradle flavor 與 `--dart-define` 是兩個真相來源,漏打其中一個就得到「Cat 圖示、Seagull 邏輯」的 APK。
+2. **同 schema 不等於兩台裝置之間有資料通路。** `kSyncedTables` 白名單至今只有 `crew_members`、`work_rest_days` 兩張;備份還原是「整庫覆蓋」不是合併;自 v49 起 Drive 上的備份是 manifest + blob 的增量內部格式,不是一個 `.mhtbackup`;而且 `drive.file` 範圍只看得到同一個 OAuth client 建的檔,不同 applicationId 的 App 看不到 MHT 的備份。所以不論 B 或 Y,「手機 MHT 與平板即時同步」都不是自動附送的。
+3. **船長的簽核權限在現行角色模型裡不存在。** `GroupRole{companyAdmin, officer, crew, none}`,船上的人只能是 crew,`canApproveReports` 是 officer/companyAdmin 的權限,`firestore.rules` 已部署「approved/locked 後船員不能改」。要做「簽核」就得在 `GroupRole` 加船長角色並更新 `firestore.rules`,這在任何方案都省不掉。
+4. **內購綁 applicationId。** `mht_full_unlock` 是一次性商品、本機信任、靠 `restorePurchases` 回填;第二支 APK 的買家在 Cat 裡查無購買紀錄,要嘛重複收費,要嘛在共用的授權邏輯裡加跨產品判斷。這是第二支 APK 最髒的地方。
+5. **「新 App 再串接」的致命傷:MHT 的語意不在資料表裡,在純 Dart 規則檔裡。** 船帳結存由 `ship_fund_books.dart` 從第 1 期滾算(v122 之後舊表留著但不再顯示,直接讀表會讀到死資料)、到期總覽在 `due_items.dart`、定期工作在 `recurring_rules.dart`、工休違規在 `work_rest_rules.dart`、油耗稽核在 `noon_fuel_audit.dart`。新 App 讀到原始列算不出船長要看的數字,要嘛重寫一份規則(回到被否決的複製方案),要嘛每次 MHT 出版就對一次欄位;而 10/15 到 10/22 一週內 schema 從 31 跳到 36,還有 `drawing_settings`、`extraJson`、`guides/`、`form_templates/` 這類不動 `user_version` 的改動完全抓不到。MHT 對外只接 `ACTION_SEND application/pdf`,匯入中心不是 intent 接收端,回寫狀態一樣得改 MHT 主幹,「不動 MHT」不成立。成本對等後是 14 到 22 天對 11 到 14 天,外加每次 schema 升級的經常稅。
+6. **一人開發的 QA 頻寬是硬上限。** 實機清單 27 到 51 共 25 項業主還沒測,平板項目「不知道怎麼測」;第二支 APK 代表每版雙 APK 驗證,結果只會是 Cat 不測就出或 MHT 節奏被拖慢。
+
+決策規則:
+
+- 只是「船長在平板上用」,買家是同一家公司或同一位船長:**直接在 MHT 內擴充**。
+- 確定需要獨立名稱、Play 上架、不同定價:先在 MHT 內做完船長模式,再升級成 product flavor(第 3 節);程式碼全部留用,但要先解決上面第 1、4 點。
+- Cat 只做與 MHT 資料無關的駕駛台計算(引航卡讀 Simosa-BRM 的 particulars、UKC、NMEA、夜令):才考慮獨立 App,但那是放棄 MHT 資料,不是「串接」。
+
+不論哪條路,有兩筆工程省不掉:(a) 把船長會改的表(申請單狀態、缺失、交接、夜令)加進 `kSyncedTables`,並在兩台裝置實機驗證同步(v93 的逐列同步從沒實機驗證過);(b) `GroupRole` 加船長角色並更新 `firestore.rules`。
+
+### 0.2 第一版結論(2026-11-06 上午,評審前;保留供對照)
 
 **不要用「複製程式碼到新 repo」的方式做。** Captainskill Cat 與 MHT 的重疊估計在七成以上,而且重疊的正是 MHT 最重的部分(Drift 資料庫 36 版 migration、同步觸發器、模組註冊表、850 項測試、Google 登入與備份、AI 辨識)。複製一份之後,每修一個 bug 都要修兩次,兩邊的資料庫 migration 會立刻分叉,半年內一定有一邊被放棄。
 
