@@ -80,7 +80,7 @@
 
 ## 4. 單元明細
 
-每單元的「簡報要點」由情境檔 `briefing` 區段於簡化教官模式播放;「講評引導問題」在情境檔(`docs/design/scenario-library.md`),目前未於畫面獨立呈現(R7),帶領者自講評卡紙本或本節讀取。
+每單元的「簡報要點」由情境檔 `briefing` 區段於簡化教官模式播放;「講評引導問題」與「同儕評估提示」寫在情境檔 `briefing.debriefQuestions` / `peerAssessmentPrompts`(目前 E20、E22a–d 已補,見 `docs/design/scenario-library.md` 第 20.1 節),由教官站簡報區(可摺疊)、練習結束頁與講評報告的講評紀錄段呈現(R7);尚未補清單的情境仍由帶領者自講評卡紙本或本節讀取。簡報後的規劃時間(`briefing.planningTimeMin`)由簡報頁倒數計時。
 
 | 單元/情境 | 學習目標(學員能夠…) | 主要行為標記要素 | 對應 STCW/課程 | 簡報要點 |
 |---|---|---|---|---|

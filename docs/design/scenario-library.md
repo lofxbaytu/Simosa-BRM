@@ -612,7 +612,7 @@ bands:
 
 ## 20. E22 1.39 教室模式迷你情境(E22a–E22d)
 
-規劃書第 8.0 節:1.39 人因理論不另設講授時段,併入練習的簡報資料與講評引導問題,由簡化教官模式播放、船長帶領討論。E22 以 4 個 12 分鐘的短情境實作,**不套用三步升級**(各有一個 `phase: discussion` 討論點,教官可在此暫停帶領討論),**無硬性失敗、無容許帶**,評估以必要事件(acknowledge/舵令)與講評為主;無人操作時分數低於及格(講評素材)。共同:開闊水域(22.40 N、120.00 E,示意,待 ENC 校正)、交班開場(`handover`,narrator)、`handoverChecklist`、簡報附件含 1.39 單元講義、長度 `briefing.duration_s` 720 s。
+規劃書第 8.0 節:1.39 人因理論不另設講授時段,併入練習的簡報資料與講評引導問題,由簡化教官模式播放、船長帶領討論(第二十六輪起講評引導問題與同儕評估提示寫在各檔 `briefing.debriefQuestions` / `peerAssessmentPrompts`,簡報後規劃時間 `planningTimeMin: 5`;教官站簡報區與講評報告直接呈現,見第 20.1 節)。E22 以 4 個 12 分鐘的短情境實作,**不套用三步升級**(各有一個 `phase: discussion` 討論點,教官可在此暫停帶領討論),**無硬性失敗、無容許帶**,評估以必要事件(acknowledge/舵令)與講評為主;無人操作時分數低於及格(講評素材)。共同:開闊水域(22.40 N、120.00 E,示意,待 ENC 校正)、交班開場(`handover`,narrator)、`handoverChecklist`、簡報附件含 1.39 單元講義、長度 `briefing.duration_s` 720 s。
 
 | 情境 | 1.39 單元 | 腳本 | 必要事件(期限參數) |
 |---|---|---|---|
@@ -622,6 +622,22 @@ bands:
 | E22d 文化差異的溝通 | 文化差異、閉環溝通、SMCP | 手操舵;T+150 s 中文「左舵十」→ 外籍舵工「Yes sir」卻操右舵 10(timeline `ownShip`,不計為學員舵令);T+420 s 外籍二管輪英語電話「reduce RPM five minute」;T+540 s 討論點 | `rudderCorrection` rudderOrder ≤ `bridge.e22.closedLoop_s`;`smcpConfirm`、`readBack` verbal ≤ `bridge.e22.languageConfirm_s` |
 
 xunit:`E22_NoOperatorRunsScriptAndMissesRequirements`(腳本時刻、討論點為唯一的階段變化、必要事件全部 missed、分數 < passMark、E22c 未質疑分支)、`E22_ScriptedResponsesMeetRequirements`(各期望行為於期限內:必要事件 met、100 分;E22c 質疑後 180 s 船長接受、舵工照令分支不出現),皆紀錄 → 重播一致。
+
+### 20.1 簡報結構:規劃時間、同儕評估提示、講評引導問題(第二十六輪,R7)
+
+規劃書第 9.1 節簡報內容(情境、角色、規劃時間、同儕評估提示)與第 11 章講評:E20 兩檔與 E22a–d 的 `briefing` 補 `planningTimeMin`、
+`peerAssessmentPrompts`(3–5 條)、`debriefQuestions`(3–5 條;E22a 原本寫在簡報文字末行的三個問題搬成清單並保留原文),其他情境暫不補
+(schema 選填;情境引擎設計第 1.4 節)。教官站:情境面板詳細區與簡化教官模式簡報頁的 `<brm-briefing-block>` 顯示規劃時間倒數
+(本地計時,到時記入學員操作紀錄)、提示清單(展開)與引導問題(摺疊);練習結束頁與講評報告(來源為紀錄標頭 `header.scenario.briefing`)
+列於講評摘要/講評紀錄旁。xunit `ScenarioLibraryFinalTests.BriefingHasPlanningTimeAndDebriefGuide`(六檔皆有、E20 兩檔相同)。
+
+| 情境 | 規劃時間 | 講評引導問題(摘要;全文見 YAML) |
+|---|---|---|
+| E20 ×2 | 15 min | 交班資訊哪些確認過;第一次故障誰先察覺、首個動作與通報;干擾時的分工;引水人建議與書面計畫衝突時的決定;靠泊接近速度/拖船與中止標準 |
+| E22a | 5 min | 交班者說法/航海日誌/ARPA 何者為真;延後接班的權利;閉環確認交班內容;如何交班才不留矛盾 |
+| E22b | 5 min | 疲勞徵兆與對判斷的影響;「錨泊船」解釋為何易被接受(確認偏誤);何時該依夜令叫船長;下次夜班改變什麼 |
+| E22c | 5 min | 聽到錯誤舵令時想說什麼、為何(沒)說出口;PACE 四層次;船長如何讓部屬敢質疑;船長堅持不改的下一步 |
+| E22d | 5 min | 「Yes sir」卻做錯與權力距離/語言;閉環溝通三步驟哪一步斷掉;讓成員敢說聽不懂、SMCP 的作用;機艙英語電話如何確認 |
 
 ## 21. 第三批共同:參數、契約、測試、限制、待辦
 
@@ -729,7 +745,7 @@ xunit:`E22_NoOperatorRunsScriptAndMissesRequirements`(腳本時刻、討論點�
 
 1. 以 ENC/港方資料校正 `kaohsiung-e20-passage.json`(口門、防波堤、港內航道、淺灘、油碼頭泊位)並與 E09/E17 的港內示意幾何統一後重錄夾具。
 2. E19 人員狀態(集合後駕駛台人力)與火災發展模型;E20 教官站「注入 X」鈕依 `briefing`/項目名稱分組顯示(目前為一般手動項目)。
-3. E22 迷你情境的講評引導問題與 1.39 講義由 BRM 教官定稿;參數集假設值依公司 SMS 核定後 bump version 並重新驗證引用情境。
+3. E22 迷你情境的講評引導問題(第二十六輪已寫入 YAML `briefing.debriefQuestions`,第 20.1 節)與 1.39 講義由 BRM 教官定稿;參數集假設值依公司 SMS 核定後 bump version 並重新驗證引用情境。
 
 ## 22. 第三批收尾審查修正(2026-10-18,E19/E20/E22a/E22b)
 
