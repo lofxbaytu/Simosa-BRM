@@ -15,6 +15,8 @@
 # 結束碼:0 合格、1 不合格(含中途 Ctrl+C 中止、核心提前結束)、2 前置條件/參數錯誤。需獨佔 CPU:不要與整套測試或端對端併行。
 # 用法:tools/soak-test.sh [--minutes 10] [--clients 3] [--scenario E05_pilot_traffic|<path.yaml>] [--port-base 18800] [--no-radar] [--no-web] [--skip-build]
 #       [--sample-s 10] [--max-latency-ms 50] [--max-rss-slope-mb-per-min 1] [--max-rss-growth-mb 64] [--warmup-s 120] [--run <名稱>] [--note <機器說明>]
+#       [--gen0-budget-mb N](N > 0 時對核心/雷達/網頁程序設 DOTNET_GCgen0MaxBudget = N MB:.NET 的 gen0 配置預算隨 L3 快取放大,
+#        雲端 VM 的 L3 可達數百 MiB,RSS 會線性上升到第一次 gen0 回收才持平;設 32 可模擬船上筆電(L3 約 12–24 MiB)。docs/design/testing.md 6.3)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -22,7 +24,7 @@ cd "$ROOT"
 source "$ROOT/tools/launch/launch-common.sh"
 
 MINUTES=10; CLIENTS=3; SCENARIO="E05_pilot_traffic"; BASE=18800; RADAR_ON=1; WEB_ON=1; SKIP_BUILD=0; SAMPLE=10
-MAX_LAT=50; MAX_SLOPE=1; MAX_GROWTH=64; WARMUP=120; RUN=""; NOTE=""
+MAX_LAT=50; MAX_SLOPE=1; MAX_GROWTH=64; WARMUP=120; RUN=""; NOTE=""; GEN0_MB=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --minutes) MINUTES="$2"; shift 2 ;;
@@ -39,11 +41,13 @@ while [[ $# -gt 0 ]]; do
     --warmup-s) WARMUP="$2"; shift 2 ;;
     --run) RUN="$2"; shift 2 ;;
     --note) NOTE="$2"; shift 2 ;;
-    -h|--help) sed -n 2,16p "${BASH_SOURCE[0]}"; exit 0 ;;
+    --gen0-budget-mb) GEN0_MB="$2"; shift 2 ;;
+    -h|--help) sed -n 2,19p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
 [[ "$MINUTES" =~ ^[0-9]+([.][0-9]+)?$ && "$CLIENTS" =~ ^[0-9]+$ && "$BASE" =~ ^[0-9]+$ && "$SAMPLE" =~ ^[0-9]+$ ]] || { echo "--minutes/--clients/--port-base/--sample-s 須為數字" >&2; exit 2; }
+[[ "$GEN0_MB" =~ ^[0-9]+$ ]] || { echo "--gen0-budget-mb 須為非負整數(MB;0 = 不設定)" >&2; exit 2; }
 [[ "$CLIENTS" -ge 1 && "$SAMPLE" -ge 1 ]] || { echo "--clients 與 --sample-s 須 ≥ 1" >&2; exit 2; }
 SECS="$(awk -v m="$MINUTES" 'BEGIN { printf "%d", m * 60 }')"
 [[ "$SECS" -ge 10 ]] || { echo "--minutes 太短(至少 10 s)" >&2; exit 2; }
@@ -62,6 +66,9 @@ mkdir -p "$OUT/records" "$OUT/media" "$STATS" "$ROOT/$LOGS_REL"
 REPORT_MD="$ROOT/build/soak/report-$RUN.md"; REPORT_JSON="$ROOT/build/soak/report-$RUN.json"
 WS=$BASE; RADAR=$((BASE + 1)); WEB=$((BASE + 2)); VHF=$((BASE + 3)); MEDIA=$((BASE + 4))
 CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+# gen0 預算上限(十六進位位元組;只影響本腳本啟動的 dotnet 子程序)與本機 L3 快取大小(報告用)
+if [[ "$GEN0_MB" -gt 0 ]]; then export DOTNET_GCgen0MaxBudget="$(printf '%x' $((GEN0_MB * 1024 * 1024)))"; fi
+L3_BYTES="$(getconf LEVEL3_CACHE_SIZE 2>/dev/null || echo 0)"; [[ "$L3_BYTES" =~ ^[0-9]+$ ]] || L3_BYTES=0
 GIT_REV=""; if [[ -f .git/HEAD ]]; then head="$(cat .git/HEAD)"; if [[ "$head" == ref:* ]]; then ref="${head#ref: }"; [[ -f ".git/$ref" ]] && GIT_REV="$(cat ".git/$ref")"; else GIT_REV="$head"; fi; fi
 step() { echo; echo "=== [soak] $1"; }
 now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
@@ -114,6 +121,7 @@ write_meta() {
   "dotnet": "$(dotnet --version 2>/dev/null || echo ?)", "node": "$(node --version)", "gitRev": $([[ -n "$GIT_REV" ]] && echo "\"$GIT_REV\"" || echo null),
   "recordPath": "$(json_str "$OUT_REL/records/soak-$SCEN_ID.jsonl")", "hostPid": ${HOST_PID:-0}, "hostExit": $HOST_EXIT, "footer": $FOOTER, "aborted": $([[ $ABORTED == 1 ]] && echo true || echo false),
   "counters": $([[ -n "$DC" ]] && echo true || echo false),
+  "gen0BudgetMb": $GEN0_MB, "l3CacheBytes": $L3_BYTES,
   "thresholds": { "maxLatencyMs": $MAX_LAT, "maxRssSlopeMbPerMin": $MAX_SLOPE, "maxRssGrowthMb": $MAX_GROWTH, "warmupS": $WARMUP }
 }
 JSON
