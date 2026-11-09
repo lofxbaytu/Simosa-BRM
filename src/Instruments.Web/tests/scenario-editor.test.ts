@@ -375,7 +375,7 @@ briefing:
   debriefQuestions: [哪一個資訊可信?]
 `);
     expect(validateDraft(d).issues).toEqual([]);
-    const yaml = scenarioToYaml(d);
+    const yaml = scenarioToYaml(toScenarioObject(d));
     expect(yaml).toContain('planningTimeMin: 15');
     expect(parseYaml(yaml).briefing).toEqual({ text: '交班', planningTimeMin: 15, peerAssessmentPrompts: ['觀察閉環溝通'], debriefQuestions: ['哪一個資訊可信?'] });
     const bad = { ...d, briefing: { ...d.briefing, planningTimeMin: 121, peerAssessmentPrompts: ['ok', ' '], debriefQuestions: 'x' } };

@@ -125,7 +125,7 @@ describe('OperationLogDeriver.clear(keep)', () => {
     const log = new OperationLogDeriver({ now: () => new Date(Date.UTC(2026, 0, 1)) });
     const s = seq();
     log.push(s.at(0));
-    log.push(s.at(1, { rudder: 10 }));
+    log.push(s.at(1, { rudderOrder: 10 }));
     const planning = log.addExternal('planningTime', '規劃時間結束(5 分鐘)', 1, 5);
     expect(log.length).toBe(2);
     log.clear((e) => e.kind === 'planningTime');
@@ -133,6 +133,6 @@ describe('OperationLogDeriver.clear(keep)', () => {
     log.clear();
     expect(log.length).toBe(0);
     // 清空後第一筆重新作基準,不會把前一筆舵角當變化
-    expect(log.push(s.at(2, { rudder: 20 }))).toEqual([]);
+    expect(log.push(s.at(2, { rudderOrder: 20 }))).toEqual([]);
   });
 });
