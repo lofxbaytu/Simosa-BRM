@@ -2151,6 +2151,25 @@
         "duration_s": {
           "type": "number",
           "description": "情境預估長度(驗證器用;預設 2 小時)"
+        },
+        "planningTimeMin": {
+          "type": "number",
+          "minimum": 0,
+          "description": "簡報後給團隊的規劃時間(分鐘;規劃書第 9.1 節簡報內容「規劃時間」)。教官站簡報區顯示本地倒數計時器(不送核心指令、不影響狀態雜湊);省略或 0 = 不顯示計時器"
+        },
+        "peerAssessmentPrompts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "同儕評估提示(規劃書第 9.1 節):簡報時提示學員互相觀察的重點,講評時供講評者引導;每項一句"
+        },
+        "debriefQuestions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "講評引導問題(規劃書第 11 章講評;1.39 教室模式由帶領者帶領討論):教官站簡報區可摺疊清單、講評報告列於講評紀錄旁;每項一句"
         }
       }
     },

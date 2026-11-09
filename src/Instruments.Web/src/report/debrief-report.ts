@@ -2,6 +2,7 @@
 // 第 8.3 節「講評報告顯示參數集版次與來源程序文件編號」):由核心 JSON Lines 紀錄或教官站紀錄(record-replay.parseReplay)
 // 加上行為標記評估表組成。本檔只產生資料模型(純函式,供 vitest 檢查),畫面在 report-app.ts。
 
+import { parseBriefing } from '../lib/timeline.js';
 import type { SimEvent } from '../types/event.js';
 import type { AssessmentSummary } from '../lib/assessment.js';
 import type { BrmMarker } from '../lib/brm-markers.js';
@@ -574,6 +575,25 @@ export interface ExerciseInfo {
   rewinds: number;
 }
 
+/** 情境簡報中的講評引導結構(規劃書第 9.1 節同儕評估提示、第 11 章講評引導問題;R7):來源為紀錄標頭 header.scenario.briefing。 */
+export interface BriefingGuide {
+  debriefQuestions: string[];
+  peerAssessmentPrompts: string[];
+  /** 簡報後的規劃時間(分鐘;有設定時列在練習資訊) */
+  planningTimeMin?: number;
+}
+
+/** 由紀錄標頭的情境物件取出講評引導結構;沒有 briefing 或三個欄位皆空時 null(舊紀錄/未補的情境不顯示該段)。 */
+export function briefingGuideOf(scenario: unknown): BriefingGuide | null {
+  if (!isRecord(scenario)) return null;
+  const b = parseBriefing(scenario['briefing']);
+  if (b.debriefQuestions.length === 0 && b.peerAssessmentPrompts.length === 0 && (b.planningTimeMin ?? 0) <= 0) return null;
+  const guide: BriefingGuide = { debriefQuestions: b.debriefQuestions, peerAssessmentPrompts: b.peerAssessmentPrompts };
+  const planning = b.planningTimeMin;
+  if (planning !== undefined && planning > 0) guide.planningTimeMin = planning;
+  return guide;
+}
+
 export interface DebriefReport {
   headerLabel: string;
   reportNo: string;
@@ -590,6 +610,8 @@ export interface DebriefReport {
   anchorsVersion: string;
   anchorsStatus: string;
   debrief: Array<{ id: DebriefSectionId; title: string; hint: string; text: string }>;
+  /** 情境簡報的講評引導問題與同儕評估提示(紀錄標頭 header.scenario.briefing;無則 null,報告不印該段) */
+  briefingGuide: BriefingGuide | null;
   parameters: ParameterSection;
   /** 紀錄標頭的參與者與休息時間確認(教官站 sessionInfo;規劃書第 5.5 節);紀錄沒有時 null */
   sessionInfo: SessionInfo | null;
@@ -662,6 +684,7 @@ export function buildDebriefReport(input: BuildReportInput): DebriefReport {
     anchorsVersion: anchors.version,
     anchorsStatus: anchors.statusLabel,
     debrief: DEBRIEF_SECTIONS.map((s) => ({ id: s.id, title: s.title, hint: s.hint, text: meta.debrief[s.id] ?? '' })),
+    briefingGuide: briefingGuideOf(h.scenario),
     parameters: buildParameterSection(data),
     sessionInfo: data.header.sessionInfo ?? null,
     vhf: vhfActivity(data.events),
@@ -687,5 +710,6 @@ export function reportOutline(r: DebriefReport): string[] {
   if (r.parameters.version) out.push(`參數集 ${r.parameters.id ?? ''} ${r.parameters.version}`.trim());
   if (r.parameters.documents.length) out.push(`來源文件 ${r.parameters.documents.map((d) => `${d.source} 第 ${d.revisions.join('/')} 版`).join('、')}`);
   if (r.vhf) out.push(`VHF 通話 ${r.vhf.calls} 次 ${r.vhf.duration_s} s / 文字 ${r.vhf.texts} / DSC ${r.vhf.dsc}`);
+  if (r.briefingGuide) out.push(`講評引導問題 ${r.briefingGuide.debriefQuestions.length} 條 / 同儕評估提示 ${r.briefingGuide.peerAssessmentPrompts.length} 條`);
   return out;
 }

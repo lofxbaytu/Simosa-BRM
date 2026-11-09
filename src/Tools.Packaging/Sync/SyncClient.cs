@@ -199,7 +199,7 @@ public static class SyncClient
         o.Store.UpdateFleet(new ShipVersionEntry
         {
             ShipId = ch.ShipId, DeviceId = ch.DeviceId, Version = status.Version, PackageId = status.PackageId, Components = status.Components,
-            ParameterSet = status.ParameterSet, Via = "tcp",
+            ParameterSet = status.ParameterSet, Environment = status.Environment, Via = "tcp",
         });
         await SyncProtocol.WriteAsync(s, new { type = SyncTypes.Bye }, ct).ConfigureAwait(false);
         try { await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false); }

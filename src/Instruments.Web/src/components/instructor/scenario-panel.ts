@@ -1,6 +1,6 @@
 // 情境選擇(規劃書第 9.1 節執行控制「載入/啟動」):列出建置時匯入的 data/scenarios/*.yaml,
-// 顯示 id、標題、船、裝載、環境摘要、時間表/航線/規則/參數引用數、簡報附件與角色;按「載入」發出 scenario-load 事件
-// (由教官站送 loadScenario 指令)。
+// 顯示 id、標題、船、裝載、環境摘要、時間表/航線/規則/參數引用數、簡報附件與角色,以及簡報結構(規劃時間倒數、同儕評估提示、
+// 講評引導問題;<brm-briefing-block>,R7);按「載入」發出 scenario-load 事件(由教官站送 loadScenario 指令)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -9,6 +9,7 @@ import { instructorStyles } from './instructor-shared.js';
 import { environmentSummary, extensionSummary, initialSummary, loadingLabel, type ScenarioSummary } from '../../lib/scenario.js';
 import { PLAYED_BY_LABEL } from '../../lib/timeline.js';
 import { ROLE_LABEL, type ScenarioLoadRejection } from '../../lib/sim-event.js';
+import './briefing-block.js';
 
 export type ScenarioLoadEvent = CustomEvent<ScenarioSummary>;
 
@@ -160,6 +161,7 @@ export class ScenarioPanel extends LitElement {
               ${sel.briefingDoc.attachments.length > 0
                 ? html`<div class="attachments">附件:${sel.briefingDoc.attachments.map((a) => html`<a href=${`data/scenarios/${sel.id}/${a.file}`} target="_blank" rel="noopener" title=${a.file}>${a.title}</a>`)}</div>`
                 : nothing}
+              <brm-briefing-block .briefing=${sel.briefingDoc}></brm-briefing-block>
               ${sel.issues.length > 0 ? html`<div class="issues">${sel.issues.join('; ')}</div>` : nothing}
             </div>`
           : nothing}

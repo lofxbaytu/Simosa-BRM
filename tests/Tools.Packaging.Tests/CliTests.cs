@@ -47,6 +47,15 @@ public sealed class CliTests : IDisposable
         Assert.Equal("2026.10.9", status.Version);
         Assert.Equal("FSB1", status.ShipId);
         Assert.True(status.RollbackAvailable);
+        // 環境版次(作業系統 / .NET / WebView2;規劃書第 5.5 節):--json 有 environment 物件,文字輸出有「環境:」一行
+        Assert.Contains("\"environment\"", st.Out);
+        Assert.NotNull(status.Environment);
+        Assert.False(string.IsNullOrWhiteSpace(status.Environment!.Os));
+        if (!OperatingSystem.IsWindows()) Assert.Null(status.Environment.WebView2);
+        var text = Run("status", "--root", ship.Root);
+        Assert.Equal(0, text.Code);
+        Assert.Contains("環境:", text.Out);
+        Assert.Contains("WebView2", text.Out);
     }
 
     [Fact]

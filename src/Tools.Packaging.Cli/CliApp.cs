@@ -434,6 +434,8 @@ public sealed class CliApp
         foreach (var d in st.SmsDocuments) _out.WriteLine($"  SMS {d.DocumentId} 第 {d.Revision} 版(核准人 {d.ApprovedBy})");
         _out.WriteLine($"信任金鑰:{string.Join("、", st.TrustedKeys.Select(k => $"{k.Name}({TrustedKey.RoleLabel(k.Role)})"))}");
         _out.WriteLine($"待回傳紀錄包 {st.OutstandingRecordPackages} 個;訪船 #{st.VisitSeq};{(st.RollbackAvailable ? "可回復上一版" : "無上一版")}");
+        // 環境版次(作業系統 / .NET / WebView2 Runtime;規劃書第 5.5 節兩船版次清單):同步後寫進教官端 fleet-versions.json
+        if (st.Environment is { } env) _out.WriteLine($"環境:{env.Describe()}");
         foreach (var w in st.Warnings) _err.WriteLine($"警告:{w}");
         return 0;
     }
@@ -633,7 +635,7 @@ public sealed class CliApp
             Host = host, Port = a.Int("port", layout.Config.Port), InstructorKey = key, Store = store, PushPackages = a.All("push"),
             EnrollDevice = a.Flag("enroll-device"), PullRecords = !a.Flag("no-pull"), SendBackupReport = !a.Flag("no-report"), Log = _out,
         }).GetAwaiter().GetResult();
-        if (report.Status is { } st) _out.WriteLine($"{report.ShipId} 現行版本 {st.Version ?? "(初始)"},參數集 {st.ParameterSet?.Version ?? "—"},待回傳紀錄包 {st.OutstandingRecordPackages}");
+        if (report.Status is { } st) _out.WriteLine($"{report.ShipId} 現行版本 {st.Version ?? "(初始)"},參數集 {st.ParameterSet?.Version ?? "—"},待回傳紀錄包 {st.OutstandingRecordPackages}{(st.Environment is { } env ? $";環境 {env.Describe()}" : "")}");
         foreach (var w in report.Warnings) _err.WriteLine($"警告:{w}");
         _out.WriteLine(report.Ok ? "同步完成" : "同步完成,但有項目失敗(見上方訊息)");
         return report.Ok ? 0 : 1;

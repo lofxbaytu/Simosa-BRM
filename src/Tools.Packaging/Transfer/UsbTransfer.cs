@@ -204,7 +204,7 @@ public static class UsbTransfer
                 {
                     var st = PackageJson.Load<ShipStatus>(statusPath, "status.json");
                     if (st.ShipId is { } sid)
-                        store.UpdateFleet(new ShipVersionEntry { ShipId = sid, DeviceId = st.DeviceId, Version = st.Version, PackageId = st.PackageId, Components = st.Components, ParameterSet = st.ParameterSet, Via = "usb" });
+                        store.UpdateFleet(new ShipVersionEntry { ShipId = sid, DeviceId = st.DeviceId, Version = st.Version, PackageId = st.PackageId, Components = st.Components, ParameterSet = st.ParameterSet, Environment = st.Environment, Via = "usb" });
                 }
                 catch (InvalidDataException ex) { rep.Warnings.Add(ex.Message); }
             }

@@ -130,6 +130,8 @@ public class ScenarioLibraryFinalTests
     }
 
     public static readonly TheoryData<string> LibraryIds = new() { E19, E20, E20D, E22A, E22B, E22C, E22D };
+    /// <summary>第二十六輪 R7 補簡報結構(規劃時間、同儕評估提示、講評引導問題)的情境:E20 兩檔與 E22a–d(E19 可不補)。</summary>
+    public static readonly TheoryData<string> BriefingGuideIds = new() { E20, E20D, E22A, E22B, E22C, E22D };
     private static readonly string[] MiniIds = { E22A, E22B, E22C, E22D };
 
     private static JsonElement Area(string file) => JsonDocument.Parse(File.ReadAllText(Path.Combine(TestData.Root, "data", "areas", file))).RootElement;
@@ -712,5 +714,28 @@ public class ScenarioLibraryFinalTests
             Assert.DoesNotContain(ev, x => x.ItemId == "masterOrderExecuted");
         }
         AssertReplays(path!);
+    }
+
+    /// <summary>
+    /// 規劃書第 9.1 節簡報內容(規劃時間、同儕評估提示)與第 11 章講評引導問題:E20 兩檔與 E22a–d 的 briefing 有 planningTimeMin > 0、
+    /// 3–5 條同儕評估提示、3–5 條講評引導問題(E22 的引導問題對應 1.39 單元討論點);E20 兩檔內容相同。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(BriefingGuideIds))]
+    public void BriefingHasPlanningTimeAndDebriefGuide(string id)
+    {
+        var b = Load(id).Briefing!;
+        Assert.True(b.PlanningTimeMin is > 0 and <= 120, $"{id} planningTimeMin {b.PlanningTimeMin}");
+        Assert.InRange(b.PeerAssessmentPrompts.Count, 3, 5);
+        Assert.InRange(b.DebriefQuestions.Count, 3, 5);
+        Assert.All(b.PeerAssessmentPrompts.Concat(b.DebriefQuestions), q => Assert.False(string.IsNullOrWhiteSpace(q)));
+        if (MiniIds.Contains(id)) Assert.InRange(b.PlanningTimeMin!.Value, 1, 10); // 12 分鐘迷你情境:規劃時間短
+        if (id == E20D)
+        {
+            var main = Load(E20).Briefing!;
+            Assert.Equal(main.PlanningTimeMin, b.PlanningTimeMin);
+            Assert.Equal(main.PeerAssessmentPrompts, b.PeerAssessmentPrompts);
+            Assert.Equal(main.DebriefQuestions, b.DebriefQuestions);
+        }
     }
 }

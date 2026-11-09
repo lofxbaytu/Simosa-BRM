@@ -823,6 +823,12 @@ function round4(v: number): number {
   return Math.round(v * 1e4) / 1e4;
 }
 
+/** 表單文字 → 數值(可含小數;空白或非數 undefined)。 */
+export function numberFromText(text: string): number | undefined {
+  const n = Number(text.trim());
+  return text.trim() === '' || !Number.isFinite(n) ? undefined : n;
+}
+
 /** 表單文字 → 整數(空白或非數 undefined)。 */
 export function intFromText(text: string): number | undefined {
   const n = Number(text.trim());
@@ -1233,6 +1239,23 @@ export function patchSection(draft: ScenarioDraft, section: FlatSectionKey, path
 }
 
 // ------------------------------------------------------------------ 簡報 briefing
+
+/** 規劃時間(briefing.planningTimeMin)的編輯器上限(分鐘;規劃書第 9.1 節簡報 15–20 分鐘加團隊規劃,超過 2 小時視為填錯)。 */
+export const PLANNING_TIME_MAX_MIN = 120;
+
+/** 多行文字 → 字串清單(每行一條,去頭尾空白、略過空行);全空時 undefined(輸出時移除該鍵)。 */
+export function linesToList(text: string): string[] | undefined {
+  const items = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
+/** 字串清單(或範本中的任意值)→ 多行文字(非陣列時空字串;非字串項目以 String 呈現)。 */
+export function listToLines(v: unknown): string {
+  return Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : String(x))).join('\n') : '';
+}
 
 export const PLAYED_BY_OPTIONS: readonly string[] = ['leader', 'voiceScript', 'instructor', 'trainee'] as const;
 export const ROLE_SUGGESTIONS: readonly string[] = ['master', 'officer', 'oow', 'helmsman', 'lookout', 'pilot', 'ecr', 'chiefEngineer', 'vts', 'portControl', 'company', 'agent', 'tug', 'berth', 'mooring', 'crew', 'otherShip'] as const;
@@ -2364,6 +2387,14 @@ export function validateDraft(draft: ScenarioDraft, catalogue: readonly FaultDef
   // 簡報:最少人數、角色 playedBy(缺 role / 附件缺 file 由 parseScenario 報)
   const minP = draft.briefing['minParticipants'];
   if (minP !== undefined && (typeof minP !== 'number' || !Number.isInteger(minP) || minP < 1)) issues.push('briefing.minParticipants 需為 ≥ 1 的整數');
+  // 規劃時間 0–120 分鐘;同儕評估提示與講評引導問題需為字串陣列(R7;規劃書第 9.1 節、第 11 章)
+  const planning = draft.briefing['planningTimeMin'];
+  if (planning !== undefined && (typeof planning !== 'number' || !Number.isFinite(planning) || planning < 0 || planning > PLANNING_TIME_MAX_MIN))
+    issues.push(`briefing.planningTimeMin 需為 0–${PLANNING_TIME_MAX_MIN} 的分鐘數`);
+  for (const key of ['peerAssessmentPrompts', 'debriefQuestions'] as const) {
+    const list = draft.briefing[key];
+    if (list !== undefined && (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || !x.trim()))) issues.push(`briefing.${key} 需為非空字串的清單(每行一條)`);
+  }
   briefingRoles(draft).forEach((r, i) => {
     const pb = r['playedBy'];
     if (pb !== undefined && !PLAYED_BY_OPTIONS.includes(str(pb))) warnings.push(`briefing.roles[${i}] playedBy ${str(pb)} 不在 ${PLAYED_BY_OPTIONS.join('/')}`);

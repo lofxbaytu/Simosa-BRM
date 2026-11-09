@@ -22,7 +22,9 @@ export type OperationKind =
   /** 教官站播放語音腳本(lib/voice-script.ts;非由狀態推導) */
   | 'voiceScript'
   /** 操舵模式/泵變更(state.steering 或 steeringModeChanged 事件);NFU 推桿推舵/放開亦記 */
-  | 'steeringMode';
+  | 'steeringMode'
+  /** 簡報後的規劃時間結束(教官站本地倒數計時器;規劃書第 9.1 節 R7;非由狀態推導) */
+  | 'planningTime';
 
 export interface OperationEvent {
   seq: number;
@@ -73,8 +75,14 @@ export class OperationLogDeriver {
     return this.events.length;
   }
 
-  clear(): void {
+  /**
+   * 清空(新練習);`keep` 回傳 true 的事件保留(簡化教官模式按「開始練習」清掉簡報階段的推導事件,但保留規劃時間結束
+   * 這類屬於本練習的紀錄)。
+   */
+  clear(keep?: (e: OperationEvent) => boolean): void {
+    const kept = keep ? this.events.filter(keep) : [];
     this.events.length = 0;
+    this.events.push(...kept);
     this.prev = null;
   }
 

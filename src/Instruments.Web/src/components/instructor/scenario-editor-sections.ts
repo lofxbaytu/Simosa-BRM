@@ -113,6 +113,10 @@ import {
   patchBerth,
   patchBerthLine,
   patchBriefing,
+  linesToList,
+  listToLines,
+  numberFromText,
+  PLANNING_TIME_MAX_MIN,
   patchRequired,
   patchRole,
   patchRoute,
@@ -487,14 +491,22 @@ export function renderBriefingSection(h: EditorHost): TemplateResult {
   const d = h.draft;
   const roles = briefingRoles(d);
   const attachments = briefingAttachments(d);
-  const kept = Object.keys(d.briefing).filter((k) => !['roles', 'attachments', 'minParticipants', 'duration_s'].includes(k));
+  const kept = Object.keys(d.briefing).filter((k) => !['roles', 'attachments', 'minParticipants', 'duration_s', 'planningTimeMin', 'peerAssessmentPrompts', 'debriefQuestions'].includes(k));
+  const prompts = listToLines(d.briefing['peerAssessmentPrompts']);
+  const questions = listToLines(d.briefing['debriefQuestions']);
   return html`<div class="panel briefing">
-    <div class="panel-title"><span>簡報角色與附件 BRIEFING</span><span class="zh">角色 ${roles.length}、附件 ${attachments.length}</span></div>
+    <div class="panel-title"><span>簡報角色與附件 BRIEFING</span><span class="zh">角色 ${roles.length}、附件 ${attachments.length}、提示 ${linesToList(prompts)?.length ?? 0}、引導問題 ${linesToList(questions)?.length ?? 0}</span></div>
     <div class="form">
       <label>最少人數</label>
       <input class="b-min" type="number" step="1" min="1" .value=${txt(d.briefing['minParticipants'])} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'minParticipants', intFromText(textOf(e))))} />
       <label>預估時長 (s)</label>
       ${numInput('b-duration', d.briefing['duration_s'], (v) => h.setDraft(patchBriefing(h.draft, 'duration_s', v)))}
+      <label title="簡報後給團隊的規劃時間;教官站簡報區顯示本地倒數(規劃書第 9.1 節)">規劃時間 (min)</label>
+      <input class="b-planning" type="number" step="1" min="0" max=${PLANNING_TIME_MAX_MIN} placeholder="未設 = 不顯示計時器" .value=${txt(d.briefing['planningTimeMin'])} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'planningTimeMin', numberFromText(textOf(e))))} />
+      <label title="簡報與講評時列出,供學員互相觀察(規劃書第 9.1 節)">同儕評估提示(每行一條)</label>
+      <textarea class="full b-peer" rows="3" .value=${prompts} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'peerAssessmentPrompts', linesToList(textOf(e))))}></textarea>
+      <label title="講評時由帶領者帶領討論;教官站簡報區可摺疊、講評報告列於講評紀錄旁(規劃書第 11 章)">講評引導問題(每行一條)</label>
+      <textarea class="full b-questions" rows="3" .value=${questions} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'debriefQuestions', linesToList(textOf(e))))}></textarea>
       ${kept.length > 0 ? html`<div class="full hint">範本的 ${kept.join('、')} 原樣保留</div>` : nothing}
     </div>
     <datalist id="role-names">${ROLE_SUGGESTIONS.map((r) => html`<option value=${r}></option>`)}</datalist>

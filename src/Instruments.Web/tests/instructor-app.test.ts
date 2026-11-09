@@ -192,6 +192,24 @@ describe('教官站操舵模式(示範模式)', () => {
     expect(opLog.events.filter((e) => e.kind === 'steeringMode')).toHaveLength(2); // nfu、emergency 各一筆,事件與狀態不重複
   });
 
+  it('簡化教官模式簡報頁有簡報結構區塊;規劃時間結束事件記入學員操作紀錄,按「開始練習」清紀錄時保留該筆(R7)', async () => {
+    const app = await mountApp('/?demo=1&mode=simple');
+    const scenarioPanel = app.shadowRoot!.querySelector('brm-scenario-panel') as App;
+    expect(scenarioPanel.shadowRoot!.querySelector('brm-briefing-block')).not.toBeNull(); // 完整簡報區(非 compact)
+    scenarioPanel.shadowRoot!.querySelector<HTMLButtonElement>('button.load')!.click();
+    await app.updateComplete;
+    const briefingBlock = app.shadowRoot!.querySelector('.stage.briefing brm-briefing-block') as (App & { large: boolean }) | null;
+    expect(briefingBlock).not.toBeNull();
+    expect(briefingBlock!.hasAttribute('large')).toBe(true);
+    briefingBlock!.dispatchEvent(new CustomEvent('planning-time-ended', { detail: { planningTimeMin: 5 }, bubbles: true, composed: true }));
+    await app.updateComplete;
+    app.shadowRoot!.querySelector<HTMLButtonElement>('button.start')!.click();
+    await app.updateComplete;
+    const opLog = app.shadowRoot!.querySelector('brm-operation-log') as HTMLElement & { events: ReadonlyArray<{ kind: string; label: string; value?: unknown }> };
+    expect(opLog.events.filter((e) => e.kind === 'planningTime')).toEqual([expect.objectContaining({ kind: 'planningTime', label: '規劃時間結束(5 分鐘)', value: 5 })]);
+    expect(opLog.events.filter((e) => e.kind !== 'planningTime')).toEqual([]);
+  });
+
   it('簡化教官模式執行畫面有精簡版操舵面板(compact):只有 FU/NFU/應急三鈕與推桿,指令進示範核心並改變 state.steering', async () => {
     const app = await mountApp('/?demo=1&mode=simple');
     expect(app.shadowRoot!.querySelector('brm-steering-panel')).toBeNull(); // 選擇練習階段沒有

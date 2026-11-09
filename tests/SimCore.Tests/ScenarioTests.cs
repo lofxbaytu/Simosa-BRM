@@ -174,6 +174,53 @@ public class ScenarioTests
         engine.Run(50);
     }
 
+    /// <summary>
+    /// 第二十六輪 R7:簡報的規劃時間(planningTimeMin)、同儕評估提示與講評引導問題讀入後原樣寫入 JSON(紀錄標頭 header.scenario)
+    /// 並可再讀回;只有文字時仍序列化為純字串;欄位不影響引擎狀態雜湊(規劃書第 9.1 節、第 11 章)。
+    /// </summary>
+    [Fact]
+    public void BriefingPlanningTimeAndDebriefGuideRoundTrip()
+    {
+        var sc = ScenarioLoader.FromYaml("""
+            id: T
+            ship: { id: FSB1 }
+            initial: { position: { lat: 23.8, lon: 120.0 }, heading: 0 }
+            environment: { waterDepth: 20 }
+            briefing:
+              text: 交班
+              planningTimeMin: 15
+              peerAssessmentPrompts: [觀察閉環溝通, 觀察意圖分享]
+              debriefQuestions: [哪一個資訊來源可信?, 何時該叫船長?, 怎樣說才有效?]
+            """).Validate();
+        var b = sc.Briefing!;
+        Assert.Equal(15.0, b.PlanningTimeMin);
+        Assert.Equal(new[] { "觀察閉環溝通", "觀察意圖分享" }, b.PeerAssessmentPrompts);
+        Assert.Equal(3, b.DebriefQuestions.Count);
+        Assert.False(b.IsTextOnly);
+        var json = sc.ToJson();
+        Assert.Contains("\"planningTimeMin\":15", json);
+        Assert.Contains("\"debriefQuestions\":[", json);
+        var back = Scenario.Scenario.FromJson(json).Briefing!;
+        Assert.Equal(b.PlanningTimeMin, back.PlanningTimeMin);
+        Assert.Equal(b.PeerAssessmentPrompts, back.PeerAssessmentPrompts);
+        Assert.Equal(b.DebriefQuestions, back.DebriefQuestions);
+        // 兩個引擎分別以含/不含新欄位的情境跑同樣步數,狀態雜湊相同(新欄位不進快照)
+        var plain = ScenarioLoader.FromYaml("""
+            id: T
+            ship: { id: FSB1 }
+            initial: { position: { lat: 23.8, lon: 120.0 }, heading: 0 }
+            environment: { waterDepth: 20 }
+            briefing: 交班
+            """).Validate();
+        Assert.True(plain.Briefing!.IsTextOnly);
+        Assert.Contains("\"briefing\":\"交班\"", plain.ToJson());
+        var e1 = new SimosaBRM.SimCore.Engine.SimulationEngine(TestData.Fsb1(), sc);
+        var e2 = new SimosaBRM.SimCore.Engine.SimulationEngine(TestData.Fsb1(), plain);
+        e1.Run(100);
+        e2.Run(100);
+        Assert.Equal(e2.StateHash, e1.StateHash);
+    }
+
 
     /// <summary>E07 出港船 OUT1 的航跡位於自船航線左舷側 ≥ 100 m(左舷對左舷通過),不與自船航線相交;minCpa 門檻用航道參數。</summary>
     [Fact]

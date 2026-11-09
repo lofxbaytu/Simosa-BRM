@@ -276,13 +276,15 @@ DPA 以備援金鑰:`simosa-pkg pack --kind trust --version <新版> --summary "
   "trustedKeys": [{ "keyId": "…", "name": "訪船船長 王○○", "role": "primary", "holder": "訓練負責人" },
                   { "keyId": "…", "name": "DPA 備援金鑰", "role": "backup", "holder": "DPA" }],
   "outstandingRecordPackages": 1, "visitSeq": 4, "rollbackAvailable": true,
+  "environment": { "os": "Microsoft Windows 10.0.26100", "dotnet": ".NET 8.0.11", "webview2": "130.0.2849.56", "collectedUtc": "2026-10-17T05:30:00Z" },
   "warnings": ["1 個紀錄包已累積超過 2 個訪船間隔仍未取得教官筆電的已備份回報…"]
 }
 ```
+- `environment`(船上筆電環境版次;規劃書第 5.5 節兩船版次清單,`Common/EnvironmentInfo.cs`):`os` = `RuntimeInformation.OSDescription`、`dotnet` = `RuntimeInformation.FrameworkDescription`、`webview2` = Evergreen WebView2 Runtime 版本(Windows 登錄檔 `HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` 的 `pv`,依序後援同路徑不含 `WOW6432Node` 與 `HKCU`;非 Windows、未安裝、`pv` 為 0.0.0.0 或只有固定版本散布時為 `null`,JSON 略過該鍵)、`collectedUtc` = 船端收集時刻。純資訊欄位不簽章;舊版船端沒有此欄位時教官端讀成 `null`。
 - 練習啟動畫面與講評報告顯示 `parameterSet.version` 與 `smsDocuments`(第 9.1 節「船上顯示現行參數集版次」);參數集版次與紀錄標頭 `header.parameterSet.version` 不同時標示「參數集版次已變更」。
 - **UpdateApplyResult**(`updateResult.result`):`{ ok, packageId, version, kind, summary, signer, signerRole, components[], errors[], warnings[], rolledBack, message }`。
 - **CleanupResult**(`cleanupResult.result`):`{ ok, reportId, signer, deleted[], deletedFiles[], retained[], mismatched[], unknown[], failed[], warnings[], errors[] }`(`failed`:無法刪除的檔案「紀錄包 路徑:原因」,該紀錄包保留待下次重試)。
-- **fleet-versions.json**(教官端兩船版次清單):`{ "ships": { "FSB1": { shipId, deviceId, version, packageId, components, parameterSet, updatedUtc, via } } }`。
+- **fleet-versions.json**(教官端兩船版次清單):`{ "ships": { "FSB1": { shipId, deviceId, version, packageId, components, parameterSet, environment, updatedUtc, via } } }`;`environment` 即上面 ShipStatus 的同名物件,直連 `status` 與隨身碟 `status.json` 兩條途徑都寫入,每次同步整筆取代該船項目(另一船的項目不受影響)。訪船時核對 Windows/WebView2/.NET 版次不必再手動登錄;Windows 累積更新(KB)清單與 Windows 11 Pro 功能版本到期日仍為手動登錄(安裝文件第 2.1 節)。
 - 練習紀錄標頭(SimCore 已實作;教官站 `sessionInfo` 指令):`participants: [{ "name": "王大副", "role": "oow", "rank"?, "certificateNo"? }]`、`restHoursConfirmation: { "confirmedBy": "船長", "confirmedAtUtc": "…", "compliant": true, "note"? }`、`course?`;紀錄已開啟後才送達者寫成最後一行 `{"kind":"session", …}`,`RecordInspector` header 有就用 header、否則取最後一行 session(`sessionInfoSource`),紀錄包據此彙總訓練時數(`participants[].rank/certificateNo` 一併帶出);舊/外部紀錄的字串陣列 participants 兩邊(`RecordInspector`、核心 `RecordReader`)皆讀成 `{name, role: null}`。footer 已含 `closedUtc`(關檔時的牆鐘 UTC),紀錄包以它為練習結束時間(舊紀錄無此欄時仍以檔案最後修改時間估計)。
 
 ## 8. 金鑰保管程序要點(納入公司網路風險管理程序,TMSA 第 13 要素)

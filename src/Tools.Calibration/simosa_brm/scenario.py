@@ -26,7 +26,8 @@
 - timeline / route / zones / assessment / briefing 只做結構檢查(C# ``Scenario.StructuralIssues`` 的便宜規則:必要欄位、
   id 唯一、參照存在、動作/條件/規則名稱在允許清單、航點 ≥ 2 且不重合、多邊形 3–64 點且不自交 …),**不模擬**;解析後的子樹
   原樣保留在結果中。與 C# 相同:origin 未給時先以 initial.position 推導再做航點/多邊形幾何檢查;id/name 可為數字(讀成字串)、
-  ``repeat`` 不分大小寫、``bands[].fail`` 字串 strip 後再比對、briefing 不檢查數值範圍。
+  ``repeat`` 不分大小寫、``bands[].fail`` 字串 strip 後再比對、briefing 不檢查數值範圍(第二十六輪 R7 新增的
+  ``planningTimeMin`` / ``peerAssessmentPrompts`` / ``debriefQuestions`` 只檢查型別,與 C# 反序列化會拒絕的形狀一致)。
   ``required[].expect`` 必填、``ukc`` 規則的 lessThan 需 metres|fractionOfDraft:C# ``Scenario.StructuralIssues`` 已同步檢查(兩邊一致)。
 - ``sensors`` / ``alerts`` / ``bnwas``(感測器層、BAM、BNWAS;docs/design/sensors-alerts.md 第 8 節)同樣只結構檢查並保留:
   補 C# 預設值(``ScenarioBridge.cs``;未設的門檻 offHeading_deg / headingMonitor_deg / shallowWater_m 省略 = 關閉)、
@@ -643,6 +644,17 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
                     if not isinstance(role, dict) or not str(role.get("role") or "").strip():
                         error(f"briefing.roles[{i}]", "角色需要 role")
         # minParticipants / duration_s 的數值範圍 C# 不檢查(只讀取),此處亦不檢查以免 C# 可載入的情境在此被拒
+        # 規劃時間與兩個提示清單(規劃書第 9.1 節、第 11 章;R7):C# 為 double? / List<string>,型別不符即無法反序列化,此處同步報錯;
+        # 數值範圍(≥ 0、編輯器 0–120)與 C# 一樣不檢查
+        ptm = briefing.get("planningTimeMin")
+        if ptm is not None and (isinstance(ptm, bool) or not isinstance(ptm, (int, float))):
+            error("briefing.planningTimeMin", "planningTimeMin 須為數值(分鐘)")
+        for key in ("peerAssessmentPrompts", "debriefQuestions"):
+            items = briefing.get(key)
+            if items is None:
+                continue
+            if not isinstance(items, list) or any(not isinstance(x, str) for x in items):
+                error(f"briefing.{key}", f"{key} 須為字串陣列")
 
     # ---- 潮汐(environment.tide;C# 在 assessment 之後檢查)
     env = raw.get("environment")

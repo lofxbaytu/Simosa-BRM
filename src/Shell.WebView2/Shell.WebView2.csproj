@@ -7,10 +7,28 @@
     發行:tools/build-release.ps1 → app/shell/(framework-dependent,需 .NET 8 Desktop Runtime 與 WebView2 Runtime;docs/ops/安裝與啟動.md 第 4.5 節)。
   -->
   <PropertyGroup>
+    <!-- 來源建置的 SDK(例如 Ubuntu 套件 dotnet-sdk-8.0)沒有 Microsoft.NET.Sdk.WindowsDesktop:此時改建成空的 net8.0 組件並警告,
+         讓 dotnet build SimosaBRM.sln 在這種容器仍能完成(Windows 與 Microsoft 散布的 SDK 皆有該 SDK,行為不變) -->
+    <WindowsDesktopSdkAvailable Condition="Exists('$(MSBuildSDKsPath)/Microsoft.NET.Sdk.WindowsDesktop/targets/Microsoft.NET.Sdk.WindowsDesktop.targets')">true</WindowsDesktopSdkAvailable>
+    <WindowsDesktopSdkAvailable Condition="'$(WindowsDesktopSdkAvailable)' == ''">false</WindowsDesktopSdkAvailable>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(WindowsDesktopSdkAvailable)' == 'true'">
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(WindowsDesktopSdkAvailable)' != 'true'">
+    <OutputType>Library</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(WindowsDesktopSdkAvailable)' != 'true'">
+    <Compile Remove="**/*.cs" />
+  </ItemGroup>
+  <Target Name="WarnNoWindowsDesktopSdk" BeforeTargets="CoreCompile" Condition="'$(WindowsDesktopSdkAvailable)' != 'true'">
+    <Warning Text="Shell.WebView2:此 SDK 沒有 Microsoft.NET.Sdk.WindowsDesktop,只建出空組件(不可用於發行);請在 Windows 或 Microsoft 散布的 .NET SDK 建置。" />
+  </Target>
+  <PropertyGroup>
     <RootNamespace>SimosaBRM.Shell.App</RootNamespace>
     <AssemblyName>SimosaBRM.Shell</AssemblyName>
     <RollForward>Major</RollForward>

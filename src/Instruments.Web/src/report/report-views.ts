@@ -20,7 +20,7 @@ import {
   type ScheduleQuarter,
 } from './admin-records.js';
 import { ANCHORS, allElements, scaleLabel, type BehaviouralAnchors } from './anchors.js';
-import { DATA_QUALITY_LABEL, participantRoleLabel, stcwMapping, stcwText, type BehaviouralResult, type DebriefReport, type ManoeuvreRow } from './debrief-report.js';
+import { type BriefingGuide, DATA_QUALITY_LABEL, participantRoleLabel, stcwMapping, stcwText, type BehaviouralResult, type DebriefReport, type ManoeuvreRow } from './debrief-report.js';
 import { summarizeForm, validateMarkerForm, type AgreementResult, type MarkerForm } from './marker-form.js';
 import { INTERNAL_TRAINING_STATEMENT, sessionHours, trainingFormLabel, validateCourseSession, VERDICT_LABEL, type CourseSession, type IndividualTrainingRecord, type SessionExercise, type TraineeResult } from './training-record.js';
 
@@ -139,6 +139,7 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
 
     <section class="sec" data-sec="debrief">
       <h2>${r.manoeuvres.length > 0 ? '六' : '五'}、講評紀錄(第 8.4 節講評結構)</h2>
+      ${r.briefingGuide ? renderBriefingGuide(r.briefingGuide) : nothing}
       ${r.debrief.map((d) => html`<div class="debrief-part"><h3>${d.title}</h3>${d.text.trim() ? html`<p class="pre">${d.text}</p>` : html`<p class="muted hint">${d.hint}</p><div class="write-lines"></div>`}</div>`)}
       <div class="debrief-part"><h3>教官總評</h3>${m.remarks.trim() ? html`<p class="pre">${m.remarks}</p>` : html`<div class="write-lines"></div>`}</div>
     </section>
@@ -171,6 +172,21 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
     ${signatures(['教官', '評估員', '日期'])}
     <footer class="doc-foot">產生時間 ${localDateTime(r.generatedUtc)} · 紀錄鍵 ${r.exercise.recordKey.slice(0, 24)} · Simosa BRM 操船模擬器(訓練模擬器,非航行設備)</footer>
   </article>`;
+}
+
+/** 情境簡報的講評引導問題與同儕評估提示(規劃書第 9.1 節、第 11 章;R7):列在講評紀錄五段之前供講評者引導討論。 */
+function renderBriefingGuide(g: BriefingGuide): TemplateResult {
+  return html`<div class="debrief-part briefing-guide" data-part="briefing-guide">
+    ${g.debriefQuestions.length > 0
+      ? html`<h3>講評引導問題(情境簡報)</h3>
+          <ol class="guide-questions">${g.debriefQuestions.map((q) => html`<li>${q}</li>`)}</ol>`
+      : nothing}
+    ${g.peerAssessmentPrompts.length > 0
+      ? html`<h3>同儕評估提示(情境簡報)</h3>
+          <ol class="guide-prompts">${g.peerAssessmentPrompts.map((q) => html`<li>${q}</li>`)}</ol>`
+      : nothing}
+    ${g.planningTimeMin !== undefined ? html`<p class="muted small">簡報後規劃時間 ${g.planningTimeMin} 分鐘(教官站本地倒數;結束時刻見學員操作紀錄)</p>` : nothing}
+  </div>`;
 }
 
 export function restHoursText(rest: RestHoursConfirmation | undefined): string {

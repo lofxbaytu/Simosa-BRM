@@ -70,6 +70,7 @@ environment: { wind: { trueSpeed: 15, trueDir: 45 }, current: { set: 200, drift:
 
 beforeAll(async () => {
   await import('../src/components/instructor/scenario-panel.js');
+  await import('../src/components/instructor/briefing-block.js');
   await import('../src/components/instructor/run-control-panel.js');
   await import('../src/components/instructor/environment-panel.js');
   await import('../src/components/instructor/fault-panel.js');
@@ -103,6 +104,100 @@ describe('情境面板', () => {
     expect(text).toContain('附件:');
     expect(text).toContain('參數集 data/parameters/company-procedures.yaml');
     expect(el.shadowRoot!.querySelector('.attachments a')?.getAttribute('href')).toBe('data/scenarios/E07_steering_failure/docs/passage-plan-mailiao.pdf');
+  });
+});
+
+const E22X: ScenarioSummary = parseScenario(
+  `id: E22x_mini
+name: 迷你
+ship: { id: FSB1, loading: full }
+initial: { position: { lat: 22.4, lon: 120.2 }, heading: 200, speed: 7.5, telegraph: HAH }
+environment: { wind: { trueSpeed: 10, trueDir: 45 }, current: { set: 200, drift: 0.5 }, waterDepth: 60 }
+briefing:
+  text: 交班
+  planningTimeMin: 5
+  peerAssessmentPrompts: [觀察接班前是否逐項查證, 觀察矛盾資訊出現時是否說出疑問]
+  debriefQuestions: [何者為真?, 有沒有權利延後接班?, 如何閉環確認?]
+`,
+  'data/scenarios/E22x_mini.yaml',
+);
+
+type BriefingBlockEl = HTMLElement & { updateComplete: Promise<unknown>; now: () => number; remainingSeconds: number | null; tick: () => void };
+
+describe('簡報結構區塊(規劃時間、同儕評估提示、講評引導問題 R7)', () => {
+  it('情境面板詳細區列出規劃時間計時器、提示(展開)與引導問題(摺疊);沒有這些欄位的情境不顯示', async () => {
+    const el = await mount('brm-scenario-panel', { scenarios: [E22X] });
+    const block = el.shadowRoot!.querySelector('brm-briefing-block') as BriefingBlockEl;
+    expect(block).not.toBeNull();
+    await block.updateComplete;
+    const text = shadowText(block);
+    expect(text).toContain('規劃時間 5 分鐘');
+    expect(text).toContain('5:00');
+    expect(text).toContain('開始規劃時間');
+    expect(text).toContain('同儕評估提示2 條');
+    expect(text).toContain('觀察接班前是否逐項查證');
+    expect(text).toContain('講評引導問題3 條');
+    expect(block.shadowRoot!.querySelector('details.prompts')!.hasAttribute('open')).toBe(true);
+    expect(block.shadowRoot!.querySelector('details.questions')!.hasAttribute('open')).toBe(false);
+    expect(block.shadowRoot!.querySelectorAll('details.questions li')).toHaveLength(3);
+    const plain = await mount('brm-scenario-panel', { scenarios: [E01] });
+    const plainBlock = plain.shadowRoot!.querySelector('brm-briefing-block') as BriefingBlockEl;
+    await plainBlock.updateComplete;
+    expect(shadowText(plainBlock).trim()).toBe('');
+    expect(plainBlock.shadowRoot!.querySelector('.timer')).toBeNull();
+  });
+
+  it('倒數:開始 → 剩 1 分鐘變色 → 到時顯示「規劃時間結束」並發 planning-time-ended;暫停/繼續/重設', async () => {
+    let clock = 1_000_000;
+    const block = await mount<BriefingBlockEl>('brm-briefing-block', { briefing: E22X.briefingDoc, now: () => clock });
+    const ended: number[] = [];
+    block.addEventListener('planning-time-ended', (ev) => ended.push((ev as CustomEvent<{ planningTimeMin: number }>).detail.planningTimeMin));
+    q<HTMLButtonElement>(block, 'button.start').click();
+    await block.updateComplete;
+    expect(block.shadowRoot!.querySelector('button.pause')).not.toBeNull();
+    clock += 60_000;
+    block.tick();
+    await block.updateComplete;
+    expect(block.remainingSeconds).toBe(240);
+    expect(shadowText(block)).toContain('4:00');
+    expect(q(block, '.countdown').classList.contains('warning')).toBe(false);
+    q<HTMLButtonElement>(block, 'button.pause').click();
+    await block.updateComplete;
+    clock += 600_000; // 暫停中時間流逝不計
+    block.tick();
+    await block.updateComplete;
+    expect(block.remainingSeconds).toBe(240);
+    expect(shadowText(block)).toContain('已暫停');
+    expect(q(block, 'button.start').textContent).toContain('繼續');
+    q<HTMLButtonElement>(block, 'button.start').click();
+    clock += 181_000; // 剩 59 s
+    block.tick();
+    await block.updateComplete;
+    expect(q(block, '.countdown').classList.contains('warning')).toBe(true);
+    expect(shadowText(block)).toContain('0:59');
+    expect(ended).toEqual([]);
+    clock += 59_000;
+    block.tick();
+    await block.updateComplete;
+    expect(ended).toEqual([5]);
+    expect(shadowText(block)).toContain('規劃時間結束');
+    expect(q(block, '.countdown').classList.contains('ended')).toBe(true);
+    block.tick(); // 不重複發事件
+    expect(ended).toEqual([5]);
+    q<HTMLButtonElement>(block, 'button.reset').click();
+    await block.updateComplete;
+    expect(shadowText(block)).toContain('5:00');
+    expect(shadowText(block)).toContain('開始規劃時間');
+    expect(block.shadowRoot!.querySelector('button.reset')).toBeNull();
+  });
+
+  it('mode=debrief 只列引導問題與提示(皆展開)、不顯示計時器', async () => {
+    const block = await mount<BriefingBlockEl>('brm-briefing-block', { briefing: E22X.briefingDoc }, { mode: 'debrief' });
+    expect(block.shadowRoot!.querySelector('.timer')).toBeNull();
+    const details = Array.from(block.shadowRoot!.querySelectorAll('details'));
+    expect(details.map((d) => d.className)).toEqual(['questions', 'prompts']);
+    expect(details.every((d) => d.hasAttribute('open'))).toBe(true);
+    expect(shadowText(block)).toContain('何者為真?');
   });
 });
 

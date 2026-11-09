@@ -80,6 +80,8 @@ import './components/instructor/fault-panel.js';
 import './components/instructor/ownship-panel.js';
 import './components/instructor/steering-panel.js';
 import './components/instructor/operation-log-view.js';
+import './components/instructor/briefing-block.js';
+import type { PlanningTimeEndedEvent } from './components/instructor/briefing-block.js';
 import './components/instructor/command-log-view.js';
 import './components/instructor/brm-marker-bar.js';
 import './components/instructor/debrief-summary.js';
@@ -542,6 +544,7 @@ export class InstructorApp extends LitElement {
     this.addEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.addEventListener('sim-reset', this.onReset);
     this.addEventListener('scenario-load', this.onScenarioLoad as EventListener);
+    this.addEventListener('planning-time-ended', this.onPlanningTimeEnded as EventListener);
     this.addEventListener('rehearsal-compose', this.onRehearsalCompose as EventListener);
     this.addEventListener('scenario-editor-load', this.onScenarioEditorLoad as EventListener);
     this.addEventListener('snapshot-taken', this.onSnapshotTaken as EventListener);
@@ -570,6 +573,7 @@ export class InstructorApp extends LitElement {
     this.removeEventListener(COMMAND_EVENT, this.onCommand as EventListener);
     this.removeEventListener('sim-reset', this.onReset);
     this.removeEventListener('scenario-load', this.onScenarioLoad as EventListener);
+    this.removeEventListener('planning-time-ended', this.onPlanningTimeEnded as EventListener);
     this.removeEventListener('rehearsal-compose', this.onRehearsalCompose as EventListener);
     this.removeEventListener('scenario-editor-load', this.onScenarioEditorLoad as EventListener);
     this.removeEventListener('snapshot-taken', this.onSnapshotTaken as EventListener);
@@ -978,6 +982,15 @@ export class InstructorApp extends LitElement {
     this.finishLoad(false);
   }
 
+  /**
+   * 簡報的規劃時間倒數到時(<brm-briefing-block>;規劃書第 9.1 節 R7):在學員操作紀錄記一筆(本地,不送核心;
+   * 模擬時間取目前狀態的 t,簡報期間核心凍結故為定值)。簡化模式按「開始練習」清紀錄時保留此筆(simpleStart)。
+   */
+  private onPlanningTimeEnded = (ev: PlanningTimeEndedEvent): void => {
+    this.opLog.addExternal('planningTime', `規劃時間結束(${ev.detail.planningTimeMin} 分鐘)`, this.shipState.t, ev.detail.planningTimeMin);
+    this.opEvents = [...this.opLog.all()];
+  };
+
   private onSnapshotTaken = (ev: CustomEvent<SnapshotEntry>): void => {
     this.snapshots = [...this.snapshots.slice(-19), ev.detail];
   };
@@ -1115,8 +1128,8 @@ export class InstructorApp extends LitElement {
   // ------------------------------------------------------------ 簡化教官模式流程
   private simpleStart(): void {
     this.restartExercise();
-    this.opLog.clear();
-    this.opEvents = [];
+    this.opLog.clear((e) => e.kind === 'planningTime'); // 簡報階段的規劃時間結束紀錄屬於本練習,保留
+    this.opEvents = [...this.opLog.all()];
     this.simplePhase = 'running';
     this.send(simpleCommand('resume'));
     if (this.recSettings.autoStart) void this.startRecording();
@@ -1319,7 +1332,7 @@ export class InstructorApp extends LitElement {
                     ${sc.briefingDoc.roles.length > 0 ? html`<div>角色:${sc.briefingDoc.roles.map((r) => `${ROLE_LABEL[r.role] ?? r.role}(${PLAYED_BY_LABEL[r.playedBy] ?? r.playedBy}${r.required ? ',必要' : ''})`).join('、')}${sc.briefingDoc.minParticipants !== undefined ? ` · 最少 ${sc.briefingDoc.minParticipants} 人` : ''}</div>` : nothing}
                     ${sc.briefingDoc.attachments.length > 0 ? html`<div>附件:${sc.briefingDoc.attachments.map((a) => a.title).join('、')}</div>` : nothing}
                   </div>`
-                : nothing}</div>
+                : nothing}${sc ? html`<brm-briefing-block large .briefing=${sc.briefingDoc}></brm-briefing-block>` : nothing}</div>
             <brm-session-info-panel compact .simUtc=${s.utc ?? ''} .submitted=${this.sessionInfo}></brm-session-info-panel>
             <brm-recording-panel .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
             <div class="actions">
@@ -1381,6 +1394,7 @@ export class InstructorApp extends LitElement {
             <div class="panel">
               <div class="panel-title"><span>自動講評摘要 DEBRIEF</span><span class="zh">${this.coreSummary ? `核心評分${this.coreSummary.final ? '(定稿)' : ''}${this.coreSummary.parameterSet?.version ? ` · 參數集 ${this.coreSummary.parameterSet.version}` : ''}` : '本地推導(核心未回覆 summary)'}</span></div>
               <brm-debrief-summary large .summary=${this.debriefSummary} .coreSummary=${this.coreSummary} .countdowns=${sc?.assessment ? requiredCountdowns(sc.assessment, this.events, s.t) : []}></brm-debrief-summary>
+              ${sc ? html`<brm-briefing-block large mode="debrief" .briefing=${sc.briefingDoc}></brm-briefing-block>` : nothing}
             </div>
             <brm-marker-bar .markers=${this.markers}></brm-marker-bar>
             <div class="actions">

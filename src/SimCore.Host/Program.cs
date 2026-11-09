@@ -213,15 +213,12 @@ if (options.EnableStopFile)
 var router = new HostCommandRouter(engine, shutdown);
 router.Log += msg => Console.WriteLine($"  [host] {msg}");
 // 紀錄(規劃書第 5.3 節):每份紀錄一個 header 情境;loadScenario 時紀錄器在引擎重設前自動關閉,這裡再為新情境開新檔。
-// 紀錄器由 router 擁有:開檔/換檔(SwapRecorder,帶入目前的 sessionInfo 寫 header)與 sessionInfo 寫 session 行在同一把鎖內
+// 紀錄器由 router 擁有:開檔/換檔(SwapRecorder,帶入目前的 sessionInfo 寫 header)與 sessionInfo 寫 session 行在同一把鎖內。
+// 第一份紀錄不在此開檔,而在下方狀態 WebSocket 成功監聽之後(--no-ws 時亦在同一處):--port 被占用時以結束碼 2 結束,
+// 不會留下只有 header+footer、tick 0 的空紀錄(第二十五輪審查第 4 項;R13 紀錄包不收無內容紀錄)
 string RecordPathFor(string scenarioId) => options.RecordPath is { } rp && router.Recorder is null
     ? (Path.IsPathRooted(rp) ? rp : Path.Combine(root, rp))
     : RecordWriter.DefaultPath(RepositoryPaths.RecordsDirectory(root), scenarioId);
-if (options.Record)
-{
-    var first = router.SwapRecorder(session => new RecordWriter(RecordPathFor(scenario.Id), engine, session: session));
-    Console.WriteLine($"  紀錄:{first.Path}");
-}
 // 情境切換(檔案路徑或內嵌情境物件共用;交接紀錄待辦第 1 項):載入結果 → TryApplyScenarioLoad(驗證錯誤/船舶/動力學失敗 → 拒絕,
 // 引擎狀態不變、紀錄不切換,引擎發 scenarioLoadRejected 由下方訂閱者印出並轉給教官站)→ 成功才列印檢查、紀錄另開新檔
 void ApplyLoadedScenario(SimulationEngine e, ScenarioLoadResult result, string origin)
@@ -287,20 +284,24 @@ if (options.EnableWebSocket)
     if (!ws.TryStart(out var wsError))
     {
         // 狀態 WebSocket 是各站(操船台/教官站/雷達/操控台)的唯一入口,無法監聽就沒有練習可做(交接紀錄第二十四輪待辦第 1 項):
-        // 印清楚訊息、已開的紀錄寫完 footer、釋放已建立的物件,以結束碼 2 優雅結束(不是未處理例外);選配的 VHF/錄影埠被占用則只停用該服務(下方)
+        // 印清楚訊息、釋放已建立的物件,以結束碼 2 優雅結束(不是未處理例外);選配的 VHF/錄影埠被占用則只停用該服務(下方)。
+        // 第一份紀錄在本區塊成功之後才開檔(下方),此處 router.Recorder 必為 null:不會留下空紀錄,也沒有 footer 要寫(第二十五輪審查第 4 項)
         Console.WriteLine($"埠 {options.Port} 被占用或無法監聽({wsError}):狀態 WebSocket 未啟動,核心無法提供服務,結束(結束碼 2)。以 --port 改埠,或以 stop-all 清掉占住埠的殘留程序後重新啟動");
         Console.Error.WriteLine($"埠 {options.Port} 被占用或無法監聽:狀態 WebSocket 未啟動,核心結束(結束碼 2)");
         await ws.DisposeAsync();
-        if (router.Recorder is { Closed: false } openRecord)
-        {
-            var footer = openRecord.Close();
-            Console.WriteLine($"紀錄已關閉:{openRecord.Path}(tick {footer.FinalTick},狀態雜湊 {footer.StateHash[..16]}…,檔案 SHA-256 {footer.Sha256[..16]}…)");
-        }
         shutdown.MarkFinished();
         Console.WriteLine("結束(原因:portInUse)。");
         return 2;
     }
     Console.WriteLine($"  WebSocket:{ws.Prefix!.Replace("http://", "ws://").Replace("*", "0.0.0.0")}(推送 OwnShipState JSON 每 40 ms;接收 SimCommand JSON;sessionInfo / shutdown 由主控程序回 ack)");
+}
+// 第一份紀錄:狀態埠已在監聽(或 --no-ws)才開檔。ws 開始接受連線到此處之間送達的 sessionInfo 由 router 在同一把鎖內保留
+// (紀錄器尚未開啟 → 「下一份紀錄的 header」),SwapRecorder 隨即帶進 header,資訊不會遺失;引擎執行緒尚未啟動,input/state 行一筆不漏,
+// header 內容與雜湊鏈與先前在此之前開檔時相同(只有 header.createdUtc 晚了數毫秒)
+if (options.Record)
+{
+    var first = router.SwapRecorder(session => new RecordWriter(RecordPathFor(scenario.Id), engine, session: session));
+    Console.WriteLine($"  紀錄:{first.Path}");
 }
 
 // 練習錄影上傳端(docs/design/screen-recording.md;R6 影像擷取、R13 錄影與紀錄包同步/上限):獨立 HttpListener,教官站的畫面錄影片段即時上傳,

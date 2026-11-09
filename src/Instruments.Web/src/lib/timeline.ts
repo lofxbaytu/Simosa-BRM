@@ -565,11 +565,41 @@ export interface ScenarioBriefing {
   minParticipants?: number;
   /** 情境預估長度(秒;驗證器用,選填) */
   duration_s?: number;
+  /** 簡報後給團隊的規劃時間(分鐘;教官站本地倒數計時;規劃書第 9.1 節;省略或 0 = 不顯示計時器) */
+  planningTimeMin?: number;
+  /** 同儕評估提示(規劃書第 9.1 節;簡報與講評時列出) */
+  peerAssessmentPrompts: string[];
+  /** 講評引導問題(規劃書第 11 章;簡報區可摺疊、講評報告列於講評紀錄旁) */
+  debriefQuestions: string[];
+}
+
+/** 簡報的空物件(無文字、無附件/角色/提示)。 */
+export function emptyBriefing(): ScenarioBriefing {
+  return { text: '', attachments: [], roles: [], peerAssessmentPrompts: [], debriefQuestions: [] };
+}
+
+/** 字串陣列欄位:非字串項目略過並記 issue;非陣列記 issue 後視為空。 */
+function stringList(raw: unknown, path: string, issues: string[]): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    issues.push(`${path} 需為字串陣列`);
+    return [];
+  }
+  const out: string[] = [];
+  raw.forEach((v, i) => {
+    if (typeof v !== 'string') {
+      issues.push(`${path}[${i}] 需為字串`);
+      return;
+    }
+    const t = v.trim();
+    if (t) out.push(t);
+  });
+  return out;
 }
 
 /** briefing:字串等同 {text};缺則 text 為空。 */
 export function parseBriefing(raw: unknown, issues: string[] = []): ScenarioBriefing {
-  const out: ScenarioBriefing = { text: '', attachments: [], roles: [] };
+  const out: ScenarioBriefing = emptyBriefing();
   if (raw === undefined || raw === null) return out;
   if (typeof raw === 'string') {
     out.text = raw.trim();
@@ -602,6 +632,14 @@ export function parseBriefing(raw: unknown, issues: string[] = []): ScenarioBrie
   if (min !== undefined) out.minParticipants = Math.trunc(min);
   const dur = optNumber(raw['duration_s']);
   if (dur !== undefined) out.duration_s = dur;
+  // 規劃時間(分鐘)、同儕評估提示、講評引導問題(第二十六輪 R7;規劃書第 9.1 節、第 11 章)
+  const planning = optNumber(raw['planningTimeMin']);
+  if (planning !== undefined) {
+    if (planning < 0) issues.push('briefing.planningTimeMin 不可為負');
+    else out.planningTimeMin = planning;
+  } else if (raw['planningTimeMin'] !== undefined && raw['planningTimeMin'] !== null) issues.push('briefing.planningTimeMin 需為數值(分鐘)');
+  out.peerAssessmentPrompts = stringList(raw['peerAssessmentPrompts'], 'briefing.peerAssessmentPrompts', issues);
+  out.debriefQuestions = stringList(raw['debriefQuestions'], 'briefing.debriefQuestions', issues);
   return out;
 }
 

@@ -335,6 +335,41 @@ describe('簡報角色/附件、感測器/警報/BNWAS', () => {
     expect(text(el)).toContain('✖ briefing.minParticipants 需為 ≥ 1 的整數');
   });
 
+  it('規劃時間、同儕評估提示、講評引導問題(每行一條)→ briefing 物件與 YAML;驗證 0–120;清空移除鍵;草稿保留(R7)', async () => {
+    const el = await mountWithTemplate();
+    expect(q<HTMLInputElement>(el, 'input.b-planning').value).toBe('');
+    await setInput(el, 'input.b-planning', '15');
+    await setInput(el, 'textarea.b-peer', '觀察閉環溝通\n\n  觀察意圖分享  \n');
+    await setInput(el, 'textarea.b-questions', '哪一個資訊可信?\n何時該叫船長?\n怎樣說才有效?');
+    const b = scenario(el)['briefing'] as RawSection;
+    expect(b['planningTimeMin']).toBe(15);
+    expect(b['peerAssessmentPrompts']).toEqual(['觀察閉環溝通', '觀察意圖分享']);
+    expect(b['debriefQuestions']).toEqual(['哪一個資訊可信?', '何時該叫船長?', '怎樣說才有效?']);
+    expect(el.lastValidation.issues).toEqual([]);
+    expect(el.lastValidation.yaml).toContain('planningTimeMin: 15');
+    expect(el.lastValidation.yaml).toMatch(/debriefQuestions:\n\s+- 哪一個資訊可信\?\n\s+- 何時該叫船長\?/);
+    expect(text(el)).toContain('提示 2、引導問題 3');
+    // 草稿(localStorage)保留三個欄位
+    const draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY)!) as { briefing: RawSection };
+    expect(draft.briefing['planningTimeMin']).toBe(15);
+    expect(draft.briefing['debriefQuestions']).toEqual(['哪一個資訊可信?', '何時該叫船長?', '怎樣說才有效?']);
+    // 驗證範圍
+    await setInput(el, 'input.b-planning', '200');
+    expect(text(el)).toContain('✖ briefing.planningTimeMin 需為 0–120 的分鐘數');
+    expect(q<HTMLButtonElement>(el, 'button.load').disabled).toBe(true);
+    await setInput(el, 'input.b-planning', '0');
+    expect(el.lastValidation.issues).toEqual([]);
+    expect((scenario(el)['briefing'] as RawSection)['planningTimeMin']).toBe(0);
+    // 清空 → 移除鍵
+    await setInput(el, 'input.b-planning', '');
+    await setInput(el, 'textarea.b-peer', '  \n');
+    const after = scenario(el)['briefing'] as RawSection;
+    expect('planningTimeMin' in after).toBe(false);
+    expect('peerAssessmentPrompts' in after).toBe(false);
+    expect(after['debriefQuestions']).toHaveLength(3);
+    expect(el.lastValidation.yaml).not.toContain('peerAssessmentPrompts');
+  });
+
   it('感測器/警報/BNWAS 欄位 → 區段輸出(on 加引號);負值與未知模式顯示錯誤;清空移除區段', async () => {
     const el = await mountWithTemplate();
     expect(q<HTMLInputElement>(el, 'input.al-offHeading_deg').value).toBe('10');

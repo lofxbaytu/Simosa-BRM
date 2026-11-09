@@ -187,8 +187,35 @@ describe('parseRoute / parseZones(E07)', () => {
 });
 
 describe('parseBriefing', () => {
+  it('規劃時間、同儕評估提示、講評引導問題(R7):字串去空白、空項略過;型別不符記 issue 不丟例外', () => {
+    const issues: string[] = [];
+    const b = parseBriefing(
+      {
+        text: '交班',
+        planningTimeMin: '15',
+        peerAssessmentPrompts: [' 觀察閉環溝通 ', '', '觀察意圖分享'],
+        debriefQuestions: ['哪一個資訊可信?', 7, '何時該叫船長?'],
+      },
+      issues,
+    );
+    expect(b.planningTimeMin).toBe(15);
+    expect(b.peerAssessmentPrompts).toEqual(['觀察閉環溝通', '觀察意圖分享']);
+    expect(b.debriefQuestions).toEqual(['哪一個資訊可信?', '何時該叫船長?']);
+    expect(issues).toEqual(['briefing.debriefQuestions[1] 需為字串']);
+    const bad: string[] = [];
+    const c = parseBriefing({ planningTimeMin: -1, peerAssessmentPrompts: '一句話', debriefQuestions: null }, bad);
+    expect(c.planningTimeMin).toBeUndefined();
+    expect(c.peerAssessmentPrompts).toEqual([]);
+    expect(c.debriefQuestions).toEqual([]);
+    expect(bad).toEqual(['briefing.planningTimeMin 不可為負', 'briefing.peerAssessmentPrompts 需為字串陣列']);
+    const nan: string[] = [];
+    expect(parseBriefing({ planningTimeMin: 'abc' }, nan).planningTimeMin).toBeUndefined();
+    expect(nan).toEqual(['briefing.planningTimeMin 需為數值(分鐘)']);
+    expect(parseBriefing({ planningTimeMin: 0 }).planningTimeMin).toBe(0);
+  });
+
   it('字串等同 {text};物件含附件、角色、最少人數', () => {
-    expect(parseBriefing('  hello ')).toEqual({ text: 'hello', attachments: [], roles: [] });
+    expect(parseBriefing('  hello ')).toEqual({ text: 'hello', attachments: [], roles: [], peerAssessmentPrompts: [], debriefQuestions: [] });
     const issues: string[] = [];
     const b = parseBriefing(e07['briefing'], issues);
     expect(issues).toEqual([]);
@@ -235,7 +262,7 @@ describe('parseScenario 擴充欄位', () => {
     expect(s.zones).toEqual([]);
     expect(s.stats).toEqual({ timelineItems: 0, manualItems: 0, routeWaypoints: 0, zones: 0, assessmentRules: 0, paramRefs: 0, targets: 1 });
     expect(s.assessment.minCpa_nm).toEqual({ value: 0.5 });
-    expect(s.briefingDoc).toEqual({ text: '', attachments: [], roles: [] });
+    expect(s.briefingDoc).toEqual({ text: '', attachments: [], roles: [], peerAssessmentPrompts: [], debriefQuestions: [] });
     expect(s.origin).toEqual({ lat: 23.8, lon: 120.05 });
     expect(extensionSummary(s)).toBe('目標船 1');
     const e01 = parseScenario(readFileSync(e01Path, 'utf-8'), e01Path);

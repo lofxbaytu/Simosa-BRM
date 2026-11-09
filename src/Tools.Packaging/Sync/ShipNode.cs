@@ -44,6 +44,8 @@ public sealed class ShipNode
             TrustedKeys = trust.Keys.Select(k => new TrustedKeyInfo(k.KeyId, k.Name, k.Role, k.Holder)).ToList(),
             OutstandingRecordPackages = Records.Outstanding().Count, VisitSeq = Records.LoadLedger().CurrentVisit,
             RollbackAvailable = Updates.CanRollback(out _),
+            // 環境版次(作業系統 / .NET / WebView2 Runtime):收集時刻用 Clock,測試可固定;非 Windows 的 webview2 為 null
+            Environment = EnvironmentInfo.Collect(Clock),
             Warnings = warnings,
         };
     }

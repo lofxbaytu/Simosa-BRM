@@ -243,6 +243,42 @@ describe('F01 操縱量測與試俥目標比較', () => {
   });
 });
 
+describe('情境簡報的講評引導問題與同儕評估提示(R7)', () => {
+  it('紀錄標頭 header.scenario.briefing 有引導問題/提示 → 報告講評紀錄段列出;舊紀錄(E07 夾具)沒有 → null、不印該段', () => {
+    const plain = buildDebriefReport({ data: parseReplay(E07), now: NOW });
+    expect(plain.briefingGuide).toBeNull();
+    expect(html(renderReportDoc(plain)).querySelector('[data-part="briefing-guide"]')).toBeNull();
+    expect(reportOutline(plain).some((l) => l.startsWith('講評引導問題'))).toBe(false);
+
+    const lines = E07.split('\n');
+    const header = JSON.parse(lines[0]!) as { scenario: Record<string, unknown> };
+    header.scenario['briefing'] = {
+      text: '交班',
+      planningTimeMin: 5,
+      peerAssessmentPrompts: ['觀察接班前是否逐項查證', '觀察矛盾資訊出現時是否說出疑問'],
+      debriefQuestions: ['何者為真?', '有沒有權利延後接班?', '如何閉環確認?'],
+    };
+    lines[0] = JSON.stringify(header);
+    const r = buildDebriefReport({ data: parseReplay(lines.join('\n')), now: NOW });
+    expect(r.briefingGuide).toEqual({
+      planningTimeMin: 5,
+      peerAssessmentPrompts: ['觀察接班前是否逐項查證', '觀察矛盾資訊出現時是否說出疑問'],
+      debriefQuestions: ['何者為真?', '有沒有權利延後接班?', '如何閉環確認?'],
+    });
+    expect(reportOutline(r)).toContain('講評引導問題 3 條 / 同儕評估提示 2 條');
+    const doc = html(renderReportDoc(r));
+    const part = doc.querySelector('[data-sec="debrief"] [data-part="briefing-guide"]')!;
+    expect(part).not.toBeNull();
+    expect(Array.from(part.querySelectorAll('ol.guide-questions li')).map((li) => li.textContent)).toEqual(['何者為真?', '有沒有權利延後接班?', '如何閉環確認?']);
+    expect(part.querySelectorAll('ol.guide-prompts li')).toHaveLength(2);
+    expect(part.textContent).toContain('簡報後規劃時間 5 分鐘');
+    // 引導段在五段講評結構之前
+    const parts = Array.from(doc.querySelectorAll('[data-sec="debrief"] .debrief-part'));
+    expect(parts[0]!.getAttribute('data-part')).toBe('briefing-guide');
+    expect(parts[1]!.querySelector('h3')!.textContent).toBe(DEBRIEF_SECTIONS[0]!.title);
+  });
+});
+
 describe('沒有核心 summary 的紀錄', () => {
   it('退回本地推導摘要', () => {
     const lines = E07.split('\n').filter((l) => !l.includes('"kind":"summary"'));

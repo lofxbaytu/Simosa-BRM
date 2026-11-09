@@ -40,7 +40,20 @@ TOL = 1e-9
 # 夾具錄製後情境 YAML / 參數集又被編輯過的欄位(路徑前綴;情境 id → 路徑集合)。夾具與目前檔案一致時應為空;
 # 再度編輯情境/參數集後可暫列於此,並以 dotnet run --project src/SimCore.Host -- --scenario <id> --record … 重新錄製後清空
 #(2026-10-17 已重新錄製 E01/E07)。
-KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {}
+# 第二十六輪 R7:E20 兩檔與 E22a–d 的 briefing 新增 planningTimeMin / peerAssessmentPrompts / debriefQuestions(規劃書第 9.1 節、第 11 章),
+# 夾具(2026-10-18 錄製)標頭沒有這三個鍵;重新錄製六檔夾具後清空。
+_BRIEFING_GUIDE_KEYS = {"briefing.planningTimeMin", "briefing.peerAssessmentPrompts", "briefing.debriefQuestions"}
+KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {
+    sid: set(_BRIEFING_GUIDE_KEYS)
+    for sid in (
+        "E20_comprehensive_assessment_default",
+        "E20_comprehensive_assessment_kaohsiung",
+        "E22a_handover_conflict",
+        "E22b_fatigue_misjudgement",
+        "E22c_challenge_senior",
+        "E22d_cultural_communication",
+    )
+}
 # 夾具錄製時主控程序以 --timescale 覆寫、或 C# 另行正規化而不比對的欄位
 SKIP_LEAVES = {"timeScale"}
 # 一定要有 C# 紀錄夾具的情境(缺夾具時失敗而非略過;其餘情境無夾具時略過)。2026-10-17 加入 E05(無參數集的情境)、
@@ -585,6 +598,10 @@ def _mutate(fn: Any) -> dict[str, Any]:
         (lambda t: t["assessment"]["required"].append({"id": "r9", "after": {"event": "x"}, "expect": "dance", "within_s": 1}), "assessment.required[1].expect", "未知的 expect"),
         (lambda t: t["assessment"]["required"].append({"id": "r9", "after": {"event": "x"}, "expect": "rpmOrder", "within_s": 0}), "assessment.required[1]", "within_s 必須為正"),
         (lambda t: t["briefing"].update(roles=[{"playedBy": "leader"}]), "briefing.roles[0]", "需要 role"),
+        # 第二十六輪 R7:規劃時間與提示清單的型別(C# double? / List<string> 反序列化失敗的形狀)
+        (lambda t: t["briefing"].update(planningTimeMin="十五分鐘"), "briefing.planningTimeMin", "須為數值"),
+        (lambda t: t["briefing"].update(peerAssessmentPrompts="觀察閉環溝通"), "briefing.peerAssessmentPrompts", "須為字串陣列"),
+        (lambda t: t["briefing"].update(debriefQuestions=[1, "x"]), "briefing.debriefQuestions", "須為字串陣列"),
         # 感測器/警報/BNWAS(C# Scenario.StructuralIssues「警報/BNWAS 設定」)
         (lambda t: t.update(alerts={"escalate_s": 0}), "alerts.escalate_s", "escalate_s 必須為正"),
         (lambda t: t.update(alerts={"silence_s": -1}), "alerts.silence_s", "silence_s 必須為正"),
@@ -648,6 +665,8 @@ def test_structural_check_rejects_self_intersecting_polygon(with_origin: bool) -
     "mutate",
     [
         lambda t: t["briefing"].update(minParticipants=0, duration_s=0),  # C# 無 briefing 數值檢查
+        lambda t: t["briefing"].update(planningTimeMin=0, peerAssessmentPrompts=[], debriefQuestions=["哪一個資訊可信?"]),  # R7:0 分鐘 = 不顯示計時器;空清單允許
+        lambda t: t["briefing"].update(planningTimeMin=15.5, peerAssessmentPrompts=None),  # 小數分鐘;null = 未給
         lambda t: t["timeline"].append({"id": 1, "actions": []}),  # LenientStringConverter 讀成 "1"
         lambda t: t["timeline"][1].update(repeat="ONCE"),  # RepeatSpecConverter ToLowerInvariant
         lambda t: t["timeline"][1].update(repeat="Always"),

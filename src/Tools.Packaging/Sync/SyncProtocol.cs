@@ -236,6 +236,8 @@ public sealed record ShipStatus
     public int OutstandingRecordPackages { get; init; }
     public int VisitSeq { get; init; }
     public bool RollbackAvailable { get; init; }
+    /// <summary>船上筆電環境版次(作業系統 / .NET / WebView2 Runtime;規劃書第 5.5 節兩船版次清單)。舊版船端沒有此欄位時為 null。</summary>
+    public EnvironmentInfo? Environment { get; init; }
     public List<string> Warnings { get; init; } = new();
 }
 

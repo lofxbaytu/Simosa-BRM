@@ -19,6 +19,8 @@ import {
   dayNightLabel,
   describeTimeline,
   fromYaml,
+  linesToList,
+  listToLines,
   hasHardFail,
   loadDraft,
   newTarget,
@@ -350,5 +352,37 @@ describe('YAML 輸出與工具函式', () => {
     expect(dayNightLabel('2026-11-13T14:00:00Z', 120)).toContain('夜間');
     expect(dayNightLabel(undefined, 120)).toContain('未指定');
     expect(dayNightLabel('nope', 120)).toContain('無法解析');
+  });
+});
+
+describe('簡報規劃時間與提示清單(R7)', () => {
+  it('linesToList / listToLines 往返;validateDraft 檢查 0–120 與字串清單', () => {
+    expect(linesToList('a\r\n\n b \n')).toEqual(['a', 'b']);
+    expect(linesToList('  \n')).toBeUndefined();
+    expect(listToLines(['a', 'b'])).toBe('a\nb');
+    expect(listToLines(undefined)).toBe('');
+    expect(listToLines('x')).toBe('');
+    expect(listToLines([1, 'b'])).toBe('1\nb');
+    const d = fromYaml(`id: T
+name: t
+ship: { id: FSB1 }
+initial: { position: { lat: 23.8, lon: 120.0 }, heading: 0 }
+environment: { waterDepth: 20 }
+briefing:
+  text: 交班
+  planningTimeMin: 15
+  peerAssessmentPrompts: [觀察閉環溝通]
+  debriefQuestions: [哪一個資訊可信?]
+`);
+    expect(validateDraft(d).issues).toEqual([]);
+    const yaml = scenarioToYaml(d);
+    expect(yaml).toContain('planningTimeMin: 15');
+    expect(parseYaml(yaml).briefing).toEqual({ text: '交班', planningTimeMin: 15, peerAssessmentPrompts: ['觀察閉環溝通'], debriefQuestions: ['哪一個資訊可信?'] });
+    const bad = { ...d, briefing: { ...d.briefing, planningTimeMin: 121, peerAssessmentPrompts: ['ok', ' '], debriefQuestions: 'x' } };
+    expect(validateDraft(bad).issues).toEqual(
+      expect.arrayContaining(['briefing.planningTimeMin 需為 0–120 的分鐘數', 'briefing.peerAssessmentPrompts 需為非空字串的清單(每行一條)', 'briefing.debriefQuestions 需為非空字串的清單(每行一條)']),
+    );
+    expect(validateDraft({ ...d, briefing: { ...d.briefing, planningTimeMin: -1 } }).issues).toContain('briefing.planningTimeMin 需為 0–120 的分鐘數');
+    expect(validateDraft({ ...d, briefing: { ...d.briefing, planningTimeMin: 0 } }).issues).toEqual([]);
   });
 });

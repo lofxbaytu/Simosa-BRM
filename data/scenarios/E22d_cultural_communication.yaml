@@ -46,6 +46,16 @@ briefing:
     - { role: master, playedBy: leader }
   minParticipants: 2
   duration_s: 720
+  planningTimeMin: 5                              # 12 分鐘迷你情境:簡報後 5 分鐘規劃/分工(教官站本地倒數;規劃書第 9.1 節)
+  peerAssessmentPrompts:                          # 同儕評估提示(規劃書第 9.1 節)
+    - "觀察舵令是否使用 SMCP、舵工是否正確複誦,以及學員有沒有核對舵角指示器"
+    - "觀察舵工做錯(右舵 10)後,學員多久發現並以標準用語更正"
+    - "觀察機控室英語電話(減速五分鐘)時,學員是否複誦並確認原因與時間"
+  debriefQuestions:                               # 講評引導問題(1.39 文化差異/閉環溝通/SMCP;規劃書第 11 章)
+    - "為什麼舵工說「Yes sir」卻做錯?這跟權力距離與語言有什麼關係?"
+    - "閉環溝通的三個步驟是什麼?本練習哪一步斷掉了?"
+    - "怎樣讓多國籍團隊成員敢說「我沒聽懂」?SMCP 在這裡幫了什麼忙?"
+    - "機控室電話「reduce RPM five minute」你怎麼確認?如果聽不清楚該怎麼辦?"
 timeline:
   - id: handover
     name: 交班開場(新上船的外籍舵工)

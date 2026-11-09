@@ -48,6 +48,8 @@ public sealed class ShipVersionEntry
     public string? PackageId { get; set; }
     public Dictionary<string, ComponentVersion> Components { get; set; } = new();
     public ParameterSetRef? ParameterSet { get; set; }
+    /// <summary>該船筆電的環境版次(statusResult / status.json 的 environment;舊版船端沒有時為 null,合併時原樣保留)</summary>
+    public EnvironmentInfo? Environment { get; set; }
     public DateTime UpdatedUtc { get; set; }
     public string? Via { get; set; }
 }

@@ -132,6 +132,9 @@ public sealed class SyncHardeningTests : IDisposable
 
         UsbTransfer.ShipImport(node, usb);
         Assert.Empty(UsbTransfer.InstructorImport(store, usb, enrollDevice: true).Errors);
+        // 隨身碟途徑的 status.json 也把環境版次帶進兩船版次清單(與直連 statusResult 相同欄位)
+        Assert.Equal("usb", store.LoadFleet().Ships["FSB1"].Via);
+        Assert.False(string.IsNullOrWhiteSpace(store.LoadFleet().Ships["FSB1"].Environment?.Dotnet));
         store.MarkBackedUp(null, "外接碟");
         UsbTransfer.InstructorExport(store, usb, Array.Empty<string>(), key);
         var second = UsbTransfer.ShipImport(node, usb);

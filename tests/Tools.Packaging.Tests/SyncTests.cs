@@ -53,6 +53,12 @@ public sealed class SyncTests : IDisposable
         Assert.Equal(1.0, pulled.TrainingHours, 3);
         Assert.Null(rep1.Cleanup); // 尚未備份
         Assert.Equal("2026.10.1", store.LoadFleet().Ships["FSB1"].Version);
+        // 船端 statusResult 的環境版次(作業系統 / .NET / WebView2)寫進兩船版次清單(規劃書第 5.5 節)
+        var fleetEnv = store.LoadFleet().Ships["FSB1"].Environment;
+        Assert.NotNull(fleetEnv);
+        Assert.Equal(rep1.Status!.Environment, fleetEnv);
+        Assert.False(string.IsNullOrWhiteSpace(fleetEnv!.Os));
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, fleetEnv.CollectedUtc); // 船端以自己的時鐘收集
         Assert.True(File.Exists(Path.Combine(ship.RecordsDir, "r1.jsonl")));
 
         // 岸上備份後,第二次訪船:送出已備份回報 → 船上刪除副本

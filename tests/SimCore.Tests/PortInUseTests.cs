@@ -13,7 +13,9 @@ namespace SimosaBRM.SimCore.Tests;
 /// (a) 以 TcpListener 佔住 0.0.0.0:埠後直接建構三個伺服器類別 → TryStart 回 false 並回報原因、Start 拋 HttpListenerException、
 ///     DisposeAsync 不拋例外且可重複呼叫;釋放埠後同一埠可再啟動(失敗的嘗試不會在 HttpListener 的靜態端點表留下殘骸);
 /// (b) 以子程序啟動建置好的 Host(比照 HostGracefulStopTests):--vhf-port / --media-port 被占 → 結束碼 0、stdout 有「未啟動」與「核心照常執行」、
-///     紀錄有 footer;--port 被占 → 結束碼 2、stdout 有訊息、紀錄仍寫完 footer、stderr 無未處理例外。
+///     紀錄有 header 與 footer 且 tick > 0;--port 被占且有 --record → 結束碼 2、stdout 有訊息、stderr 無未處理例外,
+///     而且**不留下紀錄檔**(第二十五輪審查第 4 項:第一份紀錄在狀態埠成功監聽後才開檔,先前會留下只有 header+footer、tick 0 的空紀錄)。
+///     埠可用 + --record + 停止檔的正常停止(紀錄有 header/footer、雜湊鏈完整)由 HostGracefulStopTests.StopFile_EndsHostAndRecordHasFooterWithIntactHashChain 涵蓋,不在此重複。
 /// </summary>
 public class PortInUseTests
 {
@@ -211,11 +213,14 @@ public class PortInUseTests
         return new HostRun(p.ExitCode, stdout.Result, stderr.Result);
     }
 
+    /// <summary>埠可用時的紀錄:有 header(RecordReader.Read 缺 header 會擲例外)、footer 與內容一致、且真的跑過 tick(不是空紀錄)。</summary>
     private static void AssertFooter(string recordPath)
     {
         Assert.True(File.Exists(recordPath), "應有紀錄檔");
         var rec = RecordReader.Read(recordPath);
+        Assert.NotNull(rec.Header);
         Assert.NotNull(rec.Footer);
+        Assert.True(rec.Footer!.FinalTick > 0, "紀錄應跑過 tick(非空紀錄)");
         Assert.True(rec.IntegrityOk, "footer sha256 應與內容一致");
         File.Delete(recordPath);
     }
@@ -272,7 +277,7 @@ public class PortInUseTests
     }
 
     [Fact]
-    public void Host_StatePortInUse_ExitsWithCode2_MessageAndFooter_NoUnhandledException()
+    public void Host_StatePortInUse_WithRecord_ExitsWithCode2_LeavesNoRecordFile_NoUnhandledException()
     {
         var hostDll = HostDll();
         if (hostDll is null)
@@ -281,20 +286,57 @@ public class PortInUseTests
             return;
         }
         var hold = Hold(out var wsPort);
-        var recordPath = Path.Combine(TestData.TestRecordsDirectory, $"host-portinuse-ws-{Guid.NewGuid():N}.jsonl");
+        // --record 指到一個尚不存在的子目錄:RecordWriter 開檔時會建立目錄,所以「目錄不存在」即證明沒有開過任何紀錄檔
+        // (不檢查共用的 build/test-records 目錄有無新檔:其他測試類別平行執行會在那裡寫檔)
+        var recordDir = Path.Combine(TestData.TestRecordsDirectory, $"host-portinuse-ws-{Guid.NewGuid():N}");
+        var recordPath = Path.Combine(recordDir, "record.jsonl");
         HostRun run;
         try { run = RunHost(hostDll, recordPath, "--port", wsPort.ToString(), "--no-vhf", "--no-media"); }
         finally { hold.Stop(); }
-        Assert.True(run.ExitCode == 2, $"結束碼 {run.ExitCode}(應為 2)\n{run.Stdout}\n{run.Stderr}");
-        Assert.Contains($"埠 {wsPort} 被占用或無法監聽", run.Stdout);
-        Assert.Contains("狀態 WebSocket 未啟動", run.Stdout);
-        Assert.Contains("結束碼 2", run.Stdout);
+        try
+        {
+            Assert.True(run.ExitCode == 2, $"結束碼 {run.ExitCode}(應為 2)\n{run.Stdout}\n{run.Stderr}");
+            Assert.Contains($"埠 {wsPort} 被占用或無法監聽", run.Stdout);
+            Assert.Contains("狀態 WebSocket 未啟動", run.Stdout);
+            Assert.Contains("結束碼 2", run.Stdout);
+            Assert.Contains("結束(原因:portInUse)", run.Stdout);
+            Assert.DoesNotContain("執行中(", run.Stdout); // 未進入主迴圈
+            Assert.DoesNotContain("Unhandled exception", run.Stderr);
+            Assert.DoesNotContain("Unhandled exception", run.Stdout);
+            Assert.Contains($"埠 {wsPort} 被占用或無法監聽", run.Stderr);
+            // 第二十五輪審查第 4 項:狀態埠失敗時不得留下空紀錄 — 沒有「紀錄:」開檔訊息、沒有「紀錄已關閉」、檔案與目錄都不存在
+            Assert.DoesNotContain("  紀錄:", run.Stdout);
+            Assert.DoesNotContain("紀錄已關閉", run.Stdout);
+            Assert.False(File.Exists(recordPath), $"狀態埠被占用時不得留下紀錄檔:{recordPath}");
+            Assert.False(Directory.Exists(recordDir), $"狀態埠被占用時不得建立紀錄目錄:{recordDir}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(recordDir)) Directory.Delete(recordDir, true); } catch (Exception) { }
+        }
+    }
+
+    [Fact]
+    public void Host_StatePortAvailable_WithRecord_RecordHasHeaderAndFooter_AndRecordLineIsPrintedAfterWebSocket()
+    {
+        // 對照組:同樣的參數但狀態埠可用 → 結束碼 0,紀錄檔有 header、footer、tick > 0;且「紀錄:」開檔訊息在「WebSocket:」之後
+        //(開檔順序移到狀態埠成功監聽之後;第二十五輪審查第 4 項)。停止檔路徑的正常停止由 HostGracefulStopTests 涵蓋
+        var hostDll = HostDll();
+        if (hostDll is null)
+        {
+            Console.WriteLine("PortInUseTests:找不到 SimosaBRM.SimCore.Host.dll,略過(請先 dotnet build SimosaBRM.sln)");
+            return;
+        }
+        var recordPath = Path.Combine(TestData.TestRecordsDirectory, $"host-portfree-ws-{Guid.NewGuid():N}.jsonl");
+        var run = RunHost(hostDll, recordPath, "--port", FreePort().ToString(), "--no-vhf", "--no-media");
+        Assert.True(run.ExitCode == 0, $"結束碼 {run.ExitCode}\n{run.Stdout}\n{run.Stderr}");
+        var wsLine = run.Stdout.IndexOf("  WebSocket:ws://", StringComparison.Ordinal);
+        var recordLine = run.Stdout.IndexOf($"  紀錄:{recordPath}", StringComparison.Ordinal);
+        Assert.True(wsLine >= 0, "應印出 WebSocket 監聽位址");
+        Assert.True(recordLine > wsLine, "「紀錄:」開檔訊息應在「WebSocket:」之後(紀錄在狀態埠成功監聽後才開檔)");
         Assert.Contains("紀錄已關閉", run.Stdout);
-        Assert.Contains("結束(原因:portInUse)", run.Stdout);
-        Assert.DoesNotContain("執行中(", run.Stdout); // 未進入主迴圈
+        Assert.Contains("結束(原因:duration)", run.Stdout);
         Assert.DoesNotContain("Unhandled exception", run.Stderr);
-        Assert.DoesNotContain("Unhandled exception", run.Stdout);
-        Assert.Contains($"埠 {wsPort} 被占用或無法監聽", run.Stderr);
         AssertFooter(recordPath);
     }
 }
