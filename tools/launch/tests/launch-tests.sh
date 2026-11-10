@@ -229,7 +229,7 @@ PYCHK
 
 # USB 操控台服務(src/Contracts/console-serial.md):--console loopback:<讀取檔>,<寫入檔> 以檔案假裝置啟動 app/console 服務,
 # 預先寫入 HELLO/RUD/TEL/HB 行 → 回寫檔應有 ACK、LED,LINK,1、DISP,TEL,HAH;console.log 應有轉送到核心的 rudder/telegraph 指令;
-# PID 登錄為 console、stop-all(SIGINT)後服務以「結束(原因:SIGINT)」收尾、無 Unhandled exception
+# PID 登錄為 console、stop-all(SIGINT)後服務以「結束(原因:SIGINT 或 Ctrl+C)」收尾、無 Unhandled exception
 test_console_loopback() {
   local cfg; cfg="$(ship_cfg ship-console.json)"
   local infile="$TMP/console-in.txt" outfile="$TMP/console-out.txt"
@@ -248,7 +248,8 @@ test_console_loopback() {
   grep -q '"type":"rudder","value":10' "$log" || fail "console.log 應有轉送的 rudder 指令:$(tail -10 "$log")" || return 1
   grep -q '"type":"telegraph","value":"SAH"' "$log" || fail "console.log 應有轉送的 telegraph 指令" || return 1
   grep -q '"type":"alertAcknowledge"' "$log" || fail "console.log 應有轉送的 alertAcknowledge 指令" || return 1
-  grep -q "結束(原因:SIGINT)" "$log" || fail "stop-all 後 console.log 應有「結束(原因:SIGINT)」:$(tail -3 "$log")" || return 1
+  # SIGINT 同時觸發 Console.CancelKeyPress(原因 Ctrl+C)與 PosixSignalRegistration(原因 SIGINT),先後依 .NET 執行階段而異:兩者皆為優雅結束
+  grep -Eq "結束(原因:(SIGINT|Ctrl\+C))" "$log" || fail "stop-all 後 console.log 應有「結束(原因:SIGINT 或 Ctrl+C)」:$(tail -3 "$log")" || return 1
   grep -q "Unhandled exception" "$log" && { fail "console.log 不得有 Unhandled exception"; return 1; }
   [[ ! -f "$ROOT/$LOGS/simosa.pids" ]] || fail "PID 檔應被移除" || return 1
   return 0
