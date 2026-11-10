@@ -141,7 +141,8 @@ function New-FakeShellExe([string]$Path) {
 #!/bin/sh
 printf '%s\n' "$@"
 '@
-        Set-Content -Path $Path -Value $body -Encoding ascii
+        # 本檔在 Linux 的全新簽出為 CRLF(.gitattributes):here-string 內的 CR 會讓 shebang 變成「/bin/sh\r」而無法執行,先去掉
+        Set-Content -Path $Path -Value ($body -replace "`r", '') -Encoding ascii
         & chmod +x $Path
     }
     return $Path

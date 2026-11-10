@@ -249,7 +249,7 @@ test_console_loopback() {
   grep -q '"type":"telegraph","value":"SAH"' "$log" || fail "console.log 應有轉送的 telegraph 指令" || return 1
   grep -q '"type":"alertAcknowledge"' "$log" || fail "console.log 應有轉送的 alertAcknowledge 指令" || return 1
   # SIGINT 同時觸發 Console.CancelKeyPress(原因 Ctrl+C)與 PosixSignalRegistration(原因 SIGINT),先後依 .NET 執行階段而異:兩者皆為優雅結束
-  grep -Eq "結束(原因:(SIGINT|Ctrl\+C))" "$log" || fail "stop-all 後 console.log 應有「結束(原因:SIGINT 或 Ctrl+C)」:$(tail -3 "$log")" || return 1
+  { grep -Fq "結束(原因:SIGINT)" "$log" || grep -Fq "結束(原因:Ctrl+C)" "$log"; } || fail "stop-all 後 console.log 應有「結束(原因:SIGINT 或 Ctrl+C)」:$(tail -3 "$log")" || return 1
   grep -q "Unhandled exception" "$log" && { fail "console.log 不得有 Unhandled exception"; return 1; }
   [[ ! -f "$ROOT/$LOGS/simosa.pids" ]] || fail "PID 檔應被移除" || return 1
   return 0

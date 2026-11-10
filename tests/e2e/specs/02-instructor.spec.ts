@@ -107,8 +107,11 @@ test('凍結(教官站)→ 事件 frozen、tick 停止;恢復 → 事件 resumed
   try {
     const ev = await frozenEvent;
     expect(ev['source']).toBe('instructor');
-    // 凍結中核心不推進(SimulationEngine.Step 在 Frozen 時不 Advance);心跳幀的 tick 不變:1.5 s 內 tick 不前進
-    const tickAtFreeze = core.last?.tick ?? 0;
+    // 凍結中核心不推進(SimulationEngine.Step 在 Frozen 時不 Advance);心跳幀的 tick 不變:1.5 s 內 tick 不前進。
+    // 基準取第一個 flags.frozen 的狀態幀:狀態幀 25 Hz(每 2 tick 一幀),凍結事件可能比凍結當下那個 tick 的幀早到,
+    // 直接讀 core.last 會差 1 tick(第二十六輪在較快的機器上重現)
+    const frozenState = await core.waitState((s) => s.flags?.frozen === true, 5_000, '凍結後的狀態幀');
+    const tickAtFreeze = frozenState.tick;
     await page.waitForTimeout(1500);
     expect(core.last?.tick).toBe(tickAtFreeze);
     // 教官站事件流列出凍結事件(事件框仍會送達)
