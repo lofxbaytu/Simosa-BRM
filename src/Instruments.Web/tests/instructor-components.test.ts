@@ -147,6 +147,32 @@ describe('簡報結構區塊(規劃時間、同儕評估提示、講評引導問
     expect(plainBlock.shadowRoot!.querySelector('.timer')).toBeNull();
   });
 
+  it('情境面板切換到規劃時間分鐘數相同的另一個情境:計時器重設(換新元素),倒數不帶到下一個情境', async () => {
+    const other: ScenarioSummary = { ...E22X, id: 'E22y_mini', name: '迷你二' };
+    const el = await mount('brm-scenario-panel', { scenarios: [E22X, other] });
+    const first = el.shadowRoot!.querySelector('brm-briefing-block') as BriefingBlockEl;
+    await first.updateComplete;
+    let clock = 1_000_000;
+    first.now = () => clock;
+    q<HTMLButtonElement>(first, 'button.start').click();
+    await first.updateComplete;
+    clock += 120_000;
+    first.tick();
+    await first.updateComplete;
+    expect(first.remainingSeconds).toBe(180);
+    const ended: unknown[] = [];
+    el.addEventListener('planning-time-ended', (ev) => ended.push(ev));
+    (el.shadowRoot!.querySelectorAll('.item')[1] as HTMLElement).click();
+    await (el as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+    const second = el.shadowRoot!.querySelector('brm-briefing-block') as BriefingBlockEl;
+    await second.updateComplete;
+    expect(second).not.toBe(first);
+    expect(shadowText(second)).toContain('5:00');
+    expect(shadowText(second)).toContain('開始規劃時間');
+    clock += 600_000; // 舊元素已移除:不再倒數、不發到時事件
+    first.tick();
+    expect(ended).toHaveLength(0);
+  });
   it('倒數:開始 → 剩 1 分鐘變色 → 到時顯示「規劃時間結束」並發 planning-time-ended;暫停/繼續/重設', async () => {
     let clock = 1_000_000;
     const block = await mount<BriefingBlockEl>('brm-briefing-block', { briefing: E22X.briefingDoc, now: () => clock });

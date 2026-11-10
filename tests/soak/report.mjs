@@ -60,16 +60,6 @@ function readCounters(file) {
   };
 }
 
-/** RSS 準則的備註:本機 L3 快取大且未限制 gen0 預算時,提示成長可能來自 GC 配置預算(見 docs/design/testing.md 6.3)。 */
-export function gen0Hint(meta, rp, th) {
-  const l3Mb = (meta?.l3CacheBytes ?? 0) / (1024 * 1024);
-  const capped = (meta?.gen0BudgetMb ?? 0) > 0;
-  const failed = !(rp && rp.samples >= 2 && Math.abs(rp.slopeMbPerMin ?? Infinity) <= th.maxRssSlopeMbPerMin && rp.growthMb <= th.maxRssGrowthMb);
-  if (capped) return `gen0 預算上限 ${meta.gen0BudgetMb} MB(DOTNET_GCgen0MaxBudget)`;
-  if (failed && l3Mb >= 64) return `本機 L3 快取 ${Math.round(l3Mb)} MiB:.NET gen0 預算隨之放大,RSS 會先上升到第一次 gen0 回收才持平;以 --gen0-budget-mb 32 重跑可模擬船上筆電`;
-  return null;
-}
-
 export function loadRun(dir) {
   const metaFile = path.join(dir, 'meta.json');
   if (!fs.existsSync(metaFile)) throw new Error(`找不到 ${metaFile}`);
@@ -188,8 +178,6 @@ export function summarise(run, thresholds = {}) {
     : null;
 
   // ---- 判定 ----
-  // .NET 的 gen0 配置預算隨 L3 快取放大:雲端 VM 的 L3 可達數百 MiB,RSS 會先線性上升到第一次 gen0 回收才持平(不是洩漏;第二十六輪比對)。
-  // RSS 準則不合格、L3 ≥ 64 MiB 且未設 gen0 預算上限時,在備註提示以 --gen0-budget-mb 重跑。
   const footer = meta.footer ?? /紀錄已關閉/.test(run.simcoreLog);
   const hostOk = hostSummary.aliveAtEnd && !meta.aborted && (meta.hostExit === undefined || meta.hostExit === null || meta.hostExit === 0) && footer;
   const criteria = [];
@@ -203,8 +191,7 @@ export function summarise(run, thresholds = {}) {
   const rp = hostSummary.rssPostWarmup;
   add('rss', 'RSS 不持續成長', `暖機 ${hostSummary.warmup_s} s 後斜率 ≤ ${th.maxRssSlopeMbPerMin} MB/min 且增量 ≤ ${th.maxRssGrowthMb} MB`,
     rp ? `起 ${rp.first} → 訖 ${rp.last} MB(增量 ${rp.growthMb} MB;斜率 ${rp.slopeMbPerMin} MB/min,後半段 ${rp.secondHalfSlopeMbPerMin} MB/min;${rp.samples} 筆${rp.tailExcluded ? `,排除收尾 ${rp.tailExcluded} 筆` : ''})` : '無資料',
-    rp && rp.samples >= 2 && Math.abs(rp.slopeMbPerMin ?? Infinity) <= th.maxRssSlopeMbPerMin && rp.growthMb <= th.maxRssGrowthMb,
-    gen0Hint(meta, rp, th));
+    rp && rp.samples >= 2 && Math.abs(rp.slopeMbPerMin ?? Infinity) <= th.maxRssSlopeMbPerMin && rp.growthMb <= th.maxRssGrowthMb);
   add('connections', '無斷線與錯誤', '客戶端斷線 0、錯誤 0、網頁失敗 0',
     `斷線 ${clientsSummary.disconnects}、錯誤 ${clientsSummary.errors}、網頁失敗 ${clientsSummary.web?.fail ?? 0}${clientsSummary.lastErrors.length ? `(${clientsSummary.lastErrors.join(';')})` : ''}`,
     clientsSummary.count > 0 && clientsSummary.disconnects === 0 && clientsSummary.errors === 0 && (clientsSummary.web?.fail ?? 0) === 0);
@@ -237,7 +224,7 @@ export function renderMarkdown(s) {
   lines.push(`# 長時間穩定性(soak)測試報告 — ${s.run}`, '');
   lines.push(`> 規劃書第 14 章「效能」列(核心 50 Hz 無掉拍、延遲 < 50 ms、RSS 不持續成長);工具 \`tools/soak-test.sh\`(docs/design/testing.md 第 6 節)。`);
   lines.push(`> 情境 ${m.scenario ?? '?'};合成客戶端 ${m.clients ?? '?'} + 學員 1;設定時長 ${m.minutes ?? '?'} 分鐘(實際 ${f(s.host.elapsed_s, 0)} s);開始 ${m.startedUtc ?? '?'};結束 ${m.endedUtc ?? '?'};` +
-    `平台 ${m.platform ?? '?'}(${m.cpuCount ?? '?'} 核;${m.machineNote ?? ''});git ${m.gitRev ? m.gitRev.slice(0, 12) : '?'};.NET ${m.dotnet ?? '?'};Node ${m.node ?? '?'}${m.l3CacheBytes ? `;L3 快取 ${Math.round(m.l3CacheBytes / (1024 * 1024))} MiB` : ''}${m.gen0BudgetMb ? `;gen0 預算上限 ${m.gen0BudgetMb} MB` : ''}。`, '');
+    `平台 ${m.platform ?? '?'}(${m.cpuCount ?? '?'} 核;${m.machineNote ?? ''});git ${m.gitRev ? m.gitRev.slice(0, 12) : '?'};.NET ${m.dotnet ?? '?'};Node ${m.node ?? '?'}。`, '');
   lines.push(`## 判定:**${s.pass ? '合格' : '不合格'}**`, '', '| 準則 | 門檻 | 量測 | 結果 |', '|---|---|---|---|');
   for (const c of s.criteria) lines.push(`| ${c.name} | ${c.threshold} | ${c.measured} | ${c.pass ? '通過' : '**不通過**'} |`);
   lines.push('');

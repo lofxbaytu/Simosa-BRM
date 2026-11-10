@@ -40,6 +40,16 @@ if (options.NmeaFile is { } nmeaFileArg)
         return 2;
     }
 }
+// --media-dir 同理(審查第二十六輪):原本在第一份紀錄開檔之後才由 MediaUploadServer 建構時檢查,失敗會留下 0 位元組的紀錄檔
+if (options.EnableMedia)
+{
+    try { MediaUploadServer.ResolveDir(root, options.MediaDir); }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 2;
+    }
+}
 ShipParticulars LoadShip(string id) => ShipParticulars.LoadFromDataRoot(root, id);
 
 // 動力學工廠(規劃書第 6.2 節):預設 MMG 完整模型(係數檔由 src/Tools.Calibration 產生);--dynamics placeholder 切回 Nomoto 暫代模型

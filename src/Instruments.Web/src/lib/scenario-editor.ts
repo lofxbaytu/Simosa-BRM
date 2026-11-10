@@ -1247,7 +1247,7 @@ export const PLANNING_TIME_MAX_MIN = 120;
 export function linesToList(text: string): string[] | undefined {
   const items = text
     .split(/\r?\n/)
-    .map((l) => l.trim())
+    .map((l) => l.replace(/\s+/g, ' ').trim()) // Tab 與連續空白併成一格:含 Tab 的未加引號純量 PyYAML 讀不了(從文書軟體貼編號清單常見)
     .filter((l) => l.length > 0);
   return items.length > 0 ? items : undefined;
 }

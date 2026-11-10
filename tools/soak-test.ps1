@@ -29,9 +29,7 @@ param(
     [int]$SampleSeconds = 10,
     [double]$MaxLatencyMs = 50, [double]$MaxRssSlopeMbPerMin = 1, [double]$MaxRssGrowthMb = 64, [int]$WarmupSeconds = 120,
     [string]$Run,
-    [string]$Note,
-    # > 0 時對核心/雷達/網頁程序設 DOTNET_GCgen0MaxBudget = N MB(.NET gen0 配置預算隨 L3 快取放大;docs/design/testing.md 6.3);0 = 不設定
-    [int]$Gen0BudgetMb = 0
+    [string]$Note
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -48,11 +46,6 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw '找不到 no
 if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = Join-Path $root '.cache\dotnet-home' }
 if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = Join-Path $root '.cache\nuget\packages' }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'; $env:SIMOSA_BRM_ROOT = $root
-if ($Gen0BudgetMb -lt 0) { Write-Error '-Gen0BudgetMb 須為非負整數(MB;0 = 不設定)'; exit 2 }
-if ($Gen0BudgetMb -gt 0) { $env:DOTNET_GCgen0MaxBudget = ('{0:x}' -f ([int64]$Gen0BudgetMb * 1024 * 1024)) }
-# 本機 L3 快取大小(報告用;取不到為 0)
-$l3Bytes = 0
-try { $l3Kb = (Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1).L3CacheSize; if ($l3Kb) { $l3Bytes = [int64]$l3Kb * 1024 } } catch { $l3Bytes = 0 }
 if (-not $Run) { $Run = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss') }
 $outRel = "build\soak\$Run"; $outDir = Join-Path $root $outRel; $logsRel = "$outRel\logs"; $stats = Join-Path $outDir 'stats'
 $reportMd = Join-Path $root "build\soak\report-$Run.md"; $reportJson = Join-Path $root "build\soak\report-$Run.json"
@@ -134,7 +127,6 @@ function Write-Meta {
         recordPath = "$outRel\records\soak-$scenId.jsonl" -replace '\\', '/'
         hostPid = $(if ($script:hostProc) { $script:hostProc.Id } else { 0 }); hostExit = $script:hostExit; footer = $script:footer; aborted = $script:aborted
         counters = [bool]$dc
-        gen0BudgetMb = $Gen0BudgetMb; l3CacheBytes = $l3Bytes
         thresholds = [ordered]@{ maxLatencyMs = $MaxLatencyMs; maxRssSlopeMbPerMin = $MaxRssSlopeMbPerMin; maxRssGrowthMb = $MaxRssGrowthMb; warmupS = $WarmupSeconds }
     }
     $meta | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $outDir 'meta.json') -Encoding UTF8

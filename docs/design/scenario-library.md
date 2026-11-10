@@ -628,7 +628,7 @@ xunit:`E22_NoOperatorRunsScriptAndMissesRequirements`(腳本時刻、討論點�
 規劃書第 9.1 節簡報內容(情境、角色、規劃時間、同儕評估提示)與第 11 章講評:E20 兩檔與 E22a–d 的 `briefing` 補 `planningTimeMin`、
 `peerAssessmentPrompts`(3–5 條)、`debriefQuestions`(3–5 條;E22a 原本寫在簡報文字末行的三個問題搬成清單並保留原文),其他情境暫不補
 (schema 選填;情境引擎設計第 1.4 節)。教官站:情境面板詳細區與簡化教官模式簡報頁的 `<brm-briefing-block>` 顯示規劃時間倒數
-(本地計時,到時記入學員操作紀錄)、提示清單(展開)與引導問題(摺疊);練習結束頁與講評報告(來源為紀錄標頭 `header.scenario.briefing`)
+(本地計時,到時記入學員操作紀錄)、提示清單(展開)與引導問題(摺疊);練習結束頁與講評報告(來源:核心 JSON Lines 紀錄標頭的 `header.scenario.briefing`;教官站紀錄為 `header.scenario.briefingDoc`)
 列於講評摘要/講評紀錄旁。xunit `ScenarioLibraryFinalTests.BriefingHasPlanningTimeAndDebriefGuide`(六檔皆有、E20 兩檔相同)。
 
 | 情境 | 規劃時間 | 講評引導問題(摘要;全文見 YAML) |

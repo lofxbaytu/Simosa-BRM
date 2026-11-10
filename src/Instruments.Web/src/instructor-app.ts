@@ -14,6 +14,7 @@
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, query, state } from 'lit/decorators.js';
+import { keyed } from 'lit/directives/keyed.js';
 import type { OwnShipState, ShipId } from './types/state.js';
 import type { SimCommand } from './types/command.js';
 import type { ConnectionStatus, SimSource } from './net/sim-source.js';
@@ -1332,7 +1333,7 @@ export class InstructorApp extends LitElement {
                     ${sc.briefingDoc.roles.length > 0 ? html`<div>角色:${sc.briefingDoc.roles.map((r) => `${ROLE_LABEL[r.role] ?? r.role}(${PLAYED_BY_LABEL[r.playedBy] ?? r.playedBy}${r.required ? ',必要' : ''})`).join('、')}${sc.briefingDoc.minParticipants !== undefined ? ` · 最少 ${sc.briefingDoc.minParticipants} 人` : ''}</div>` : nothing}
                     ${sc.briefingDoc.attachments.length > 0 ? html`<div>附件:${sc.briefingDoc.attachments.map((a) => a.title).join('、')}</div>` : nothing}
                   </div>`
-                : nothing}${sc ? html`<brm-briefing-block large .briefing=${sc.briefingDoc}></brm-briefing-block>` : nothing}</div>
+                : nothing}${sc ? keyed(sc.id, html`<brm-briefing-block large .briefing=${sc.briefingDoc}></brm-briefing-block>`) : nothing}</div>
             <brm-session-info-panel compact .simUtc=${s.utc ?? ''} .submitted=${this.sessionInfo}></brm-session-info-panel>
             <brm-recording-panel .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
             <div class="actions">

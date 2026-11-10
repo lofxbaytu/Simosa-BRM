@@ -185,7 +185,7 @@ function renderBriefingGuide(g: BriefingGuide): TemplateResult {
       ? html`<h3>同儕評估提示(情境簡報)</h3>
           <ol class="guide-prompts">${g.peerAssessmentPrompts.map((q) => html`<li>${q}</li>`)}</ol>`
       : nothing}
-    ${g.planningTimeMin !== undefined ? html`<p class="muted small">簡報後規劃時間 ${g.planningTimeMin} 分鐘(教官站本地倒數;結束時刻見學員操作紀錄)</p>` : nothing}
+    ${g.planningTimeMin !== undefined ? html`<p class="muted small">簡報後規劃時間 ${g.planningTimeMin} 分鐘${g.planningEnded ? '(教官站倒數已計時結束)' : ''}</p>` : nothing}
   </div>`;
 }
 

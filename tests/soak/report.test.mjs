@@ -7,7 +7,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LatencyEstimator, MsHistogram, quantileOf } from './lib.mjs';
-import { gen0Hint, loadRun, renderMarkdown, slope, summarise } from './report.mjs';
+import { loadRun, renderMarkdown, slope, summarise } from './report.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TMP = path.join(ROOT, 'build', 'test-tmp', 'soak');
@@ -176,16 +176,4 @@ test('LatencyEstimator:校正期後以最快一幀為原點,延遲 ≥ 0,核心�
 test('slope 最小平方', () => {
   assert.equal(slope([[0, 1], [1, 3], [2, 5]]), 2);
   assert.equal(slope([[0, 1]]), null);
-});
-
-test('gen0Hint:RSS 不合格且 L3 快取大而未設上限 → 提示 --gen0-budget-mb;已設上限 → 註明上限;其餘無備註', () => {
-  const th = { maxRssSlopeMbPerMin: 1, maxRssGrowthMb: 64 };
-  const bad = { samples: 48, slopeMbPerMin: 26.3, growthMb: 186.5 };
-  const good = { samples: 48, slopeMbPerMin: 0.2, growthMb: 3 };
-  const bigL3 = 504 * 1024 * 1024;
-  assert.match(gen0Hint({ l3CacheBytes: bigL3, gen0BudgetMb: 0 }, bad, th), /L3 快取 504 MiB.*--gen0-budget-mb 32/);
-  assert.equal(gen0Hint({ l3CacheBytes: bigL3, gen0BudgetMb: 0 }, good, th), null);
-  assert.equal(gen0Hint({ l3CacheBytes: 24 * 1024 * 1024 }, bad, th), null);
-  assert.equal(gen0Hint({}, bad, th), null);
-  assert.match(gen0Hint({ l3CacheBytes: bigL3, gen0BudgetMb: 32 }, good, th), /gen0 預算上限 32 MB/);
 });

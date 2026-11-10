@@ -40,20 +40,9 @@ TOL = 1e-9
 # 夾具錄製後情境 YAML / 參數集又被編輯過的欄位(路徑前綴;情境 id → 路徑集合)。夾具與目前檔案一致時應為空;
 # 再度編輯情境/參數集後可暫列於此,並以 dotnet run --project src/SimCore.Host -- --scenario <id> --record … 重新錄製後清空
 #(2026-10-17 已重新錄製 E01/E07)。
-# 第二十六輪 R7:E20 兩檔與 E22a–d 的 briefing 新增 planningTimeMin / peerAssessmentPrompts / debriefQuestions(規劃書第 9.1 節、第 11 章),
-# 夾具(2026-10-18 錄製)標頭沒有這三個鍵;重新錄製六檔夾具後清空。
-_BRIEFING_GUIDE_KEYS = {"briefing.planningTimeMin", "briefing.peerAssessmentPrompts", "briefing.debriefQuestions"}
-KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {
-    sid: set(_BRIEFING_GUIDE_KEYS)
-    for sid in (
-        "E20_comprehensive_assessment_default",
-        "E20_comprehensive_assessment_kaohsiung",
-        "E22a_handover_conflict",
-        "E22b_fatigue_misjudgement",
-        "E22c_challenge_senior",
-        "E22d_cultural_communication",
-    )
-}
+# 第二十六輪 R7:E20 兩檔與 E22a–d 的 briefing 新增 planningTimeMin / peerAssessmentPrompts / debriefQuestions 後已重錄六檔夾具
+# (2026-11-09;狀態雜湊與事件序列不變),目前沒有已知漂移。
+KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {}
 # 夾具錄製時主控程序以 --timescale 覆寫、或 C# 另行正規化而不比對的欄位
 SKIP_LEAVES = {"timeScale"}
 # 一定要有 C# 紀錄夾具的情境(缺夾具時失敗而非略過;其餘情境無夾具時略過)。2026-10-17 加入 E05(無參數集的情境)、

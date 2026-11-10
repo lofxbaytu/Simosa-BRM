@@ -54,9 +54,31 @@ public sealed class ScenarioBriefingConverter : JsonConverter<ScenarioBriefing>
         public List<BriefingRole>? Roles { get; set; }
         public int? MinParticipants { get; set; }
         [JsonPropertyName("duration_s")] public double? DurationS { get; set; }
-        public double? PlanningTimeMin { get; set; }
-        public List<string>? PeerAssessmentPrompts { get; set; }
-        public List<string>? DebriefQuestions { get; set; }
+        // 三個結構欄位以 JsonElement 讀入後嚴格檢查(與 scenario.schema.json、Python structural_issues 一致):
+        // ContractJson 的 AllowReadingFromString / LenientStringConverter 會把 "15"、[1, true, null] 寬鬆讀入,null 還會原樣寫進紀錄標頭(審查第二十六輪)
+        public JsonElement? PlanningTimeMin { get; set; }
+        public JsonElement? PeerAssessmentPrompts { get; set; }
+        public JsonElement? DebriefQuestions { get; set; }
+    }
+
+    private static double? StrictNumber(JsonElement? e, string name)
+    {
+        if (e is not { } v || v.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
+        if (v.ValueKind != JsonValueKind.Number) throw new JsonException($"briefing.{name} 須為數值(分鐘)");
+        return v.GetDouble();
+    }
+
+    private static List<string> StrictStringList(JsonElement? e, string name)
+    {
+        var list = new List<string>();
+        if (e is not { } v || v.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return list;
+        if (v.ValueKind != JsonValueKind.Array) throw new JsonException($"briefing.{name} 須為字串陣列");
+        foreach (var item in v.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String) throw new JsonException($"briefing.{name} 須為字串陣列");
+            list.Add(item.GetString()!);
+        }
+        return list;
     }
 
     public override ScenarioBriefing? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -67,7 +89,9 @@ public sealed class ScenarioBriefingConverter : JsonConverter<ScenarioBriefing>
         return new ScenarioBriefing
         {
             Text = p.Text, Attachments = p.Attachments ?? new(), Roles = p.Roles ?? new(), MinParticipants = p.MinParticipants, DurationS = p.DurationS,
-            PlanningTimeMin = p.PlanningTimeMin, PeerAssessmentPrompts = p.PeerAssessmentPrompts ?? new(), DebriefQuestions = p.DebriefQuestions ?? new(),
+            PlanningTimeMin = StrictNumber(p.PlanningTimeMin, "planningTimeMin"),
+            PeerAssessmentPrompts = StrictStringList(p.PeerAssessmentPrompts, "peerAssessmentPrompts"),
+            DebriefQuestions = StrictStringList(p.DebriefQuestions, "debriefQuestions"),
         };
     }
 
@@ -85,9 +109,9 @@ public sealed class ScenarioBriefingConverter : JsonConverter<ScenarioBriefing>
             Roles = value.Roles.Count > 0 ? value.Roles : null,
             MinParticipants = value.MinParticipants,
             DurationS = value.DurationS,
-            PlanningTimeMin = value.PlanningTimeMin,
-            PeerAssessmentPrompts = value.PeerAssessmentPrompts.Count > 0 ? value.PeerAssessmentPrompts : null,
-            DebriefQuestions = value.DebriefQuestions.Count > 0 ? value.DebriefQuestions : null,
+            PlanningTimeMin = value.PlanningTimeMin is { } minutes ? JsonSerializer.SerializeToElement(minutes, options) : null,
+            PeerAssessmentPrompts = value.PeerAssessmentPrompts.Count > 0 ? JsonSerializer.SerializeToElement(value.PeerAssessmentPrompts, options) : null,
+            DebriefQuestions = value.DebriefQuestions.Count > 0 ? JsonSerializer.SerializeToElement(value.DebriefQuestions, options) : null,
         }, options);
     }
 }

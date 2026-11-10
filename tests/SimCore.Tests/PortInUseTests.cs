@@ -317,6 +317,36 @@ public class PortInUseTests
     }
 
     [Fact]
+    public void Host_InvalidMediaDir_WithRecord_ExitsWithCode2_LeavesNoRecordFile()
+    {
+        // 審查第二十六輪:--media-dir 在專案資料夾外 → 在建立任何伺服器/紀錄之前就以結束碼 2 結束,不留 0 位元組的紀錄檔
+        var hostDll = HostDll();
+        if (hostDll is null)
+        {
+            Console.WriteLine("PortInUseTests:找不到 SimosaBRM.SimCore.Host.dll,略過(請先 dotnet build SimosaBRM.sln)");
+            return;
+        }
+        var recordDir = Path.Combine(TestData.TestRecordsDirectory, $"host-mediadir-{Guid.NewGuid():N}");
+        var recordPath = Path.Combine(recordDir, "record.jsonl");
+        var outside = Path.Combine(Path.GetPathRoot(Path.GetFullPath(TestData.TestRecordsDirectory)) ?? "/", "simosa-outside-project-media");
+        try
+        {
+            var run = RunHost(hostDll, recordPath, "--port", FreePort().ToString(), "--no-vhf", "--media-dir", outside);
+            Assert.True(run.ExitCode == 2, $"結束碼 {run.ExitCode}(應為 2)\n{run.Stdout}\n{run.Stderr}");
+            Assert.Contains("--media-dir", run.Stderr);
+            Assert.DoesNotContain("  紀錄:", run.Stdout);
+            Assert.DoesNotContain("Unhandled exception", run.Stderr);
+            Assert.False(File.Exists(recordPath), $"--media-dir 不合法時不得留下紀錄檔:{recordPath}");
+            Assert.False(Directory.Exists(recordDir), $"--media-dir 不合法時不得建立紀錄目錄:{recordDir}");
+            Assert.False(Directory.Exists(outside), "不得在專案資料夾外建立目錄");
+        }
+        finally
+        {
+            try { if (Directory.Exists(recordDir)) Directory.Delete(recordDir, true); } catch (Exception) { }
+        }
+    }
+
+    [Fact]
     public void Host_StatePortAvailable_WithRecord_RecordHasHeaderAndFooter_AndRecordLineIsPrintedAfterWebSocket()
     {
         // 對照組:同樣的參數但狀態埠可用 → 結束碼 0,紀錄檔有 header、footer、tick > 0;且「紀錄:」開檔訊息在「WebSocket:」之後

@@ -555,7 +555,7 @@ public sealed class CliApp
                 foreach (var p in store.LoadLedger().Packages)
                     _out.WriteLine($"{p.ShipId} {p.PackageId} {p.Directory} 匯入 {p.ImportedUtc:yyyy-MM-dd} 備份 {(p.BackedUpUtc is { } b ? b.ToString("yyyy-MM-dd") : "未")} 船上 {(p.ShipDeletedUtc is null ? "保留" : "已刪除")}");
                 foreach (var (ship, v) in store.LoadFleet().Ships)
-                    _out.WriteLine($"版次 {ship}:{v.Version}(參數集 {v.ParameterSet?.Version},更新於 {v.UpdatedUtc:yyyy-MM-dd},經 {v.Via})");
+                    _out.WriteLine($"版次 {ship}:{v.Version}(參數集 {v.ParameterSet?.Version},更新於 {v.UpdatedUtc:yyyy-MM-dd},經 {v.Via};環境 {(v.Environment is { } env ? $"{env.Describe()}(收集於 {env.CollectedUtc:yyyy-MM-dd})" : "未回報")})");
                 return 0;
             default: throw new CliUsageException($"未知的 store 子指令:{sub}");
         }

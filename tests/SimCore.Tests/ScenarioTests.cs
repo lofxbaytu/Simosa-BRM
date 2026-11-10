@@ -221,6 +221,50 @@ public class ScenarioTests
         Assert.Equal(e2.StateHash, e1.StateHash);
     }
 
+    /// <summary>簡報三個結構欄位的畸形輸入與 scenario.schema.json、Python structural_issues 一致地拒絕(不因 ContractJson 的寬鬆讀入而接受;審查第二十六輪)。</summary>
+    [Theory]
+    [InlineData("planningTimeMin: \"15\"")]
+    [InlineData("planningTimeMin: true")]
+    [InlineData("peerAssessmentPrompts: [1, 觀察]")]
+    [InlineData("peerAssessmentPrompts: [true, 觀察]")]
+    [InlineData("debriefQuestions: [觀察, ~]")]
+    [InlineData("debriefQuestions: 只有一條")]
+    [InlineData("debriefQuestions: [[巢狀]]")]
+    public void BriefingStructuredFieldsRejectMalformedShapes(string line)
+    {
+        var yaml = $"""
+            id: T
+            ship: {"{"} id: FSB1 {"}"}
+            initial: {"{"} position: {"{"} lat: 23.8, lon: 120.0 {"}"}, heading: 0 {"}"}
+            environment: {"{"} waterDepth: 20 {"}"}
+            briefing:
+              text: 交班
+              {line}
+            """;
+        Assert.ThrowsAny<Exception>(() => ScenarioLoader.FromYaml(yaml).Validate());
+    }
+
+    /// <summary>省略或 null 的結構欄位視為未設定;空陣列可接受。</summary>
+    [Fact]
+    public void BriefingStructuredFieldsAcceptNullAndEmpty()
+    {
+        var sc = ScenarioLoader.FromYaml("""
+            id: T
+            ship: { id: FSB1 }
+            initial: { position: { lat: 23.8, lon: 120.0 }, heading: 0 }
+            environment: { waterDepth: 20 }
+            briefing:
+              text: 交班
+              planningTimeMin: ~
+              peerAssessmentPrompts: []
+              debriefQuestions: ~
+            """).Validate();
+        Assert.Null(sc.Briefing!.PlanningTimeMin);
+        Assert.Empty(sc.Briefing.PeerAssessmentPrompts);
+        Assert.Empty(sc.Briefing.DebriefQuestions);
+        Assert.True(sc.Briefing.IsTextOnly);
+    }
+
 
     /// <summary>E07 出港船 OUT1 的航跡位於自船航線左舷側 ≥ 100 m(左舷對左舷通過),不與自船航線相交;minCpa 門檻用航道參數。</summary>
     [Fact]

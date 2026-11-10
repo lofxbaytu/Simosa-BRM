@@ -28,6 +28,10 @@
   <Target Name="WarnNoWindowsDesktopSdk" BeforeTargets="CoreCompile" Condition="'$(WindowsDesktopSdkAvailable)' != 'true'">
     <Warning Text="Shell.WebView2:此 SDK 沒有 Microsoft.NET.Sdk.WindowsDesktop,只建出空組件(不可用於發行);請在 Windows 或 Microsoft 散布的 .NET SDK 建置。" />
   </Target>
+  <!-- 空組件不得被發行:dotnet publish 在這種 SDK 上直接失敗(tools/build-release.sh 以 win-x64 為目標時因此在發布外殼時停下,不會產出沒有 exe 的 app/shell) -->
+  <Target Name="FailPublishWithoutWindowsDesktopSdk" BeforeTargets="PrepareForPublish" Condition="'$(WindowsDesktopSdkAvailable)' != 'true'">
+    <Error Text="Shell.WebView2:此 SDK 沒有 Microsoft.NET.Sdk.WindowsDesktop,不能發行 WebView2 外殼(SimosaBRM.Shell.exe);請改用 Windows(tools\build-release.ps1)或 Microsoft 散布的 .NET 8 SDK。" />
+  </Target>
   <PropertyGroup>
     <RootNamespace>SimosaBRM.Shell.App</RootNamespace>
     <AssemblyName>SimosaBRM.Shell</AssemblyName>

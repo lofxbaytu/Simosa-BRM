@@ -581,17 +581,31 @@ export interface BriefingGuide {
   peerAssessmentPrompts: string[];
   /** 簡報後的規劃時間(分鐘;有設定時列在練習資訊) */
   planningTimeMin?: number;
+  /** 教官站紀錄的學員操作紀錄有「規劃時間結束」那筆(教官站本地倒數已計時結束);核心 JSON Lines 紀錄沒有這筆,恆為 undefined */
+  planningEnded?: boolean;
 }
 
-/** 由紀錄標頭的情境物件取出講評引導結構;沒有 briefing 或三個欄位皆空時 null(舊紀錄/未補的情境不顯示該段)。 */
+/**
+ * 由紀錄標頭的情境物件取出講評引導結構;沒有 briefing 或三個欄位皆空時 null(舊紀錄/未補的情境不顯示該段)。
+ * 兩種來源:核心 JSON Lines 標頭的 header.scenario.briefing 是物件;教官站紀錄(SessionRecord,教官站「講評報告」鈕交接的那份)
+ * 的 header.scenario 是 ScenarioSummary,briefing 為純文字、結構欄位在 briefingDoc(鍵名與 YAML 相同;審查第二十六輪)。
+ */
 export function briefingGuideOf(scenario: unknown): BriefingGuide | null {
   if (!isRecord(scenario)) return null;
-  const b = parseBriefing(scenario['briefing']);
+  const raw = isRecord(scenario['briefing']) ? scenario['briefing'] : isRecord(scenario['briefingDoc']) ? scenario['briefingDoc'] : scenario['briefing'];
+  const b = parseBriefing(raw);
   if (b.debriefQuestions.length === 0 && b.peerAssessmentPrompts.length === 0 && (b.planningTimeMin ?? 0) <= 0) return null;
   const guide: BriefingGuide = { debriefQuestions: b.debriefQuestions, peerAssessmentPrompts: b.peerAssessmentPrompts };
   const planning = b.planningTimeMin;
   if (planning !== undefined && planning > 0) guide.planningTimeMin = planning;
   return guide;
+}
+
+/** 教官站紀錄的 operations[] 有 kind = planningTime 的項目時,在引導結構標記規劃時間已計時結束。 */
+function withPlanningEnded(guide: BriefingGuide | null, operations: readonly unknown[]): BriefingGuide | null {
+  if (!guide || guide.planningTimeMin === undefined) return guide;
+  const ended = operations.some((o) => isRecord(o) && o['kind'] === 'planningTime');
+  return ended ? { ...guide, planningEnded: true } : guide;
 }
 
 export interface DebriefReport {
@@ -684,7 +698,7 @@ export function buildDebriefReport(input: BuildReportInput): DebriefReport {
     anchorsVersion: anchors.version,
     anchorsStatus: anchors.statusLabel,
     debrief: DEBRIEF_SECTIONS.map((s) => ({ id: s.id, title: s.title, hint: s.hint, text: meta.debrief[s.id] ?? '' })),
-    briefingGuide: briefingGuideOf(h.scenario),
+    briefingGuide: withPlanningEnded(briefingGuideOf(h.scenario), data.operations),
     parameters: buildParameterSection(data),
     sessionInfo: data.header.sessionInfo ?? null,
     vhf: vhfActivity(data.events),

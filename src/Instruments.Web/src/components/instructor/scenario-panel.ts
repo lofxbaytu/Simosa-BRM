@@ -4,6 +4,7 @@
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { keyed } from 'lit/directives/keyed.js';
 import { tileStyles } from '../shared.js';
 import { instructorStyles } from './instructor-shared.js';
 import { environmentSummary, extensionSummary, initialSummary, loadingLabel, type ScenarioSummary } from '../../lib/scenario.js';
@@ -161,7 +162,7 @@ export class ScenarioPanel extends LitElement {
               ${sel.briefingDoc.attachments.length > 0
                 ? html`<div class="attachments">附件:${sel.briefingDoc.attachments.map((a) => html`<a href=${`data/scenarios/${sel.id}/${a.file}`} target="_blank" rel="noopener" title=${a.file}>${a.title}</a>`)}</div>`
                 : nothing}
-              <brm-briefing-block .briefing=${sel.briefingDoc}></brm-briefing-block>
+              ${keyed(sel.id, html`<brm-briefing-block .briefing=${sel.briefingDoc}></brm-briefing-block>`) /* 換情境即換元素:倒數不帶到下一個情境(同分鐘數的 E22a–d、E20 兩檔;審查第二十六輪) */}
               ${sel.issues.length > 0 ? html`<div class="issues">${sel.issues.join('; ')}</div>` : nothing}
             </div>`
           : nothing}

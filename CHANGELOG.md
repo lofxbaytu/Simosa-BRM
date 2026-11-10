@@ -2,6 +2,15 @@
 
 > 版本號 = `VERSION` 檔(`<年>.<月>.<輪次>`,例如 2026.11.24;更新包只接受版本遞增,此方案大於舊的 `0.<日期>.<時分>` 後備與文件示例 2026.11.1,船上曾套用的任何版本都不會把它判為降版;`tools/build-release.*` 無 `--version` 時以此為發行版本,與更新包版本規則相同:1–4 段數字)。每輪一條,只列新增/修正/已知限制的摘要;細節、驗證指令與測試數見 `docs/dev-log/2026-10-08-工作階段交接.md` 各輪與各 `docs/design/*.md`。日期為該輪提交日。
 
+## 2026.11.26 — 2026-11-10(第二十六輪)
+
+- 修正:SimCore.Host 在 `--port` 被占用且有 `--record` 時不再留下只有 header+footer 的空紀錄(第一份紀錄改在狀態 WebSocket 啟動成功後才開檔);`--media-dir` 不合法時在開檔前即以結束碼 2 結束,不留 0 位元組紀錄檔。
+- 新增(R13):版次清單納入船上筆電環境資訊 `environment`(`os`、`dotnet`、`webview2`、`collectedUtc`;`simosa-pkg status`、直連同步與隨身碟 `status.json` 都寫入 `fleet-versions.json`,`store list` 同列顯示;船端未回報時沿用上次已知值)。
+- 新增(R7):情境 `briefing` 的 `planningTimeMin`、`peerAssessmentPrompts`、`debriefQuestions`;教官站 `<brm-briefing-block>` 規劃時間倒數(本地計時,到時記入學員操作紀錄)、同儕評估提示與講評引導問題;講評報告對核心紀錄與教官站紀錄都列出;情境編輯器三個欄位;E20 兩檔與 E22a–d 補內容並重錄六檔紀錄夾具;C# 對三個欄位嚴格檢查(與 schema、Python 一致)。
+- 工具鏈:Ubuntu 套件版 .NET SDK(無 WindowsDesktop SDK、C# 12 編譯器)也能建置整個方案——雷達 `RadarService` 改寫一處 async 內的 Span 區域變數;`Shell.WebView2` 在這種 SDK 只建空組件並警告,`dotnet publish` 直接失敗,`build-release.*` 另檢查 `SimosaBRM.Shell.exe` 存在。
+- soak 比對:本輪工作樹與第二十四輪(abf0e3a)各 10 分鐘的 RSS 曲線相同(核心 97 → 約 360 MB、雷達 89 → 約 333 MB,之後持平),第二十五輪記下的成長不是該輪引入;成因未定(見交接紀錄)。
+- 已知限制:浪一階運動(升沉/縱搖,R2)本輪未做,契約已定於交接紀錄;講評引導問題只補六個情境;重播檢視未列引導問題;soak 的 RSS 準則在大快取雲端機器上 10 分鐘內不會合格。
+
 ## 2026.11.25 — 2026-11-05(第二十五輪)
 
 - 修正:SimCore.Host 三個 HttpListener 伺服器與雷達服務在埠被占用時不再崩潰——每次嘗試用新的 HttpListener(萬用 → localhost+127.0.0.1),VHF/錄影埠失敗只停用該服務、核心照常執行;狀態埠失敗印訊息、寫完紀錄 footer 後結束碼 2;雷達服務埠失敗結束碼 2;`TryStart/StartError/Started`,DisposeAsync 可重複;PortInUseTests(SimCore 8、Radar 3)。

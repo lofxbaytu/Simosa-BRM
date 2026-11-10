@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { render } from 'lit';
 import { describe, expect, it } from 'vitest';
 import { parseReplay } from '../src/lib/record-replay.js';
+import { parseScenario } from '../src/lib/scenario.js';
+import { buildSessionRecord } from '../src/lib/session-record.js';
+import { defaultState } from '../src/lib/state-parser.js';
 import {
   buildDebriefReport,
   DEBRIEF_SECTIONS,
@@ -276,6 +279,40 @@ describe('情境簡報的講評引導問題與同儕評估提示(R7)', () => {
     const parts = Array.from(doc.querySelectorAll('[data-sec="debrief"] .debrief-part'));
     expect(parts[0]!.getAttribute('data-part')).toBe('briefing-guide');
     expect(parts[1]!.querySelector('h3')!.textContent).toBe(DEBRIEF_SECTIONS[0]!.title);
+  });
+
+  it('教官站紀錄(講評報告鈕交接的 SessionRecord):結構欄位在 header.scenario.briefingDoc → 同樣列出;有 planningTime 操作紀錄時註明倒數已結束', () => {
+    const sc = parseScenario(readFileSync(path.join(here, '../../../data/scenarios/E22a_handover_conflict.yaml'), 'utf8'), 'data/scenarios/E22a_handover_conflict.yaml');
+    const base = {
+      mode: 'simple' as const,
+      source: 'ws://x',
+      scenario: sc,
+      shipId: 'FSB1',
+      sampleInterval_s: 1,
+      states: [defaultState('FSB1'), { ...defaultState('FSB1'), t: 60, tick: 3000 }],
+      markers: [],
+      commands: [],
+      summary: null,
+    };
+    const data = parseReplay(JSON.stringify(buildSessionRecord({ ...base, operations: [] })));
+    expect(data.source).toBe('instructor-json');
+    const r = buildDebriefReport({ data, now: NOW });
+    expect(r.briefingGuide).not.toBeNull();
+    expect(r.briefingGuide!.debriefQuestions).toHaveLength(4);
+    expect(r.briefingGuide!.peerAssessmentPrompts).toHaveLength(3);
+    expect(r.briefingGuide!.planningTimeMin).toBe(5);
+    expect(r.briefingGuide!.planningEnded).toBeUndefined();
+    const part = html(renderReportDoc(r)).querySelector('[data-sec="debrief"] [data-part="briefing-guide"]')!;
+    expect(part).not.toBeNull();
+    expect(part.querySelectorAll('ol.guide-questions li')).toHaveLength(4);
+    expect(part.textContent).toContain('簡報後規劃時間 5 分鐘');
+    expect(part.textContent).not.toContain('已計時結束');
+    expect(part.textContent).not.toContain('見學員操作紀錄');
+
+    const withOp = parseReplay(JSON.stringify(buildSessionRecord({ ...base, operations: [{ seq: 1, t: 0, wall: '2026-10-17T00:55:00Z', kind: 'planningTime', label: '規劃時間結束(5 分鐘)', value: 5 }] })));
+    const ended = buildDebriefReport({ data: withOp, now: NOW });
+    expect(ended.briefingGuide!.planningEnded).toBe(true);
+    expect(html(renderReportDoc(ended)).querySelector('[data-part="briefing-guide"]')!.textContent).toContain('簡報後規劃時間 5 分鐘(教官站倒數已計時結束)');
   });
 });
 

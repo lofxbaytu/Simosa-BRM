@@ -358,6 +358,7 @@ describe('YAML 輸出與工具函式', () => {
 describe('簡報規劃時間與提示清單(R7)', () => {
   it('linesToList / listToLines 往返;validateDraft 檢查 0–120 與字串清單', () => {
     expect(linesToList('a\r\n\n b \n')).toEqual(['a', 'b']);
+    expect(linesToList('1.\t交班者的說法\n2.  兩格   空白')).toEqual(['1. 交班者的說法', '2. 兩格 空白']); // Tab/連續空白併成一格(匯出的 YAML 才能被 PyYAML 讀)
     expect(linesToList('  \n')).toBeUndefined();
     expect(listToLines(['a', 'b'])).toBe('a\nb');
     expect(listToLines(undefined)).toBe('');

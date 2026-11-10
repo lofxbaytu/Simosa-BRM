@@ -123,9 +123,10 @@ Publish 'src\Tools.Packaging.Cli\Tools.Packaging.Cli.csproj' (Join-Path $outDir 
 # WebView2 操船台外殼(src\Shell.WebView2,net8.0-windows WinForms):win-x64 發布 app\shell\SimosaBRM.Shell.exe;其他 RID 只在步驟 1 建置、不發布
 if ($Rid -eq 'win-x64') {
     Publish 'src\Shell.WebView2\Shell.WebView2.csproj' (Join-Path $outDir 'app\shell')
+    if (-not (Test-Path (Join-Path $outDir 'app\shell\SimosaBRM.Shell.exe'))) { Write-Error '發行失敗:app\shell\SimosaBRM.Shell.exe 不存在(此 SDK 可能沒有 Microsoft.NET.Sdk.WindowsDesktop)'; exit 1 }
     $components.Add("shell=$Version=app/shell=WebView2 殼 SimosaBRM.Shell.exe(需 .NET 8 Desktop Runtime 與 WebView2 Runtime;docs/ops/安裝與啟動.md 第 4.5 節;實機需 Windows 驗證)")
 } else {
-    Note "WebView2 外殼未發布可執行檔($Rid 非 Windows;步驟 1 已建置 src\Shell.WebView2 確認可編譯)"; $components.Add("shell=$Version==略過:非 win-x64(僅建置,未發布)")
+    Note "WebView2 外殼未發布可執行檔($Rid 非 Windows;步驟 1 在有 WindowsDesktop SDK 時才實際編譯 src\Shell.WebView2)"; $components.Add("shell=$Version==略過:非 win-x64(僅建置,未發布)")
 }
 Get-ChildItem -Recurse -File -Include '*.pdb' (Join-Path $outDir 'app'), (Join-Path $outDir 'tools') | Remove-Item
 # WebView2 Runtime 離線安裝檔的放置位置(岸上下載,不在儲存庫;外殼偵測不到 Runtime 時顯示此路徑)

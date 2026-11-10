@@ -89,12 +89,14 @@ publish src/Console.Serial/Console.Serial.csproj "$OUT/app/console"
 publish tools/launch/StaticWeb/StaticWeb.csproj "$OUT/app/web-server"
 publish src/Tools.Packaging.Cli/Tools.Packaging.Cli.csproj "$OUT/tools/updater"
 # WebView2 操船台外殼(src/Shell.WebView2,net8.0-windows WinForms):只有 win-x64 發行版發布 app/shell/SimosaBRM.Shell.exe;
-# 其他 RID 已在步驟 1 以 EnableWindowsTargeting 建置確認可編譯,但不發布可執行檔(docs/ops/安裝與啟動.md 第 4.5 節)
+# 其他 RID 不發布可執行檔(docs/ops/安裝與啟動.md 第 4.5 節);步驟 1 在有 Microsoft.NET.Sdk.WindowsDesktop 的 SDK 才實際編譯外殼,
+# 來源建置的 SDK(例如 Ubuntu 套件版)只建空組件並警告,且 dotnet publish 會失敗(csproj 的 FailPublishWithoutWindowsDesktopSdk)
 if [[ "$RID" == win-x64 ]]; then
   publish src/Shell.WebView2/Shell.WebView2.csproj "$OUT/app/shell"
+  [[ -f "$OUT/app/shell/SimosaBRM.Shell.exe" ]] || { echo "發行失敗:app/shell/SimosaBRM.Shell.exe 不存在(此 SDK 可能沒有 Microsoft.NET.Sdk.WindowsDesktop;請用 Windows 或 Microsoft 散布的 .NET 8 SDK)" >&2; exit 1; }
   COMPONENTS+=("shell=$VERSION=app/shell=WebView2 殼 SimosaBRM.Shell.exe(需 .NET 8 Desktop Runtime 與 WebView2 Runtime;docs/ops/安裝與啟動.md 第 4.5 節;實機需 Windows 驗證)")
 else
-  note "WebView2 外殼未發布可執行檔($RID 非 Windows;步驟 1 已以 EnableWindowsTargeting 建置 src/Shell.WebView2 確認可編譯):win-x64 發行版(tools/build-release.ps1 或 --rid win-x64)才有 app/shell/"
+  note "WebView2 外殼未發布可執行檔($RID 非 Windows;步驟 1 在有 WindowsDesktop SDK 時才實際編譯 src/Shell.WebView2,否則只建空組件):win-x64 發行版(tools/build-release.ps1 或 --rid win-x64)才有 app/shell/"
   COMPONENTS+=("shell=$VERSION==略過:非 win-x64(僅建置,未發布)")
 fi
 find "$OUT/app" "$OUT/tools" -name '*.pdb' -delete

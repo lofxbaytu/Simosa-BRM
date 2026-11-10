@@ -261,7 +261,7 @@ briefing:
 
 **簡報結構(第二十六輪,R7)**:`planningTimeMin`(number ≥ 0)、`peerAssessmentPrompts`(string[])、`debriefQuestions`(string[])三個選填欄位。核心
 `ScenarioBriefing.cs` 只讀入並原樣寫進紀錄標頭 `header.scenario.briefing`(不做數值檢查、不進快照與狀態雜湊;只有文字時仍序列化為純字串);
-Python `scenario.py` 只檢查型別(數值 / 字串陣列,與 C# 反序列化會拒絕的形狀一致)並原樣保留。教官站 `<brm-briefing-block>`
+Python `scenario.py` 只檢查型別(數值 / 字串陣列,與 C# `ScenarioBriefingConverter` 的嚴格檢查一致:字串數字、布林、含非字串或 null 項目的陣列兩邊都拒絕;負的規劃時間兩邊都接受,schema 的 `minimum: 0` 與上限 120 由情境編輯器把關)並原樣保留。教官站 `<brm-briefing-block>`
 (`components/instructor/briefing-block.ts`;情境面板詳細區與簡化教官模式簡報頁共用):規劃時間倒數計時器(`lib/planning-timer.ts`;
 開始/暫停/繼續/重設、剩 60 s 變色、到時顯示「規劃時間結束」並發 `planning-time-ended`,教官站記入學員操作紀錄 `kind: planningTime`;
 簡化模式按「開始練習」清紀錄時保留此筆)、同儕評估提示(展開)、講評引導問題(摺疊);純本地、不送核心指令。練習結束頁與講評報告

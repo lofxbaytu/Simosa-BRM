@@ -48,7 +48,7 @@ public sealed class ShipVersionEntry
     public string? PackageId { get; set; }
     public Dictionary<string, ComponentVersion> Components { get; set; } = new();
     public ParameterSetRef? ParameterSet { get; set; }
-    /// <summary>該船筆電的環境版次(statusResult / status.json 的 environment;舊版船端沒有時為 null,合併時原樣保留)</summary>
+    /// <summary>該船筆電的環境版次(statusResult / status.json 的 environment;船端未回報時 UpdateFleet 沿用上次已知值,從未回報過則為 null)</summary>
     public EnvironmentInfo? Environment { get; set; }
     public DateTime UpdatedUtc { get; set; }
     public string? Via { get; set; }
@@ -108,6 +108,9 @@ public sealed class RecordStore
         {
             var f = LoadFleet();
             entry.UpdatedUtc = Now;
+            // 船端未回報 environment(舊版船端、舊格式的隨身碟 status.json)時沿用上次已知值:筆電的 OS/.NET/WebView2 不因軟體回復而改變,
+            // 陳舊與否由 EnvironmentInfo.CollectedUtc 判斷(docs/design/packaging-sync.md 第 7 節)
+            if (entry.Environment is null && f.Ships.TryGetValue(entry.ShipId, out var previous)) entry.Environment = previous.Environment;
             f.Ships[entry.ShipId] = entry;
             PackageJson.SaveAtomic(FleetPath, f);
         }

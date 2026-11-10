@@ -258,10 +258,10 @@ public sealed class SimStateClient
     /// <summary>送出 SimCommand JSON(UTF-8)到核心;任何執行緒可呼叫,非阻塞。</summary>
     public void Send(byte[] utf8Json) => _outbox.Writer.TryWrite(utf8Json);
 
-    /// <summary>解析狀態框;不是狀態(事件/評估/其他)時回傳 null。</summary>
     /// <summary>同 <see cref="ParseState(ReadOnlySpan{byte})"/>,但以 MemoryStream 的有效區段為輸入(供 async 接收迴圈呼叫,避免 CS4012)。</summary>
     private static OwnShipState? ParseBuffered(MemoryStream ms) => ParseState(ms.GetBuffer().AsSpan(0, (int)ms.Length));
 
+    /// <summary>解析狀態框;不是狀態(事件/評估/其他)時回傳 null。</summary>
     public static OwnShipState? ParseState(ReadOnlySpan<byte> utf8)
     {
         // 判斷:第一層有 "tick" 欄位才是狀態幀
@@ -296,7 +296,7 @@ public sealed class SimStateClient
                     if (res.MessageType == System.Net.WebSockets.WebSocketMessageType.Close) break;
                     ms.Write(buffer, 0, res.Count);
                     if (!res.EndOfMessage) continue;
-                    // 不在 async 方法內宣告 Span 區域變數:C# 12 編譯器(例如 Ubuntu 套件版 SDK 8.0.1xx)會報 CS4012,改經同步的區域函式解析
+                    // 不在 async 方法內宣告 Span 區域變數:C# 12 編譯器(例如 Ubuntu 套件版 SDK 8.0.1xx)會報 CS4012,改經同步的私有方法 ParseBuffered 解析
                     if (res.MessageType == System.Net.WebSockets.WebSocketMessageType.Text && ParseBuffered(ms) is { } st)
                     {
                         FramesReceived++;

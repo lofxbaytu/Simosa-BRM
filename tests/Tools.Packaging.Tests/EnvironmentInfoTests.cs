@@ -1,4 +1,5 @@
 using System.Text.Json;
+using SimosaBRM.Packaging.Cli;
 using SimosaBRM.Packaging.Common;
 using SimosaBRM.Packaging.Records;
 using SimosaBRM.Packaging.Sync;
@@ -113,5 +114,22 @@ public sealed class EnvironmentInfoTests : IDisposable
         Assert.Equal("2026.10.2", fleet.Ships["FSB1"].Version);
         Assert.Null(fleet.Ships["FSB2"].Environment);
         Assert.Equal("2026.10.1", fleet.Ships["FSB2"].Version);
+
+        // 船端未回報 environment(軟體回復到舊版、隨身碟上是舊格式 status.json):沿用上次已知值與它原本的 collectedUtc,其餘欄位照常取代(審查第二十六輪)
+        store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", DeviceId = "FSB1-LT01", Version = "2026.10.9", Via = "usb" });
+        fleet = store.LoadFleet();
+        Assert.Equal("2026.10.9", fleet.Ships["FSB1"].Version);
+        Assert.Equal("usb", fleet.Ships["FSB1"].Via);
+        Assert.Equal("131.0.2903.70", fleet.Ships["FSB1"].Environment!.WebView2);
+        Assert.Equal(env.CollectedUtc, fleet.Ships["FSB1"].Environment!.CollectedUtc);
+
+        // 教官端 store list 的「版次」行同列環境摘要;從未回報的船顯示「未回報」
+        var o = new StringWriter();
+        Assert.Equal(0, new CliApp(o, new StringWriter()).Run(new[] { "store", "list", "--store", _env.PathIn("store") }));
+        var listed = o.ToString();
+        Assert.Contains("版次 FSB1:2026.10.9", listed);
+        Assert.Contains("WebView2 131.0.2903.70(收集於 2026-11-09)", listed);
+        Assert.Contains("版次 FSB2:2026.10.1", listed);
+        Assert.Contains("環境 未回報", listed);
     }
 }
