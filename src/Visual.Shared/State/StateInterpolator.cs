@@ -6,8 +6,11 @@ namespace SimosaBRM.Visual.Shared.State;
 /// <summary>
 /// 插值後的一個物體姿態(ENU 公尺、航向度)。RollDeg 為橫搖角(度,右傾正;state.roll 不存在時 0)、
 /// RollRateDegps 為橫搖角速度(度/秒;外推用);目標船無橫搖,兩者為 0。
+/// 浪一階運動(state.waveMotion;情境 ship.seakeeping.enabled 且有浪時才有,需求 R2):HeaveM 升沉(m,向上為正)、PitchDeg 縱搖(度,艏仰為正)、
+/// HeaveRateMps / PitchRateDegps 為其速率(m/s、度/秒;外推用);state.waveMotion 不存在時與目標船皆為 0(畫面與未實作前相同)。
 /// </summary>
-public readonly record struct Pose(double East, double North, double HeadingDeg, double SogKn, double CogDeg, double RollDeg = 0.0, double RollRateDegps = 0.0);
+public readonly record struct Pose(double East, double North, double HeadingDeg, double SogKn, double CogDeg, double RollDeg = 0.0, double RollRateDegps = 0.0,
+    double HeaveM = 0.0, double PitchDeg = 0.0, double HeaveRateMps = 0.0, double PitchRateDegps = 0.0);
 
 /// <summary>某一顯示幀要畫的全部內容:自船姿態、目標船姿態(含原始 TargetState)、最後一幀的其餘資料。</summary>
 public sealed class VisualSample
@@ -29,6 +32,7 @@ public sealed class VisualSample
 /// 作法:保留最近 N 幀(模擬時間 t 與到達牆鐘),估計模擬時間對牆鐘的速率(timescale、凍結時為 0),
 /// 顯示時間 = 最新幀 t + rate·(now − 到達) − 緩衝(rate·DelaySeconds);落在兩幀之間時線性插值(航向走最短弧),
 /// 超過最新幀時以 COG/SOG/ROT 外推,最多 MaxExtrapolationSeconds,之後凍結(Stalled)。
+/// 自船另帶橫搖(state.roll)與浪一階運動(state.waveMotion:升沉/縱搖)— 插值/外推方式見 <see cref="Lerp(Pose, Pose, double)"/> 與 <see cref="Extrapolate"/>。
 /// 模擬時間倒退(重設/倒帶/重播)或跳躍超過 JumpThresholdSeconds 時清空歷史重新開始。
 /// 速率估計(審查發現:幀成批到達時最舊/最新兩幀的 Δt/Δ牆鐘會膨脹 2–3 倍,顯示時間倒退並卡在最舊幀):
 /// 同一牆鐘到達的幀(間隔 ≤ DegenerateIntervalSeconds:啟動第一幀、網路停頓後 TCP 一次送達、GC 卡頓)不含速率資訊,
@@ -202,7 +206,9 @@ public sealed class StateInterpolator
         return _targetBuffer;
     }
 
-    public static Pose PoseOf(OwnShipState s) => new(s.Pos.X, s.Pos.Y, s.Heading, s.Sog, s.Cog, s.Roll?.AngleDeg ?? 0.0, s.Roll?.RateDegps ?? 0.0);
+    /// <summary>自船原始幀 → 姿態;roll / waveMotion 省略時對應欄位為 0(顯示端沒有這些欄位要正常運作)。</summary>
+    public static Pose PoseOf(OwnShipState s) => new(s.Pos.X, s.Pos.Y, s.Heading, s.Sog, s.Cog, s.Roll?.AngleDeg ?? 0.0, s.Roll?.RateDegps ?? 0.0,
+        s.WaveMotion?.HeaveM ?? 0.0, s.WaveMotion?.PitchDeg ?? 0.0, s.WaveMotion?.HeaveRateMps ?? 0.0, s.WaveMotion?.PitchRateDps ?? 0.0);
     public static Pose PoseOf(TargetState t) => new(t.Pos.X, t.Pos.Y, t.Heading, t.Sog, t.Cog);
 
     public static Pose Lerp(OwnShipState a, OwnShipState b, double f) => Lerp(PoseOf(a), PoseOf(b), f);
@@ -217,7 +223,12 @@ public sealed class StateInterpolator
             a.SogKn + (b.SogKn - a.SogKn) * f,
             LerpHeading(a.CogDeg, b.CogDeg, f),
             LerpAngle(a.RollDeg, b.RollDeg, f),
-            a.RollRateDegps + (b.RollRateDegps - a.RollRateDegps) * f);
+            a.RollRateDegps + (b.RollRateDegps - a.RollRateDegps) * f,
+            // 升沉/縱搖與其速率:線性(縱搖為幾度的小角,不需走最短弧;一側無 waveMotion 時為 0 → 一個幀距內線性淡入/淡出)
+            a.HeaveM + (b.HeaveM - a.HeaveM) * f,
+            a.PitchDeg + (b.PitchDeg - a.PitchDeg) * f,
+            a.HeaveRateMps + (b.HeaveRateMps - a.HeaveRateMps) * f,
+            a.PitchRateDegps + (b.PitchRateDegps - a.PitchRateDegps) * f);
     }
 
     /// <summary>航向插值走最短弧(359 → 1 不會轉一整圈)。</summary>
@@ -228,7 +239,10 @@ public sealed class StateInterpolator
     public static double LerpAngle(double a, double b, double f)
         => Units.WrapDeg180(a + Units.WrapDeg180(b - a) * f);
 
-    /// <summary>以 COG/SOG 與 ROT(度/分)外推 dt 秒;橫搖以角速度線性外推(最多 MaxExtrapolationSeconds,誤差遠小於一個週期)。</summary>
+    /// <summary>
+    /// 以 COG/SOG 與 ROT(度/分)外推 dt 秒;橫搖以角速度、升沉/縱搖以各自速率線性外推(最多 MaxExtrapolationSeconds,誤差遠小於一個週期;
+    /// 無 roll / waveMotion 時速率為 0 → 不變)。
+    /// </summary>
     public static Pose Extrapolate(Pose p, double rotDegPerMin, double dt)
     {
         if (dt <= 0) return p;
@@ -240,6 +254,8 @@ public sealed class StateInterpolator
             North = p.North + v * Math.Cos(c) * dt,
             HeadingDeg = Units.NormalizeHeadingDeg(p.HeadingDeg + rotDegPerMin / 60.0 * dt),
             RollDeg = Units.WrapDeg180(p.RollDeg + p.RollRateDegps * dt),
+            HeaveM = p.HeaveM + p.HeaveRateMps * dt,
+            PitchDeg = p.PitchDeg + p.PitchRateDegps * dt,
         };
     }
 }

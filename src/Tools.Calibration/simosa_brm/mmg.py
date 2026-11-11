@@ -40,6 +40,7 @@ from .external import BankEffectModel, Env, ExternalForceModel, Kin, ShipInterac
 from .particulars import GRAVITY, KN_TO_MPS, ShipParticulars
 from .propeller import PropellerModel
 from .roll import RollModel
+from .seakeeping import SeakeepingModel
 
 TWO_PI = 2.0 * math.pi
 DEG = math.pi / 180.0
@@ -289,6 +290,9 @@ class MMGShip:
         # 解耦 1 自由度橫搖(roll.py;情境 ship.roll,經 configure_roll);None = 未啟用(state 無 roll、雜湊不追加,數值與舊版相同)
         self.roll_config: dict[str, Any] | None = None
         self.roll: RollModel | None = None
+        # 浪一階運動:升沉/縱搖(seakeeping.py;情境 ship.seakeeping,經 configure_seakeeping);None = 未啟用(state 無 waveMotion、雜湊不追加,數值與舊版相同)
+        self.seakeeping_config: dict[str, Any] | None = None
+        self.seakeeping: SeakeepingModel | None = None
         self._build_external()
 
     @property
@@ -555,6 +559,7 @@ class MMGShip:
         if waves is None:
             self.waves = None
             self._sync_roll_waves()
+            self._sync_seakeeping_waves()
             return
         if not isinstance(waves, dict):
             raise ValueError("invalidWaves")
@@ -590,12 +595,14 @@ class MMGShip:
         if hs == 0.0:
             self.waves = None
             self._sync_roll_waves()
+            self._sync_seakeeping_waves()
             return
         settings = {"significantHeight_m": hs, "peakPeriod_s": tp, "direction_deg": normalize_heading_deg(direction),  # type: ignore[arg-type]
                     "spectrum": spectrum, "gamma": gamma if gamma is not None else 3.3}
         self.waves = WaveDriftModel(self.sp.raw, self.sp.loading.name, settings)
         self.waves.update_last(self._kin(), self._water_depth_or_inf())
         self._sync_roll_waves()
+        self._sync_seakeeping_waves()
 
     def reset(self, x: float = 0.0, y: float = 0.0, heading_deg: float = 0.0, speed_kn: float = 0.0,
               rpm: float | None = None, telegraph: str | None = None) -> None:
@@ -630,6 +637,8 @@ class MMGShip:
         self._build_external()
         # 橫搖回到初始(φ = 0、相位由種子重抽;C# Initialize 的 RollModel.Create)
         self._build_roll()
+        # 浪一階運動依目前種子與浪設定重建並重算步末結果(C# Initialize 的 SeakeepingModel.Create + RefreshSeakeeping)
+        self._build_seakeeping()
 
     # ------------------------------------------------------------------
     # 橫搖(解耦 1 自由度;roll.py)
@@ -652,6 +661,41 @@ class MMGShip:
         """浪設定改變後同步橫搖的浪激勵成分(C# SetWaves 的 _roll?.SetWaves);Hs 於每步取 ``self.waves.hs``。"""
         if self.roll is not None:
             self.roll.set_waves_from(self.waves)
+
+    # ------------------------------------------------------------------
+    # 浪一階運動:升沉 / 縱搖(線性、只輸出;seakeeping.py;docs/design/physics-waves.md 第 11 節)
+    # ------------------------------------------------------------------
+    def configure_seakeeping(self, cfg: dict[str, Any] | None) -> None:
+        """設定情境的 ``ship.seakeeping``(``seakeeping.normalise_seakeeping`` 的結果;None 或 enabled False = 未啟用)並以目前種子重建模型。"""
+        self.seakeeping_config = dict(cfg) if isinstance(cfg, dict) else None
+        self._build_seakeeping()
+
+    def _build_seakeeping(self) -> None:
+        """依 ``seakeeping_config`` 與目前種子建立模型(C# SeakeepingModel.Create + SetWaves(目前浪設定)+ RefreshSeakeeping);未啟用為 None。"""
+        cfg = self.seakeeping_config
+        if cfg and cfg.get("enabled"):
+            self.seakeeping = SeakeepingModel(self.sp.raw, self.sp.loading.name, cfg, seed=self.seed)
+            self.seakeeping.set_waves_from(self.waves)
+            self._refresh_seakeeping()
+        else:
+            self.seakeeping = None
+
+    def _sync_seakeeping_waves(self) -> None:
+        """浪設定改變後同步浪成分並重算步末結果(C# SetWaves 的 _seakeeping?.SetWaves + RefreshSeakeeping);關閉浪 → 無輸出。"""
+        if self.seakeeping is not None:
+            self.seakeeping.set_waves_from(self.waves)
+            self._refresh_seakeeping()
+
+    def _refresh_seakeeping(self) -> None:
+        """浪一階運動的步末結果(雜湊與 state.waveMotion;C# RefreshSeakeeping):以目前狀態、自船位置的流、目前 Hs(無浪 0 → 無輸出)
+        與目前時刻 tick·dt 重算(純函數,無跨步狀態)。"""
+        sk = self.seakeeping
+        if sk is None:
+            return
+        s = self.state
+        t = s.tick * self.dt
+        cur_e, cur_n = self.current_en_at(t, s.x, s.y)
+        sk.update_last(self._kin(), cur_e, cur_n, self.waves.hs if self.waves is not None else 0.0, t)
 
     # ------------------------------------------------------------------
     # 外力(拖船 / 錨 / 泊位 / 岸壁;external.py)
@@ -698,6 +742,9 @@ class MMGShip:
         # 橫搖的浪激勵成分跟著情境浪設定(__init__ 時尚無 roll 屬性 → 略過)
         if getattr(self, "roll", None) is not None:
             self._sync_roll_waves()
+        # 浪一階運動的浪成分同樣跟著情境浪設定(__init__ 時尚未建立 → 略過)
+        if getattr(self, "seakeeping", None) is not None:
+            self._sync_seakeeping_waves()
 
     def configure_external(self, sections: dict[str, Any] | None) -> None:
         """設定情境的外力區段(``external.normalise_sections`` 的結果;None = 無)並以目前狀態重建模組。"""
@@ -964,6 +1011,8 @@ class MMGShip:
             "current_overridden": self.current_overridden,
             # 橫搖(φ、φ'、相位與浪激勵成分;C# EngineSnapshot.Roll;未啟用為 None)
             "roll": copy.deepcopy(self.roll),
+            # 浪一階運動(浪成分、相位與最近一次結果;C# 無對應快照欄位:純函數,還原後重算;未啟用為 None)
+            "seakeeping": copy.deepcopy(self.seakeeping),
         }
 
     def restore(self, snap: dict[str, Any]) -> None:
@@ -991,6 +1040,10 @@ class MMGShip:
             self.roll = copy.deepcopy(snap["roll"])
         else:  # 舊快照:橫搖回到初始(C# 缺 Roll 欄位時相同)
             self._build_roll()
+        if "seakeeping" in snap:
+            self.seakeeping = copy.deepcopy(snap["seakeeping"])
+        else:  # 舊快照:依設定重建(純函數,以還原後的狀態重算)
+            self._build_seakeeping()
 
     # ------------------------------------------------------------------
     # 穩態輔助
@@ -1334,6 +1387,7 @@ class MMGShip:
             s.t += self.dt
             s.tick += 1
             self._refresh_current()
+            self._refresh_seakeeping()
             return
         dt = self.dt
         y0 = s.as_tuple()
@@ -1427,6 +1481,8 @@ class MMGShip:
                                   current_at=(lambda x, y: self.current_en_at(t0, x, y)) if self.current_field_active else None)
             for ev in events_si:
                 self._emit(ev)
+        # 浪一階運動步末結果(C# Advance 的 RefreshSeakeeping:浪 UpdateLast 之後、擱淺檢查之前;不影響 3-DOF;未啟用時不做任何事)
+        self._refresh_seakeeping()
         # 擱淺/水深檢查
         if self.env.water_depth is not None and self.depth_below_keel() <= 0.0:
             self.aground = True
@@ -1486,6 +1542,9 @@ class MMGShip:
         # 橫搖:情境啟用 ship.roll 時追加(C# RollModel.WriteHash;未啟用的情境雜湊不變)
         if self.roll is not None:
             payload += self.roll.hash_bytes()
+        # 浪一階運動:情境啟用 ship.seakeeping 且有輸出(有浪、Hs > 0)時追加(C# SeakeepingModel.WriteHash;未啟用或無浪的情境雜湊不變)
+        if self.seakeeping is not None and self.seakeeping.last is not None:
+            payload += self.seakeeping.hash_bytes()
         return hashlib.sha256(payload).hexdigest()
 
     def set_start_utc(self, iso_or_none: str | None) -> datetime:
@@ -1580,6 +1639,8 @@ class MMGShip:
             out["shipInteraction"] = self.interaction.state()
         if self.roll is not None:
             out["roll"] = self.roll.state()
+        if self.seakeeping is not None and self.seakeeping.last is not None:
+            out["waveMotion"] = self.seakeeping.state()
         return out
 
 

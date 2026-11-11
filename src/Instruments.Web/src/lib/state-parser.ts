@@ -20,6 +20,7 @@ import {
   type TelegraphPosition,
   type Thruster,
   WAVE_SPECTRA,
+  type WaveMotionState,
   type WaveSpectrum,
   type WaveState,
   type Wind,
@@ -317,7 +318,24 @@ export function parseState(input: unknown, previous?: OwnShipState): ParseResult
   if (isRecord(raw['roll'])) state.roll = parseRoll(raw['roll'], issues);
   else if (raw['roll'] !== undefined && raw['roll'] !== null) issues.push('roll');
 
+  // 浪一階運動(state.waveMotion;情境 ship.seakeeping.enabled 且有浪時才有,省略時不記問題、不繼承前一幀;需求 R2)
+  if (isRecord(raw['waveMotion'])) state.waveMotion = parseWaveMotion(raw['waveMotion'], issues);
+  else if (raw['waveMotion'] !== undefined && raw['waveMotion'] !== null) issues.push('waveMotion');
+
   return { state, issues };
+}
+
+/**
+ * 解析 state.waveMotion(升沉向上為正、縱搖艏仰為正):四個欄位皆必填,缺少或非數值(非數字字串、布林、null、NaN、Infinity)以 0 補上並記入 issues,
+ * 不影響其他欄位(與 roll 相同的防呆;數字字串照 num() 慣例接受)。
+ */
+export function parseWaveMotion(m: Record<string, unknown>, issues: string[]): WaveMotionState {
+  return {
+    heave_m: num(m, 'heave_m', 0, issues, 'waveMotion.heave_m'),
+    pitch_deg: num(m, 'pitch_deg', 0, issues, 'waveMotion.pitch_deg'),
+    heaveRate_mps: num(m, 'heaveRate_mps', 0, issues, 'waveMotion.heaveRate_mps'),
+    pitchRate_dps: num(m, 'pitchRate_dps', 0, issues, 'waveMotion.pitchRate_dps'),
+  };
 }
 
 /** 解析 state.roll:四個欄位皆必填,缺少或型別錯誤以 0 補上並記入 issues(naturalPeriod_s 非正時記入 issues 並以 0 表示未知)。 */

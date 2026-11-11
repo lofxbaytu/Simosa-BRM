@@ -278,6 +278,7 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 | E15 | `data/scenarios/E15_distraction_workload_kaohsiung.yaml` | FSB2 滿載 | 高雄第二港口引航進港(`data/areas/kaohsiung-second-port-inbound.json`、`kaohsiung-anchorage.json`) | ≤ 30 min |
 | E16 | `data/scenarios/E16_night_approach_keelung.yaml` | FSB1 滿載 | 基隆港北口(`data/areas/keelung-approach.json`) | ≤ 35 min |
 | E17 | `data/scenarios/E17_typhoon_departure_kaohsiung.yaml` | FSB1 壓載 | 高雄港南端油品碼頭(`data/areas/kaohsiung-south-oil-berth.json`) | ≤ 45 min |
+| E17b | `data/scenarios/E17b_typhoon_seakeeping.yaml`(2026-11-11) | FSB1 壓載 | 同 E17 幾何、拖船、時間表項目與評估;另加港內湧浪(`environment.waves`,時間表隨風力漸增)與浪一階運動 `ship.seakeeping`(`state.waveMotion` 升沉/縱搖;physics-waves.md 第 11 節) | ≤ 45 min |
 | E18 | `data/scenarios/E18_ukc_squat_anping.yaml` | FSB2 滿載 | 安平港油品碼頭進港航道(`data/areas/anping-approach.json`) | ≤ 55 min |
 | E18b | `data/scenarios/E18b_tide_table.yaml` | FSB2 滿載 | 同 E18 幾何;潮汐以 `environment.tide.table` 表示(基底 CD 7.0 m + 潮高表),時間表無 `setEnvironment` 水深漸變 | ≤ 55 min |
 | E21 | `data/scenarios/E21_cargo_heating_pressure_anping.yaml` | FSB1 滿載 | 同 E18(同一幾何、不同船與潮況) | ≤ 65 min |
@@ -324,6 +325,13 @@ R2 的出現距離經掃描決定:保持 FAH 不應變時 R2 最近距離約 0.1
 
 **評估**:硬性失敗擱淺、碼頭硬接觸、繫纜斷裂;容許帶 `berthing.maxEnergyRatio`(warn 0.8、fail 1.0)、港內速限超速時間;必要事件 `handoverChecklist`、`departureDecision`(notifyCompany/report ≤ `typhoon.departureDecision_s`)、`engineStandby`(notifyEcr)、`tugPlan`(verbal/report)、`tugUsed`(拖船縮減後 `tugCommand`)、**`departBeforeStorm`**(港方要求 → `clearOfBerth` ≤ `typhoon.e17.departBy_s` = 強風時刻 − 要求時刻,penalty 20;決策時機)。拖船工作時間與最大出力見 `summary.berthing.tugs`。
 合理操作(xunit):早決策、TG1 帶纜待命,留艏倒纜右滿舵 DSAH 開艉 100 s,解倒纜後 SAS 退出,TG1 依開出角(< 15°)拉艉抵抗吹攏風(相對方位 270° 的拉力隨船轉動,持續全力會使船迴轉,故以開出角調節);約 T+17 離開泊位區(強風前),無碼頭硬接觸、無斷纜,及格。
+
+**變體 E17b `E17b_typhoon_seakeeping`(2026-11-11;港內湧浪與船體升沉/縱搖)**:E17 本體不變;變體沿用同一船/裝載/初始狀態、拖船、泊位與繫纜、區域、時間表項目(id 與階段)與評估規則,差異只有兩處:
+
+1. `ship.seakeeping: { enabled: true }`(預設係數,皆 ASSUMED)——核心輸出 `state.waveMotion {heave_m 向上為正, pitch_deg 艏仰為正, heaveRate_mps, pitchRate_dps}`(線性、只輸出、不回饋 3 自由度;`docs/design/physics-waves.md` 第 11 節),供視景相機/船模與 conning 海況方塊呈現船在泊位與離泊途中的起伏。
+2. `environment.waves: { significantHeight_m: 0.5, peakPeriod_s: 10, direction_deg: 225, spectrum: jonswap }`(港內湧浪,示意:自西南來 = 船的左舷艉);`tugReduced` 的 `setEnvironment` 加 `waves: { significantHeight_m: 0.8 }`、`outerBands` 加 `1.2`(與風同一個 `ramp_s: 600`,Hs 線性漸變;各多一個 `environmentRampDone {channel: waveHeight}`)。簡報文字加一句港內湧浪。
+
+量級(FSB1 壓載、泊位上靜止):Hs 0.5 m 時升沉 ≤ 0.17 m、縱搖 ≤ 0.38°;Hs 0.8 m 時約 0.27 m、0.61°;Hs 1.2 m 時約 0.41 m、0.91°。湧浪的平均波浪漂移力在 Hs 0.8 m 以下 ≤ 約 3 kN(把船壓向碼頭),遠小於風力;無人操作留在泊位到 T+45(主控程序 `--duration 2710` 實跑):與 E17 相同無硬性失敗(無碼頭硬接觸、無斷纜)、分數同為 30,`lineTension` 0.69(E17 0.71,皆 warn),升級時刻與 E17 相同(T+7 degraded、T+25 emergency)。**港內波高、週期與來向為示意值**(非港灣遮蔽/繞射計算);一階運動模型用深水波數(泊位水深 12 m 時波長偏長)、不影響 UKC 與繫纜張力(physics-waves.md 第 11.6 節)。測試:`SeakeepingModelTests.E17b_SharesE17GeometryAndAddsSwellWithSeakeeping`、`E17b_NoOperatorHeaveAndPitchGrowWithSwellAndRecordReplays`(1,500 s,紀錄/重播一致)、pytest `test_seakeeping.py::test_e17b_scenario_enables_seakeeping_with_harbour_swell`;核心紀錄夾具 `record-E17b_typhoon_seakeeping-core.jsonl`(60 s,規則同其他夾具;`test_scenario_params.py` `REQUIRED_FIXTURES` 已加入);視景區域對照沿用 `E17` 前綴(`data/visual/scenario-areas.json`)。E17 的學員腳本(合理操作)未在 E17b 重跑。
 
 ## 12. E18 油碼頭進港 UKC/squat 限制(安平)
 

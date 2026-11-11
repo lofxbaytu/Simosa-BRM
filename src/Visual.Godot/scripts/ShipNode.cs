@@ -6,7 +6,7 @@ namespace SimosaBRM.Visual.Godot;
 
 /// <summary>
 /// 一艘船(自船或目標船)的節點:程序化船體(完整與低面數兩套,依距離切換)、航行燈。
-/// 位置由 Pose(ENU)設定,節點前方 −z 為艏,yaw = −heading(SceneCoordinates)。無每幀配置。
+/// 位置由 Pose(ENU)設定,節點前方 −z 為艏,yaw = −heading(SceneCoordinates);自船另套用橫搖、縱搖與升沉(SetPose)。無每幀配置。
 /// </summary>
 public partial class ShipNode : Node3D
 {
@@ -60,12 +60,24 @@ public partial class ShipNode : Node3D
         _lights.Configure(Hull, category);
     }
 
-    /// <summary>位置與艏向;rollDeg 為橫搖(度,右傾正;繞艏艉軸、以水線中心線為軸,右舷下沉),目標船與無 state.roll 時為 0(姿態與原本相同)。</summary>
-    public void SetPose(double east, double north, double headingDeg, double rollDeg = 0.0)
+    /// <summary>
+    /// 位置與艏向;rollDeg 為橫搖(度,右傾正;繞艏艉軸、以水線中心線為軸,右舷下沉),目標船與無 state.roll 時為 0(姿態與原本相同)。
+    /// pitchDeg / heaveM 為浪一階運動(state.waveMotion;需求 R2):縱搖(度,艏仰正;繞船舯水線的橫軸,艏部上升)與升沉(m,向上正;整船垂直平移),
+    /// 目標船與無 state.waveMotion 時為 0。姿態合成順序固定為 Ry(−艏向) · Rx(縱搖) · Rz(−橫搖)
+    /// (Euler ZYX,與 SceneCoordinates.BodyToWorldOffset、CameraRig.AttitudeBasis 相同;docs/design/visual-client.md 第 4 節)。
+    /// </summary>
+    public void SetPose(double east, double north, double headingDeg, double rollDeg = 0.0, double pitchDeg = 0.0, double heaveM = 0.0)
     {
-        Position = new Vector3((float)east, 0f, (float)-north);
-        if (rollDeg == 0.0) Rotation = new Vector3(0f, (float)SceneCoordinates.HeadingToYawRad(headingDeg), 0f);
-        else Basis = new Basis(Vector3.Up, (float)SceneCoordinates.HeadingToYawRad(headingDeg)) * new Basis(Vector3.Back, -Mathf.DegToRad((float)rollDeg));
+        Position = new Vector3((float)east, (float)heaveM, (float)-north);
+        if (rollDeg == 0.0 && pitchDeg == 0.0)
+        {
+            Rotation = new Vector3(0f, (float)SceneCoordinates.HeadingToYawRad(headingDeg), 0f);
+            return;
+        }
+        var basis = new Basis(Vector3.Up, (float)SceneCoordinates.HeadingToYawRad(headingDeg));
+        if (pitchDeg != 0.0) basis *= new Basis(Vector3.Right, Mathf.DegToRad((float)pitchDeg));
+        if (rollDeg != 0.0) basis *= new Basis(Vector3.Back, -Mathf.DegToRad((float)rollDeg));
+        Basis = basis;
     }
 
     /// <summary>依距離切換 LOD 與可見;回傳是否可見。</summary>

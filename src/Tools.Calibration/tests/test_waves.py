@@ -148,6 +148,16 @@ def test_shallow_water_wavelength_follows_finite_depth_dispersion() -> None:
     assert shallow.factor > deep.factor
 
 
+def test_wave_number_in_very_deep_water_does_not_overflow() -> None:
+    # k·h > 約 710 時 math.cosh 會丟 OverflowError(C# Math.Cosh 回傳 Infinity):深水短週期浪須回到深水波數 ω²/g,且情境可建立並推進
+    assert wave_number(2.7, 1000.0) == pytest.approx(2.7 * 2.7 / GRAVITY, rel=1e-15)
+    assert wave_number(TWO_PI / 6.0, 2000.0) == pytest.approx((TWO_PI / 6.0) ** 2 / GRAVITY, rel=1e-15)
+    ship = ship_from_scenario(validate_scenario(_tree({"significantHeight_m": 2.0, "peakPeriod_s": 6.0, "direction_deg": 90}, depth=2000.0)))
+    _steps_to(ship, 250)  # 5 s
+    w = ship.state_json()["waves"]
+    assert w["wavelength_m"] == pytest.approx(TWO_PI * GRAVITY / (TWO_PI / 6.0) ** 2, rel=1e-12) and math.isfinite(w["Y_kN"]) and w["Y_kN"] < 0.0
+
+
 def test_bessel_and_ursell_approximations() -> None:
     assert bessel_i1(1.0) == pytest.approx(0.5651591, abs=1e-6) and bessel_k1(1.0) == pytest.approx(0.6019072, abs=1e-6)
     assert bessel_i1(5.0) == pytest.approx(24.33564, abs=1e-4) and bessel_k1(5.0) == pytest.approx(0.004044613, abs=1e-8)

@@ -42,6 +42,7 @@ TOL = 1e-9
 #(2026-10-17 已重新錄製 E01/E07)。
 # 第二十六輪 R7:E20 兩檔與 E22a–d 的 briefing 新增 planningTimeMin / peerAssessmentPrompts / debriefQuestions 後已重錄六檔夾具
 # (2026-11-09;狀態雜湊與事件序列不變),目前沒有已知漂移。
+# 第二十七輪 R2:新增 E17b_typhoon_seakeeping(E17 的變體:ship.seakeeping + 港內湧浪)並錄製夾具(2026-11-11;E17 夾具不動)。
 KNOWN_FIXTURE_DRIFT: dict[str, set[str]] = {}
 # 夾具錄製時主控程序以 --timescale 覆寫、或 C# 另行正規化而不比對的欄位
 SKIP_LEAVES = {"timeScale"}
@@ -67,6 +68,7 @@ REQUIRED_FIXTURES = {
     "E15_distraction_workload_kaohsiung",
     "E16_night_approach_keelung",
     "E17_typhoon_departure_kaohsiung",
+    "E17b_typhoon_seakeeping",
     "E18_ukc_squat_anping",
     "E18b_tide_table",
     "E19_fire_isps_pilotage_kaohsiung",

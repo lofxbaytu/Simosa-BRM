@@ -215,6 +215,21 @@ export interface RollState {
   staticHeel_deg: number;
 }
 
+/**
+ * 浪一階運動(state.schema.json waveMotion;情境 ship.seakeeping.enabled 且有浪時才有,需求 R2):升沉與縱搖,
+ * 線性、不回饋到 3 自由度運動(與橫搖同原則)。升沉向上為正、縱搖艏仰為正。
+ */
+export interface WaveMotionState {
+  /** 升沉(m,向上為正) */
+  heave_m: number;
+  /** 縱搖角(度,艏仰為正) */
+  pitch_deg: number;
+  /** 升沉速率(m/s,向上為正) */
+  heaveRate_mps: number;
+  /** 縱搖角速度(度/秒,艏仰方向為正) */
+  pitchRate_dps: number;
+}
+
 export interface OwnShipState {
   /** 模擬時間(秒,自練習開始) */
   t: number;
@@ -294,4 +309,6 @@ export interface OwnShipState {
   shipInteraction?: ShipInteractionState;
   /** 橫搖(情境 ship.roll.enabled 時才有;無則操船台不放傾斜儀、視景不套用相機橫滾) */
   roll?: RollState;
+  /** 浪一階運動(升沉/縱搖;情境 ship.seakeeping.enabled 且有浪時才有;無則 SEA 方塊與教官站不顯示、視景不套用升沉/縱搖) */
+  waveMotion?: WaveMotionState;
 }

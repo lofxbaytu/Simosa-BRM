@@ -2,6 +2,7 @@ using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Geo;
 using SimosaBRM.SimCore.Ship;
 using SimosaBRM.Visual.Shared.Area;
+using SimosaBRM.Visual.Shared.Scene;
 using SimosaBRM.Visual.Shared.Ship;
 using SimosaBRM.Visual.Shared.View;
 using Xunit;
@@ -325,6 +326,72 @@ public class ViewDefinitionTests
         var top = ViewDefinition.For(ViewKind.Overview, h);
         Assert.False(top.FollowsRoll);
         Assert.Equal(0.0, top.CameraRollDeg(12.0));
+    }
+
+    [Fact]
+    public void BridgeWingAndAftViewsFollowShipPitchAndHeaveButOverviewDoesNot()
+    {
+        // 浪一階運動(state.waveMotion;縱搖艏仰正、升沉向上正):隨船的視角套用,鳥瞰不套用
+        var h = HullParameters.FromParticulars(ShipParticulars.LoadFromDataRoot(TestPaths.Root, "FSB1"), LoadingCondition.Full);
+        foreach (var kind in new[] { ViewKind.Bridge, ViewKind.PortWing, ViewKind.StbdWing, ViewKind.Aft })
+        {
+            var v = ViewDefinition.For(kind, h);
+            Assert.True(v.FollowsShipMotion, kind.ToString());
+            Assert.Equal(1.5, v.CameraPitchDeg(1.5));
+            Assert.Equal(-0.4, v.CameraHeaveM(-0.4));
+            Assert.Equal(0.0, v.CameraPitchDeg(0.0));
+            Assert.Equal(0.0, v.CameraHeaveM(0.0));
+            // 無船體運動:眼位與原本的換算逐位元相同
+            Assert.Equal(SceneCoordinates.BodyToWorldOffset(v.EyeForward, v.EyeStarboard, v.EyeUp, 137), v.EyeOffset(137, 0, 0, 0));
+            // 只有橫搖:與原本(橫搖視角)的眼位相同
+            Assert.Equal(SceneCoordinates.BodyToWorldOffset(v.EyeForward, v.EyeStarboard, v.EyeUp, 137, 4.0), v.EyeOffset(137, 4.0, 0, 0));
+            // 升沉:眼位高度加上升沉,水平位置不變
+            var level = v.EyeOffset(137, 0, 0, 0);
+            var heaved = v.EyeOffset(137, 0, 0, 0.6);
+            Assert.Equal(level.X, heaved.X);
+            Assert.Equal(level.Z, heaved.Z);
+            Assert.Equal(0.6, heaved.Y - level.Y, 12);
+            // 縱搖:眼位高度 = EyeForward·sin θ + EyeUp·cos θ(駕駛台在船舯之後 → 艏仰時眼位下沉)
+            var pitched = v.EyeOffset(137, 0, 2.0, 0);
+            Assert.Equal(v.EyeForward * Math.Sin(2 * Math.PI / 180) + v.EyeUp * Math.Cos(2 * Math.PI / 180), pitched.Y, 9);
+        }
+        var bridge = ViewDefinition.For(ViewKind.Bridge, h);
+        Assert.True(bridge.EyeForward < 0, "FSB1 駕駛台在船舯之後");
+        Assert.True(bridge.EyeOffset(0, 0, 2.0, 0).Y < bridge.EyeOffset(0, 0, 0, 0).Y);
+
+        var top = ViewDefinition.For(ViewKind.Overview, h);
+        Assert.False(top.FollowsShipMotion);
+        Assert.Equal(0.0, top.CameraPitchDeg(3.0));
+        Assert.Equal(0.0, top.CameraHeaveM(1.2));
+        Assert.Equal(new ScenePoint(0, top.EyeUp, 0), top.EyeOffset(137, 8.0, 3.0, 1.2));
+    }
+
+    [Fact]
+    public void BridgeViewHorizonDropsWhenBowPitchesUpAndOverviewIgnoresShipMotion()
+    {
+        var h = HullParameters.FromParticulars(ShipParticulars.LoadFromDataRoot(TestPaths.Root, "FSB1"), LoadingCondition.Full);
+        // 駕駛台前視(俯仰 −2°):艏仰 +1.5° → 地平線在畫面中下移 1.5°;艉視相反(上移)
+        var bridge = ViewDefinition.For(ViewKind.Bridge, h);
+        var (level, _) = SceneCoordinates.HorizonInView(bridge.ObserverBasis(45, 0, 0));
+        var (bowUp, tilt) = SceneCoordinates.HorizonInView(bridge.ObserverBasis(45, 0, 1.5));
+        Assert.Equal(-bridge.PitchDeg, level, 9);
+        Assert.Equal(level - 1.5, bowUp, 9);
+        Assert.Equal(0.0, tilt, 9);
+        var aft = ViewDefinition.For(ViewKind.Aft, h);
+        var (aftLevel, _) = SceneCoordinates.HorizonInView(aft.ObserverBasis(45, 0, 0));
+        var (aftBowUp, _) = SceneCoordinates.HorizonInView(aft.ObserverBasis(45, 0, 1.5));
+        Assert.Equal(aftLevel + 1.5, aftBowUp, 9);
+        // 右翼橋(偏航 +60°):艏仰使畫面右側(艉方)下沉 → 地平線右端升高,且視線略上抬
+        var wing = ViewDefinition.For(ViewKind.StbdWing, h);
+        var (wingLevel, _) = SceneCoordinates.HorizonInView(wing.ObserverBasis(45, 0, 0));
+        var (wingBowUp, wingTilt) = SceneCoordinates.HorizonInView(wing.ObserverBasis(45, 0, 1.5));
+        Assert.True(wingTilt > 1.2 && wingTilt < 1.4, $"右翼橋地平線傾斜 {wingTilt:F3}°(≈ 1.5·sin60°)");
+        Assert.True(wingBowUp < wingLevel);
+        // 環視偏移疊加在視角偏航/俯仰上
+        Assert.Equal(bridge.ObserverBasis(45, 2, 1.5, 180, 0).Forward, SceneCoordinates.ObserverBasis(45, 2, 1.5, 180, bridge.PitchDeg).Forward);
+        // 鳥瞰:北向上,不含艏向與船體運動
+        var top = ViewDefinition.For(ViewKind.Overview, h);
+        Assert.Equal(top.ObserverBasis(0, 0, 0), top.ObserverBasis(217, 9.0, 3.0));
     }
 
     [Theory]

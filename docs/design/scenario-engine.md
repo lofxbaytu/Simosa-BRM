@@ -423,7 +423,7 @@ environment:
 - 契約:`state.waves {significantHeight_m, peakPeriod_s, direction_deg, wavelength_m, spectrum, X_kN, Y_kN, N_kNm}`(**只在情境有 `waves` 時輸出**);視景以 `significantHeight_m`/`direction_deg` 畫海面(`Visual.Shared` `EnvironmentMapper`,取代由風速推得的波高)。無 `waves` 的情境:零力,所有數值、雜湊與既有夾具/黃金測試位元不變。
 - 結構檢查(`Scenario.StructuralIssues` 與 Python `waves_issues`,路徑 `environment.waves.*`、訊息相同):Hs ≥ 0 有限、Tp > 0、來向 0–360、`spectrum` pm|jonswap、`gamma ≥ 1`。
 - Python 參考實作:`external.py WaveDriftModel` 同公式同運算順序,`scenario.validate_scenario` 正規化 `environment.waves` 並經 `normalise_sections` 交給 `MMGShip.configure_external`;跨語言夾具 `tests/SimCore.Tests/Golden/waves_force_table.csv`(純函數 120 列,相對 ≤ 1e-12,實測逐位元相同)與 `waves_drift_run.{yaml,csv}`(300 s 積分,< 1%,實測 ~1e-16),`export_waves_reference.py` 產生。
-- 限制:練習中變更見 physics-waves.md 6.1(`setEnvironment`/時間表 `waves`;只有 Hs 漸變、其餘階躍;Python 無漸變);橫搖不回饋 3-DOF(第 1.5.5 節);係數為文獻量級估計(physics-waves.md 第 4、7、9 節)。
+- 限制:練習中變更見 physics-waves.md 6.1(`setEnvironment`/時間表 `waves`;只有 Hs 漸變、其餘階躍;Python 無漸變);橫搖不回饋 3-DOF(第 1.5.5 節)、升沉/縱搖為只輸出模型(第 1.5.6 節);係數為文獻量級估計(physics-waves.md 第 4、7、9 節)。
 
 ### 1.5.4 `environment.shipInteraction`:船間交互作用(2026-10-29)
 
@@ -479,6 +479,31 @@ ship:
 - Python 參考實作:`roll.py RollModel` 同公式同運算順序,`scenario.validate_scenario` 把 `ship.roll` 正規化到 `sc["ship"]["roll"]`、`apply_scenario` 交給 `MMGShip.configure_roll`;跨語言夾具 `tests/SimCore.Tests/Golden/roll_run.{yaml,csv}`(300 s、φ 與 φ' 每秒 1e-9,實測 ~1e-14;`export_roll_reference.py` 產生)。
 - 量級(physics-roll.md 第 4.2 節):FSB1 滿載 15 kn 35° 舵迴轉外傾約 0.3°(力臂比 1.4 時 0.4°)、35 kn 正橫風靜傾約 0.2°、Hs 2 m 正橫浪共振(Tp ≈ 10.3 s)振幅約 10°(壓載 T 7.1 s 約 22°)。
 - 限制:線性小角度、不回饋 3-DOF、深水波數、無短波折減與方向擴散;係數 ASSUMED(FSB2 GM、ζ、C_Dt、增益)。
+
+### 1.5.6 `ship.seakeeping`:浪一階運動(升沉/縱搖)(2026-11-11)
+
+選填、預設關閉(設計文件 `docs/design/physics-waves.md` 第 11 節)。`enabled: true` 且有浪(`environment.waves` 或 `setEnvironment waves`,Hs > 0)時核心輸出**升沉與縱搖**(`state.waveMotion`):線性、只輸出、**不回饋** 3 自由度運動(啟用後 u/v/r/x/y/ψ、陣風亂數序列與未啟用時逐位元相同;與 `ship.roll` 同原則,兩者可同時啟用)。
+
+```yaml
+ship:
+  id: FSB2
+  loading: full
+  seakeeping:
+    enabled: true              # 預設 false
+    heaveDampingRatio: 0.35    # 選填 0–1(不含);預設 0.35(ASSUMED)
+    pitchDampingRatio: 0.35    # 選填 0–1(不含);預設 0.35(ASSUMED)
+    pitchGyradiusRatio: 0.25   # 選填 k_yy/L,> 0 且 ≤ 0.5;預設 0.25(ASSUMED)
+    gmL_m: 104.7               # 選填 > 0;未給時由 particulars 估 3·C_wp²·L²/(40·C_b·T)(滿載約 1.0–1.2 L)
+```
+
+- 模型:沿用橫搖浪激勵的同一個地固波場(5 個浪譜成分、相位由情境種子的同一序列,不另造亂數);每個成分以遭遇頻率 ω_e = ω + k·(對地速度朝浪源的分量)的線性單自由度穩態響應閉式合成(不積分、無跨步狀態)。升沉 ω_n² = g·A_wp/(∇ + A_33)(A_33 = ∇、C_wp = (1 + 2C_b)/3),激勵 = 波幅 × sinc(k·L·cos χ/2) × Smith 修正;縱搖 ω_n² = g·∇·GM_L/I_55(I_55 = ρ∇(k_yy·L)²·1.2),激勵 = 波幅·k·cos χ·3(sin x − x cos x)/x³ × Smith 修正(橫浪為零)。
+- 核心:`Physics/SeakeepingModel.cs`(純函數 `Compute` / `Response` / `Sinc` / `PitchFilter`);引擎於 `Initialize`/`Restore` 重建,每步步末(浪 UpdateLast 之後)以步末狀態、時刻與目前 Hs 重算。
+- 確定性:有輸出時雜湊追加 5 個 int64(標記 `SEAKEEP1`、升沉、縱搖、兩個速率);純函數,**快照不需新欄位**(還原後重算);紀錄/重播一致(`SeakeepingModelTests.RecordReplayReproducesHashWithSeakeeping`)。
+- 契約:`state.waveMotion {heave_m(向上為正), pitch_deg(艏仰為正), heaveRate_mps, pitchRate_dps}`(**只在啟用且 Hs > 0 時輸出**);未啟用、無浪或 Hs = 0 的情境所有數值、雜湊與既有夾具/黃金測試位元不變。
+- 結構檢查(`Scenario.StructuralIssues` 與 Python `seakeeping_issues`,路徑 `ship.seakeeping.*`、訊息相同):兩個阻尼比在 0–1 之間(不含)、`pitchGyradiusRatio` 大於 0 且不超過 0.5、`gmL_m` 為正(enabled 與否都檢查)。
+- Python 參考實作:`seakeeping.py SeakeepingModel` 同公式同運算順序,`scenario.validate_scenario` 正規化到 `sc["ship"]["seakeeping"]`、`apply_scenario` 交給 `MMGShip.configure_seakeeping`;跨語言夾具 `tests/SimCore.Tests/Golden/seakeeping_table.csv`(純函數 420 列,1e-12,實測逐位元相同)與 `seakeeping_run.{yaml,csv}`(120 s,每秒 1e-9;`export_seakeeping_reference.py` 產生)。
+- 量級(physics-waves.md 第 11.4 節):FSB2 滿載 12 kn、Hs 2.5 m / Tp 8 s 自 045°:升沉約 0.4 m、縱搖約 1.5°;T_h 7.3 s、T_p 5.6 s。內建情境 `E17b_typhoon_seakeeping` 啟用。
+- 限制:線性、無升沉–縱搖與橫搖耦合、無縱盪/橫盪/艏搖一階運動、深水波數、不模擬暫態、不影響 UKC;係數皆 ASSUMED(A_33、C_wp、k_yy、GM_L 估計式、ζ)。
 
 ### 1.6 schema 變更清單
 

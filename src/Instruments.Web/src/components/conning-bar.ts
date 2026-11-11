@@ -1,6 +1,8 @@
 // 上排 conning 條:把各儀器方塊排成一列(1920 寬一列;窄於 1500 時折成兩列)。
 // 核心有航線狀態(state.route)或能見度時加一格航線/能見度方塊(規劃書第 7.2 節 XTD/下一航點);
 // 有浪(state.waves)或船間交互作用(state.shipInteraction)時再加一格 SEA 方塊(physics-waves.md 第 5 節);
+// 有浪一階運動(state.waveMotion;情境 ship.seakeeping.enabled 且有浪,需求 R2)時 SEA 方塊多一列縱搖/升沉(契約上必與 state.waves 同時出現,
+// 單獨出現時也放 SEA 方塊以免資料被吞掉);無 waveMotion 時版面與原本相同;
 // 有橫搖(state.roll;情境 ship.roll.enabled)時再加一格傾斜儀 HEEL 方塊(inclinometer.ts),無 roll 時版面與原本相同。
 
 import { LitElement, html, css } from 'lit';
@@ -94,7 +96,7 @@ export class ConningBar extends LitElement {
     const step = telegraphStep(cfg, s.telegraph);
     const headingSuspect = this.noData || this.issues.includes('heading');
     const withRoute = s.route !== undefined || s.visibility_nm !== undefined;
-    const withSea = s.waves !== undefined || s.shipInteraction !== undefined;
+    const withSea = s.waves !== undefined || s.shipInteraction !== undefined || s.waveMotion !== undefined;
     const withRoll = s.roll !== undefined;
     // 感測器有效性(sensors-alerts.md 第 2.1 節):無效時各方塊標「無效」並淡化保持的最後值
     const sen = s.sensors;
@@ -127,7 +129,7 @@ export class ConningBar extends LitElement {
         ></brm-depth>
         <brm-wind .trueDir=${s.wind.trueDir} .trueSpeed=${s.wind.trueSpeed} .relDir=${s.wind.relDir} .relSpeed=${s.wind.relSpeed} .heading=${s.heading}></brm-wind>
         <brm-current .set=${s.current.set} .drift=${s.current.drift} .heading=${s.heading} .source=${s.currentSource}></brm-current>
-        ${withSea ? html`<brm-sea .waves=${s.waves} .interaction=${s.shipInteraction} .heading=${s.heading}></brm-sea>` : ''}
+        ${withSea ? html`<brm-sea .waves=${s.waves} .interaction=${s.shipInteraction} .motion=${s.waveMotion} .heading=${s.heading}></brm-sea>` : ''}
         ${withRoll ? html`<brm-inclinometer .roll=${s.roll}></brm-inclinometer>` : ''}
         <brm-clock .simTime=${s.t} .tick=${s.tick} .lat=${s.pos.lat} .lon=${s.pos.lon} .frozen=${s.flags?.frozen ?? false} .posInvalid=${sen ? !sen.positionValid : false}></brm-clock>
         ${withRoute ? html`<brm-route .route=${s.route} .visibility=${s.visibility_nm}></brm-route>` : ''}

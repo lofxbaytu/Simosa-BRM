@@ -1,0 +1,11 @@
+# 由 export_seakeeping_reference.py 產生(請勿手改):FSB2 滿載 12 kn 直航、ship.seakeeping 預設、Hs 2.5 m / Tp 8 s 自 045° JONSWAP、深水、無風無流(120 s)
+id: seakeeping_run
+seed: 5
+ship: { id: FSB2, loading: full, seakeeping: { enabled: true } }
+origin: { lat: 23.80, lon: 120.15 }
+initial: { position: { x: 0, y: 0 }, heading: 0, speed: 12 }
+environment:
+  wind: { trueSpeed: 0, trueDir: 0, gustiness: 0 }
+  current: { set: 0, drift: 0 }
+  waterDepth: 1000
+  waves: { significantHeight_m: 2.5, peakPeriod_s: 8.0, direction_deg: 45, spectrum: jonswap, gamma: 3.3 }

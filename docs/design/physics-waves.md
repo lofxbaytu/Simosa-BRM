@@ -7,11 +7,15 @@
 > Python 參考實作 `src/Tools.Calibration/simosa_brm/external.py`(`WaveDriftModel`、`normalise_waves`)、`scenario.py`(`waves_issues`)、`mmg.py`(接線);
 > 測試 `tests/SimCore.Tests/WaveDriftTests.cs`、`tests/Visual.Shared.Tests/OptionsEnvironmentAndClientTests.cs`、`src/Tools.Calibration/tests/test_waves.py`;
 > 跨語言夾具 `tests/SimCore.Tests/Golden/waves_force_table.csv`、`waves_drift_run.{yaml,csv}`(`export_waves_reference.py` 產生)。
+> 一階運動(升沉/縱搖;第 11 節,2026-11-11):`src/SimCore/Physics/SeakeepingModel.cs`、`Scenario.cs`(`ScenarioSeakeeping`)、`OwnShipState.cs`(`waveMotion`);
+> Python `simosa_brm/seakeeping.py`;測試 `tests/SimCore.Tests/SeakeepingModelTests.cs`、`src/Tools.Calibration/tests/test_seakeeping.py`;
+> 夾具 `tests/SimCore.Tests/Golden/seakeeping_table.csv`、`seakeeping_run.{yaml,csv}`(`export_seakeeping_reference.py` 產生)。
 
 ## 1. 總覽與資料來源聲明
 
 - 範圍:3 自由度(surge/sway/yaw)模型只做**平均二階波浪漂移力**(mean second-order drift force)——對操船有意義的定常分量:迎浪阻力增加(added resistance)、
-  橫浪側向漂移、斜浪的艏搖力矩(靜止船趨向正橫受浪)。**不做**一階振盪運動(升沉、縱搖、橫搖)、慢變漂移振盪、波浪對舵效/螺槳的瞬時影響、浪流交互作用。
+  橫浪側向漂移、斜浪的艏搖力矩(靜止船趨向正橫受浪)。**不做**慢變漂移振盪、波浪對舵效/螺槳的瞬時影響、浪流交互作用;一階振盪運動不進 3 自由度方程式——
+  橫搖另由解耦模型輸出(`ship.roll`,physics-roll.md),升沉與縱搖另由線性、只輸出的模型輸出(`ship.seakeeping`,**第 11 節**),兩者皆不回饋本節的漂移力與 3 自由度運動。
 - 公式結構:Faltinsen 等(1980)短波漸近式——沿水線「迎浪側」積分反射壓力 ∝ ½ρgζa²·sin²(入射角),加上遭遇頻率的速度修正——推廣到不規則海:
   以 Hs 的譜零階矩 m0 = Hs²/16 代替 ζa²/2,每個浪譜成分再乘以兩個衰減:
   (1) **Ursell(1947)垂直障板反射係數平方** α_d(x) = π²I1²(x)/(π²I1²(x) + K1²(x)),x = 1.5·k·T(Fujii & Takahashi 1975 的吃水修正;NMRI/ITTC 的
@@ -195,7 +199,7 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
 | 速度 | |U_w| < c(遭遇頻率修正為二次) | 順浪快於相速度時力為 0;迎浪高速時修正偏大(Faltinsen 式本身為一階) |
 | 水深 | 深水到 h ≈ T(波長以有限水深色散求得) | 不含淺水波高變化(shoaling/折射)與碎波;h → T 時反射係數以 kT 計(較保守) |
 | 船型 | Cb 0.7–0.85、有球艏/方艉的商船 | 水線形狀為假設;細長船艏的迎浪力偏大 |
-| 自由度 | 3(平均力) | 無橫搖/升沉/縱搖,無一階振盪;儀表不顯示搖晃 |
+| 自由度 | 3(平均力) | 漂移力本身不含一階振盪;橫搖(`ship.roll`)與升沉/縱搖(`ship.seakeeping`,第 11 節)為另外的只輸出模型,不回饋 3 自由度 |
 
 ## 8. 測試
 
@@ -213,7 +217,8 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
 ## 9. 已知限制與後續
 
 1. 練習中變更只有 Hs 漸變,Tp / 來向 / 浪譜為階躍(來向可比照風向以最短弧漸變,但模型需每步重算譜權重;後續視需要加入);Python 參考實作無漸變。
-2. 無一階振盪與橫搖(規劃書第 6.2 節預留 4 自由度);儀表/視景不呈現搖晃,只有平均漂移。
+2. 一階振盪不回饋 3 自由度(規劃書第 6.2 節預留 4 自由度):橫搖為解耦 1 自由度(`ship.roll`)、升沉/縱搖為線性只輸出模型(`ship.seakeeping`,第 11 節),
+   皆需情境啟用;縱盪/橫盪/艏搖的一階運動未實作,漂移力不因船體運動而改變(第 7 節 λ ≳ L 的低估仍在)。
 3. 係數為估計;待模型試驗或實船漂移紀錄校正(`EndFullness`、`CutoffWavelengthL`)。
 4. 浪與流、浪與淺水的波高變化、方向擴散(directional spreading)未納入;雷達海雜波只取 Hs 推 Douglas 海況(不含 Tp / 來向的方位調制;教官/情境明示海況優先)。
 5. 視景海況等級(Douglas)仍由風速/雷達環境決定,只有波高/浪向取自 `state.waves`。
@@ -233,3 +238,163 @@ F = ρ·g·Hs²/16 · K · (G_x, G_y, G_n),ρ = 1025 kg/m³、g = 9.80665 m/s²�
   - `waves_drift_run.{yaml,csv}`:FSB1 滿載 6 kn、Hs 2 m / Tp 7 s 自 045° JONSWAP、水深 20 m(走有限水深色散),100 s 右舵 10°,300 s;
     C# `GoldenRunMatchesPythonWithinOnePercent` 每 1 s 比對位置/航向/速度/漂移力/波長(規劃書第 14 章 < 1%;實測位置差 5e-16 % 航程、
     漂移力相對差 ≤ 5e-16)。Python `test_waves.py` 以同一路徑重算並比對末狀態雜湊。
+
+## 11. 一階運動:升沉(heave)與縱搖(pitch)(`ship.seakeeping` → `state.waveMotion`;2026-11-11)
+
+### 11.1 總覽與資料來源聲明
+
+- 範圍:浪的**一階振盪運動**中的升沉與縱搖,供視景(相機/船模)與儀表呈現船體隨浪起伏。**線性、只輸出、不回饋 3 自由度運動**(與解耦橫搖 `ship.roll` 同原則):
+  啟用後 u/v/r/x/y/ψ、陣風亂數序列與未啟用時逐位元相同;不改變漂移力、舵效、阻力、UKC(`depthBelowKeel` 不含升沉/縱搖)。
+- 做法:沿用橫搖浪激勵的**同一個地固波場**(同一組浪譜成分、同一組相位、同一個種子,不另造亂數),每個成分以遭遇頻率的線性單自由度穩態響應(RAO 與相位滯後)
+  **閉式合成**——不積分、無跨步狀態,輸出是步末狀態、時刻、目前 Hs、浪設定與種子的純函數。
+- **所有係數為 ASSUMED**(兩船沒有耐航模型試驗或實船運動紀錄;本專案離線開發):附加質量/慣量、阻尼比、水線面係數、縱搖迴轉半徑、GM_L 估計式集中於
+  `SeakeepingModel` 常數與情境 `ship.seakeeping`(第 11.4 節);取得耐航計算(strip theory)或實船紀錄後應校正。未啟用、無浪或 Hs = 0 的情境:無輸出,
+  狀態、雜湊、既有夾具與黃金測試逐位元不變。
+
+| 項目 | 本模型 | 狀態 |
+|---|---|---|
+| 波場(成分、振幅、相位、深水波數) | 與 `RollModel` 相同:5 個成分 ω_i = ω_p·ρ_i(ρ_i 在 [0.6, 2.0] 等分取中點)、PM/JONSWAP 權重、相位由情境種子 | 與橫搖一致(測試以波斜率核對) |
+| 遭遇頻率 ω_e = ω + k·V_D | 對地速度朝浪源的分量 | 標準(深水) |
+| 升沉自然頻率 ω_h² = g·A_wp/(∇ + A_33) | A_33 = ∇、A_wp = C_wp·L·B、C_wp = (1 + 2C_b)/3 | 結構標準;**A_33、C_wp 為 ASSUMED** |
+| 縱搖自然頻率 ω_p² = g·∇·GM_L/I_55 | I_55 = ρ∇(k_yy·L)²·1.2、k_yy/L = 0.25、GM_L ≈ BM_L = 3·C_wp²·L²/(40·C_b·T) | 結構標準;**附加慣量 1.2、k_yy、GM_L 估計式為 ASSUMED** |
+| 激勵(Froude–Krylov 型):沿船長的長度濾波 × Smith 修正 exp(−k·T/2) | 均勻(矩形)水線面的波面平均(升沉)與一次矩(縱搖) | 簡化(無繞射、無船型分佈) |
+| 響應 RAO = 1/√((1 − r²)² + (2ζr)²)、滯後 atan2(2ζr, 1 − r²) | 阻尼比 ζ_h = ζ_p = 0.35 | 線性單自由度;**ζ 為 ASSUMED** |
+| 升沉–縱搖耦合、與橫搖耦合、縱盪/橫盪/艏搖一階運動 | 無 | **未實作**(第 11.6 節) |
+
+### 11.2 情境 `ship.seakeeping`(`scenario.schema.json` `properties.ship.properties.seakeeping`)
+
+```yaml
+ship:
+  id: FSB2
+  loading: full
+  seakeeping:
+    enabled: true              # 預設 false
+    heaveDampingRatio: 0.35    # 選填 0–1(不含);預設 0.35(ASSUMED)
+    pitchDampingRatio: 0.35    # 選填 0–1(不含);預設 0.35(ASSUMED)
+    pitchGyradiusRatio: 0.25   # 選填 k_yy/L,> 0 且 ≤ 0.5;預設 0.25(ASSUMED)
+    gmL_m: 104.7               # 選填 > 0;未給時由 particulars 估 3·C_wp²·L²/(40·C_b·T)(滿載約 1.0–1.2 L)
+environment:
+  waves: { significantHeight_m: 2.5, peakPeriod_s: 8, direction_deg: 45, spectrum: jonswap }   # 沒有浪(或 Hs = 0)就沒有輸出
+```
+
+- 結構檢查(`Scenario.StructuralIssues` 與 Python `scenario.seakeeping_issues`,路徑 `ship.seakeeping.*`、訊息相同;`enabled` 與否都檢查):
+  `heaveDampingRatio` / `pitchDampingRatio` 須在 0–1 之間(不含)、`pitchGyradiusRatio` 須大於 0 且不超過 0.5、`gmL_m` 必須為正(皆有限)。
+- 無區段或 `enabled: false`:不建立模型(`SimulationEngine.Seakeeping` 為 null),`state.waveMotion` 省略、雜湊不追加區塊。
+- 可與 `ship.roll` 同時啟用(兩者互不影響);浪可來自情境 `environment.waves` 或練習中的 `setEnvironment waves`(第 6.1 節;Hs 漸變中以當下插值計算)。
+
+### 11.3 模型
+
+**波場**(與 physics-roll.md 第 3.3 節相同):成分 ω_i = ω_p·ρ_i、權重 w_i(PM / JONSWAP,Σw_i = 1)、振幅 a_i = (Hs/4)·√(2w_i)、深水波數 k_i = ω_i²/g、
+相位 ε_i = 2π·`DeterministicRandom(seed).NextDouble()`(`RollModel.DrawPhases`,同一序列)。地固波面
+η(x, y, t) = Σ a_i·sin θ_i,θ_i = ω_i·t − k_i·s + ε_i,s = −(x·sin D + y·cos D) 為沿浪傳播方向的座標(D = 來向)。
+
+**幾何與遭遇頻率**:χ = D − ψ(0 = 頂浪、±90° = 橫浪、180° = 順浪);沿艏向座標 ξ 的相位為 θ_i + k_i·cos χ·ξ,令 x_i = k_i·L_pp·cos χ/2。
+V_D = v_E·sin D + v_N·cos D 為**對地**速度(對水速度 + 流)朝浪源的分量,遭遇頻率 ω_e,i = dθ_i/dt = ω_i + k_i·V_D(頂浪前進升高;順浪且船速超過波速時為負)。
+
+**升沉**(向上為正):
+
+- 自然頻率 ω_h² = ρ·g·A_wp/(ρ∇ + A_33) = g·A_wp/(2∇)(A_33 = ρ∇)。
+- 激勵 = 沿船長平均的波面 × Smith 修正:a_i·sinc(x_i)·exp(−k_i·T/2),sinc(x) = sin x/x(沿船長正好一個波長時為零;可為負 = 反相)。
+- z = Σ a_i·sinc(x_i)·e^{−k_i T/2}·RAO(r_h,i)·sin(θ_i − δ_h,i),r_h,i = ω_e,i/ω_h;ż = Σ(同振幅)·ω_e,i·cos(θ_i − δ_h,i)。
+
+**縱搖**(艏仰為正):
+
+- 自然頻率 ω_p² = ρ·g·∇·GM_L/I_55 = g·GM_L/(1.2·(k_yy·L)²)。
+- 激勵 = 均勻水線面上波面的一次矩(靜水壓力矩)÷ 縱向復原力矩 × Smith 修正:
+  (12/L³)·∫ξ·η(ξ)dξ = a_i·k_i·cos χ·F_p(x_i)·cos θ_i,**F_p(x) = 3(sin x − x cos x)/x³**(x → 0 時 1,即沿艏向的波斜率 a·k·cos χ;第一個零點 x ≈ 4.49;|x| < 0.05 用級數 1 − x²/10 + x⁴/280)。
+- θ = Σ a_i·k_i·cos χ·F_p(x_i)·e^{−k_i T/2}·RAO(r_p,i)·cos(θ_i − δ_p,i);θ̇ = −Σ(同振幅)·ω_e,i·sin(θ_i − δ_p,i)。
+- 趨勢:橫浪 cos χ = 0 → 縱搖恰為零;長波(λ ≫ L)時頂浪/順浪最大、隨 cos χ 遞減;λ ≈ L 的短波在頂浪時沿船長相消(F_p 小),斜浪的等效波長 λ/cos χ 較長,
+  縱搖可略大於頂浪(實船亦然)。
+- 註:規劃時的近似式「a·k·|2(sin x/x − cos x)/x|」與上式只差無因次因子 k·L/3(且取絕對值);上式是同一個一次矩積分以縱向復原力矩 ρg·B·L³/12 正規化的結果,
+  長波極限才會回到波斜率 a·k·cos χ,並保留正負號(x 超過零點時反相),故採用上式。
+
+**響應**:RAO(r) = 1/√((1 − r²)² + (2ζr)²)、相位滯後 δ = atan2(2ζr, 1 − r²)(r → 0:1 與 0;r = 1:1/(2ζ) 與 π/2;r → ∞:0 與 π;r < 0 時 RAO 相同、滯後變號);
+最大值在 r = √(1 − 2ζ²)(ζ = 0.35 時 r = 0.87、RAO 1.53)。速率為解析微分(把 RAO、δ、χ 視為緩變)。
+
+**船速/航向改變**:θ_i 以自船位置取值,波的相位連續;RAO 與 δ 直接代入當下的 ω_e、長度濾波代入當下的 χ ——不模擬暫態,船速或航向急變時各成分的振幅與相位滯後
+立刻跳到新的穩態值(輸出可能出現小的不連續;以 50 Hz 計算、操船的 ω_e 變化緩慢,可接受)。
+
+### 11.4 係數(ASSUMED)與 FSB 量級
+
+| 常數 / 設定 | 值 | 說明 |
+|---|---|---|
+| `HeaveAddedMassRatio` | 1.0 | A_33/(ρ∇);寬淺船型的升沉附加質量與排水質量同量級 |
+| C_wp | (1 + 2C_b)/3 | 與漂移力水線幾何同式(FSB 0.80–0.84) |
+| `PitchAddedInertiaFactor` | 1.2 | I_55 = ρ∇(k_yy·L)² × 1.2 |
+| `pitchGyradiusRatio`(k_yy/L) | 0.25 | 商船 0.24–0.26 |
+| `gmL_m` 估計 | 3·C_wp²·L²/(40·C_b·T) | BM_L 的經驗式(= 3·A_wp²·L/(40·B·∇));忽略 KB − KG |
+| `heaveDampingRatio` / `pitchDampingRatio` | 0.35 | 興波阻尼大,文獻量級 0.2–0.5 |
+
+| 船/裝載 | C_wp | A_wp (m²) | ∇ (m³) | T_h (s) | GM_L (m) | GM_L/L | T_p (s) |
+|---|---|---|---|---|---|---|---|
+| FSB1 滿載 | 0.825 | 1,471 | 7,536 | 6.42 | 119.0 | 1.20 | 4.99 |
+| FSB1 壓載 | 0.800 | 1,426 | 4,364 | 4.96 | 180.7 | 1.82 | 4.05 |
+| FSB2 滿載 | 0.843 | 1,754 | 11,486 | 7.26 | 104.7 | 1.01 | 5.58 |
+| FSB2 壓載(C_b、Δ 為估計) | 0.826 | 1,717 | 8,369 | 6.26 | 137.4 | 1.32 | 4.88 |
+
+量級(FSB2 滿載、Hs 2.5 m、PM、靜止,1,200 s 內的最大值;`SeakeepingModelTests.BeamSeasGiveNoPitchWhileHeadAndFollowingSeasGiveMost`):
+
+| Tp | 頂浪 升沉 / 縱搖 | 45° 斜浪 | 橫浪 |
+|---|---|---|---|
+| 8 s(λ_p ≈ L) | 0.30 m / 1.15° | 0.51 m / 1.36° | 1.34 m / 0° |
+| 14 s(λ_p ≈ 3 L) | 1.09 m / 1.60° | 1.27 m / 1.43° | 1.56 m / 0° |
+
+- 12 kn、Hs 2.5 m / Tp 8 s 自 045°(JONSWAP;黃金案例):最大升沉 0.36–0.38 m、縱搖 1.5–1.6°、升沉速率 0.35 m/s、縱搖角速度 1.5°/s。
+- 12 kn 頂浪 Tp 14 s:升沉 1.25 m、縱搖 2.14°(遭遇頻率升高,接近縱搖共振)。
+- E17b(FSB1 壓載、泊位上靜止、湧浪自左舷艉 225°、Tp 10 s):Hs 0.5 m 時升沉 ≤ 0.17 m、縱搖 ≤ 0.38°;Hs 0.8 m 時 0.27 m、0.61°。
+
+### 11.5 狀態、引擎接線、雜湊與確定性
+
+```json
+"waveMotion": { "heave_m": 0.132, "pitch_deg": 1.256, "heaveRate_mps": 0.227, "pitchRate_dps": -0.495 }
+```
+
+- `state.waveMotion`(`state.schema.json` `properties.waveMotion`;`OwnShipState.WaveMotion`):`heave_m` 升沉(向上為正)、`pitch_deg` 縱搖(艏仰為正)、
+  `heaveRate_mps`、`pitchRate_dps`。**只在 `ship.seakeeping.enabled` 且有浪(Hs > 0)時輸出**;其餘情況省略,其他欄位不變。
+- 建立:`Initialize`(載入/重設)與 `Restore` 以 `SeakeepingModel.Create(Ship, Loading, Scenario)` 重建(相位由種子)、`SetWaves(目前浪設定)`,最後 `RefreshSeakeeping`
+  以目前狀態重算(tick 0 即有輸出)。練習中變更浪(`SetWaves`)同步成分並重算;關閉浪 → 輸出消失。`setEnvironment`(`ApplyEnvironment`)結尾也重算一次:
+  立即改流(無 ramp)會改變對地速度 → 遭遇頻率,凍結中下指令或時間表在評估步同 tick 改流時,`state.waveMotion` 當下即為新流的值,
+  與此時取快照再還原的結果一致(`ImmediateCurrentChangeWhileFrozenRefreshesOutputAndSurvivesRestore`)。
+- 每步(`Advance`):… → RK4 → tick++ → 潮高/流更新 → … → 浪 UpdateLast → **`RefreshSeakeeping`**(步末狀態、自船位置的流 → 對地速度、目前 Hs、步末時刻 tick·dt)→ 擱淺 → … → 雜湊。
+  不在 RK4 內、不產生任何力。動力學不接受外力(`SupportsExternalForces = false`)時漂移力停用、`state.waves` 省略,但升沉/縱搖只需浪設定與運動狀態,照常輸出
+  (`DynamicsWithoutExternalForceSupportStillOutputWaveMotion`;與橫搖同原則)。
+- **雜湊**:有輸出時於雜湊鏈最後(橫搖區塊之後)追加 5 個 int64:標記 `SEAKEEP1`、升沉(m)、縱搖(rad)、升沉速率(m/s)、縱搖角速度(rad/s)。未啟用、無浪或 Hs = 0 不追加
+  (`WithoutSeakeepingOutputsAndHashAreUnchangedAndEnabledDoesNotFeedBack`、`EnabledWithoutWavesOrWithZeroHsProducesNoOutputAndLeavesHashUnchanged`)。
+- **快照**:純函數、無跨步狀態,`EngineSnapshot` **不需新欄位**(啟用與否快照 JSON 除雜湊外相同);還原後以還原的狀態、時刻與浪設定重算,
+  與快照當時逐位元相同,續跑雜湊與連續執行相同(含 Hs 漸變中途;`SnapshotRestoreReproducesOutputAndHash`);紀錄/重播一致(`RecordReplayReproducesHashWithSeakeeping`)。
+- 確定性:只依種子、情境與輸入;C# 與 Python 逐項同運算順序(取樣表逐位元相同,第 11.8 節)。
+- 顯示端(T4;`Visual.Shared` 內插與相機/船模、網頁 `state-parser` / conning 海況方塊 / 教官站自船面板)依本節欄位名稱與正負號;與橫搖的合成順序見 `docs/design/visual-client.md`。
+
+### 11.6 適用範圍與限制
+
+- **線性**:振幅 ∝ Hs;無甲板上浪、艏底拍擊(slamming)、螺槳出水與大振幅非線性。**無升沉–縱搖耦合**(各為獨立的單自由度)、**無橫搖耦合**(橫搖見 `ship.roll`)、
+  **無縱盪/橫盪/艏搖的一階運動**;不回饋 3 自由度(失速、舵效、漂移力不因船體運動改變),UKC/擱淺判定不含升沉與縱搖。
+- 激勵為矩形水線面的 Froude–Krylov 近似 + Smith 修正:無繞射/輻射的頻率相依(附加質量與阻尼為常數)、無船型沿船長的分佈、無前進速度對激勵與阻尼的影響
+  (只有遭遇頻率)。RAO 的峰值位置與高度取決於 ASSUMED 的 ζ、A_33、k_yy、GM_L。
+- **深水波數**(與橫搖相同):淺水(例:E17b 泊位水深 12 m、Tp 10 s)實際波長較短,長度濾波與波斜率偏離;港內遮蔽、反射與繞射不在模型內(情境的港內波高為示意值)。
+- 5 個成分的正弦和:長時間下有拍頻;不是連續譜的統計(最大值與有義值的比例和實海不同)、無方向擴散。
+- 不模擬暫態(第 11.3 節):船速/航向急變、`setEnvironment waves` 改 Tp/來向時輸出階躍。
+- 遭遇頻率為零或負(順浪、船速 ≥ 波速)時以準靜態/反向相位處理,實際上此時線性頻域模型本身不適用(衝浪、打橫不在模型內)。
+
+### 11.7 Python 參考實作(`simosa_brm/seakeeping.py`)
+
+- `SeakeepingModel(raw_particulars, loading, cfg, seed)`:與 C# 建構子同式;`set_waves(tp, direction_rad, spectrum, gamma)` / `set_waves_from(WaveDriftModel)`;
+  純函數 `sinc`、`pitch_filter`、`response`、`compute`;`evaluate(kin, cur_e, cur_n, hs, t)` / `update_last`;`hash_bytes()`(`<q4d`)、`state()`;相位用 `roll.draw_phases`。
+- `MMGShip`:`configure_seakeeping(cfg)`、`seakeeping` 屬性;`reset` 重建、`set_waves` 同步並重算、`step` 步末(含擱淺分支)`_refresh_seakeeping`、
+  `snapshot/restore` 深拷貝(舊快照無此鍵 → 重建)、`state_json` 的 `waveMotion`、`state_hash` 追加(只在有輸出時)。Python 無 Hs 漸變(同第 6.1 節)。
+- `scenario.validate_scenario` → `sc["ship"]["seakeeping"]`(`normalise_seakeeping`)、`seakeeping_issues`;`apply_scenario` 最後呼叫 `configure_seakeeping`。
+
+### 11.8 測試與跨語言夾具
+
+- C# `tests/SimCore.Tests/SeakeepingModelTests.cs`(31 項):自然週期與預設/覆寫;RAO 極限與共振峰;長度濾波極限;長波極限(升沉 → 波面、縱搖 → 波斜率,殘差 < 8 %);
+  橫浪縱搖為零、頂浪 = 順浪 > 斜浪(長波)、橫浪升沉最大;低阻尼時 Tp ≈ T_h 放大最大;速率 = 沿航跡的數值微分(含流)與遭遇頻率;與橫搖同一波場/相位;Hs 線性、
+  無浪/Hs = 0 無輸出;未啟用位元不變且啟用不回饋(狀態 JSON 去掉 `waveMotion` 後相同、快照相同);啟用但無浪雜湊不變;不接受外力的動力學仍輸出;量級;`setEnvironment waves` 開/漸變/關;
+  快照/還原;紀錄/重播;結構檢查 8 例與情境 JSON 往返;schema 欄位名稱/預設值與契約類別一致;跨語言夾具 2 項;E17b 2 項。
+- Python `src/Tools.Calibration/tests/test_seakeeping.py`(26 項):同上各項的 Python 版、`MMGShip` 接線(`reset`、舊快照)、夾具可重現、E17b。
+- 跨語言夾具(`tests/SimCore.Tests/Golden/export_seakeeping_reference.py`;重產:`cd src/Tools.Calibration && uv run python ../../tests/SimCore.Tests/Golden/export_seakeeping_reference.py`):
+  - `seakeeping_table.csv`:4 組船舶/裝載 ×(預設 2 個種子 + 覆寫設定 1 個種子)× 5 種浪況 × 7 個狀態(靜止、頂浪/斜浪前進、倒退、順浪超過短波波速、有流、遠離原點與長時間)
+    共 420 列的純函數取樣;C# `GoldenTableMatchesPythonReference` 四個輸出 |差| ≤ 1e-12·max(1, |值|)(實測 0:逐位元相同)。
+  - `seakeeping_run.{yaml,csv}`:FSB2 滿載 12 kn(未指定車鐘 → 直航平衡轉速;無舵令,浪漂移使艏向在 120 s 內緩慢偏轉約 18°)、Hs 2.5 m / Tp 8 s 自 045° JONSWAP、深水,120 s 每 1 s 一列;
+    C# `GoldenSeakeepingRunMatchesPythonReference` 升沉/縱搖/速率/波面高每列 |差| ≤ 1e-9·max(1, |值|)(與橫搖夾具相同容差;Linux 實測逐位元相同)、位置差 / 航程 < 1 %。
+- 情境 `data/scenarios/E17b_typhoon_seakeeping.yaml`(E17 的變體;scenario-library.md 第 11 節):`E17b_SharesE17GeometryAndAddsSwellWithSeakeeping`、
+  `E17b_NoOperatorHeaveAndPitchGrowWithSwellAndRecordReplays`;核心紀錄夾具 `record-E17b_typhoon_seakeeping-core.jsonl`。

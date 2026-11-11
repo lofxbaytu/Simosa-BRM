@@ -9,9 +9,11 @@ namespace SimosaBRM.Visual.Godot;
 /// <summary>
 /// 視角:鍵盤 1–5 切換(駕駛台前視/左翼橋/右翼橋/艉視/鳥瞰),滑鼠左鍵拖曳環視(yaw/pitch 偏移)、滾輪縮放視野角、R 重設;
 /// 眼位依 ViewDefinition(眼高取 particulars bridge 資料或估計)跟隨自船插值姿態;鳥瞰固定北向上。
-/// 橫搖(state.roll;docs/design/visual-client.md 第 4 節「橫搖視角」):觀察者隨船傾,相機姿態 = 艏向 yaw · 船體橫搖(繞艏艉軸,右傾正)·
-/// 視角偏航 · 俯仰(Basis 精確合成,艉視自動反號、翼橋側視部分化為俯仰),眼位亦隨船傾偏移;低品質一樣套用(只是一個矩陣乘法)。
-/// 無 roll 時橫搖為 0,姿態與原本的 Euler 寫法完全相同。
+/// 船體運動(state.roll 橫搖、state.waveMotion 縱搖/升沉;docs/design/visual-client.md 第 4 節「橫搖、縱搖與升沉」):觀察者隨船運動,
+/// 相機姿態 = 艏向 yaw · 船體縱搖(繞橫軸,艏仰正)· 船體橫搖(繞艏艉軸,右傾正)· 視角偏航 · 俯仰
+/// (Basis 精確合成;合成順序 Euler ZYX 與 SceneCoordinates.BodyToWorldOffset / ObserverBasis 相同;艉視自動反號、翼橋側視時橫搖與縱搖互相混合),
+/// 眼位亦隨船體姿態偏移並加上升沉(ViewDefinition.EyeOffset);低品質一樣套用(只多矩陣乘法)。
+/// 無 roll / waveMotion 時對應量為 0,姿態與原本的 Euler 寫法完全相同;鳥瞰不隨船體運動。
 /// </summary>
 public partial class CameraRig : Node3D
 {
@@ -59,27 +61,32 @@ public partial class CameraRig : Node3D
         }
         else
         {
-            var roll = v.CameraRollDeg(own.RollDeg);
-            var eye = SceneCoordinates.FromEnu(own.East, own.North, 0) + SceneCoordinates.BodyToWorldOffset(v.EyeForward, v.EyeStarboard, v.EyeUp, own.HeadingDeg, roll);
+            // 眼位:船體座標的眼位經橫搖 → 縱搖 → 艏向 → 升沉(固定順序,ViewDefinition.EyeOffset);姿態以同一順序合成
+            var eye = SceneCoordinates.FromEnu(own.East, own.North, 0) + v.EyeOffset(own.HeadingDeg, own.RollDeg, own.PitchDeg, own.HeaveM);
             Position = new Vector3((float)eye.X, (float)eye.Y, (float)eye.Z);
-            Basis = HeeledBasis(own.HeadingDeg, roll, v.YawDeg + _mouseYaw, v.PitchDeg + _mousePitch);
+            Basis = AttitudeBasis(own.HeadingDeg, v.CameraRollDeg(own.RollDeg), v.CameraPitchDeg(own.PitchDeg), v.YawDeg + _mouseYaw, v.PitchDeg + _mousePitch);
         }
         _camera.Fov = (float)FovDeg;
     }
 
     /// <summary>
-    /// 艏向(度)、船體橫搖(度,右傾正)、相對艏向的偏航(度,右正)與俯仰(度,上正)→ 相機 Basis:
-    /// Ry(−艏向) · Rz(−橫搖) · Ry(−偏航) · Rx(俯仰)。橫搖 0 時 = Ry(−(艏向 + 偏航)) · Rx(俯仰),即原本的 Rotation(俯仰, yaw, 0)。
+    /// 艏向(度)、船體橫搖(度,右傾正)、船體縱搖(度,艏仰正)、相對艏向的偏航(度,右正)與俯仰(度,上正)→ 相機 Basis:
+    /// Ry(−艏向) · Rx(船縱搖) · Rz(−橫搖) · Ry(−偏航) · Rx(俯仰)(Euler ZYX:艏搖 → 縱搖 → 橫搖;SceneCoordinates.ObserverBasis 為其雙精度對照,
+    /// Visual.Shared.Tests 的 SceneWaveMotionTests 釘住順序與正負號)。橫搖與縱搖皆 0 時 = Ry(−(艏向 + 偏航)) · Rx(俯仰),即原本的 Rotation(俯仰, yaw, 0)。
     /// 右傾為繞船體 +z(艉向)旋轉 −φ:右舷下沉、高於水線的點往右舷移(SceneCoordinates.HeelOffset 同一慣例)。
+    /// 艏仰為繞船體 +x(右舷向)旋轉 +θ:艏部上升(SceneCoordinates.PitchOffset 同一慣例;與視角俯仰「上正」同一轉向,
+    /// 所以駕駛台前視時艏仰使視線上抬、地平線在畫面中下移)。
     /// </summary>
-    public static Basis HeeledBasis(double headingDeg, double rollDeg, double viewYawDeg, double pitchDeg)
+    public static Basis AttitudeBasis(double headingDeg, double rollDeg, double shipPitchDeg, double viewYawDeg, double pitchDeg)
     {
         var yawShip = new Basis(Vector3.Up, (float)SceneCoordinates.HeadingToYawRad(headingDeg));
         var viewYaw = new Basis(Vector3.Up, (float)SceneCoordinates.HeadingToYawRad(viewYawDeg));
         var pitch = new Basis(Vector3.Right, Mathf.DegToRad((float)pitchDeg));
-        if (rollDeg == 0.0) return yawShip * viewYaw * pitch;
-        var heel = new Basis(Vector3.Back, -Mathf.DegToRad((float)rollDeg));
-        return yawShip * heel * viewYaw * pitch;
+        if (rollDeg == 0.0 && shipPitchDeg == 0.0) return yawShip * viewYaw * pitch;
+        var attitude = yawShip;
+        if (shipPitchDeg != 0.0) attitude *= new Basis(Vector3.Right, Mathf.DegToRad((float)shipPitchDeg));
+        if (rollDeg != 0.0) attitude *= new Basis(Vector3.Back, -Mathf.DegToRad((float)rollDeg));
+        return attitude * viewYaw * pitch;
     }
 
     public override void _UnhandledInput(InputEvent e)

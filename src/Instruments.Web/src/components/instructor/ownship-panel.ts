@@ -1,6 +1,7 @@
 // 自船覆寫(規劃書第 9.1 節):位置/航向/速度、裝載狀態、拖船數量。command.schema.json 無專用指令,
 // 以 reset 附 args 送出(Python 參考伺服器讀 x/y/heading/speed;C# 核心目前忽略 args);未支援者標示。
-// 面板標題下另列目前橫搖(state.roll:角度 P/S、靜傾、角速度、自然週期;情境 ship.roll.enabled 時才有,無則不顯示)。
+// 面板標題下另列目前橫搖(state.roll:角度 P/S、靜傾、角速度、自然週期;情境 ship.roll.enabled 時才有,無則不顯示),
+// 同一列接著浪一階運動(state.waveMotion:縱搖艏仰為正、升沉向上為正,各附速率;情境 ship.seakeeping.enabled 且有浪時才有,需求 R2);兩者皆無時整列不顯示。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -9,6 +10,7 @@ import { instructorStyles, numberFromInput } from './instructor-shared.js';
 import { CORE_SUPPORT_LABEL, OWNSHIP_FIELD_SUPPORT, ownShipOverrideCommand, type OwnShipOverride } from '../../lib/instructor-command.js';
 import type { LoadingCondition, OwnShipState } from '../../types/state.js';
 import { formatHeel } from '../inclinometer.js';
+import { formatSignedMetres } from '../sea-readout.js';
 import { formatSignedDeg } from '../../lib/format.js';
 
 @customElement('brm-ownship-panel')
@@ -77,12 +79,22 @@ export class OwnShipPanel extends LitElement {
 
   override render() {
     const f = this.form;
+    const roll = this.state?.roll;
+    const motion = this.state?.waveMotion;
     return html`
       <div class="panel">
         <div class="panel-title"><span>自船覆寫 OWN SHIP</span><span class="zh">以 reset + args 送出</span></div>
-        ${this.state?.roll
-          ? html`<div class="hint roll-readout" title="橫搖(state.roll;右傾正、S = 右傾、P = 左傾;動態 = 角度 − 靜傾)">
-              橫搖 ${formatHeel(this.state.roll.angle_deg)} · 靜傾 ${formatHeel(this.state.roll.staticHeel_deg)} · 動態 ${formatHeel(this.state.roll.angle_deg - this.state.roll.staticHeel_deg)} · 角速度 ${formatSignedDeg(this.state.roll.rate_degps)}/s · 自然週期 ${this.state.roll.naturalPeriod_s.toFixed(1)} s
+        ${roll || motion
+          ? html`<div class="hint attitude-readout">
+              ${roll
+                ? html`<span class="roll-readout" title="橫搖(state.roll;右傾正、S = 右傾、P = 左傾;動態 = 角度 − 靜傾)"
+                    >橫搖 ${formatHeel(roll.angle_deg)} · 靜傾 ${formatHeel(roll.staticHeel_deg)} · 動態 ${formatHeel(roll.angle_deg - roll.staticHeel_deg)} · 角速度 ${formatSignedDeg(roll.rate_degps)}/s · 自然週期 ${roll.naturalPeriod_s.toFixed(1)} s</span
+                  >`
+                : nothing}${roll && motion ? ' · ' : nothing}${motion
+                ? html`<span class="wave-motion-readout" title="浪一階運動(state.waveMotion;縱搖艏仰為正、升沉向上為正;括號內為速率)"
+                    >縱搖 ${formatSignedDeg(motion.pitch_deg)}(${formatSignedDeg(motion.pitchRate_dps, 2)}/s) · 升沉 ${formatSignedMetres(motion.heave_m)} m(${formatSignedMetres(motion.heaveRate_mps)} m/s)</span
+                  >`
+                : nothing}
             </div>`
           : nothing}
         <div class="form">

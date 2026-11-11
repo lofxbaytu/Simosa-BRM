@@ -76,6 +76,17 @@
             "turnHeelGain": { "type": "number", "minimum": 0, "default": 1, "description": "迴轉傾倍率(0 = 無迴轉傾;物理上約為 (KG − T/2)/GM,FSB1 滿載約 1.4)" },
             "waveGain": { "type": "number", "minimum": 0, "default": 1, "description": "浪激勵倍率(0 = 無浪激勵;有效波斜率係數)" }
           }
+        },
+        "seakeeping": {
+          "type": "object",
+          "description": "浪一階振盪運動:升沉(heave)與縱搖(pitch)(選填、預設關閉;R2「浪」;docs/design/physics-waves.md 第 11 節)。enabled 且有浪(environment.waves 或 setEnvironment waves,Hs > 0)時核心輸出 state.waveMotion {heave_m 向上為正, pitch_deg 艏仰為正, heaveRate_mps, pitchRate_dps}、雜湊追加 SEAKEEP1 區塊。模型為線性、只輸出、不回饋 3 自由度運動(u/v/r/x/y/ψ 與未啟用時逐位元相同;與 ship.roll 同原則,兩者可同時啟用):沿用橫搖浪激勵的同一個地固波場(5 個浪譜成分、相位由情境種子的同一序列抽取,不另造亂數),每個成分以遭遇頻率 ω_e = ω + k·(對地速度朝浪源的分量)的線性單自由度穩態響應閉式合成(不積分、無跨步狀態):RAO = 1/√((1 − r²)² + (2ζr)²)、相位滯後 atan2(2ζr, 1 − r²)。升沉:ω_n² = g·A_wp/(∇ + A_33),A_33 = ∇(ASSUMED)、A_wp = C_wp·L·B、C_wp = (1 + 2C_b)/3(ASSUMED);激勵 = 波幅 × sinc(k·L_pp·cos χ/2)× Smith 修正 exp(−k·T/2)。縱搖:ω_n² = g·∇·GM_L/I_55,I_55 = ρ∇(k_yy·L)²·1.2(附加慣量 ASSUMED);激勵 = 波幅·k·cos χ·3(sin x − x cos x)/x³(x = k·L_pp·cos χ/2;均勻水線面的波面一次矩)× Smith 修正;橫浪(χ = ±90°)縱搖為零。船速或航向急變時 RAO 與相位滯後直接代入當下的遭遇頻率(不模擬暫態)。未給或 enabled = false、或無浪/Hs = 0 時 state.waveMotion 省略,數值與雜湊與舊版相同。所有預設係數為 ASSUMED(兩船無耐航模型試驗)。C# 與 Python 參考實作同公式(夾具 tests/SimCore.Tests/Golden/seakeeping_table.csv、seakeeping_run.csv)",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "啟用(預設 false)" },
+            "heaveDampingRatio": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.35, "description": "升沉阻尼比 ζ(0–1 之間,不含;預設 0.35 為 ASSUMED,文獻量級 0.2–0.5)" },
+            "pitchDampingRatio": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.35, "description": "縱搖阻尼比 ζ(0–1 之間,不含;預設 0.35 為 ASSUMED)" },
+            "pitchGyradiusRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.5, "default": 0.25, "description": "縱搖迴轉半徑比 k_yy/L(大於 0、不超過 0.5;預設 0.25 為 ASSUMED,商船 0.24–0.26)" },
+            "gmL_m": { "type": "number", "exclusiveMinimum": 0, "description": "縱穩心高 GM_L(m);未給時由 particulars 估計 GM_L ≈ BM_L = 3·C_wp²·L²/(40·C_b·T)(ASSUMED;兩船滿載約 1.0–1.2 × L,壓載吃水淺時較大)" }
+          }
         }
       }
     },
@@ -478,7 +489,7 @@
         },
         "waves": {
           "type": "object",
-          "description": "浪(選填;docs/design/physics-waves.md):有此區段時核心以短波漸近水線反射積分計算平均二階波浪漂移力(surge/sway/yaw;強度 ∝ ρ g Hs²,隨吃水/波長與 λ/L 衰減、遭遇頻率修正;淺水時波長以有限水深色散關係求得)並輸出 state.waves;未給時零力、數值與雜湊與舊版相同。確定性(平均力無相位、無亂數);C# 與 Python 參考實作同公式。3 自由度:無一階振盪運動與橫搖",
+          "description": "浪(選填;docs/design/physics-waves.md):有此區段時核心以短波漸近水線反射積分計算平均二階波浪漂移力(surge/sway/yaw;強度 ∝ ρ g Hs²,隨吃水/波長與 λ/L 衰減、遭遇頻率修正;淺水時波長以有限水深色散關係求得)並輸出 state.waves;未給時零力、數值與雜湊與舊版相同。確定性(平均力無相位、無亂數);C# 與 Python 參考實作同公式。3 自由度:漂移力本身不含一階振盪;橫搖與升沉/縱搖另由 ship.roll、ship.seakeeping 的只輸出模型提供(皆不回饋 3 自由度)",
           "required": ["significantHeight_m", "peakPeriod_s", "direction_deg"],
           "properties": {
             "significantHeight_m": { "type": "number", "minimum": 0, "description": "有義波高 Hs(m)" },

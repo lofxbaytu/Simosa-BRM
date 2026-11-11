@@ -67,6 +67,64 @@ public class StateFrameParserTests
     }
 
     [Fact]
+    public void StateWithoutWaveMotionParsesWithNullAndZeroPose()
+    {
+        // 無 waveMotion 的狀態幀(情境未啟用 ship.seakeeping、無浪、舊核心):WaveMotion 為 null、姿態升沉/縱搖 0(畫面與未實作前相同)
+        var json = ContractJson.Serialize(SmokeSequence.Frame(3) with { WaveMotion = null });
+        Assert.DoesNotContain("waveMotion", json);
+        var s = StateFrameParser.TryParseState(json)!;
+        Assert.Null(s.WaveMotion);
+        Assert.NotNull(s.Roll); // 橫搖與浪一階運動各自獨立
+        var pose = StateInterpolator.PoseOf(s);
+        Assert.Equal(0.0, pose.HeaveM);
+        Assert.Equal(0.0, pose.PitchDeg);
+        Assert.Equal(0.0, pose.HeaveRateMps);
+        Assert.Equal(0.0, pose.PitchRateDegps);
+        // 明確的 null 視同省略
+        var withNull = json.Insert(json.LastIndexOf('}'), ",\"waveMotion\":null");
+        var n = StateFrameParser.TryParseState(withNull)!;
+        Assert.Null(n.WaveMotion);
+        Assert.Equal(0.0, StateInterpolator.PoseOf(n).HeaveM);
+    }
+
+    [Fact]
+    public void WaveMotionBlockParsesContractFieldNames()
+    {
+        // 契約欄位名(state.schema.json waveMotion):heave_m 向上為正、pitch_deg 艏仰為正、heaveRate_mps、pitchRate_dps —
+        // 以手寫 JSON 釘住線上格式(不靠 C# 屬性名來回序列化)
+        var baseJson = ContractJson.Serialize(SmokeSequence.Frame(0) with { WaveMotion = null, Roll = null });
+        var json = baseJson.Insert(baseJson.LastIndexOf('}'), ",\"waveMotion\":{\"heave_m\":-0.35,\"pitch_deg\":1.25,\"heaveRate_mps\":0.12,\"pitchRate_dps\":-0.3}");
+        Assert.Equal(FrameKind.State, StateFrameParser.Classify(json));
+        var s = StateFrameParser.TryParseState(json)!;
+        Assert.NotNull(s.WaveMotion);
+        Assert.Equal(-0.35, s.WaveMotion!.HeaveM);
+        Assert.Equal(1.25, s.WaveMotion.PitchDeg);
+        Assert.Equal(0.12, s.WaveMotion.HeaveRateMps);
+        Assert.Equal(-0.3, s.WaveMotion.PitchRateDps);
+        var pose = StateInterpolator.PoseOf(s);
+        Assert.Equal(-0.35, pose.HeaveM);
+        Assert.Equal(1.25, pose.PitchDeg);
+        Assert.Equal(0.12, pose.HeaveRateMps);
+        Assert.Equal(-0.3, pose.PitchRateDegps);
+        Assert.Equal(0.0, pose.RollDeg); // 沒有 roll 也能有 waveMotion
+        // 來回序列化後欄位名不變
+        var round = ContractJson.Serialize(s);
+        Assert.Contains("\"waveMotion\":{\"heave_m\":-0.35,\"pitch_deg\":1.25,\"heaveRate_mps\":0.12,\"pitchRate_dps\":-0.3}", round);
+    }
+
+    [Fact]
+    public void MalformedWaveMotionRejectsTheFrameInsteadOfThrowing()
+    {
+        // 型別錯誤的 waveMotion 與其他區塊相同處理:整幀視為壞框(回傳 null、不丟例外;StateClient 記入 BadFrames),視景沿用前一幀
+        var baseJson = ContractJson.Serialize(SmokeSequence.Frame(0) with { WaveMotion = null });
+        foreach (var bad in new[] { "\"rough\"", "{\"heave_m\":\"abc\",\"pitch_deg\":0,\"heaveRate_mps\":0,\"pitchRate_dps\":0}", "[1,2]" })
+        {
+            var json = baseJson.Insert(baseJson.LastIndexOf('}'), ",\"waveMotion\":" + bad);
+            Assert.Null(StateFrameParser.TryParseState(json));
+        }
+    }
+
+    [Fact]
     public void ParsesRecordedCoreFixtureFrames()
     {
         // 網頁夾具是核心實跑的紀錄(含 truth/sensors/alerts 等);每個 state 行都應能解析
@@ -329,6 +387,126 @@ public class RollInterpolationTests
         Assert.InRange(quarter.AngleDeg, SmokeSequence.SmokeRollStaticHeelDeg + SmokeSequence.SmokeRollAmplitudeDeg - 1e-9, SmokeSequence.SmokeRollStaticHeelDeg + SmokeSequence.SmokeRollAmplitudeDeg + 1e-9);
         Assert.InRange(quarter.RateDegps, -1e-9, 1e-9);
         for (var k = 0; k < 250; k++) Assert.InRange(Math.Abs(SmokeSequence.Frame(k).Roll!.AngleDeg), 0, SmokeSequence.SmokeRollStaticHeelDeg + SmokeSequence.SmokeRollAmplitudeDeg + 1e-9);
+    }
+}
+
+/// <summary>
+/// 浪一階運動(state.waveMotion:升沉向上為正、縱搖艏仰為正;需求 R2)的插值與外推:升沉/縱搖與速率皆線性、
+/// 以速率外推、無 waveMotion 時為 0(與 roll 相互獨立)。
+/// </summary>
+public class WaveMotionInterpolationTests
+{
+    private static OwnShipState Frame(double t, (double Heave, double Pitch, double HeaveRate, double PitchRate)? motion, double? rollDeg = null)
+        => SmokeSequence.Frame(0) with
+        {
+            T = t,
+            Tick = (long)(t * 50),
+            Roll = rollDeg is { } a ? new RollState { AngleDeg = a, RateDegps = 0, NaturalPeriodS = 9, StaticHeelDeg = 0 } : null,
+            WaveMotion = motion is { } m ? new WaveMotionState { HeaveM = m.Heave, PitchDeg = m.Pitch, HeaveRateMps = m.HeaveRate, PitchRateDps = m.PitchRate } : null,
+            RadarEnvironment = null,
+        };
+
+    [Fact]
+    public void InterpolatesHeaveAndPitchLinearlyBetweenFrames()
+    {
+        var it = new StateInterpolator { DelaySeconds = 0.0 };
+        it.Push(Frame(0.00, (-0.40, 1.0, 0.2, -0.5)), 100.00);
+        it.Push(Frame(0.04, (0.20, -1.0, 0.6, 0.5)), 100.04);
+        it.Push(Frame(0.08, (0.30, -1.2, 0.0, 0.0)), 100.08);
+        var s = it.Sample(100.02)!; // 前兩幀的中點
+        Assert.False(s.Extrapolating);
+        Assert.Equal(-0.10, s.Own.HeaveM, 9);
+        Assert.Equal(0.0, s.Own.PitchDeg, 9);
+        Assert.Equal(0.4, s.Own.HeaveRateMps, 9);
+        Assert.Equal(0.0, s.Own.PitchRateDegps, 9);
+        var q = it.Sample(100.05)!; // 第二、三幀之間 1/4
+        Assert.Equal(0.225, q.Own.HeaveM, 9);
+        Assert.Equal(-1.05, q.Own.PitchDeg, 9);
+        // 直接內插:f 夾在 0–1
+        var a = new Pose(0, 0, 0, 0, 0, HeaveM: 1.0, PitchDeg: -2.0, HeaveRateMps: 0.5, PitchRateDegps: 1.0);
+        var b = new Pose(0, 0, 0, 0, 0, HeaveM: 2.0, PitchDeg: 2.0, HeaveRateMps: -0.5, PitchRateDegps: 3.0);
+        Assert.Equal(new Pose(0, 0, 0, 0, 0, HeaveM: 1.25, PitchDeg: -1.0, HeaveRateMps: 0.25, PitchRateDegps: 1.5), StateInterpolator.Lerp(a, b, 0.25));
+        Assert.Equal(b, StateInterpolator.Lerp(a, b, 1.7));
+    }
+
+    [Fact]
+    public void ExtrapolationAdvancesHeaveAndPitchByTheirRates()
+    {
+        var it = new StateInterpolator { DelaySeconds = 0.0, MaxExtrapolationSeconds = 0.25 };
+        it.Push(Frame(0.00, (0.10, 0.50, 0.5, -1.0)), 100.00);
+        it.Push(Frame(0.04, (0.12, 0.46, 0.5, -1.0)), 100.04);
+        var s = it.Sample(100.14)!; // 超前 0.1 s
+        Assert.True(s.Extrapolating);
+        Assert.Equal(0.12 + 0.5 * 0.1, s.Own.HeaveM, 6);
+        Assert.Equal(0.46 - 1.0 * 0.1, s.Own.PitchDeg, 6);
+        // 超過外推上限:停在上限(0.25 s)
+        var stalled = it.Sample(101.00)!;
+        Assert.True(stalled.Stalled);
+        Assert.Equal(0.12 + 0.5 * 0.25, stalled.Own.HeaveM, 9);
+        Assert.Equal(0.46 - 1.0 * 0.25, stalled.Own.PitchDeg, 9);
+        // 無浪一階運動:外推不變
+        var p = StateInterpolator.Extrapolate(new Pose(0, 0, 0, 0, 0), 0, 1.0);
+        Assert.Equal(0.0, p.HeaveM);
+        Assert.Equal(0.0, p.PitchDeg);
+    }
+
+    [Fact]
+    public void FramesWithoutWaveMotionGiveZeroHeaveAndPitchEverywhere()
+    {
+        var it = new StateInterpolator { DelaySeconds = 0.0 };
+        it.Push(Frame(0.00, null, rollDeg: 3.0), 100.00);
+        it.Push(Frame(0.04, null, rollDeg: 3.0), 100.04);
+        foreach (var wall in new[] { 100.02, 100.10, 101.0 })
+        {
+            var s = it.Sample(wall)!;
+            Assert.Equal(0.0, s.Own.HeaveM);
+            Assert.Equal(0.0, s.Own.PitchDeg);
+            Assert.Equal(3.0, s.Own.RollDeg, 9); // 橫搖不受影響
+            Assert.Null(s.Latest.WaveMotion);
+            foreach (var (_, pose) in s.Targets) { Assert.Equal(0.0, pose.HeaveM); Assert.Equal(0.0, pose.PitchDeg); }
+        }
+    }
+
+    [Fact]
+    public void WaveMotionAppearingOrDisappearingFadesOverOneFrameInterval()
+    {
+        // 練習中開浪/關浪:一側無 waveMotion 視為 0,於一個幀距內線性過渡(不跳動、不沿用舊值)
+        var it = new StateInterpolator { DelaySeconds = 0.0 };
+        it.Push(Frame(0.00, null), 100.00);
+        it.Push(Frame(0.04, (0.40, -1.0, 0, 0)), 100.04);
+        it.Push(Frame(0.08, null), 100.08);
+        Assert.Equal(0.20, it.Sample(100.02)!.Own.HeaveM, 9);
+        Assert.Equal(-0.50, it.Sample(100.02)!.Own.PitchDeg, 9);
+        Assert.Equal(0.10, it.Sample(100.07)!.Own.HeaveM, 9);
+        var end = it.Sample(100.08)!;
+        Assert.Equal(0.0, end.Own.HeaveM, 9);
+        Assert.Equal(0.0, end.Own.PitchDeg, 9);
+        Assert.Null(end.Latest.WaveMotion);
+    }
+
+    [Fact]
+    public void SmokeWaveMotionIsBoundedAndRatesAreDerivatives()
+    {
+        var a = SmokeSequence.SmokeWaveMotion(0);
+        Assert.Equal(0.0, a.HeaveM, 12);
+        Assert.Equal(SmokeSequence.SmokePitchAmplitudeDeg, a.PitchDeg, 12);
+        const double h = 1e-5;
+        foreach (var t in new[] { 0.3, 1.9, 4.2, 6.6 })
+        {
+            var m = SmokeSequence.SmokeWaveMotion(t);
+            var (lo, hi) = (SmokeSequence.SmokeWaveMotion(t - h), SmokeSequence.SmokeWaveMotion(t + h));
+            Assert.Equal((hi.HeaveM - lo.HeaveM) / (2 * h), m.HeaveRateMps, 6);
+            Assert.Equal((hi.PitchDeg - lo.PitchDeg) / (2 * h), m.PitchRateDps, 6);
+        }
+        for (var k = 0; k < 250; k++)
+        {
+            var m = SmokeSequence.Frame(k).WaveMotion!;
+            Assert.InRange(Math.Abs(m.HeaveM), 0, SmokeSequence.SmokeHeaveAmplitudeM + 1e-9);
+            Assert.InRange(Math.Abs(m.PitchDeg), 0, SmokeSequence.SmokePitchAmplitudeDeg + 1e-9);
+        }
+        // 煙霧幀序列化後帶 waveMotion,解析回來一致(視景煙霧路徑)
+        var s = StateFrameParser.TryParseState(ContractJson.Serialize(SmokeSequence.Frame(10)))!;
+        Assert.Equal(SmokeSequence.SmokeWaveMotion(10 / SmokeSequence.Hz).HeaveM, s.WaveMotion!.HeaveM, 12);
     }
 }
 

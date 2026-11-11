@@ -27,8 +27,10 @@ public readonly record struct SeakeepingResult(double Heave, double Pitch, doubl
 /// 速率為解析微分(RAO、δ、χ 視為緩變):z' = Σ A·ω_e·cos(θ_i − δ)、θ' = −Σ A·ω_e·sin(θ_i − δ)。
 /// </para>
 /// <para>
-/// θ_i 以自船位置取值(與橫搖相同),船速/航向改變時相位連續;RAO 與 δ 則直接代入當下的 ω_e(不模擬暫態:船速或航向急變時
-/// 振幅與相位滯後立刻跳到新的穩態值,可接受,設計文件第 11.6 節)。確定性:輸出只由步末狀態、時刻、目前 Hs、浪設定與種子決定(純函數),
+/// θ_i 以自船位置取值(與橫搖相同),船速/航向改變時波的相位連續;RAO 與 δ 則直接代入當下的 ω_e、長度濾波代入當下的 χ(不模擬暫態:船速或航向急變時
+/// 各成分的振幅與相位滯後立刻跳到新的穩態值,輸出可能有小的不連續,可接受;設計文件第 11.3、11.6 節)。
+/// 縱搖激勵採用以縱向復原力矩正規化的一次矩 F_p(長波極限 = 波斜率、保留正負號);規劃時的近似式 a·k·|2(sin x/x − cos x)/x| 與它只差無因次因子 k·L/3(第 11.3 節註)。
+/// 確定性:輸出只由步末狀態、時刻、目前 Hs、浪設定與種子決定(純函數),
 /// 快照不需新欄位(還原後重算);只在情境 ship.seakeeping.enabled 且有浪(Hs &gt; 0)時輸出 state.waveMotion 並追加雜湊區塊,
 /// 其餘情境的輸出、雜湊、夾具與黃金測試不變。C# 與 Python 參考實作(seakeeping.py)逐項同運算順序。
 /// </para>
@@ -161,7 +163,7 @@ public sealed class SeakeepingModel
 
     /// <summary>
     /// 設定(或清除)浪成分:Tp、來向、浪譜與 γ(Hs 於每次計算傳入,支援漸變);相位不變。成分、權重與波數的算式與
-    /// <see cref="RollModel.SetWaves"/> 逐項相同(同一個波場;<c>SeakeepingModelTests.WaveFieldIsTheSameAsRollExcitation</c> 以橫搖的波斜率核對),
+    /// <see cref="RollModel.SetWaves"/> 逐項相同(同一個波場;<c>SeakeepingModelTests.WaveFieldIsTheSameAsRollExcitationAndPhasesComeFromScenarioSeed</c> 以橫搖的波斜率核對),
     /// 另存每單位 Hs 的波幅 √(2 w_i)/4 與 Smith 修正 exp(−k_i·T/2)。清除時 <see cref="Last"/> 一併清除。
     /// </summary>
     public void SetWaves(ScenarioWaves? waves)

@@ -1884,7 +1884,8 @@ def wave_number(omega: float, depth: float, iterations: int = 12) -> float:
     for _ in range(iterations):
         kh = k * depth
         th = math.tanh(kh)
-        ch = math.cosh(kh)
+        # math.cosh 在 k·h > 約 710 時丟 OverflowError(深水短週期浪);C# Math.Cosh 回傳 Infinity,此時 kh/ch² = 0、tanh = 1,兩邊逐位元一致
+        ch = math.cosh(kh) if kh < 700.0 else math.inf
         f = GRAVITY * k * th - w2
         fp = GRAVITY * (th + kh / (ch * ch))
         k = k - f / fp

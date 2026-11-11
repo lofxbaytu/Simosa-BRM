@@ -113,6 +113,9 @@ public sealed class SimulationEngine
     // 解耦 1 自由度橫搖(設計文件 docs/design/physics-roll.md);情境 ship.roll.enabled 時建立,Initialize/Restore 時依情境重建
     // (不回饋 3-DOF;相位由獨立的 DeterministicRandom(情境種子)抽取,引擎的陣風亂數序列與運動不受啟用影響;φ、φ'、相位進快照)
     private RollModel? _roll;
+    // 浪一階運動:升沉/縱搖(設計文件 docs/design/physics-waves.md 第 11 節;R2);情境 ship.seakeeping.enabled 時建立,Initialize/Restore 時依情境重建
+    // (線性、只輸出、不回饋 3-DOF;相位與橫搖同一序列(情境種子);步末狀態/時刻/Hs 的純函數,無跨步狀態,快照不需新欄位)
+    private SeakeepingModel? _seakeeping;
     private RadarEnvironmentState? _radarEnvironment;
     // state.radarEnvironment 廣播關鍵幀(只影響廣播/紀錄內容,不進快照與雜湊):載入/重設/倒帶後第一幀與之後每秒一次帶出,
     // 其他幀省略(內容練習中不變;雷達服務視省略為不變,時間倒退或情境切換時清除)。避免 25 Hz 每幀重複整份雨區定義
@@ -211,6 +214,10 @@ public sealed class SimulationEngine
     public ShipInteractionModel? ShipInteraction => _interaction;
     /// <summary>解耦 1 自由度橫搖(情境未啟用 ship.roll 時 null;不影響 3-DOF 積分,啟用時雜湊追加 ROLLDOF1 區塊並輸出 state.roll)</summary>
     public RollModel? Roll => _roll;
+    /// <summary>
+    /// 浪一階運動(升沉/縱搖;情境未啟用 ship.seakeeping 時 null;不影響 3-DOF 積分,啟用且有浪(Hs &gt; 0)時雜湊追加 SEAKEEP1 區塊並輸出 state.waveMotion)
+    /// </summary>
+    public SeakeepingModel? Seakeeping => _seakeeping;
     /// <summary>自動舵可啟用:無 autopilotFailure,且電羅經未失效(指示航向有效)</summary>
     public bool AutopilotAvailable => !_faults.Contains(FaultNames.AutopilotFailure) && !_faults.Contains(FaultNames.GyroFailure);
 
@@ -455,6 +462,9 @@ public sealed class SimulationEngine
         // 橫搖:情境 ship.roll.enabled 時建立(φ = 0、相位由種子抽取),浪激勵的頻率成分依目前浪設定
         _roll = RollModel.Create(Ship, Loading, sc);
         _roll?.SetWaves(_waveSettings);
+        // 浪一階運動:情境 ship.seakeeping.enabled 時建立(相位由種子抽取,與橫搖同一序列),浪成分依目前浪設定;步末結果於本方法最後重算(RefreshSeakeeping)
+        _seakeeping = SeakeepingModel.Create(Ship, Loading, sc);
+        _seakeeping?.SetWaves(_waveSettings);
         // 雷達環境:只來自情境、練習中不變(不進快照與雜湊;重播由紀錄 header 的情境重建;廣播只在關鍵幀帶出)
         _radarEnvironment = ScenarioRadarEnvironmentBuilder.Build(sc, _projection);
         _radarEnvironmentPending = true;
@@ -482,6 +492,7 @@ public sealed class SimulationEngine
         RefreshBank();
         RefreshWaves();
         RefreshInteraction();
+        RefreshSeakeeping();
     }
 
     /// <summary>依目前情境建立岸壁效應模組(情境無 banks 時 null)。</summary>
@@ -502,6 +513,9 @@ public sealed class SimulationEngine
         RefreshWaves();
         // 橫搖的浪激勵成分(Tp/來向/浪譜)跟著變;Hs 於每步取模型目前值(漸變中為插值)
         _roll?.SetWaves(settings);
+        // 浪一階運動的浪成分同樣跟著變,並以目前狀態重算步末結果(關閉浪 → state.waveMotion 省略、雜湊不再追加區塊)
+        _seakeeping?.SetWaves(settings);
+        RefreshSeakeeping();
     }
 
     /// <summary>
@@ -677,6 +691,17 @@ public sealed class SimulationEngine
     {
         if (_waves is not { Active: true } w) return;
         w.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y));
+    }
+
+    /// <summary>
+    /// 浪一階運動(升沉/縱搖)的步末結果(雜湊與 state.waveMotion;physics-waves.md 第 11.5 節):以目前狀態、自船位置的流(對地速度 → 遭遇頻率)、
+    /// 目前 Hs(漸變中為插值;無浪 0 → 無輸出)與目前時刻重算(純函數,快照不需新欄位;情境未啟用 ship.seakeeping 時不做任何事)。
+    /// </summary>
+    private void RefreshSeakeeping()
+    {
+        if (_seakeeping is not { } sk) return;
+        var (curE, curN) = Environment.CurrentVectorAt(Time, Motion.X, Motion.Y);
+        sk.UpdateLast(Motion, curE, curN, _waves?.SignificantHeightM ?? 0.0, Time);
     }
 
     /// <summary>岸壁效應的步末結果(雜湊與 state.bank):以目前狀態、所在水深與實際轉速重算(純函數,故快照不需新欄位)。</summary>
@@ -1543,6 +1568,9 @@ public sealed class SimulationEngine
         }
         // 浪:Hs 漸變(通道 waveHeight)或立即;changes.waves 為 {from, to}(null = 無浪)
         if (wavesGiven) changes["waves"] = ApplyWaves(wavesTarget, rampTicks, wavesHsGiven);
+        // 浪一階運動:立即改流(無 ramp)會改變對地速度 → 遭遇頻率;這裡重算步末結果,使凍結中下指令或時間表同 tick 改流後的 state.waveMotion
+        // 與「取快照再還原」的結果一致(physics-waves.md 第 11.5 節;純函數,未啟用 ship.seakeeping 時不做任何事)
+        RefreshSeakeeping();
         Raise(NewEvent(SimEventKinds.EnvironmentChange, source, itemId, null, null, new
         {
             wind = cmd.Arg("wind"), current = cmd.Arg("current"), waterDepth = cmd.ArgAsDouble("waterDepth"), visibility_nm = cmd.ArgAsDouble("visibility_nm"),
@@ -1638,6 +1666,8 @@ public sealed class SimulationEngine
         bank?.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y), _act.Rpm);
         // 波浪漂移力步末結果(雜湊與 state.waves;步末位置的有效水深)
         waves?.UpdateLast(Motion, Environment.DepthAt(Motion.X, Motion.Y));
+        // 浪一階運動步末結果(雜湊與 state.waveMotion;步末狀態、步末時刻與目前 Hs 的純函數;不影響上面的 3-DOF 積分;未啟用的情境不做任何事)
+        RefreshSeakeeping();
 
         if (!Aground && UnderKeelClearance() <= 0.0)
         {
@@ -1733,6 +1763,9 @@ public sealed class SimulationEngine
         // 橫搖只在情境啟用 ship.roll 時追加(未啟用者雜湊與舊版相同)
         var hashRoll = _roll is not null;
         if (hashRoll) size += RollModel.HashLongs * 8;
+        // 浪一階運動只在情境啟用 ship.seakeeping 且有輸出(有浪、Hs > 0)時追加(未啟用或無浪者雜湊與舊版相同)
+        var hashSeakeeping = _seakeeping is { Last: not null };
+        if (hashSeakeeping) size += SeakeepingModel.HashLongs * 8;
         Span<byte> buf = size <= 2048 ? stackalloc byte[size] : new byte[size];
         _hash.CopyTo(buf);
         var o = 32;
@@ -1793,6 +1826,7 @@ public sealed class SimulationEngine
         if (hashWaves) o += _waves!.WriteHash(buf[o..]);
         if (hashInteraction) o += _interaction!.WriteHash(buf[o..]);
         if (hashRoll) o += _roll!.WriteHash(buf[o..]);
+        if (hashSeakeeping) o += _seakeeping!.WriteHash(buf[o..]);
         SHA256.HashData(buf[..o], _hash);
     }
 
@@ -1914,6 +1948,9 @@ public sealed class SimulationEngine
         _roll = RollModel.Create(Ship, Loading, Scenario);
         _roll?.SetWaves(_waveSettings);
         if (s.Roll is { } rs) _roll?.Restore(rs);
+        // 浪一階運動:無跨步狀態,依情境重建(相位由種子抽取)、浪成分依還原後的浪設定,還原完成後以還原的狀態與時刻重算步末結果(RefreshSeakeeping)
+        _seakeeping = SeakeepingModel.Create(Ship, Loading, Scenario);
+        _seakeeping?.SetWaves(_waveSettings);
 
         Tick = s.Tick;
         _radarEnvironmentPending = true;
@@ -2008,6 +2045,7 @@ public sealed class SimulationEngine
         RefreshBank();
         RefreshWaves();
         RefreshInteraction();
+        RefreshSeakeeping();
 
         static IDepthProvider SetDepth(ConstantDepth existing, double value) { existing.Depth = value; return existing; }
     }
@@ -2221,6 +2259,7 @@ public sealed class SimulationEngine
             Waves = _waves is { Active: true } waves ? waves.State() : null,
             ShipInteraction = _interaction is { Active: true } inter ? inter.State() : null,
             Roll = _roll?.State(),
+            WaveMotion = _seakeeping?.State(),
             RadarEnvironment = includeRadarEnvironment ? _radarEnvironment : null,
         };
     }

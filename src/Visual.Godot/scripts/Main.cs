@@ -330,7 +330,7 @@ public partial class Main : Node3D
         {
             EnsureHarbour(sample.Latest);
             var look = EnvironmentMapper.Build(sample.Latest, sample.RadarEnvironment, _options.DayNight, _options.StartUtc);
-            _ownShip.SetPose(sample.Own.East, sample.Own.North, sample.Own.HeadingDeg, sample.Own.RollDeg);
+            _ownShip.SetPose(sample.Own.East, sample.Own.North, sample.Own.HeadingDeg, sample.Own.RollDeg, sample.Own.PitchDeg, sample.Own.HeaveM);
             _ownShip.ApplyLod(0, double.MaxValue, double.MaxValue, look.NavigationLightsOn);
             _camera.Update(sample.Own);
             _harbour.SetOverviewMode(_camera.Kind == ViewKind.Overview);
@@ -381,6 +381,8 @@ public partial class Main : Node3D
         sb.Append("HDG ").Append(s.Own.HeadingDeg.ToString("000")).Append("°  SOG ").Append(st.Sog.ToString("0.0")).Append(" kn  ROT ").Append(st.Rot.ToString("+0;-0")).Append(" °/min");
         // 橫搖(state.roll;右傾正):插值後角度、靜傾與自然週期;無 roll 的情境不顯示
         if (st.Roll is { } roll) sb.Append("  橫搖 ").Append(s.Own.RollDeg.ToString("+0.0;-0.0")).Append("°(靜傾 ").Append(roll.StaticHeelDeg.ToString("+0.0;-0.0")).Append("° T ").Append(roll.NaturalPeriodS.ToString("0.0")).Append(" s)");
+        // 浪一階運動(state.waveMotion;縱搖艏仰正、升沉向上正):插值後的值,與橫搖同列;無 waveMotion 的情境不顯示
+        if (st.WaveMotion is not null) sb.Append("  縱搖 ").Append(s.Own.PitchDeg.ToString("+0.0;-0.0")).Append("° 升沉 ").Append(s.Own.HeaveM.ToString("+0.00;-0.00")).Append(" m");
         sb.Append('\n');
         sb.Append("舵 ").Append(st.Rudder.ToString("+0;-0")).Append("°  RPM ").Append(st.Rpm.ToString("0")).Append("  ").Append(st.Telegraph).Append('\n');
         sb.Append("能見度 ").Append((look.VisibilityM / 1852.0).ToString("0.0")).Append(" nm  風 ").Append(st.Wind.TrueDir.ToString("000")).Append('/').Append(st.Wind.TrueSpeed.ToString("0")).Append(" kn  海況 ").Append(look.SeaState.ToString("0")).Append(look.Rain > 0.05 ? "  雨" : "").Append('\n');

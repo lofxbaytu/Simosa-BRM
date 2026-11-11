@@ -48,6 +48,7 @@ from .external import normalise_sections, normalise_ship_interaction, normalise_
 from .external import structural_issues as external_structural_issues
 from .mmg import DEG, TELEGRAPH_ORDERS, LocalTangentPlane, MMGShip, make_ship, parse_utc
 from .roll import normalise_roll
+from .seakeeping import normalise_seakeeping
 from .depth import depth_zones_from_scenario
 from .tide import tide_from_scenario
 from .current import current_from_scenario
@@ -678,7 +679,33 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
     # ---- 橫搖(ship.roll;C# 在船間交互作用之後檢查)
     if isinstance(ship, dict) and ship.get("roll") is not None:
         roll_issues(ship.get("roll"), error)
+    # ---- 浪一階運動(ship.seakeeping;C# 在橫搖之後檢查)
+    if isinstance(ship, dict) and ship.get("seakeeping") is not None:
+        seakeeping_issues(ship.get("seakeeping"), error)
     return issues
+
+
+def seakeeping_issues(sk: Any, error: Any) -> None:
+    """``ship.seakeeping`` 的結構檢查(C# Scenario.StructuralIssues 的浪一階運動段;路徑與訊息相同;docs/design/physics-waves.md 第 11.2 節):
+    0 < heaveDampingRatio / pitchDampingRatio < 1、0 < pitchGyradiusRatio ≤ 0.5、gmL_m > 0(皆有限;enabled 與否都檢查)。
+    非物件:C# 於反序列化即拒絕,此處以 ``ship.seakeeping`` 一條錯誤表示。"""
+    kp = "ship.seakeeping"
+    if not isinstance(sk, dict):
+        error(kp, "seakeeping 須為物件")
+        return
+    en = sk.get("enabled")
+    if en is not None and not isinstance(en, bool):
+        error(f"{kp}.enabled", "enabled 須為布林值")  # C# 於反序列化即拒絕
+    for key in ("heaveDampingRatio", "pitchDampingRatio"):
+        zeta = sk.get(key)
+        if zeta is not None and (not _is_num(zeta) or not math.isfinite(zeta) or float(zeta) <= 0.0 or float(zeta) >= 1.0):
+            error(f"{kp}.{key}", f"{key} 須在 0–1 之間(不含)")
+    kr = sk.get("pitchGyradiusRatio")
+    if kr is not None and (not _is_num(kr) or not math.isfinite(kr) or float(kr) <= 0.0 or float(kr) > 0.5):
+        error(f"{kp}.pitchGyradiusRatio", "pitchGyradiusRatio 須大於 0 且不超過 0.5")
+    gml = sk.get("gmL_m")
+    if gml is not None and (not _is_num(gml) or not math.isfinite(gml) or float(gml) <= 0.0):
+        error(f"{kp}.gmL_m", "gmL_m 必須為正")
 
 
 def roll_issues(roll: Any, error: Any) -> None:
@@ -1178,8 +1205,10 @@ def validate_scenario(raw: dict[str, Any], default_id: str = "", parameter_set: 
         "startTimeUtc": str(raw["startTimeUtc"]) if raw.get("startTimeUtc") is not None else None,
         "timeScale": ts,
         # 橫搖(roll.normalise_roll;結構檢查已於 roll_issues 通過;未給 None):apply_scenario 交給 MMGShip.configure_roll
+        # 浪一階運動(seakeeping.normalise_seakeeping;結構檢查已於 seakeeping_issues 通過;未給 None):apply_scenario 交給 MMGShip.configure_seakeeping
         # 自船 AIS MMSI(選填;NMEA 閘道 VDO 用,Python 參考實作不輸出 NMEA,只保留)
         "ship": {"id": ship_id, "loading": loading, "roll": normalise_roll(ship.get("roll")),
+                 "seakeeping": normalise_seakeeping(ship.get("seakeeping")),
                  "mmsi": int(ship["mmsi"]) if ship.get("mmsi") is not None else None},
         "origin": origin,
         "initial": {"lat": lat, "lon": lon, "x": x, "y": y, "heading": heading % 360.0, "speed": speed,
@@ -1300,6 +1329,9 @@ def apply_scenario(ship: MMGShip, sc: dict[str, Any]) -> None:
     ship.configure_external(sc.get("external"))
     # 橫搖(ship.roll;roll.py):外力/浪之後建立,浪激勵成分取情境浪設定、相位由情境種子抽取(C# Initialize 的 RollModel.Create + SetWaves)
     ship.configure_roll(sc["ship"].get("roll"))
+    # 浪一階運動(ship.seakeeping;seakeeping.py):橫搖之後建立,浪成分取情境浪設定、相位由情境種子抽取(與橫搖同一序列;
+    # C# Initialize 的 SeakeepingModel.Create + SetWaves + RefreshSeakeeping)
+    ship.configure_seakeeping(sc["ship"].get("seakeeping"))
 
 
 def ship_from_scenario(sc: dict[str, Any], dt: float = 0.02, coeffs: dict[str, Any] | None = None,

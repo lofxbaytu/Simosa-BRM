@@ -761,7 +761,7 @@
     },
     "waves": {
       "type": "object",
-      "description": "浪與平均二階波浪漂移力(情境有 environment.waves 且動力學接受外力時輸出;無 waves 的情境省略;C# 與 Python 參考實作皆輸出;docs/design/physics-waves.md 第 5 節)。視景以 significantHeight_m/direction_deg 畫海面(取代由風速推得的波高);力為船體座標:X 向艏正、Y 右舷正、N 艏向右正(與 u/v/r 相同)。3 自由度:只有平均漂移力,無一階振盪與橫搖",
+      "description": "浪與平均二階波浪漂移力(情境有 environment.waves 且動力學接受外力時輸出;無 waves 的情境省略;C# 與 Python 參考實作皆輸出;docs/design/physics-waves.md 第 5 節)。視景以 significantHeight_m/direction_deg 畫海面(取代由風速推得的波高);力為船體座標:X 向艏正、Y 右舷正、N 艏向右正(與 u/v/r 相同)。3 自由度:只有平均漂移力;一階升沉/縱搖見 waveMotion(ship.seakeeping)、橫搖見 roll(ship.roll),皆為只輸出、不回饋",
       "required": ["significantHeight_m", "peakPeriod_s", "direction_deg", "wavelength_m"],
       "properties": {
         "significantHeight_m": { "type": "number", "minimum": 0, "description": "有義波高 Hs(m)" },
@@ -799,6 +799,17 @@
         "rate_degps": { "type": "number", "description": "橫搖角速度(度/秒,右傾方向正)" },
         "naturalPeriod_s": { "type": "number", "exclusiveMinimum": 0, "description": "自然橫搖週期(秒;情境給定或依 GM 與船寬估計 T = 2·0.4·B/√GM)" },
         "staticHeel_deg": { "type": "number", "description": "靜傾角(度,右傾正;迴轉離心與風傾的等效靜傾;動態橫搖 = angle_deg − staticHeel_deg)" }
+      }
+    },
+    "waveMotion": {
+      "type": "object",
+      "description": "浪一階運動:升沉與縱搖(只在情境 ship.seakeeping.enabled 且有浪(Hs > 0)時輸出並納入狀態雜湊;未啟用、無浪或 Hs = 0 時省略,其他欄位與雜湊不變;C# 與 Python 參考實作皆輸出;docs/design/physics-waves.md 第 11 節)。線性、只輸出、不回饋 3 自由度運動:沿用橫搖浪激勵的同一個地固波場(5 個浪譜成分、相位由情境種子),每個成分以遭遇頻率的線性單自由度 RAO 閉式合成(升沉 ω_n² = g·A_wp/(∇ + A_33);縱搖 ω_n² = g·∇·GM_L/I_55;含沿船長的長度濾波與 Smith 修正),為步末狀態、時刻與目前 Hs 的純函數;速率為解析微分。正負號:heave_m 向上為正(船舯相對靜水平衡位置)、pitch_deg 艏仰為正;橫浪時縱搖為零。視景相機/船模、conning 海況方塊與教官站自船面板據此顯示;不含橫搖(見 roll)、縱盪/橫盪/艏搖的一階運動",
+      "required": ["heave_m", "pitch_deg", "heaveRate_mps", "pitchRate_dps"],
+      "properties": {
+        "heave_m": { "type": "number", "description": "升沉(m,向上為正)" },
+        "pitch_deg": { "type": "number", "description": "縱搖(度,艏仰為正)" },
+        "heaveRate_mps": { "type": "number", "description": "升沉速率(m/s,向上為正)" },
+        "pitchRate_dps": { "type": "number", "description": "縱搖角速度(度/秒,艏仰方向為正)" }
       }
     },
     "bank": {

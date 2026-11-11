@@ -1,13 +1,15 @@
 // 浪與船間交互作用方塊(操船台環境區;docs/design/physics-waves.md 第 5 節、physics-ship-interaction.md 第 5 節):
 //  - state.waves:Hs / Tp / 來向(艏向上的羅盤箭頭,由浪的來向指向中心,與風方塊相同慣例)與浪譜;
 //  - state.shipInteraction:啟用時顯示主要目標與側向力 / 艏搖力矩(t、t·m),超過事件門檻(event)以警示色標示;
-// 兩者皆無時 conning-bar 不放此方塊。練習中以 setEnvironment waves 關閉浪後 state.waves 省略 → 顯示「無浪」。
+//  - state.waveMotion(浪一階運動;情境 ship.seakeeping.enabled 且有浪時才有,需求 R2):在浪的數值下加一列「縱搖 ±x.x°」「升沉 ±x.xx m」
+//    (縱搖艏仰為正、升沉向上為正;方塊夠寬時同一行、窄時折成兩行);無此欄位時方塊與原本完全相同;
+// 三者皆無時 conning-bar 不放此方塊。練習中以 setEnvironment waves 關閉浪後 state.waves 省略 → 顯示「無浪」。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { tileStyles } from './shared.js';
-import { formatBearing } from '../lib/format.js';
-import { WAVE_SPECTRUM_LABELS, type ShipInteractionState, type WaveState } from '../types/state.js';
+import { formatBearing, formatSignedDeg } from '../lib/format.js';
+import { WAVE_SPECTRUM_LABELS, type ShipInteractionState, type WaveMotionState, type WaveState } from '../types/state.js';
 
 /** 側向力/力矩的顯示文字(帶正負號;右舷/艏向右為正)。 */
 export function formatSignedTonnes(v: number | undefined, digits = 1): string {
@@ -21,6 +23,19 @@ export function formatSignedTonnes(v: number | undefined, digits = 1): string {
 export function formatWavesSummary(w: Pick<WaveState, 'significantHeight_m' | 'peakPeriod_s' | 'direction_deg'> & { spectrum?: string }): string {
   const spec = w.spectrum ? `(${WAVE_SPECTRUM_LABELS[w.spectrum as keyof typeof WAVE_SPECTRUM_LABELS] ?? w.spectrum})` : '';
   return `Hs ${w.significantHeight_m.toFixed(1)} m / Tp ${w.peakPeriod_s.toFixed(1)} s / ${formatBearing(w.direction_deg)}°${spec}`;
+}
+
+/** 帶正負號的公尺數(升沉:向上為正;不含單位):0.347 → "+0.35"、−0.3 → "−0.30"(Unicode 減號,與 formatSignedDeg 一致)、0 → "0.00";無值 "--"。 */
+export function formatSignedMetres(v: number | undefined | null, digits = 2): string {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '--';
+  const r = Number(v.toFixed(digits));
+  const sign = r < 0 ? '−' : r > 0 ? '+' : '';
+  return sign + Math.abs(r).toFixed(digits);
+}
+
+/** 浪一階運動的一行摘要(SEA 方塊該列的提示文字):「縱搖 +1.2° / 升沉 −0.35 m」(縱搖艏仰為正、升沉向上為正)。 */
+export function formatWaveMotionSummary(m: Pick<WaveMotionState, 'pitch_deg' | 'heave_m'>): string {
+  return `縱搖 ${formatSignedDeg(m.pitch_deg)} / 升沉 ${formatSignedMetres(m.heave_m)} m`;
 }
 
 @customElement('brm-sea')
@@ -72,19 +87,37 @@ export class SeaReadout extends LitElement {
       .interaction.event .label {
         color: var(--ob-warning);
       }
-      .interaction .value {
+      .interaction .value,
+      .motion .value {
         font-size: clamp(12px, 0.85vw, 16px);
+      }
+      /* 縱搖/升沉:兩組「標籤 + 值」;方塊夠寬時同一行,不夠寬時(1920 單列版面每格約 165–190 px)自動折成兩行,不被方塊裁切 */
+      .motion {
+        flex-wrap: wrap;
+        column-gap: 10px;
+        row-gap: 2px;
+      }
+      .motion .pair {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 6px;
+        white-space: nowrap;
       }
     `,
   ];
 
   @property({ attribute: false }) waves: WaveState | undefined = undefined;
   @property({ attribute: false }) interaction: ShipInteractionState | undefined = undefined;
+  /** 浪一階運動(state.waveMotion;undefined = 情境未啟用或無浪 → 不顯示該行) */
+  @property({ attribute: false }) motion: WaveMotionState | undefined = undefined;
   @property({ type: Number }) heading = 0;
 
   override render() {
     const w = this.waves;
     const si = this.interaction;
+    const m = this.motion;
     const rel = w ? w.direction_deg - this.heading : 0;
     const spec = w?.spectrum ? WAVE_SPECTRUM_LABELS[w.spectrum] : undefined;
     return html`
@@ -105,8 +138,9 @@ export class SeaReadout extends LitElement {
                 <div class="rows">
                   <div class="row"><span class="label">Hs / Tp</span><span class="value small waves-hs">${w.significantHeight_m.toFixed(1)}<span class="unit">m</span> ${w.peakPeriod_s.toFixed(1)}<span class="unit">s</span></span></div>
                   <div class="row"><span class="label">來向 / 相對</span><span class="value small waves-dir">${formatBearing(w.direction_deg)}° / ${formatBearing(rel)}°</span></div>
+                  ${this.renderMotion(m)}
                 </div>`
-            : html`<div class="rows"><div class="label muted no-waves">無浪</div></div>`}
+            : html`<div class="rows"><div class="label muted no-waves">無浪</div>${this.renderMotion(m)}</div>`}
         </div>
         ${si
           ? html`<div class="interaction ${si.event ? 'event' : ''}" title="船間交互作用:側向力(右舷正)/ 艏搖力矩(艏向右正);超過門檻以警示色">
@@ -118,6 +152,15 @@ export class SeaReadout extends LitElement {
           : nothing}
       </div>
     `;
+  }
+
+  /** 浪一階運動一列(縱搖、升沉兩組;無 waveMotion 時不輸出任何節點,版面與原本相同)。 */
+  private renderMotion(m: WaveMotionState | undefined) {
+    if (!m) return nothing;
+    return html`<div class="row motion" title="浪一階運動(state.waveMotion):縱搖艏仰為正、升沉向上為正;${formatWaveMotionSummary(m)}">
+      <span class="pair"><span class="label">縱搖</span><span class="value small wave-pitch">${formatSignedDeg(m.pitch_deg)}</span></span>
+      <span class="pair"><span class="label">升沉</span><span class="value small wave-heave">${formatSignedMetres(m.heave_m)}<span class="unit">m</span></span></span>
+    </div>`;
   }
 }
 

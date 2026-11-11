@@ -13,6 +13,7 @@ namespace SimosaBRM.Visual.Shared.Smoke;
 /// (正常/黃/紅/斷纜各一;泊位幾何由 <see cref="SmokeBerthArea"/> 給出、沿自船航跡左舷 22 m,船仍直線前進 — 只驗證繫纜節點,非物理)。
 /// 每幀亦帶 utc(2026-05-05T22:30:00Z + t,高雄當地 06:30,日出前後)供日夜自動模式驗證。
 /// 每幀另帶示意橫搖 <see cref="SmokeRoll"/>(靜傾 0.5° + 振幅 3°、週期 9 s 的正弦)驗證相機/船體橫搖與 HUD;非物理。
+/// 每幀亦帶示意浪一階運動 <see cref="SmokeWaveMotion"/>(升沉振幅 0.4 m、縱搖振幅 1°、週期 7 s)驗證相機/船體的升沉與縱搖;非物理。
 /// </summary>
 public static class SmokeSequence
 {
@@ -30,6 +31,26 @@ public static class SmokeSequence
             RateDegps = SmokeRollAmplitudeDeg * w * Math.Cos(w * t),
             NaturalPeriodS = SmokeRollPeriodS,
             StaticHeelDeg = SmokeRollStaticHeelDeg,
+        };
+    }
+
+    public const double SmokeHeaveAmplitudeM = 0.4;
+    public const double SmokePitchAmplitudeDeg = 1.0;
+    public const double SmokeWavePeriodS = 7.0;
+
+    /// <summary>
+    /// 示意浪一階運動(state.waveMotion;升沉向上為正、縱搖艏仰為正):升沉 z = A_z·sin(2πt/T)、縱搖 θ = A_θ·cos(2πt/T)(相位差 90°),
+    /// 速率為其導數(m/s、度/秒)。只供視景路徑驗證,非物理(核心的模型見 SimCore Physics/SeakeepingModel)。
+    /// </summary>
+    public static WaveMotionState SmokeWaveMotion(double t)
+    {
+        var w = 2 * Math.PI / SmokeWavePeriodS;
+        return new WaveMotionState
+        {
+            HeaveM = SmokeHeaveAmplitudeM * Math.Sin(w * t),
+            PitchDeg = SmokePitchAmplitudeDeg * Math.Cos(w * t),
+            HeaveRateMps = SmokeHeaveAmplitudeM * w * Math.Cos(w * t),
+            PitchRateDps = -SmokePitchAmplitudeDeg * w * Math.Sin(w * t),
         };
     }
 
@@ -98,6 +119,7 @@ public static class SmokeSequence
             },
             Berth = index >= BerthSegmentStartFrame ? SmokeBerth() : null,
             Roll = SmokeRoll(t),
+            WaveMotion = SmokeWaveMotion(t),
             RadarEnvironment = withRadarEnvironment ? new RadarEnvironmentState
             {
                 RainAreas = new[]

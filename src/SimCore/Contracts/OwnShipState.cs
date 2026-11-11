@@ -99,6 +99,11 @@ public sealed record OwnShipState
     [JsonPropertyName("shipInteraction")] public Physics.External.ShipInteractionState? ShipInteraction { get; init; }
     /// <summary>橫搖(解耦 1 自由度線性模型;只在情境 ship.roll.enabled 時輸出,無則省略且其他欄位不變;視景相機與傾斜儀據此顯示)</summary>
     [JsonPropertyName("roll")] public RollState? Roll { get; init; }
+    /// <summary>
+    /// 浪一階運動:升沉與縱搖(線性、只輸出、不回饋 3 自由度;只在情境 ship.seakeeping.enabled 且有浪(Hs &gt; 0)時輸出,否則省略且其他欄位不變;
+    /// 設計文件 physics-waves.md 第 11 節;視景相機/船模據此顯示)
+    /// </summary>
+    [JsonPropertyName("waveMotion")] public WaveMotionState? WaveMotion { get; init; }
     /// <summary>雷達環境(情境 environment.radar 換算為 ENU;情境未給時省略;docs/design/radar-arpa.md 第 2.1 節)</summary>
     [JsonPropertyName("radarEnvironment")] public SimosaBRM.SimCore.Scenario.RadarEnvironmentState? RadarEnvironment { get; init; }
 }
@@ -117,6 +122,23 @@ public sealed record RollState
     [JsonPropertyName("naturalPeriod_s")] public required double NaturalPeriodS { get; init; }
     /// <summary>靜傾角(度,右傾正;迴轉與風傾的等效靜傾)</summary>
     [JsonPropertyName("staticHeel_deg")] public required double StaticHeelDeg { get; init; }
+}
+
+/// <summary>
+/// 浪一階運動狀態(state.schema.json <c>waveMotion</c>;情境 <c>ship.seakeeping.enabled</c> 且有浪(Hs &gt; 0)時輸出;R2「浪」;
+/// 設計文件 physics-waves.md 第 11 節):升沉向上為正(m)、縱搖艏仰為正(度)與兩者的速率(m/s、度/秒)。
+/// 各浪譜成分以遭遇頻率的線性 RAO 閉式合成(步末狀態與時刻的純函數),不回饋 3 自由度運動。
+/// </summary>
+public sealed record WaveMotionState
+{
+    /// <summary>升沉(m,向上為正;船舯相對靜水平衡位置的垂向位移)</summary>
+    [JsonPropertyName("heave_m")] public required double HeaveM { get; init; }
+    /// <summary>縱搖(度,艏仰為正)</summary>
+    [JsonPropertyName("pitch_deg")] public required double PitchDeg { get; init; }
+    /// <summary>升沉速率(m/s,向上為正)</summary>
+    [JsonPropertyName("heaveRate_mps")] public required double HeaveRateMps { get; init; }
+    /// <summary>縱搖角速度(度/秒,艏仰方向為正)</summary>
+    [JsonPropertyName("pitchRate_dps")] public required double PitchRateDps { get; init; }
 }
 
 /// <summary>真值區塊(state.schema.json <c>truth</c>)。</summary>

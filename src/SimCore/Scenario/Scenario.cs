@@ -436,6 +436,16 @@ public sealed class Scenario
             if (roll.TurnHeelGain is { } tg && (!double.IsFinite(tg) || tg < 0)) Error($"{rp}.turnHeelGain", "turnHeelGain 必須為 ≥ 0 的有限數值");
             if (roll.WaveGain is { } vg && (!double.IsFinite(vg) || vg < 0)) Error($"{rp}.waveGain", "waveGain 必須為 ≥ 0 的有限數值");
         }
+        // 浪一階運動(ship.seakeeping;設計文件 physics-waves.md 第 11.2 節):0 < 阻尼比 < 1、0 < pitchGyradiusRatio ≤ 0.5、gmL_m > 0(皆有限;enabled 與否都檢查)。
+        // 與 Python seakeeping_issues 一致
+        if (Ship.Seakeeping is { } sk)
+        {
+            const string kp = "ship.seakeeping";
+            if (sk.HeaveDampingRatio is { } hz && (!double.IsFinite(hz) || hz <= 0 || hz >= 1)) Error($"{kp}.heaveDampingRatio", "heaveDampingRatio 須在 0–1 之間(不含)");
+            if (sk.PitchDampingRatio is { } pz && (!double.IsFinite(pz) || pz <= 0 || pz >= 1)) Error($"{kp}.pitchDampingRatio", "pitchDampingRatio 須在 0–1 之間(不含)");
+            if (sk.PitchGyradiusRatio is { } kr && (!double.IsFinite(kr) || kr <= 0 || kr > 0.5)) Error($"{kp}.pitchGyradiusRatio", "pitchGyradiusRatio 須大於 0 且不超過 0.5");
+            if (sk.GmLM is { } gml && (!double.IsFinite(gml) || gml <= 0)) Error($"{kp}.gmL_m", "gmL_m 必須為正");
+        }
         return issues;
     }
 
@@ -593,6 +603,29 @@ public sealed class ScenarioShip
     /// 輸出 state.roll、雜湊追加 ROLLDOF1 區塊;不回饋到 3 自由度運動。未給或 enabled = false 時與舊版逐位元相同。
     /// </summary>
     public ScenarioRoll? Roll { get; set; }
+    /// <summary>
+    /// 浪一階運動:升沉與縱搖(選填、預設關閉;R2「浪」;設計文件 docs/design/physics-waves.md 第 11 節):enabled 且有浪(Hs &gt; 0)時核心以各浪譜成分
+    /// 遭遇頻率的線性 RAO 閉式合成升沉/縱搖,輸出 state.waveMotion、雜湊追加 SEAKEEP1 區塊;不回饋到 3 自由度運動。未給或 enabled = false 時與舊版逐位元相同。
+    /// </summary>
+    public ScenarioSeakeeping? Seakeeping { get; set; }
+}
+
+/// <summary>
+/// 情境浪一階運動設定(<see cref="Scenario.StructuralIssues"/> 檢查:0 &lt; 阻尼比 &lt; 1、0 &lt; pitchGyradiusRatio ≤ 0.5、gmL_m &gt; 0;
+/// Python seakeeping_issues 同路徑與訊息)。預設值皆為 ASSUMED(兩船無耐航模型試驗;physics-waves.md 第 11.4 節)。
+/// </summary>
+public sealed class ScenarioSeakeeping
+{
+    /// <summary>啟用(預設 false:有區段但未啟用與無區段相同)</summary>
+    public bool Enabled { get; set; }
+    /// <summary>升沉阻尼比 ζ_h(0–1 之間,不含;預設 0.35,ASSUMED)</summary>
+    public double? HeaveDampingRatio { get; set; }
+    /// <summary>縱搖阻尼比 ζ_p(0–1 之間,不含;預設 0.35,ASSUMED)</summary>
+    public double? PitchDampingRatio { get; set; }
+    /// <summary>縱搖迴轉半徑比 k_yy/L(&gt; 0 且 ≤ 0.5;預設 0.25,ASSUMED)</summary>
+    public double? PitchGyradiusRatio { get; set; }
+    /// <summary>縱穩心高 GM_L(m,&gt; 0;未給時由 particulars 估計 3·C_wp²·L²/(40·C_b·T),滿載約 1.0–1.2 L)</summary>
+    [JsonPropertyName("gmL_m")] public double? GmLM { get; set; }
 }
 
 /// <summary>情境橫搖設定(<see cref="Scenario.StructuralIssues"/> 檢查:naturalPeriod_s &gt; 0、0 &lt; dampingRatio &lt; 1、各 gain ≥ 0;Python roll_issues 同路徑與訊息)。</summary>
