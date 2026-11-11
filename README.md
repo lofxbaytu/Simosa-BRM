@@ -85,6 +85,7 @@ pnpm build && pnpm test
 - 安裝與啟動(船上筆電、教官筆電、更新包與紀錄回傳、故障排除):[docs/ops/安裝與啟動.md](docs/ops/安裝與啟動.md)
 - 需求追溯表(R1–R14、第 14 章驗收表 → 模組/測試/狀態、需實機項目):[docs/驗收/需求追溯表.md](docs/驗收/需求追溯表.md)
 - 更新包、紀錄包與直連同步設計:[docs/design/packaging-sync.md](docs/design/packaging-sync.md)
+- 修改指南(想改什麼 → 改哪裡 → 跑哪個測試;三級分類、契約同步清單、夾具重錄、熱點檔導覽):[docs/修改指南.md](docs/修改指南.md)
 
 ## 測試
 
