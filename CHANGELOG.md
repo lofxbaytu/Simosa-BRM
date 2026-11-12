@@ -10,8 +10,8 @@
 - 修正:所有 PowerShell 腳本改存 **UTF-8 with BOM + CRLF**(繁體中文 Windows 內建的 PowerShell 5.1 會把無 BOM 的檔案當 Big5 讀,中文變亂碼甚至無法執行;安裝程式的捷徑就是用 5.1);`tools/pscheck.py` 檢查;本機設定檔(`config\packaging.json` 等)開頭有 BOM 時也能讀。
 - 新增:`tools/check-local-data.ps1`(只讀取:列出根目錄磁碟與檔案系統、環境變數、C: 上各工具預設位置是否有新資料;發行版也附一份,安裝好的筆電可執行)、`tools/dev-shell.cmd`(雙擊開啟已設定好的 PowerShell 視窗)、`setup-windows.ps1 -SessionOnly / -SystemTemp / -Unregister`、`stop-all.ps1` 會請專屬設定檔的 Edge 視窗關閉(`-KeepBrowser` 保留)。
 - 修正(審查):`setup-windows.ps1` 不再改 corepack 的位置(會讓已下載的 pnpm 失效、連線時改抓不相容的新版),pnpm 固定建議 10.28.0 並對 11 以上提出警告;檢查專案磁碟的檔案系統(exFAT / FAT32 上 `pnpm install` 會失敗,開發用磁碟須為 NTFS)與抽取式磁碟;`SIMOSA_BRM_ROOT` 不再寫成使用者層級;各腳本對「已設定但指到專案外」的快取變數改指回專案;3 個把系統暫存當成「專案外路徑」的測試改寫;解除安裝不再刪 `build\webview2`(內含訓練紀錄);`.gitignore` 加入 simosa-pkg 的本機狀態(`state/`、`store/`、`config/device/` 等)。
-- CI:Windows 工作在 TEMP/TMP 指到 `build\tmp` 的配置下建置與測試,並以內建的 Windows PowerShell 5.1 實跑 `setup-windows.ps1 -SessionOnly`、`check-local-data.ps1`、`build-release.ps1 -WhatIf`。
-- 已知限制:專屬 Edge 設定檔與預先寫入的下載位置、WebView2 外殼的下載位置與「另存為 PDF」對話框預設資料夾、匯出版視景的導向、安裝程式的新對話框、exFAT / FAT32 上的行為都**尚未在 Windows 實機確認**(`docs/ops/本機資料位置.md` 第 7 節);直接雙擊視景執行檔或手動用其他瀏覽器開網頁仍會寫到 C:(文件已註明);安裝程式的預設位置只以磁碟是否存在判斷;`build\tmp` 不自動清理。
+- CI:Windows 工作在 TEMP/TMP 指到 `build\tmp` 的配置下建置與測試;以內建的 Windows PowerShell 5.1 實跑 `setup-windows.ps1 -SessionOnly`、`check-local-data.ps1`、`build-release.ps1 -WhatIf`;依守則設定後實際還原並建置一個專案,檢查 C: 上各工具的預設位置沒有新資料;以 Inno Setup 實際編譯安裝程式腳本(第一次有編譯驗證)。
+- 已知限制:專屬 Edge 設定檔與預先寫入的下載位置、WebView2 外殼的下載位置與「另存為 PDF」對話框預設資料夾、匯出版視景的導向、安裝程式新對話框的執行行為(腳本已編譯通過)、exFAT / FAT32 上的行為都**尚未在 Windows 實機確認**(`docs/ops/本機資料位置.md` 第 7 節);直接雙擊視景執行檔或手動用其他瀏覽器開網頁仍會寫到 C:(文件已註明);安裝程式的預設位置只以磁碟是否存在判斷;`build\tmp` 不自動清理。
 
 ## 2026.11.27 — 2026-11-11(第二十七輪)
 
