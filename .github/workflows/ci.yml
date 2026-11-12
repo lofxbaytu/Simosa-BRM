@@ -123,9 +123,15 @@ jobs:
           $iscc = $null
           foreach ($p in @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) { if (Test-Path $p) { $iscc = $p; break } }
           if (-not $iscc) { Write-Host '::warning::執行器沒有 Inno Setup 6(ISCC.exe),略過安裝程式編譯檢查'; exit 0 }
+          # 版本:ISCC.exe 本身沒有版本資源(讀到 0.0.0.0),改讀同資料夾的 Compil32.exe / ISCmplr.dll;讀不到就直接編譯
           $ver = $null
-          try { $ver = [version](("$((Get-Item $iscc).VersionInfo.ProductVersion)".Trim()) -replace '[^0-9.].*$', '') } catch { }
-          Write-Host "ISCC:$iscc(版本 $ver)"
+          foreach ($f in @('Compil32.exe', 'ISCmplr.dll', 'ISCC.exe')) {
+            $path = Join-Path (Split-Path $iscc) $f
+            if (-not (Test-Path $path)) { continue }
+            try { $v = [version](("$((Get-Item $path).VersionInfo.ProductVersion)".Trim()) -replace '[^0-9.].*$', '') } catch { $v = $null }
+            if ($v -and $v.Major -ge 1) { $ver = $v; break }
+          }
+          Write-Host "ISCC:$iscc(版本 $(if ($ver) { $ver } else { '未知,直接編譯' }))"
           if ($ver -and $ver -lt [version]'6.3') { Write-Host "::warning::Inno Setup $ver 低於 6.3,略過安裝程式編譯檢查"; exit 0 }
           $src = Join-Path $env:GITHUB_WORKSPACE 'build\tmp\iss-check\release'
           $out = Join-Path $env:GITHUB_WORKSPACE 'build\tmp\iss-check\installer'
