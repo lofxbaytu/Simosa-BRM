@@ -96,6 +96,50 @@ jobs:
           $rc = $LASTEXITCODE
           if ($rc -ne 0 -and -not ($onSys -and $rc -eq 2)) { throw "check-local-data.ps1 結束碼 $rc(setup-windows.ps1 -SessionOnly 之後應為 0)" }
           .\tools\build-release.ps1 -WhatIf
+      - name: 本機資料守則實測(依守則設定後建置,系統磁碟不得有新資料)
+        # 實機配置的端到端檢查:結束前面步驟留下的建置伺服器(它們帶著舊的環境變數)→ setup-windows.ps1 -SessionOnly →
+        # 以專案內全新的 NuGet 快取還原並建置一個專案(用到 NuGet 套件 / HTTP 快取 / 還原暫存、MSBuild 暫存、.NET CLI 家目錄)→
+        # check-local-data.ps1 -Since <開始時間> 必須回 0(C:\Users 下各工具的預設位置沒有新資料)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet build-server shutdown | Out-Null
+          Start-Sleep -Seconds 3
+          $t0 = Get-Date
+          $onSys = (Get-Location).Path.StartsWith($env:SystemDrive, [System.StringComparison]::OrdinalIgnoreCase)
+          if ($onSys) { .\tools\setup-windows.ps1 -SessionOnly -AllowSystemDrive | Out-Null } else { .\tools\setup-windows.ps1 -SessionOnly | Out-Null }
+          dotnet build src\Tools.Packaging.Cli\Tools.Packaging.Cli.csproj -c Debug --disable-build-servers -nologo -v q
+          if ($LASTEXITCODE -ne 0) { throw "dotnet build 失敗(結束碼 $LASTEXITCODE)" }
+          dotnet build-server shutdown | Out-Null
+          .\tools\check-local-data.ps1 -Since $t0
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0 -and -not ($onSys -and $rc -eq 2)) { throw "依守則設定後建置,check-local-data.ps1 仍回報結束碼 $rc(系統磁碟上有新資料或環境變數未指到專案內)" }
+      - name: 安裝程式腳本以 Inno Setup 編譯
+        # 執行器有 Inno Setup 時實際編譯 tools\installer\SimosaBRM.iss(以最小的假發行版目錄;只驗證腳本與 [Code] 能編譯,不執行安裝)。
+        # 容器內只有靜態檢查(tools/installer/check-iss.py),這一步是唯一的編譯驗證;沒有 ISCC 或版本低於 6.3 時略過並留下警告。
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = $null
+          foreach ($p in @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) { if (Test-Path $p) { $iscc = $p; break } }
+          if (-not $iscc) { Write-Host '::warning::執行器沒有 Inno Setup 6(ISCC.exe),略過安裝程式編譯檢查'; exit 0 }
+          $ver = $null
+          try { $ver = [version](("$((Get-Item $iscc).VersionInfo.ProductVersion)".Trim()) -replace '[^0-9.].*$', '') } catch { }
+          Write-Host "ISCC:$iscc(版本 $ver)"
+          if ($ver -and $ver -lt [version]'6.3') { Write-Host "::warning::Inno Setup $ver 低於 6.3,略過安裝程式編譯檢查"; exit 0 }
+          $src = Join-Path $env:GITHUB_WORKSPACE 'build\tmp\iss-check\release'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'build\tmp\iss-check\installer'
+          New-Item -ItemType Directory -Force -Path (Join-Path $src 'config'), (Join-Path $src 'app\launch'), (Join-Path $src 'docs\ops'), $out | Out-Null
+          Set-Content -Path (Join-Path $src 'manifest.json') -Value '{}'
+          Copy-Item 'config\*.json' (Join-Path $src 'config')
+          Copy-Item 'tools\launch\*.ps1' (Join-Path $src 'app\launch')
+          Copy-Item 'docs\ops\安裝與啟動.md' (Join-Path $src 'docs\ops')
+          $version = (Get-Content VERSION -Raw).Trim()
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$src" "/DOutputDir=$out" /Qp 'tools\installer\SimosaBRM.iss'
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 編譯失敗(結束碼 $LASTEXITCODE)" }
+          $setup = Get-ChildItem $out -Filter 'SimosaBRM-Setup-*.exe'
+          if (-not $setup) { throw 'ISCC 未產生安裝程式' }
+          Write-Host "已編譯:$($setup.Name)($([math]::Round($setup.Length / 1MB, 1)) MB)"
   e2e:
     name: 端對端(Playwright + 真實核心)
     needs: detect
