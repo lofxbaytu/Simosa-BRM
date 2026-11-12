@@ -126,7 +126,9 @@ function Find-LaunchDll([string]$Component, [string]$Project, [string]$Dll, [str
     foreach ($csproj in @((Join-Path $Root "src\$Project\$Project.csproj"), (Join-Path $Root "tools\launch\$Project\$Project.csproj"))) {
         if (Test-Path $csproj) {
             Write-Host "建置 $Project(Release)…"
-            & dotnet build $csproj -c Release -nologo -v q
+            # 建置輸出送到畫面(Out-Host),不可流進本函式的回傳值:否則呼叫端拿到的是「建置訊息 + 路徑」的陣列,
+            # 接著會把 "Build succeeded." 之類的文字當成 dotnet 的參數(第一次從原始碼啟動、尚未建置時才會發生;CI run 78 發現)
+            & dotnet build $csproj -c Release -nologo -v q | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "建置 $Project 失敗" }
             $c = Join-Path $Root "build\bin\$Project\Release\net8.0\$Dll"
             if (Test-Path $c) { return $c }

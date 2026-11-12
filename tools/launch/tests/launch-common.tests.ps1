@@ -374,6 +374,34 @@ Invoke-Test '瀏覽器端資料位置:Get-LaunchBrowserProfile 在根目錄內;E
     }
 }
 
+Invoke-Test 'Find-LaunchDll:尚未建置時先建置,回傳值只有 DLL 路徑(建置輸出不可混進回傳值)' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $fakeRoot = Join-Path $tmp 'dllroot'
+    Remove-Item -Recurse -Force $fakeRoot -ErrorAction SilentlyContinue
+    $projDir = Join-Path (Join-Path $fakeRoot 'src') 'Fake.Tool'
+    New-Item -ItemType Directory -Force -Path $projDir | Out-Null
+    Set-Content -Path (Join-Path $projDir 'Fake.Tool.csproj') -Value '<Project />' -Encoding ascii
+    $expected = Join-Path $fakeRoot 'build\bin\Fake.Tool\Release\net8.0\Fake.Tool.dll'
+    # dotnet 的替身:像真的 dotnet build 一樣把訊息寫到標準輸出,並產生 DLL
+    $script:fakeBuilds = 0
+    function dotnet {
+        $script:fakeBuilds++
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $expected) | Out-Null
+        Set-Content -Path $expected -Value 'x' -Encoding ascii
+        $global:LASTEXITCODE = 0
+        'Build succeeded.'; '    0 Warning(s)'; '    0 Error(s)'
+    }
+    try {
+        $dll = Find-LaunchDll 'faketool' 'Fake.Tool' 'Fake.Tool.dll' $fakeRoot 6>$null
+        Assert-True ($script:fakeBuilds -eq 1) "找不到 DLL 且有 csproj 時應建置一次,實際 $($script:fakeBuilds)"
+        Assert-True ($dll -is [string]) "回傳值應為單一字串,實際型別 $($dll.GetType().Name):$($dll -join ' | ')"
+        Assert-True ($dll -eq $expected) "回傳值應為建置出的 DLL 路徑:$dll"
+        # 已建置:直接回傳,不再建置
+        $dll2 = Find-LaunchDll 'faketool' 'Fake.Tool' 'Fake.Tool.dll' $fakeRoot
+        Assert-True ($script:fakeBuilds -eq 1 -and $dll2 -eq $expected) '已有 DLL 時不應再建置'
+    } finally { Remove-Item Function:\dotnet }
+}
+
 # ---- USB 操控台服務(src\Contracts\console-serial.md;start-ship-laptop.ps1 -Console)----
 Invoke-Test 'Get-LaunchConsoleArgs:序列埠與 loopback 規格;loopback 假裝置實跑服務回寫 ACK/LED' {
     . (Join-Path $launch 'launch-common.ps1')

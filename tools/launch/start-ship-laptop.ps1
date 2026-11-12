@@ -169,7 +169,7 @@ try {
                 if (Test-Path $exe) {
                     Start-LaunchProcess -Name "visual-$v" -Log (Join-Path $logDir "visual-$v.log") -File $exe -Arguments ($engine + @('--') + $vargs) -WorkDir (Split-Path $exe) -Window | Out-Null
                 } elseif ($editor -and (Test-Path $editor) -and (Test-Path (Join-Path $proj 'project.godot'))) {
-                    if (-not (Test-Path (Join-Path $proj '.godot\mono\temp\bin\Debug\SimosaBRM.Visual.Godot.dll'))) { & dotnet build (Join-Path $proj 'Visual.Godot.csproj') -nologo -v q }
+                    if (-not (Test-Path (Join-Path $proj '.godot\mono\temp\bin\Debug\SimosaBRM.Visual.Godot.dll'))) { & dotnet build (Join-Path $proj 'Visual.Godot.csproj') -nologo -v q | Out-Host }
                     Start-LaunchProcess -Name "visual-$v" -Log (Join-Path $logDir "visual-$v.log") -File $editor -Arguments (@('--path', $proj) + $engine + @('--') + $vargs) -WorkDir $root -Window | Out-Null
                 } else { Write-Host "  視景 ${v}:略過(無 $exe,也無 Godot 編輯器 $editor;docs\ops\安裝與啟動.md)" }
             }
