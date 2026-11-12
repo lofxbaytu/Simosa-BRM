@@ -116,6 +116,52 @@ def test_setup_windows_sets_uv_dirs_inside_project(var: str, subdir: str):
     assert m.group(1).replace("/", "\\").split("\\")[0] == subdir, f"{var} 指到 {m.group(1)},預期 .cache\\{subdir}"
 
 
+# ---- 其他工具:只能用環境變數導回專案內的目錄(nuget.config / .npmrc 無對應鍵) ----
+
+OTHER_DIR_VARS = {
+    # NuGet HTTP 快取;預設 %LOCALAPPDATA%\NuGet\v3-cache(nuget.config 沒有對應的設定鍵)
+    "NUGET_HTTP_CACHE_PATH": "nuget",
+    # NuGet 外掛快取;預設 %LOCALAPPDATA%\NuGet\plugins-cache
+    "NUGET_PLUGINS_CACHE_PATH": "nuget",
+    # NuGet 還原暫存;預設 %TEMP%\NuGetScratch
+    "NUGET_SCRATCH": "nuget",
+    # corepack 下載的 pnpm 本體;預設 %LOCALAPPDATA%\node\corepack
+    "COREPACK_HOME": "corepack",
+    # npm / npx 快取;預設 %LOCALAPPDATA%\npm-cache
+    "npm_config_cache": "npm",
+}
+
+
+@pytest.mark.parametrize("var,subdir", sorted(OTHER_DIR_VARS.items()))
+def test_setup_windows_sets_other_tool_dirs_inside_project(var: str, subdir: str):
+    """setup-windows.ps1 必須把 NuGet HTTP/外掛快取與暫存、corepack、npm 快取都以 $cache(= <專案>\\.cache)為基底設定。"""
+    text = SETUP_SCRIPT.read_text(encoding="utf-8")
+    m = re.search(rf"'{var}'\s*=\s*\(Join-Path \$cache '([^']+)'\)", text)
+    assert m, f"setup-windows.ps1 未設定 {var}(會寫到 C:\\Users)"
+    assert m.group(1).replace("/", "\\").split("\\")[0] == subdir, f"{var} 指到 {m.group(1)},預期 .cache\\{subdir}"
+
+
+def test_nuget_config_does_not_pretend_to_redirect_http_cache():
+    """nuget.config 的 <config> 只有 globalPackagesFolder 有效;http-cache / plugins-cache 不是有效的設定鍵
+    (曾誤以為有效,實際 HTTP 快取仍落在 %LOCALAPPDATA%\\NuGet),必須改用環境變數並在檔內註明。"""
+    text = (PROJECT_ROOT / "nuget.config").read_text(encoding="utf-8")
+    assert 'key="globalPackagesFolder"' in text
+    assert 'key="http-cache"' not in text and 'key="plugins-cache"' not in text, "nuget.config 不應再有無效的 http-cache / plugins-cache 鍵"
+    for var in ("NUGET_HTTP_CACHE_PATH", "NUGET_PLUGINS_CACHE_PATH", "NUGET_SCRATCH"):
+        assert var in text, f"nuget.config 應註明 {var}(HTTP/外掛快取與暫存只能用環境變數改)"
+
+
+def test_setup_windows_refuses_system_drive_and_redirects_temp():
+    """setup-windows.ps1:專案在系統磁碟時預設拒絕(-AllowSystemDrive 才繼續);TEMP/TMP 導到 build\\tmp(-SystemTemp 才留在系統預設位置);
+    不寫死 D:(G: 亦可)。"""
+    text = SETUP_SCRIPT.read_text(encoding="utf-8")
+    assert "$AllowSystemDrive" in text and "$env:SystemDrive" in text, "應檢查專案是否位於系統磁碟"
+    assert "$SystemTemp" in text and re.search(r"\$env:TEMP = \$tmp; \$env:TMP = \$tmp", text), "應把 TEMP/TMP 導到 build\\tmp"
+    assert "$SessionOnly" in text, "應提供只設定目前工作階段的 -SessionOnly"
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    assert not re.search(r"(?i)\b[CD]:\\", code), "setup-windows.ps1 的程式碼(註解外)不應寫死 C:\\ 或 D:\\"
+
+
 def test_readme_mentions_managed_python_location():
     """README 須說明:沒有 Python 3.12+ 時 uv 會代為下載到 .cache\\uv-python(不是 C:\\)。"""
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")

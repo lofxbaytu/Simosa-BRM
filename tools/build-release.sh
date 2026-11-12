@@ -55,6 +55,7 @@ fi
 if ! command -v dotnet >/dev/null && [[ -f /etc/profile.d/dotnet.sh ]]; then . /etc/profile.d/dotnet.sh; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet SDK" >&2; exit 2; }
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}" NUGET_PACKAGES="${NUGET_PACKAGES:-$ROOT/.cache/nuget/packages}" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+export NUGET_HTTP_CACHE_PATH="${NUGET_HTTP_CACHE_PATH:-$ROOT/.cache/nuget/http}" NUGET_PLUGINS_CACHE_PATH="${NUGET_PLUGINS_CACHE_PATH:-$ROOT/.cache/nuget/plugins}" NUGET_SCRATCH="${NUGET_SCRATCH:-$ROOT/.cache/nuget/scratch}"  # NuGet HTTP/外掛快取與暫存只能用環境變數導回專案內(nuget.config 的註解)
 export SIMOSA_BRM_ROOT="$ROOT"
 OUT="$ROOT/$OUT_BASE/$VERSION"
 KEYS="$ROOT/$OUT_BASE/dev-keys"

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   結束 start-ship-laptop.ps1 / start-instructor-laptop.ps1 啟動的全部程序(讀 build\logs\simosa.pids)。
 .DESCRIPTION

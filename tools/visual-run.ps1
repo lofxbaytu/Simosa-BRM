@@ -1,4 +1,4 @@
-# 啟動 3D 視景(Windows;docs/design/visual-client.md 第 6–7 節)。多螢幕:每台顯示器各啟動一個程序訂閱同一狀態流,例如
+﻿# 啟動 3D 視景(Windows;docs/design/visual-client.md 第 6–7 節)。多螢幕:每台顯示器各啟動一個程序訂閱同一狀態流,例如
 #   .\tools\visual-run.ps1 -View bridge -Monitor 0
 #   .\tools\visual-run.ps1 -View portWing -Monitor 1
 #   .\tools\visual-run.ps1 -View stbdWing -Monitor 2

@@ -55,6 +55,7 @@ command -v node >/dev/null || { echo "找不到 node(需 Node.js 22,內建 WebSo
 command -v dotnet >/dev/null || { echo "找不到 dotnet(需 .NET 8 SDK/執行階段)" >&2; exit 2; }
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 SIMOSA_BRM_ROOT="$ROOT"
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}" NUGET_PACKAGES="${NUGET_PACKAGES:-$ROOT/.cache/nuget/packages}"
+export NUGET_HTTP_CACHE_PATH="${NUGET_HTTP_CACHE_PATH:-$ROOT/.cache/nuget/http}" NUGET_PLUGINS_CACHE_PATH="${NUGET_PLUGINS_CACHE_PATH:-$ROOT/.cache/nuget/plugins}" NUGET_SCRATCH="${NUGET_SCRATCH:-$ROOT/.cache/nuget/scratch}"  # NuGet HTTP/外掛快取與暫存只能用環境變數導回專案內(nuget.config 的註解)
 
 [[ -n "$RUN" ]] || RUN="$(date -u +%Y%m%d-%H%M%S)"
 OUT_REL="build/soak/$RUN"; OUT="$ROOT/$OUT_REL"; LOGS_REL="$OUT_REL/logs"; STATS="$OUT/stats"

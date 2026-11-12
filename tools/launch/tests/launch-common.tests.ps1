@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   launch-common.ps1 / stop-all.ps1 的測試(PowerShell 7;Windows 或 Linux 皆可執行,不需 Pester)。
 .DESCRIPTION
@@ -229,22 +229,79 @@ Invoke-Test 'Start-LaunchShellPages 找不到外殼時退回 Open-LaunchPages �
     . (Join-Path $launch 'launch-common.ps1')
     # 以假的 Open-LaunchPages 取代(真的會 Start-Process 網址開瀏覽器);在 dot-source 之後定義才會蓋過原函式
     $script:openCalls = @()
-    ${function:Open-LaunchPages} = { param([string]$BaseUrl, $Pages, [hashtable]$Subst) $script:openCalls += , @($BaseUrl, @($Pages), $Subst) }
+    ${function:Open-LaunchPages} = { param([string]$BaseUrl, $Pages, [hashtable]$Subst, [string]$ProfileDir = '') $script:openCalls += , @($BaseUrl, @($Pages), $Subst, $ProfileDir) }
     $logs = 'build\test-tmp\launch-ps\logs5'
     $logDir = Join-Path $root $logs
     Remove-Item -Recurse -Force $logDir -ErrorAction SilentlyContinue
     Initialize-LaunchLogs $root $logs
     $pages = @('index.html?station=bridge', 'radar.html?radar=x')
     $missing = Join-Path $tmp 'nope\SimosaBRM.Shell.exe'
-    $warn1 = (Start-LaunchShellPages $missing 'http://127.0.0.1:18080' $pages @{ ship = '127.0.0.1' } $root $logDir @(0, 1) 3>&1 | Out-String)
+    $profile1 = Get-LaunchBrowserProfile $root
+    $warn1 = (Start-LaunchShellPages $missing 'http://127.0.0.1:18080' $pages @{ ship = '127.0.0.1' } $root $logDir @(0, 1) $profile1 3>&1 | Out-String)
     $warn2 = (Start-LaunchShellPages $null 'http://127.0.0.1:18080' $pages @{ ship = '127.0.0.1' } $root $logDir 3>&1 | Out-String)
-    Assert-True ($warn1.Contains('改用預設瀏覽器') -and $warn2.Contains('改用預設瀏覽器')) "exe 不存在或為 `$null 時都應警告改用預設瀏覽器:$warn1 / $warn2"
+    Assert-True ($warn1.Contains('改用瀏覽器') -and $warn2.Contains('改用瀏覽器')) "exe 不存在或為 `$null 時都應警告改用瀏覽器:$warn1 / $warn2"
+    # 瀏覽器設定檔位置原樣轉交(有給 → 專屬 Edge 設定檔;沒給 → 空字串 = 預設瀏覽器)
+    Assert-True ($script:openCalls[0][3] -eq $profile1 -and $script:openCalls[1][3] -eq '') "應把 BrowserProfile 轉交給 Open-LaunchPages:'$($script:openCalls[0][3])' / '$($script:openCalls[1][3])'"
     Assert-True ($script:openCalls.Count -eq 2) "應呼叫 Open-LaunchPages 2 次,實際 $($script:openCalls.Count)"
     Assert-True ($script:openCalls[0][0] -eq 'http://127.0.0.1:18080' -and (@($script:openCalls[0][1]) -join ',') -eq ($pages -join ',') -and $script:openCalls[0][2]['ship'] -eq '127.0.0.1') '應以相同 BaseUrl、全部頁面與代換表呼叫 Open-LaunchPages'
     $pidLines = @(Get-Content (Join-Path $logDir 'simosa.pids') | Where-Object { $_ })
     Assert-True ($pidLines.Count -eq 0) "退回瀏覽器時不應登錄任何 PID:$($pidLines -join '、')"
     Assert-True (-not (Get-ChildItem $logDir -Filter 'shell-*.log')) '退回瀏覽器時不應產生 shell-*.log'
     Assert-True (-not (Test-Path (Join-Path $logDir 'launch.log'))) '退回瀏覽器時不應寫啟動標頭'
+}
+
+# ---- 本機資料位置(守則:放 D: 或 G:,不寫 C:\):快取、暫存、瀏覽器端資料都在安裝根目錄內 ----
+Invoke-Test 'Set-LaunchProjectEnv:NuGet/.NET 快取與 TEMP/TMP 導到根目錄內;已設定者不覆寫;SIMOSA_SYSTEM_TEMP=1 不改暫存' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $names = @('DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH', 'NUGET_PLUGINS_CACHE_PATH', 'NUGET_SCRATCH', 'TEMP', 'TMP', 'SIMOSA_SYSTEM_TEMP')
+    $saved = @{}; foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    try {
+        $fakeRoot = Join-Path $tmp 'envroot'
+        Remove-Item -Recurse -Force $fakeRoot -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $fakeRoot | Out-Null
+        foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $null) }
+        [Environment]::SetEnvironmentVariable('NUGET_PACKAGES', 'already-set')
+        Set-LaunchProjectEnv $fakeRoot
+        $norm = { param($p) ([string]$p) -replace '\\', '/' }
+        $base = & $norm $fakeRoot
+        Assert-True ($env:NUGET_PACKAGES -eq 'already-set') "已設定的變數不應被覆寫:$($env:NUGET_PACKAGES)"
+        Assert-True ((& $norm $env:DOTNET_CLI_HOME) -eq "$base/.cache/dotnet-home") "DOTNET_CLI_HOME:$($env:DOTNET_CLI_HOME)"
+        Assert-True ((& $norm $env:NUGET_HTTP_CACHE_PATH) -eq "$base/.cache/nuget/http") "NUGET_HTTP_CACHE_PATH:$($env:NUGET_HTTP_CACHE_PATH)"
+        Assert-True ((& $norm $env:NUGET_PLUGINS_CACHE_PATH) -eq "$base/.cache/nuget/plugins") "NUGET_PLUGINS_CACHE_PATH:$($env:NUGET_PLUGINS_CACHE_PATH)"
+        Assert-True ((& $norm $env:NUGET_SCRATCH) -eq "$base/.cache/nuget/scratch") "NUGET_SCRATCH:$($env:NUGET_SCRATCH)"
+        Assert-True ((& $norm $env:TEMP) -eq "$base/build/tmp" -and (& $norm $env:TMP) -eq "$base/build/tmp") "TEMP/TMP 應為 <根目錄>/build/tmp:$($env:TEMP) / $($env:TMP)"
+        Assert-True (Test-Path (Join-Path (Join-Path $fakeRoot 'build') 'tmp')) '應建立 build/tmp'
+        # SIMOSA_SYSTEM_TEMP=1(經同意才使用):不改 TEMP/TMP
+        [Environment]::SetEnvironmentVariable('TEMP', 'system-temp'); [Environment]::SetEnvironmentVariable('TMP', 'system-tmp')
+        $env:SIMOSA_SYSTEM_TEMP = '1'
+        Set-LaunchProjectEnv $fakeRoot
+        Assert-True ($env:TEMP -eq 'system-temp' -and $env:TMP -eq 'system-tmp') "SIMOSA_SYSTEM_TEMP=1 時不應改 TEMP/TMP:$($env:TEMP) / $($env:TMP)"
+    } finally { foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) } }
+}
+
+Invoke-Test '瀏覽器端資料位置:Get-LaunchBrowserProfile 在根目錄內;Edge 參數含 --user-data-dir 且路徑加引號' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $fakeRoot = Join-Path $tmp 'Simosa BRM'
+    $p = Get-LaunchBrowserProfile $fakeRoot
+    $rel = ($p.Substring($fakeRoot.Length) -replace '\\', '/')
+    Assert-True ($p.StartsWith($fakeRoot) -and $rel -eq '/build/browser/edge') "設定檔應在 <根目錄>/build/browser/edge:$p"
+    $a = Get-LaunchEdgeArguments $p 'http://127.0.0.1:8080/instructor.html?mode=simple'
+    Assert-True ($a.Count -eq 4 -and $a[0] -eq "--user-data-dir=`"$p`"" -and $a[1] -eq '--no-first-run' -and $a[2] -eq '--no-default-browser-check' -and $a[3] -eq '"http://127.0.0.1:8080/instructor.html?mode=simple"') "Edge 參數:$($a -join ' ')"
+    # 第一次建立設定檔時預先寫入下載位置(<根目錄>/build/downloads);Preferences 為無 BOM 的 UTF-8 JSON;已存在時不覆寫
+    Remove-Item -Recurse -Force $fakeRoot -ErrorAction SilentlyContinue
+    Initialize-LaunchBrowserProfile $p
+    $prefsPath = Join-Path (Join-Path $p 'Default') 'Preferences'
+    $downloads = Join-Path (Join-Path $fakeRoot 'build') 'downloads'
+    Assert-True ((Test-Path $prefsPath) -and (Test-Path $downloads)) "應建立 Default/Preferences 與 build/downloads:$prefsPath"
+    $bytes = [System.IO.File]::ReadAllBytes($prefsPath)
+    Assert-True ($bytes[0] -eq 0x7B) "Preferences 應為無 BOM 的 JSON(第一個位元組 '{'):0x$('{0:X2}' -f $bytes[0])"
+    $prefs = Get-Content -Raw -Encoding UTF8 $prefsPath | ConvertFrom-Json
+    Assert-True ($prefs.download.default_directory -eq $downloads -and $prefs.download.prompt_for_download -eq $false -and $prefs.savefile.default_directory -eq $downloads) "下載位置應為 ${downloads};實際:$(Get-Content -Raw $prefsPath)"
+    Set-Content -Path $prefsPath -Value '{"download":{"default_directory":"user-choice"}}' -Encoding ASCII -NoNewline
+    Initialize-LaunchBrowserProfile $p
+    Assert-True ((Get-Content -Raw $prefsPath) -eq '{"download":{"default_directory":"user-choice"}}') '既有的 Preferences 不應被覆寫'
+    # 非 Windows(容器內的 pwsh)沒有 Edge;Open-LaunchPages 會警告並退回預設瀏覽器(此處不實際開啟)
+    if (-not $IsWindows) { Assert-True ($null -eq (Find-LaunchEdge)) '非 Windows 應回傳 $null' }
 }
 
 # ---- USB 操控台服務(src\Contracts\console-serial.md;start-ship-laptop.ps1 -Console)----

@@ -38,6 +38,13 @@ public static class ShellPaths
     public static string LogFile(string installRoot, string profileName) =>
         Path.GetFullPath(Path.Combine(installRoot, "build", "logs", $"shell-{profileName}.log"));
 
+    /// <summary>
+    /// 下載資料夾:&lt;根目錄&gt;/build/downloads(網頁的「下載 YAML / 紀錄 JSON / 報告」存到這裡;WebView2 預設是 Windows 使用者的「下載」資料夾,
+    /// 即 C:\Users\…\Downloads — 守則:本機資料放 D: 或 G:,不寫 C:)。
+    /// </summary>
+    public static string DownloadsDirectory(string installRoot) =>
+        Path.GetFullPath(Path.Combine(installRoot, "build", "downloads"));
+
     /// <summary>Evergreen 離線安裝檔的完整路徑。</summary>
     public static string InstallerPath(string installRoot) =>
         Path.GetFullPath(Path.Combine(installRoot, RuntimeCheck.InstallerRelativePath.Replace('/', Path.DirectorySeparatorChar)));

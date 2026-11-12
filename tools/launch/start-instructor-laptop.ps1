@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   教官筆電啟動(訪船船長;規劃書第 5.4 節):教官站網頁、雷達鏡像頁、直連檢查與 simosa-pkg sync 說明;離船時可單機執行 SimCore。
 .DESCRIPTION
@@ -6,6 +6,8 @@
   頁面的 ws 參數指向船上筆電(直連 IP);-Standalone(或 standalone.enabled)時改啟動本機 SimCore.Host 與雷達供岸上備課、審閱紀錄。
   直連前檢查 Wi-Fi/藍牙(第 5.4 節:直連期間停用;-CheckWifi 時 Wi-Fi 開啟則拒絕繼續)。同步不自動執行:顯示 simosa-pkg sync 指令
   (需硬體金鑰 --cert,且更新包產生前須完成受影響情境驗證;docs\design\packaging-sync.md 第 6.2–6.3 節)。
+  網頁以專屬設定檔啟動 Microsoft Edge(build\browser\edge):教官站的情境草稿、參與者資料與講評報告站的訓練紀錄(瀏覽器端儲存)留在安裝根目錄內,不寫 C:\Users。
+  -DefaultBrowser 改用 Windows 預設瀏覽器(其設定檔在 C:\Users;需經訓練負責人同意)。暫存檔在 build\tmp(SIMOSA_SYSTEM_TEMP=1 時留在 Windows 預設位置)。
 .EXAMPLE
   .\start-instructor-laptop.ps1 -Ship FSB1
   .\start-instructor-laptop.ps1 -Standalone
@@ -14,7 +16,7 @@
 param(
     [string]$Config = 'config\instructor-laptop.json',
     [string]$Ship,
-    [switch]$Standalone, [switch]$CheckWifi, [switch]$NoBrowser, [switch]$NoWait
+    [switch]$Standalone, [switch]$CheckWifi, [switch]$NoBrowser, [switch]$NoWait, [switch]$DefaultBrowser
 )
 . (Join-Path $PSScriptRoot 'launch-common.ps1')
 $root = Get-LaunchRoot
@@ -24,6 +26,9 @@ $cfg = Read-LaunchConfig $Config
 $env:SIMOSA_BRM_ROOT = $root
 $env:SIMOSA_INSTALL_ROOT = $root
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+# 快取與暫存留在安裝根目錄內(.cache\、build\tmp;不寫 C:\);瀏覽器端資料 → 專屬 Edge 設定檔(-DefaultBrowser 時用預設瀏覽器)
+Set-LaunchProjectEnv $root
+$browserProfile = if ($DefaultBrowser) { '' } else { Get-LaunchBrowserProfile $root }
 $logs = Get-Cfg $cfg 'logs' 'build\logs'
 if (-not $Ship) { $Ship = Get-Cfg $cfg 'ship' 'FSB1' }
 $shipIp = Get-Cfg $cfg "ships.$Ship" $Ship
@@ -73,7 +78,7 @@ try {
             Wait-LaunchTcp '127.0.0.1' $webPort 10 | Out-Null
             $pages = Get-Cfg $cfg 'web.openPages' @()
             if ($NoBrowser) { foreach ($p in @($pages)) { Write-Host "  http://127.0.0.1:$webPort/$p" } }
-            else { Open-LaunchPages "http://127.0.0.1:$webPort" $pages @{ ship = $shipIp; stateWs = $wsPort; radarWs = $radarPort } }
+            else { Open-LaunchPages "http://127.0.0.1:$webPort" $pages @{ ship = $shipIp; stateWs = $wsPort; radarWs = $radarPort } $browserProfile }
         }
     }
     $cert = Get-Cfg $cfg 'sync.certThumbprint' ''

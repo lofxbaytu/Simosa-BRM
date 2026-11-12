@@ -2,7 +2,8 @@
 抓結構性錯誤與本專案的部署規則(規劃書第 5.5 節、第 11.2 節;docs/ops/安裝與啟動.md 第 2.8 節):
   - 區段:[Setup]、[Tasks]、[Dirs]、[Files]、[Icons]、[Run]、[UninstallDelete]、[Code] 皆須存在;[Setup] 必要鍵齊全、每行為 鍵=值
   - 參數式區段([Files]、[Icons]、[Run]…)每行為 參數: 值; …,引號成對
-  - 預設安裝位置由 GetDefaultDir 決定且為 D:\\Simosa BRM;腳本中(註解外)不得出現 C:\\;UninstallFilesDir 在 {app} 內
+  - 預設安裝位置由 GetDefaultDir 決定:D:\\Simosa BRM,其次 G:\\Simosa BRM;裝在系統磁碟須明確確認(/ALLOWSYSTEMDRIVE=1 或對話框);
+    腳本中(註解外)不得出現 C:\\;UninstallFilesDir 在 {app} 內
   - [Files] 來源皆為 {#SourceDir}、目的地皆在 {app};config\\ 以 onlyifdoesntexist 安裝
   - 捷徑:start-ship-laptop.ps1 -Shell、start-instructor-laptop.ps1、stop-all.ps1
   - 防火牆:8765、8766、8767、8768、7300 各有規則,remoteip 限 DirectLinkSubnet、profile=any
@@ -174,7 +175,7 @@ def check(path):
     if setup.get('PrivilegesRequired', '').lower() != 'admin':
         errs.append('[Setup] PrivilegesRequired 應為 admin(防火牆規則與 Runtime 安裝)')
     if setup.get('DefaultDirName') != '{code:GetDefaultDir}':
-        errs.append('[Setup] DefaultDirName 應為 {code:GetDefaultDir}(有 D: 時 D:\\Simosa BRM,可改)')
+        errs.append('[Setup] DefaultDirName 應為 {code:GetDefaultDir}(有 D: 時 D:\\Simosa BRM,其次 G:\\Simosa BRM,可改)')
     if not setup.get('UninstallFilesDir', '').startswith('{app}'):
         errs.append('[Setup] UninstallFilesDir 應在 {app} 內')
     if not re.match(r'^\{\{[0-9A-Fa-f-]{36}\}$', setup.get('AppId', '')):
@@ -280,6 +281,15 @@ def check(path):
                 errs.append(f'[Code] 以保留字 {kw} 作為識別字')
     if "'D:\\Simosa BRM'" not in code:
         errs.append('[Code] GetDefaultDir 應回傳 D:\\Simosa BRM')
+    if "'G:\\Simosa BRM'" not in code:
+        errs.append('[Code] GetDefaultDir 在沒有 D: 時應回傳 G:\\Simosa BRM(守則:本機資料放 D: 或 G:)')
+    # 預設位置的優先順序:D: → G: → 系統磁碟(最後才是 {sd})
+    order = [code.find("'D:\\Simosa BRM'"), code.find("'G:\\Simosa BRM'"), code.find("{sd}\\Simosa BRM")]
+    if -1 in order or order != sorted(order):
+        errs.append('[Code] GetDefaultDir 的順序應為 D: → G: → 系統磁碟({sd})')
+    # 系統磁碟須明確確認:/ALLOWSYSTEMDRIVE=1 或確認對話框(預設「否」);不得靜默裝到系統磁碟
+    if '{param:ALLOWSYSTEMDRIVE|0}' not in code or 'SuppressibleMsgBox' not in code or 'IDNO' not in code:
+        errs.append('[Code] NextButtonClick 應在安裝位置位於系統磁碟({sd})時要求確認(/ALLOWSYSTEMDRIVE=1 或 SuppressibleMsgBox 預設 IDNO)')
     if 'Users' not in code or 'wpSelectDir' not in code:
         errs.append('[Code] NextButtonClick 應在 wpSelectDir 拒絕使用者資料夾(Users)之下的安裝位置')
     # 防火牆

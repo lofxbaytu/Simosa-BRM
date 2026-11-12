@@ -54,6 +54,8 @@ public class ShellPathsTests
     {
         var root = P(Path.GetTempPath(), "simosa-root");
         Assert.Equal(Path.Combine(root, "build", "logs", "shell-instructor.log"), ShellPaths.LogFile(root, "instructor"));
+        // 下載資料夾在安裝根目錄內(不用 Windows 使用者的「下載」資料夾)
+        Assert.Equal(Path.Combine(root, "build", "downloads"), ShellPaths.DownloadsDirectory(root));
         Assert.Equal(Path.Combine(root, "tools", "webview2", "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"), ShellPaths.InstallerPath(root));
     }
 }

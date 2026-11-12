@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   船上筆電啟動(Windows;規劃書第 5.4–5.5 節、第 14 章「船上部署」):依 config\ship-laptop.json 啟動全部服務,Ctrl+C 一併結束。
 .DESCRIPTION
@@ -14,6 +14,8 @@
 .PARAMETER NoWait     啟動後即返回(預設前景等待 Ctrl+C;之後以 stop-all.ps1 結束:先寫停止檔讓核心寫完紀錄 footer,逾時才強制結束)
 .PARAMETER Console    USB 實體操控台的序列埠(例如 COM5;覆寫 config 的 console.port;協定 src\Contracts\console-serial.md、安裝文件第 4.6 節);
                       loopback:<讀取檔>,<寫入檔> 為測試用假裝置。-NoConsole 停用
+.PARAMETER DefaultBrowser  網頁改用 Windows 預設瀏覽器開啟(其設定檔在 C:\Users;瀏覽器端的草稿與紀錄會存在 C:,需經訓練負責人同意)。
+                      未指定時以專屬設定檔啟動 Microsoft Edge(build\browser\edge),瀏覽器端資料留在安裝根目錄內
 .PARAMETER Shell      以 WebView2 操船台外殼(app\shell\SimosaBRM.Shell.exe;kiosk 全螢幕,每個 web.openPages 一個程序)開啟網頁,取代預設瀏覽器;
                       config 的 web.shell=true 同義;找不到外殼時退回瀏覽器(docs\ops\安裝與啟動.md 第 4.5 節)
 .EXAMPLE
@@ -28,7 +30,7 @@ param(
     [string]$Scenario,
     [double]$Duration = 0,
     [string]$Console,
-    [switch]$NoVisual, [switch]$NoWeb, [switch]$NoRadar, [switch]$NoSync, [switch]$NoConsole, [switch]$NoBrowser, [switch]$NoWait, [switch]$CheckOnly, [switch]$Shell
+    [switch]$NoVisual, [switch]$NoWeb, [switch]$NoRadar, [switch]$NoSync, [switch]$NoConsole, [switch]$NoBrowser, [switch]$NoWait, [switch]$CheckOnly, [switch]$Shell, [switch]$DefaultBrowser
 )
 . (Join-Path $PSScriptRoot 'launch-common.ps1')
 $root = Get-LaunchRoot
@@ -39,8 +41,10 @@ $env:SIMOSA_BRM_ROOT = $root
 $env:SIMOSA_INSTALL_ROOT = $root
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
-if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = Join-Path $root '.cache\dotnet-home' }
-if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = Join-Path $root '.cache\nuget\packages' }
+# 快取與暫存留在安裝根目錄內(.cache\、build\tmp;不寫 C:\)
+Set-LaunchProjectEnv $root
+# 瀏覽器端資料的位置:專屬 Edge 設定檔(build\browser\edge);-DefaultBrowser 時用預設瀏覽器(資料在 C:\Users,需經同意)
+$browserProfile = if ($DefaultBrowser) { '' } else { Get-LaunchBrowserProfile $root }
 $logs = Get-Cfg $cfg 'logs' 'build\logs'
 $shipIp = Get-Cfg $cfg 'network.directLinkIp' '127.0.0.1'
 $wsPort = Get-Cfg $cfg 'ports.stateWs' 8765
@@ -135,8 +139,8 @@ try {
         if (-not (Wait-LaunchTcp '127.0.0.1' $webPort 10 -Process $webProc)) { Write-Warning "simosa-web 未開啟埠 $webPort 或已結束,見 $logs\web.log" }
         if (-not $NoBrowser) {
             $subst = @{ ship = $shipIp; stateWs = $wsPort; radarWs = $radarPort }
-            if ($shellExe) { Start-LaunchShellPages $shellExe "http://127.0.0.1:$webPort" (Get-Cfg $cfg 'web.openPages' @()) $subst $root $logDir (Get-Cfg $cfg 'web.shellMonitors' $null) }
-            else { Open-LaunchPages "http://127.0.0.1:$webPort" (Get-Cfg $cfg 'web.openPages' @()) $subst }
+            if ($shellExe) { Start-LaunchShellPages $shellExe "http://127.0.0.1:$webPort" (Get-Cfg $cfg 'web.openPages' @()) $subst $root $logDir (Get-Cfg $cfg 'web.shellMonitors' $null) $browserProfile }
+            else { Open-LaunchPages "http://127.0.0.1:$webPort" (Get-Cfg $cfg 'web.openPages' @()) $subst $browserProfile }
         }
     } elseif ($webDll) { Write-Warning '找不到網頁目錄(app\web 或 build\web\instruments),略過' }
 

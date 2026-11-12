@@ -1,11 +1,16 @@
 """PowerShell 靜態語法檢查(無 pwsh 的環境,例如 Linux 容器/CI):括號/大括號/方括號配對、單/雙引號字串、here-string(@" "@ / @' '@)、註解 <# #>、
-反引號續行。只能抓結構性錯誤,不能取代 pwsh 的解析器。用法:python3 pscheck.py <檔案>..."""
+反引號續行;另檢查含非 ASCII 字元的檔案有 UTF-8 BOM(Windows PowerShell 5.1 需要)。只能抓結構性錯誤,不能取代 pwsh 的解析器。用法:python3 pscheck.py <檔案>..."""
 import sys, re
 def check(path):
-    s = open(path, encoding='utf-8').read()
+    raw = open(path, 'rb').read()
+    s = raw.decode('utf-8-sig')
     i, n, line = 0, len(s), 1
     stack = []  # (char, line)
     errs = []
+    # 含非 ASCII 字元(中文註解/訊息)的 .ps1 必須有 UTF-8 BOM:Windows PowerShell 5.1(船上筆電以 powershell -File 執行)
+    # 把沒有 BOM 的檔案當成系統 ANSI 字碼頁(繁體中文 Windows 為 Big5)讀取 → 中文亂碼,雙位元組尾碼還可能吃掉引號或括號造成語法錯誤
+    if any(b >= 0x80 for b in raw) and not raw.startswith(b'\xef\xbb\xbf'):
+        errs.append('1: 含非 ASCII 字元但沒有 UTF-8 BOM(Windows PowerShell 5.1 會以 Big5 讀取 → 亂碼或語法錯誤);請以「UTF-8 with BOM」存檔')
     pairs = {')': '(', '}': '{', ']': '['}
     while i < n:
         c = s[i]

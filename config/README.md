@@ -9,4 +9,4 @@
 
 發行版(`tools/build-release.*`)把本資料夾複製到 `<發行目錄>/config/`;安裝步驟見 `docs/ops/安裝與啟動.md`。
 金鑰相關檔案(`config/trusted-keys/*.pem`、`config/device/`)只在安裝時於該機產生或放入,**不得放進儲存庫或發行版**;開發用 PEM 金鑰由 `build-release` 放在 `build/release/dev-keys/`(僅供測試)。
-路徑一律相對安裝根目錄(`D:\Simosa BRM`;規劃書第 11.2 節),所有輸出留在根目錄內(`build/logs`、`build/records`、`build/visual`)。
+路徑一律相對安裝根目錄(放在 D: 或 G:,例如 `D:\Simosa BRM`、`G:\Simosa BRM`;規劃書第 11.2 節),所有輸出留在根目錄內(`build/logs`、`build/records`、`build/visual`、`build/tmp`、`build/browser`、`build/webview2`),不寫 C:(守則與例外開關見 `docs/ops/本機資料位置.md`)。`config/*.json` 內的路徑請用相對路徑;填絕對路徑時也必須在 D: 或 G:。

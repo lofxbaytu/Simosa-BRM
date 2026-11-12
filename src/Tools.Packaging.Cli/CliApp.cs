@@ -73,7 +73,7 @@ public sealed class CliApp
           export --to <隨身碟目錄> [--role ship|instructor] [--push <檔.sbupd>]... [--key|--cert] [--ship <ID>]...
           import --from <隨身碟目錄> [--role ship|instructor] [--enroll-device]
 
-        共通:--root 安裝根目錄(預設 SIMOSA_INSTALL_ROOT,Windows 為 D:\Simosa BRM);--store 預設 <root>/store;
+        共通:--root 安裝根目錄(預設 SIMOSA_INSTALL_ROOT → 程式所在的安裝/專案根目錄 → D:\Simosa BRM 或 G:\Simosa BRM;不會自動落到 C:);--store 預設 <root>/store;
               私鑰密碼可用 --key-password 或環境變數 SIMOSA_KEY_PASSWORD。
         """;
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   發行組裝(Windows,win-x64;Linux/容器版為 build-release.sh,參數相同):規劃書第 5.4–5.5 節、第 11.2 節、第 12.1 節 M4 交付。
 .DESCRIPTION
@@ -56,6 +56,12 @@ if (-not $Git -and (Test-Path '.git\HEAD')) {
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '找不到 dotnet SDK' }
 if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = Join-Path $root '.cache\dotnet-home' }
 if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = Join-Path $root '.cache\nuget\packages' }
+# NuGet 的 HTTP 快取、外掛快取與暫存只能用環境變數導回專案內(nuget.config 無對應鍵;預設在 C:\Users\…\AppData\Local\NuGet 與 %TEMP%)
+if (-not $env:NUGET_HTTP_CACHE_PATH) { $env:NUGET_HTTP_CACHE_PATH = Join-Path $root '.cache\nuget\http' }
+if (-not $env:NUGET_PLUGINS_CACHE_PATH) { $env:NUGET_PLUGINS_CACHE_PATH = Join-Path $root '.cache\nuget\plugins' }
+if (-not $env:NUGET_SCRATCH) { $env:NUGET_SCRATCH = Join-Path $root '.cache\nuget\scratch' }
+# 暫存檔 → 專案內 build\tmp(只影響本程序與子程序;SIMOSA_SYSTEM_TEMP=1 時留在 Windows 預設的 C:\Users\…\Temp,需經同意)
+if ($env:SIMOSA_SYSTEM_TEMP -ne '1') { $simosaTmp = Join-Path $root 'build\tmp'; New-Item -ItemType Directory -Force -Path $simosaTmp | Out-Null; $env:TEMP = $simosaTmp; $env:TMP = $simosaTmp }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'; $env:SIMOSA_BRM_ROOT = $root
 $outDir = Join-Path $root (Join-Path $Out $Version)
 $keys = Join-Path $root (Join-Path $Out 'dev-keys')

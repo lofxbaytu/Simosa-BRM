@@ -19,6 +19,7 @@ if ! command -v dotnet >/dev/null 2>&1 && [[ -f /etc/profile.d/dotnet.sh ]]; the
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}"
 export NUGET_PACKAGES="${NUGET_PACKAGES:-$ROOT/.cache/nuget/packages}"
+export NUGET_HTTP_CACHE_PATH="${NUGET_HTTP_CACHE_PATH:-$ROOT/.cache/nuget/http}" NUGET_PLUGINS_CACHE_PATH="${NUGET_PLUGINS_CACHE_PATH:-$ROOT/.cache/nuget/plugins}" NUGET_SCRATCH="${NUGET_SCRATCH:-$ROOT/.cache/nuget/scratch}"  # NuGet HTTP/外掛快取與暫存只能用環境變數導回專案內(nuget.config 的註解)
 # Playwright 的 TypeScript 轉譯快取預設在系統暫存目錄,改放專案內(CLAUDE.md)
 export PWTEST_CACHE_DIR="${PWTEST_CACHE_DIR:-$ROOT/.cache/playwright-transform}"
 if [[ -z "${E2E_CHROMIUM:-}" && -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then

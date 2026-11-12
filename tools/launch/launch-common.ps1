@@ -1,4 +1,4 @@
-# 啟動腳本共用函式(Windows;Linux 版為 launch-common.sh):找安裝根目錄、讀 config\*.json、找各元件、背景啟動並記 PID。
+﻿# 啟動腳本共用函式(Windows;Linux 版為 launch-common.sh):找安裝根目錄、讀 config\*.json、找各元件、背景啟動並記 PID。
 # 安裝根目錄 = 本檔上兩層(儲存庫:tools\launch\..\..;發行版:app\launch\..\..),必須含 data\。
 # 所有輸出留在根目錄內:build\logs\<元件>.log、build\logs\simosa.pids、build\logs\simcore.stop[file](規劃書第 11.2 節、CLAUDE.md:不寫 C:\)。
 Set-StrictMode -Version Latest
@@ -11,6 +11,32 @@ function Get-LaunchRoot {
     $root = (Resolve-Path (Join-Path $script:LaunchDir '..\..')).Path
     if (-not (Test-Path (Join-Path $root 'data'))) { throw "安裝根目錄 $root 沒有 data\" }
     return $root
+}
+
+# 把工具快取與暫存檔導到安裝根目錄內(守則:本機資料放 D: 或 G:,不寫 C:\;只影響本程序與由它啟動的子程序):
+#   .NET CLI 家目錄、NuGet 套件 / HTTP 快取 / 外掛快取 / 暫存(後三者只能用環境變數改,nuget.config 無對應鍵)— 已設定者不覆寫
+#  (tools\setup-windows.ps1 的使用者層級設定優先);
+#   TEMP / TMP → <根目錄>\build\tmp。環境變數 SIMOSA_SYSTEM_TEMP=1 時不改 TEMP/TMP(暫存留在 Windows 預設的
+#   C:\Users\…\AppData\Local\Temp;放在隨身碟會明顯拖慢時,經訓練負責人同意才使用)。
+function Set-LaunchProjectEnv([string]$Root) {
+    $defaults = [ordered]@{
+        'DOTNET_CLI_HOME'          = @('.cache', 'dotnet-home')
+        'NUGET_PACKAGES'           = @('.cache', 'nuget', 'packages')
+        'NUGET_HTTP_CACHE_PATH'    = @('.cache', 'nuget', 'http')
+        'NUGET_PLUGINS_CACHE_PATH' = @('.cache', 'nuget', 'plugins')
+        'NUGET_SCRATCH'            = @('.cache', 'nuget', 'scratch')
+    }
+    foreach ($k in $defaults.Keys) {
+        if (-not [Environment]::GetEnvironmentVariable($k)) {
+            $p = $Root; foreach ($seg in $defaults[$k]) { $p = Join-Path $p $seg }
+            [Environment]::SetEnvironmentVariable($k, $p)
+        }
+    }
+    if ($env:SIMOSA_SYSTEM_TEMP -ne '1') {
+        $tmp = Join-Path (Join-Path $Root 'build') 'tmp'
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        $env:TEMP = $tmp; $env:TMP = $tmp
+    }
 }
 
 function Read-LaunchConfig([string]$Path) {
@@ -177,14 +203,64 @@ function Set-DirectLinkIp([string]$Adapter, [string]$Ip, [string]$Mask) {
     }
 }
 
-# 開啟網頁(預設瀏覽器;Windows 11 IoT LTSC 內建 Edge/WebView2)
-function Open-LaunchPages([string]$BaseUrl, $Pages, [hashtable]$Subst) {
+# 瀏覽器端資料(localStorage / IndexedDB:情境草稿、參與者與休息時間資料、講評報告站的訓練紀錄、ECDIS 與顯示設定)存在瀏覽器的使用者設定檔內;
+# 預設瀏覽器的設定檔在 C:\Users\…\AppData。為讓這些資料留在安裝根目錄內,啟動腳本以專屬設定檔啟動 Microsoft Edge
+#(--user-data-dir=<根目錄>\build\browser\edge;WebView2 外殼則在 build\webview2\);網頁下載的檔案兩者都存到 build\downloads\。
+function Get-LaunchBrowserProfile([string]$Root) {
+    return (Join-Path (Join-Path (Join-Path $Root 'build') 'browser') 'edge')
+}
+
+# 專屬 Edge 設定檔第一次建立時預先寫入下載位置(<根目錄>\build\downloads;與 WebView2 外殼相同):Edge 預設把「下載 YAML / 紀錄 JSON / 報告」
+# 存到 C:\Users\…\Downloads。Chromium 啟動時讀取既有的 Default\Preferences 並補上其餘預設值;設定檔已存在時不動(使用者可在 Edge 設定內自行調整)。
+# Preferences 必須是沒有 BOM 的 UTF-8(有 BOM 會被視為損毀而重設)。
+function Initialize-LaunchBrowserProfile([string]$ProfileDir) {
+    $downloads = Join-Path (Split-Path -Parent (Split-Path -Parent $ProfileDir)) 'downloads'
+    $default = Join-Path $ProfileDir 'Default'
+    New-Item -ItemType Directory -Force -Path $default, $downloads | Out-Null
+    $prefs = Join-Path $default 'Preferences'
+    if (Test-Path $prefs) { return }
+    $json = @{
+        download = @{ default_directory = $downloads; prompt_for_download = $false; directory_upgrade = $true }
+        savefile = @{ default_directory = $downloads }
+    } | ConvertTo-Json -Depth 4 -Compress
+    [System.IO.File]::WriteAllText($prefs, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# 找 Microsoft Edge(Windows 10/11 內建);找不到回 $null。非 Windows(測試用的 pwsh)一律 $null。
+function Find-LaunchEdge {
+    if (-not $script:OnWindows) { return $null }
+    foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, $env:LOCALAPPDATA)) {
+        if (-not $base) { continue }
+        $p = Join-Path $base 'Microsoft\Edge\Application\msedge.exe'
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+# 組出以專屬設定檔開啟網址的 Edge 參數(含空白的路徑與網址加引號:Start-Process 只以空白串接 -ArgumentList)
+function Get-LaunchEdgeArguments([string]$ProfileDir, [string]$Url) {
+    return @("--user-data-dir=`"$ProfileDir`"", '--no-first-run', '--no-default-browser-check', "`"$Url`"")
+}
+
+# 開啟網頁。$ProfileDir 有值且找得到 Edge → 以該設定檔啟動 Edge(瀏覽器端資料留在安裝根目錄內);
+# $ProfileDir 為空(啟動腳本 -DefaultBrowser)→ Windows 預設瀏覽器(資料在該瀏覽器位於 C:\Users 的設定檔,需經同意才使用);
+# 找不到 Edge → 警告後退回預設瀏覽器。
+function Open-LaunchPages([string]$BaseUrl, $Pages, [hashtable]$Subst, [string]$ProfileDir = '') {
+    $edge = $null
+    if ($ProfileDir) {
+        $edge = Find-LaunchEdge
+        if ($edge) { Initialize-LaunchBrowserProfile $ProfileDir }
+        else { Write-Warning '找不到 Microsoft Edge,改用預設瀏覽器:瀏覽器端資料(草稿、參與者資料、訓練紀錄)會存在該瀏覽器的使用者設定檔(通常在 C:\Users);建議改用 -Shell(WebView2 外殼,資料在 build\webview2)' }
+    }
     foreach ($p in @($Pages)) {
         $u = [string]$p
         foreach ($k in $Subst.Keys) { $u = $u.Replace('{' + $k + '}', [string]$Subst[$k]) }
         $url = "$BaseUrl/$u"
         Write-Host "  開啟 $url"
-        try { Start-Process $url } catch { Write-Warning "無法開啟瀏覽器:$url" }
+        try {
+            if ($edge) { Start-Process -FilePath $edge -ArgumentList (Get-LaunchEdgeArguments $ProfileDir $url) }
+            else { Start-Process $url }
+        } catch { Write-Warning "無法開啟瀏覽器:$url" }
     }
 }
 
@@ -202,12 +278,12 @@ function Find-LaunchShellExe([string]$Root) {
 }
 
 # 以 WebView2 外殼開啟網頁(每頁一個全螢幕 kiosk 程序;PID 記入 simosa.pids,stop-all.ps1 一併結束;docs\ops\安裝與啟動.md 第 4.5 節)。
-# $Monitors:與 $Pages 同序的螢幕索引(0 起算;省略或 $null 時由外殼用主螢幕);找不到外殼 exe 時退回預設瀏覽器。
+# $Monitors:與 $Pages 同序的螢幕索引(0 起算;省略或 $null 時由外殼用主螢幕);找不到外殼 exe 時退回瀏覽器($BrowserProfile 同 Open-LaunchPages 的 $ProfileDir)。
 # 程序名稱 shell-<頁面主檔名>(index.html?station=bridge → shell-index;同主檔名的第 2 頁起加 -2、-3…,避免兩頁共用同一 log 與 PID 名稱)。
-function Start-LaunchShellPages([string]$Exe, [string]$BaseUrl, $Pages, [hashtable]$Subst, [string]$WorkDir, [string]$LogDir, $Monitors = $null) {
+function Start-LaunchShellPages([string]$Exe, [string]$BaseUrl, $Pages, [hashtable]$Subst, [string]$WorkDir, [string]$LogDir, $Monitors = $null, [string]$BrowserProfile = '') {
     if (-not $Exe -or -not (Test-Path $Exe)) {
-        Write-Warning '找不到 WebView2 外殼(app\shell\SimosaBRM.Shell.exe 或 build\bin\Shell.WebView2\…),改用預設瀏覽器'
-        Open-LaunchPages $BaseUrl $Pages $Subst
+        Write-Warning '找不到 WebView2 外殼(app\shell\SimosaBRM.Shell.exe 或 build\bin\Shell.WebView2\…),改用瀏覽器'
+        Open-LaunchPages $BaseUrl $Pages $Subst $BrowserProfile
         return
     }
     $i = 0

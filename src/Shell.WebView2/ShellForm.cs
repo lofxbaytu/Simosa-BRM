@@ -125,6 +125,19 @@ internal sealed class ShellForm : Form
             return;
         }
         var core = _web.CoreWebView2;
+        // 下載(情境 YAML、紀錄 JSON、講評報告匯出)存到安裝根目錄內的 build\downloads:WebView2 預設是 C:\Users\…\Downloads
+        //(CLAUDE.md 本機資料守則:資料放 D: 或 G:,不寫 C:)。Runtime 過舊不支援此 API 時只記 log,不影響啟動。
+        try
+        {
+            var downloads = ShellPaths.DownloadsDirectory(_installRoot);
+            Directory.CreateDirectory(downloads);
+            core.Profile.DefaultDownloadFolderPath = downloads;
+            _log.Write($"下載資料夾 {downloads}");
+        }
+        catch (Exception ex)
+        {
+            _log.Write($"無法設定下載資料夾(沿用 WebView2 預設位置):{ex.Message}");
+        }
         var s = core.Settings;
         s.AreDefaultContextMenusEnabled = _options.AllowDevTools;
         s.AreDevToolsEnabled = _options.AllowDevTools;

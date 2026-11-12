@@ -37,6 +37,7 @@ load_config "$CONFIG"
 cd "$ROOT"
 export SIMOSA_BRM_ROOT="$ROOT" SIMOSA_INSTALL_ROOT="$ROOT" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}" NUGET_PACKAGES="${NUGET_PACKAGES:-$ROOT/.cache/nuget/packages}"
+export NUGET_HTTP_CACHE_PATH="${NUGET_HTTP_CACHE_PATH:-$ROOT/.cache/nuget/http}" NUGET_PLUGINS_CACHE_PATH="${NUGET_PLUGINS_CACHE_PATH:-$ROOT/.cache/nuget/plugins}" NUGET_SCRATCH="${NUGET_SCRATCH:-$ROOT/.cache/nuget/scratch}"  # NuGet HTTP/外掛快取與暫存只能用環境變數導回專案內(nuget.config 的註解)
 LOGS="$(cfg logs build/logs)"
 SHIP_IP="$(cfg network_directLinkIp 127.0.0.1)"
 WS_PORT="$(cfg ports_stateWs 8765)"; RADAR_PORT="$(cfg ports_radarWs 8766)"; WEB_PORT="$(cfg ports_web 8080)"; SYNC_PORT="$(cfg ports_sync 7300)"

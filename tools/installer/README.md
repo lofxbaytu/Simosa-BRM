@@ -20,7 +20,7 @@
 
 | 項目 | 行為 |
 |---|---|
-| 安裝位置 | 預設 `D:\Simosa BRM`(無 D: 時系統磁碟根目錄下的 `Simosa BRM`),可改;**拒絕** `C:\Users\…` 與 Program Files 之下(程式會寫入自己的資料夾:log、紀錄、`state\`,同步服務需替換 `app\`)。整個安裝根目錄授與 Users 修改權限(船上帶領者為標準使用者)。 |
+| 安裝位置 | 預設 `D:\Simosa BRM`,沒有 D: 時 `G:\Simosa BRM`,兩者皆無才是系統磁碟根目錄下的 `Simosa BRM`;可改。**裝在系統磁碟(通常 C:)須明確確認**(守則:本機資料放 D: 或 G:;放 C: 須經訓練負責人同意;確認對話框預設「否」,靜默安裝須加 `/ALLOWSYSTEMDRIVE=1`,否則中止)。**拒絕** `C:\Users\…` 與 Program Files 之下(程式會寫入自己的資料夾:log、紀錄、`state\`,同步服務需替換 `app\`)。整個安裝根目錄授與 Users 修改權限(船上帶領者為標準使用者)。 |
 | 內容 | 發行版目錄原樣(`manifest.json`、`app\`、`tools\`、`data\`、`contracts\`、`docs\`、`packages\`、`README.txt`);`config\*.json` 已存在者不覆寫、解除安裝不刪;另建 `build\logs`、`build\records`、`build\webview2`、`data\records`、`state\`、`store\`、`config\trusted-keys`、`config\device` |
 | 捷徑 | 開始功能表「Simosa BRM」與(可選)桌面:操船台(`start-ship-laptop.ps1 -Shell`,WebView2 外殼)、教官站(`start-instructor-laptop.ps1 -CheckWifi`)、停止(`stop-all.ps1`)、安裝與啟動說明、解除安裝;皆以 `powershell.exe -ExecutionPolicy Bypass -File` 啟動 |
 | 防火牆(可選,預設勾選) | 入站規則「Simosa BRM …」:TCP 8765、8766、8767、8768、8080、7300,UDP 7001、60001、10110–10112;`remoteip=192.168.77.0/24`、`profile=any`(與安裝文件第 2.2 節相同);解除安裝時移除 |

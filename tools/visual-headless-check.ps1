@@ -1,4 +1,4 @@
-# 3D 視景無頭驗證(Windows;與 visual-headless-check.sh 相同流程):
+﻿# 3D 視景無頭驗證(Windows;與 visual-headless-check.sh 相同流程):
 # dotnet build 視景專案 → Godot --headless --import → --headless 煙霧場景(假狀態序列,N 幀)→ build\visual\smoke.json
 # Godot 的編輯器/使用者資料以 APPDATA/LOCALAPPDATA 環境變數導向專案內 .cache\godot\(只影響本程序),不寫到 C:\Users。
 # 用法:.\tools\visual-headless-check.ps1 [-Godot <Godot_v4.5.1-stable_mono_win64.exe>] [-Frames 200] [-Quality low|mid|high] [-Export]
@@ -20,6 +20,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $godotData 'roaming'), (Joi
 $env:APPDATA = Join-Path $godotData 'roaming'
 $env:LOCALAPPDATA = Join-Path $godotData 'local'
 if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = Join-Path $root '.cache\dotnet-home' }
+if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = Join-Path $root '.cache\nuget\packages' }
+# NuGet 的 HTTP 快取、外掛快取與暫存只能用環境變數導回專案內(nuget.config 無對應鍵;預設在 C:\Users\…\AppData\Local\NuGet 與 %TEMP%)
+if (-not $env:NUGET_HTTP_CACHE_PATH) { $env:NUGET_HTTP_CACHE_PATH = Join-Path $root '.cache\nuget\http' }
+if (-not $env:NUGET_PLUGINS_CACHE_PATH) { $env:NUGET_PLUGINS_CACHE_PATH = Join-Path $root '.cache\nuget\plugins' }
+if (-not $env:NUGET_SCRATCH) { $env:NUGET_SCRATCH = Join-Path $root '.cache\nuget\scratch' }
+# 暫存檔 → 專案內 build\tmp(只影響本程序與子程序;SIMOSA_SYSTEM_TEMP=1 時留在 Windows 預設的 C:\Users\…\Temp,需經同意)
+if ($env:SIMOSA_SYSTEM_TEMP -ne '1') { $simosaTmp = Join-Path $root 'build\tmp'; New-Item -ItemType Directory -Force -Path $simosaTmp | Out-Null; $env:TEMP = $simosaTmp; $env:TMP = $simosaTmp }
 $proj = Join-Path $root 'src\Visual.Godot'
 $log = Join-Path $root 'build\visual'
 

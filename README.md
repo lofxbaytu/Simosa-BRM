@@ -23,14 +23,16 @@
 
 ## 開發資料夾與磁碟
 
-請把本儲存庫 clone 到 **`D:\Simosa BRM`**。所有建置輸出(`build\`)、套件與快取(`.cache\`)、船模與圖資(`data\`)、紀錄(`build\records\`)都留在這個資料夾內,不寫到 `C:\`;相關設定在 `Directory.Build.props`、`nuget.config`、`.npmrc`、`uv.toml`。第一次使用先以系統管理員 PowerShell 執行:
+請把本儲存庫 clone 到 **D: 或 G:**(例如 `D:\Simosa BRM`、`G:\Simosa BRM`;可以是隨身碟,程式不寫死磁碟代號)。**本機資料守則**:所有建置輸出(`build\`)、套件與快取(`.cache\`)、暫存(`build\tmp\`)、船模與圖資(`data\`)、紀錄(`build\records\`)、瀏覽器端資料(`build\browser\`、`build\webview2\`)都留在這個資料夾內,不寫到 `C:\`;C: 只放應用程式本身;某項目放在隨身碟會嚴重拖慢進度時,先取得同意才用例外開關放 C:。完整的位置表、例外開關與實機檢查方式見 [docs/ops/本機資料位置.md](docs/ops/本機資料位置.md);相關設定在 `Directory.Build.props`、`nuget.config`、`.npmrc`、`uv.toml`。第一次使用先在 PowerShell 執行:
 
 ```powershell
-cd "D:\Simosa BRM"
+cd "D:\Simosa BRM"        # 或 G:\Simosa BRM
 .\tools\setup-windows.ps1
 ```
 
-它會設定使用者環境變數(NUGET_PACKAGES、DOTNET_CLI_HOME、UV_CACHE_DIR、UV_PYTHON_INSTALL_DIR、UV_TOOL_DIR、PLAYWRIGHT_BROWSERS_PATH 等指到 `.cache\`)並檢查工具版本。需要的工具:.NET 8 SDK、Node.js 22 LTS(pnpm)、uv、Git + Git LFS;安裝程式本身可選擇裝到 `D:\Tools\`。Python 3.12+ 不必另外安裝:機器上沒有時 `uv sync` 會自動下載受管 CPython,setup-windows.ps1 以 UV_PYTHON_INSTALL_DIR 把它放在 `.cache\uv-python\`(uv 預設為 `%APPDATA%\uv\python`,即 `C:\`,而且只能用環境變數改)。uv 的相對 `cache-dir` 設定是以執行時的目前目錄解析,因此 uv 指令請在專案根目錄或 `src\Tools.Calibration` 下執行(或從別處用 `uv --directory src\Tools.Calibration …`);執行過 setup-windows.ps1 後 UV_CACHE_DIR 為絕對路徑,不受此限。
+之後每次開新終端機做建置或測試前執行 `.\tools\setup-windows.ps1 -SessionOnly`(把這個工作階段的暫存檔 TEMP/TMP 指到 `build\tmp`);收工時可用 `.\tools\check-local-data.ps1` 確認沒有新資料落到 C:。專案位於系統磁碟時 setup-windows.ps1 預設拒絕執行(`-AllowSystemDrive` 須經同意)。
+
+setup-windows.ps1 會設定使用者環境變數(NUGET_PACKAGES、NUGET_HTTP_CACHE_PATH、NUGET_PLUGINS_CACHE_PATH、NUGET_SCRATCH、DOTNET_CLI_HOME、PNPM_HOME、COREPACK_HOME、npm_config_cache、UV_CACHE_DIR、UV_PYTHON_INSTALL_DIR、UV_TOOL_DIR、PLAYWRIGHT_BROWSERS_PATH 等指到 `.cache\`)並檢查工具版本。需要的工具:.NET 8 SDK、Node.js 22 LTS(pnpm)、uv、Git + Git LFS;這些應用程式本身可以裝在 C:,也可選擇裝到專案磁碟的 `\Tools\`。Python 3.12+ 不必另外安裝:機器上沒有時 `uv sync` 會自動下載受管 CPython,setup-windows.ps1 以 UV_PYTHON_INSTALL_DIR 把它放在 `.cache\uv-python\`(uv 預設為 `%APPDATA%\uv\python`,即 `C:\`,而且只能用環境變數改)。uv 的相對 `cache-dir` 設定是以執行時的目前目錄解析,因此 uv 指令請在專案根目錄或 `src\Tools.Calibration` 下執行(或從別處用 `uv --directory src\Tools.Calibration …`);執行過 setup-windows.ps1 後 UV_CACHE_DIR 為絕對路徑,不受此限。
 
 ## 儲存庫結構
 

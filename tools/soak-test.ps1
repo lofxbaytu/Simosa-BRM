@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   長時間穩定性(soak)測試(Windows;Linux/容器版 tools\soak-test.sh 參數相同):規劃書第 14 章「效能」列(核心 50 Hz 無掉拍、延遲 < 50 ms、RSS 不持續成長、連續 2 小時)。
 .DESCRIPTION
@@ -43,8 +43,7 @@ if (-not (Test-Path $Scenario)) { throw "找不到情境檔 $Scenario" }
 $scenId = [System.IO.Path]::GetFileNameWithoutExtension($Scenario)
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '找不到 dotnet(需 .NET 8)' }
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw '找不到 node(需 Node.js 22,內建 WebSocket)' }
-if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = Join-Path $root '.cache\dotnet-home' }
-if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = Join-Path $root '.cache\nuget\packages' }
+Set-LaunchProjectEnv $root   # .NET/NuGet 快取與暫存(build\tmp)留在專案內,不寫 C:\
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'; $env:SIMOSA_BRM_ROOT = $root
 if (-not $Run) { $Run = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss') }
 $outRel = "build\soak\$Run"; $outDir = Join-Path $root $outRel; $logsRel = "$outRel\logs"; $stats = Join-Path $outDir 'stats'

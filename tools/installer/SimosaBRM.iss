@@ -4,7 +4,8 @@
 ;   ISCC.exe /DAppVersion=<版本> /DSourceDir=<build\release\<版本>> /DOutputDir=<build\release\installer> tools\installer\SimosaBRM.iss
 ;   → <OutputDir>\SimosaBRM-Setup-<版本>.exe(/DDirectLinkSubnet=192.168.77.0/24 可改防火牆允許的直連網段)
 ; 安裝內容 = 發行版目錄(含 manifest.json;tools\build-release.* 產生並 release verify 通過者)原樣複製到安裝根目錄:
-;   預設 D:\Simosa BRM(可改;不接受使用者資料夾 C:\Users\… 與 Program Files 之下:程式與紀錄、log、設定全部留在安裝根目錄內,不寫 C:\ 使用者資料)。
+;   預設 D:\Simosa BRM,沒有 D: 時 G:\Simosa BRM(可改;不接受使用者資料夾 C:\Users\… 與 Program Files 之下:程式與紀錄、log、設定全部留在安裝根目錄內,不寫 C:\ 使用者資料)。
+;   裝在系統磁碟(通常 C:)須明確確認(須經訓練負責人同意;靜默安裝加 /ALLOWSYSTEMDRIVE=1):守則為本機資料放 D: 或 G:。
 ; 另做:開始功能表/桌面捷徑(操船台外殼、教官站、停止)、Windows 防火牆入站規則(僅直連私有網段;全部設定檔,因直連無 DHCP 會被判為公用網路)、
 ;   WebView2 Runtime 離線安裝檔(tools\webview2\)存在且尚未安裝時一併執行、.NET 8 執行階段離線安裝檔(tools\dotnet\)存在時一併執行。
 ; 解除安裝:只移除安裝程式放進去的檔案與 build\logs、build\webview2、build\tmp;保留 data\records、build\records、state\、store\、config\(練習紀錄與設定)。
@@ -36,7 +37,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
-; 預設安裝位置由 [Code] GetDefaultDir 決定:有 D: 時 D:\Simosa BRM,否則系統磁碟根目錄下的 Simosa BRM;使用者可改(DisableDirPage=no)
+; 預設安裝位置由 [Code] GetDefaultDir 決定:有 D: 時 D:\Simosa BRM,其次 G:\Simosa BRM,兩者皆無才是系統磁碟根目錄下的 Simosa BRM(須明確確認);使用者可改(DisableDirPage=no)
 DefaultDirName={code:GetDefaultDir}
 DefaultGroupName=Simosa BRM
 DisableDirPage=no
@@ -130,11 +131,14 @@ const
   RulePrefix = 'Simosa BRM ';
   RuleCount = 9;
 
-// 預設安裝位置:有 D: 磁碟時 D:\Simosa BRM(規劃書第 11.2 節);否則系統磁碟根目錄下的 Simosa BRM(仍不在使用者資料夾之下)
+// 預設安裝位置:有 D: 磁碟時 D:\Simosa BRM(規劃書第 11.2 節),其次 G:\Simosa BRM(守則:本機資料放 D: 或 G:);
+// 兩者皆無時才是系統磁碟根目錄下的 Simosa BRM(仍不在使用者資料夾之下)— 此時與使用者自行改選系統磁碟時,NextButtonClick 會要求明確確認
 function GetDefaultDir(Param: string): string;
 begin
   if DirExists('D:\') then
     Result := 'D:\Simosa BRM'
+  else if DirExists('G:\') then
+    Result := 'G:\Simosa BRM'
   else
     Result := ExpandConstant('{sd}\Simosa BRM');
 end;
@@ -253,8 +257,20 @@ begin
        (Pos(AddBackslash(Lowercase(ExpandConstant('{commonpf32}'))), Dir) = 1) then
     begin
       MsgBox('安裝位置不可在使用者資料夾(' + ExpandConstant('{sd}\Users') + ')或 Program Files 之下:' + #13#10 +
-             '程式、練習紀錄、log 與設定全部留在安裝根目錄內(規劃書第 11.2 節),請選 D:\Simosa BRM 或其他資料磁碟的資料夾。', mbError, MB_OK);
+             '程式、練習紀錄、log 與設定全部留在安裝根目錄內(規劃書第 11.2 節),請選 D:\Simosa BRM、G:\Simosa BRM 或其他資料磁碟的資料夾。', mbError, MB_OK);
       Result := False;
+    end
+    else if Pos(AddBackslash(Lowercase(ExpandConstant('{sd}'))), Dir) = 1 then
+    begin
+      // 系統磁碟(通常為 C 槽):練習紀錄、log、設定都會寫在這裡;守則為本機資料放 D: 或 G:,放系統磁碟須經訓練負責人同意。
+      // 靜默安裝(/SILENT、/VERYSILENT)以 /ALLOWSYSTEMDRIVE=1 表示已取得同意;未帶此參數且訊息被抑制時視為未同意。
+      if ExpandConstant('{param:ALLOWSYSTEMDRIVE|0}') <> '1' then
+      begin
+        if SuppressibleMsgBox('安裝位置在系統磁碟(' + ExpandConstant('{sd}') + '):練習紀錄、log 與設定都會寫在系統磁碟。' + #13#10 +
+                              '守則:本機資料放 D: 或 G:;放在系統磁碟須先取得訓練負責人同意。' + #13#10 + #13#10 +
+                              '已取得同意並要繼續安裝在這裡嗎?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) <> IDYES then
+          Result := False;
+      end;
     end;
   end;
 end;
