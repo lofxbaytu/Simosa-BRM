@@ -26,8 +26,9 @@ PREPROC_CLOSE = re.compile(r'^\s*#\s*endif\b')
 PREPROC_ANY = re.compile(r'^\s*#\s*(define|if|ifdef|ifndef|ifexist|ifnexist|else|elif|endif|error|include|pragma|undef|emit|expr|insert|for|sub|endsub|file)\b')
 
 
-def strip_pascal(code):
-    """去掉 [Code] 的字串與註解(// 行註解、{ } 與 (* *) 區塊註解),保留換行以利行號。"""
+def strip_pascal(code, keep_strings=False):
+    """去掉 [Code] 的字串與註解(// 行註解、{ } 與 (* *) 區塊註解),保留換行以利行號。
+    keep_strings=True 時只去掉註解、字串原樣保留(供結構檢查比對字串常值;字串內的 { } // 不會被當成註解)。"""
     out, i, n = [], 0, len(code)
     while i < n:
         c = code[i]
@@ -40,7 +41,7 @@ def strip_pascal(code):
                         continue
                     break
                 j += 1
-            out.append(' ')
+            out.append(code[i:j + 1] if keep_strings else ' ')
             i = j + 1
             continue
         if code.startswith('//', i):
@@ -254,7 +255,8 @@ def check(path):
     # [UninstallDelete]:保留紀錄與設定
     for no, p in parsed['UninstallDelete']:
         n = p.get('Name', '').lower()
-        for keep in ['records', 'state', 'store', 'config', 'data']:
+        # webview2 / browser:瀏覽器端資料(草稿、參與者資料、講評報告站的訓練紀錄);downloads:從網頁下載的檔案
+        for keep in ['records', 'state', 'store', 'config', 'data', 'webview2', 'browser', 'downloads']:
             if re.search(r'[\\/]' + keep + r'([\\/]|$)', n):
                 errs.append(f'{no}: [UninstallDelete] 不得刪除 {keep}(解除安裝保留紀錄與設定):{p.get("Name")}')
     if not any(p.get('Name', '').startswith('{app}') for _, p in parsed['Dirs']):
@@ -279,6 +281,25 @@ def check(path):
         for kw in ['label', 'goto', 'type', 'object', 'class', 'interface']:
             if re.search(r'(?i)\b(const|var|procedure|function)\b[^;\n]*\b' + kw + r'\s*[:,)]', stripped):
                 errs.append(f'[Code] 以保留字 {kw} 作為識別字')
+    # 以下檢查在「去掉註解、保留字串」的程式碼上做(被註解掉的程式碼不算數),並以正規表示式綁住結構
+    nocomment, _ = strip_pascal(code, keep_strings=True)
+
+    def body_of(fn):
+        m = re.search(r'\b(?:function|procedure)\s+' + fn + r'\b.*?\nend;', nocomment, flags=re.S)
+        return m.group(0) if m else ''
+
+    default_dir = body_of('GetDefaultDir')
+    if not re.search(r"if\s+DirExists\('D:\\'\)\s+then\s+Result\s*:=\s*'D:\\Simosa BRM'\s+"
+                     r"else\s+if\s+DirExists\('G:\\'\)\s+then\s+Result\s*:=\s*'G:\\Simosa BRM'\s+"
+                     r"else\s+Result\s*:=\s*ExpandConstant\('\{sd\}\\Simosa BRM'\)\s*;", default_dir):
+        errs.append('[Code] GetDefaultDir 的結構應為:有 D:\\ → D:\\Simosa BRM;否則有 G:\\ → G:\\Simosa BRM;否則 {sd}\\Simosa BRM')
+    next_click = body_of('NextButtonClick')
+    if not re.search(r"else\s+if\s+Pos\(AddBackslash\(Lowercase\(ExpandConstant\('\{sd\}'\)\)\),\s*Dir\)\s*=\s*1\s+then\s+begin\s+"
+                     r"if\s+ExpandConstant\('\{param:ALLOWSYSTEMDRIVE\|0\}'\)\s*<>\s*'1'\s+then\s+begin\s+"
+                     r"if\s+SuppressibleMsgBox\((?:(?!SuppressibleMsgBox).)*?mbConfirmation,\s*MB_YESNO\s+or\s+MB_DEFBUTTON2,\s*IDNO\)\s*<>\s*IDYES\s+then\s+"
+                     r"Result\s*:=\s*False\s*;", next_click, flags=re.S):
+        errs.append('[Code] NextButtonClick 的系統磁碟分支結構應為:位置在 {sd} 之下且 /ALLOWSYSTEMDRIVE 不是 1 → SuppressibleMsgBox(…, mbConfirmation, '
+                    'MB_YESNO or MB_DEFBUTTON2, IDNO) <> IDYES → Result := False')
     if "'D:\\Simosa BRM'" not in code:
         errs.append('[Code] GetDefaultDir 應回傳 D:\\Simosa BRM')
     if "'G:\\Simosa BRM'" not in code:

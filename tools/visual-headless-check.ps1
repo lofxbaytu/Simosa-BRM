@@ -17,16 +17,14 @@ if (-not $Godot) {
 if (-not $Godot -or -not (Test-Path $Godot)) { throw '找不到 Godot 4.5 .NET 執行檔;以 -Godot <路徑> 或環境變數 SIMOSA_GODOT 指定,或放在 .cache\godot\<版本>\ 下(旁邊放 _sc_ 空檔即為自含模式)' }
 $godotData = Join-Path $root '.cache\godot\appdata'
 New-Item -ItemType Directory -Force -Path (Join-Path $godotData 'roaming'), (Join-Path $godotData 'local'), (Join-Path $root 'build\visual') | Out-Null
+# .NET/NuGet 快取與暫存(TEMP/TMP → build\tmp)留在專案內;SIMOSA_SYSTEM_TEMP=1 時暫存留在 Windows 預設位置(需經同意)。
+# 在子範圍內載入共用函式(不把 launch-common.ps1 的 Set-StrictMode 帶進本腳本)
+& { . (Join-Path $root 'tools\launch\launch-common.ps1'); Set-LaunchProjectEnv $root }
+$oldAppData = $env:APPDATA; $oldLocalAppData = $env:LOCALAPPDATA
 $env:APPDATA = Join-Path $godotData 'roaming'
 $env:LOCALAPPDATA = Join-Path $godotData 'local'
-if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = Join-Path $root '.cache\dotnet-home' }
-if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = Join-Path $root '.cache\nuget\packages' }
-# NuGet 的 HTTP 快取、外掛快取與暫存只能用環境變數導回專案內(nuget.config 無對應鍵;預設在 C:\Users\…\AppData\Local\NuGet 與 %TEMP%)
-if (-not $env:NUGET_HTTP_CACHE_PATH) { $env:NUGET_HTTP_CACHE_PATH = Join-Path $root '.cache\nuget\http' }
-if (-not $env:NUGET_PLUGINS_CACHE_PATH) { $env:NUGET_PLUGINS_CACHE_PATH = Join-Path $root '.cache\nuget\plugins' }
-if (-not $env:NUGET_SCRATCH) { $env:NUGET_SCRATCH = Join-Path $root '.cache\nuget\scratch' }
-# 暫存檔 → 專案內 build\tmp(只影響本程序與子程序;SIMOSA_SYSTEM_TEMP=1 時留在 Windows 預設的 C:\Users\…\Temp,需經同意)
-if ($env:SIMOSA_SYSTEM_TEMP -ne '1') { $simosaTmp = Join-Path $root 'build\tmp'; New-Item -ItemType Directory -Force -Path $simosaTmp | Out-Null; $env:TEMP = $simosaTmp; $env:TMP = $simosaTmp }
+$rc = 1
+try {
 $proj = Join-Path $root 'src\Visual.Godot'
 $log = Join-Path $root 'build\visual'
 
@@ -50,5 +48,6 @@ if ($Export) {
   & $Godot --headless --path $proj --export-release 'Windows Desktop' (Join-Path $root 'build\visual\export\windows\SimosaBRM.Visual.exe') *> (Join-Path $log 'export.log')
   if ($LASTEXITCODE -ne 0) { Write-Host "匯出失敗(通常為缺少匯出範本),見 $log\export.log" }
 }
+} finally { $env:APPDATA = $oldAppData; $env:LOCALAPPDATA = $oldLocalAppData }
 Write-Host "== 結束碼 $rc(0 = 煙霧測試 ok)"
 exit $rc

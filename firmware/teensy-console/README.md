@@ -30,7 +30,7 @@
 
 ## 3. 編譯與燒錄(岸上,離線可行)
 
-1. 安裝 Arduino IDE 2.x 與 Teensyduino(Teensy 4.0 板定義;安裝檔岸上下載後離線安裝);**不要**把 IDE 的 sketchbook 設在 `C:\Users`,專案慣例為 `D:\Simosa BRM\.cache\arduino\`(IDE 偏好設定 → Sketchbook location)。
+1. 安裝 Arduino IDE 2.x 與 Teensyduino(Teensy 4.0 板定義;安裝檔岸上下載後離線安裝);**不要**把 IDE 的 sketchbook 設在 `C:\Users`,專案慣例為 `<專案資料夾>\.cache\arduino\`(專案在 D: 或 G:;IDE 偏好設定 → Sketchbook location)。Arduino IDE 本身與板套件 / 工具鏈屬應用程式,可以留在 C:(`docs/ops/本機資料位置.md` 第 3 節);IDE 的下載暫存與編譯輸出預設也在 `C:\Users`,要導回專案內須在 `%USERPROFILE%\.arduinoIDE\arduino-cli.yaml` 設定 `directories.data` / `directories.downloads` / `directories.user` 與 `build_cache.path`(尚未在實機驗證;`check-local-data.ps1` 不檢查 Arduino 的資料夾)。
 2. 開啟 `firmware/teensy-console/teensy-console.ino`;Tools → Board **Teensy 4.0**、USB Type **Serial**、CPU Speed 600 MHz、Optimize Faster。
 3. Verify → Upload(Teensy Loader 自動燒錄;首次需按板上 Program 鍵)。
 4. 版本:改 `FW_VERSION`(HELLO 第 2 欄,主機 log 會記錄),並把韌體版本登錄到兩船版次清單(規劃書第 5.5 節)。

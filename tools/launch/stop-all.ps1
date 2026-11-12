@@ -10,16 +10,40 @@
   (docs\ops\安裝與啟動.md 第 5.2 節);下次 start-ship-laptop.ps1 會先結束它再重新啟動。
 .PARAMETER StopTimeoutSeconds
   等待核心寫完 footer / 其他程序結束的上限(秒;預設 10)。
+.PARAMETER KeepBrowser
+  不關閉以專屬設定檔(build\browser\edge)開啟的 Microsoft Edge 視窗。預設會請它們正常關閉:瀏覽器端資料(草稿、參與者資料、訓練紀錄)
+  放在專案磁碟上的設定檔內,Edge 還開著就拔除隨身碟會損毀其中的 IndexedDB / localStorage。
 #>
 [CmdletBinding()]
-param([string]$Logs = 'build\logs', [switch]$KeepSync, [int]$StopTimeoutSeconds = 10)
+param([string]$Logs = 'build\logs', [switch]$KeepSync, [int]$StopTimeoutSeconds = 10, [switch]$KeepBrowser)
 $ErrorActionPreference = 'Continue'
 $onWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $logDir = Join-Path $root $Logs
 $pidFile = Join-Path $logDir 'simosa.pids'
 $stopRec = Join-Path $logDir 'simcore.stopfile'
-if (-not (Test-Path $pidFile)) { Write-Host "沒有 $pidFile(未啟動或已結束)"; Remove-Item $stopRec -ErrorAction SilentlyContinue; return }
+
+# 關閉以專屬設定檔開啟的 Edge(啟動腳本的 Open-LaunchPages;不在 PID 檔內:Edge 的啟動程序會把工作交給既有的瀏覽器程序)。
+# 以命令列含 --user-data-dir=<根目錄>\build\browser\edge 且不含 --type= 的 msedge.exe 為主程序,CloseMainWindow 讓它正常收尾;
+# 只在 Windows 執行,查詢失敗時只提示。
+function Close-ProfileEdge {
+    if (-not $onWindows -or $KeepBrowser) { return }
+    $profileDir = Join-Path (Join-Path (Join-Path $root 'build') 'browser') 'edge'
+    if (-not (Test-Path $profileDir)) { return }
+    try {
+        $mains = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction Stop |
+            Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($profileDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -notmatch '--type=' })
+        $closed = 0
+        foreach ($m in $mains) {
+            $p = Get-Process -Id $m.ProcessId -ErrorAction SilentlyContinue
+            if ($p -and $p.MainWindowHandle -ne [IntPtr]::Zero) { if ($p.CloseMainWindow()) { $closed++ } }
+        }
+        if ($closed -gt 0) { Write-Host "已請 Simosa BRM 的 Edge 視窗關閉($closed 個;設定檔 $profileDir)" }
+        elseif ($mains.Count -gt 0) { Write-Warning "Simosa BRM 的 Edge(設定檔 $profileDir)仍在執行:拔除隨身碟前請先關閉這些 Edge 視窗" }
+    } catch { Write-Warning "無法確認 Simosa BRM 的 Edge 視窗是否已關閉($($_.Exception.Message)):拔除隨身碟前請先關閉以啟動腳本開啟的 Edge 視窗" }
+}
+
+if (-not (Test-Path $pidFile)) { Write-Host "沒有 $pidFile(未啟動或已結束)"; Remove-Item $stopRec -ErrorAction SilentlyContinue; Close-ProfileEdge; return }
 $stopFile = $null
 if (Test-Path $stopRec) { $stopFile = (Get-Content $stopRec | Where-Object { $_ } | Select-Object -First 1) }
 $procs = @()
@@ -58,3 +82,4 @@ if ($kept.Count -gt 0) {
     Remove-Item $pidFile -ErrorAction SilentlyContinue
     Write-Host '已結束全部程序'
 }
+Close-ProfileEdge

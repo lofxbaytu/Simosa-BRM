@@ -477,7 +477,7 @@ public class NmeaTests
         var root = TestData.Root;
         Assert.Equal(Path.GetFullPath(Path.Combine(root, "build", "nmea", "E05.nmea")), FileNmeaSink.Resolve(root, "build/nmea/E05.nmea"));
         Assert.Equal(Path.GetFullPath(Path.Combine(root, "build", "x.nmea")), FileNmeaSink.Resolve(root, Path.Combine(root, "build", "x.nmea")));
-        Assert.Throws<ArgumentException>(() => FileNmeaSink.Resolve(root, Path.Combine(Path.GetTempPath(), "outside.nmea")));
+        Assert.Throws<ArgumentException>(() => FileNmeaSink.Resolve(root, TestData.OutsideRoot("outside.nmea")));
         Assert.Throws<ArgumentException>(() => FileNmeaSink.Resolve(root, "../outside.nmea"));
         Assert.Throws<ArgumentException>(() => FileNmeaSink.Resolve(root, " "));
     }

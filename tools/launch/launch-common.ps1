@@ -13,12 +13,32 @@ function Get-LaunchRoot {
     return $root
 }
 
+# Test-LaunchUnderRoot <路徑> <根目錄>:路徑等於根目錄或在其下(不分大小寫;路徑不必存在)
+function Test-LaunchUnderRoot([string]$Path, [string]$Root) {
+    if (-not $Path -or -not $Root) { return $false }
+    try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $false }
+    $r = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    return ($full.Equals($r, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $full.StartsWith($r + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase))
+}
+
+# Test-LaunchOnSystemDrive <根目錄>:根目錄是否在 Windows 的系統磁碟($env:SystemDrive,通常 C:);非 Windows 一律 $false
+function Test-LaunchOnSystemDrive([string]$Root) {
+    $sys = $env:SystemDrive
+    if (-not $sys -or -not $Root) { return $false }
+    return $Root.StartsWith($sys.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 # 把工具快取與暫存檔導到安裝根目錄內(守則:本機資料放 D: 或 G:,不寫 C:\;只影響本程序與由它啟動的子程序):
-#   .NET CLI 家目錄、NuGet 套件 / HTTP 快取 / 外掛快取 / 暫存(後三者只能用環境變數改,nuget.config 無對應鍵)— 已設定者不覆寫
-#  (tools\setup-windows.ps1 的使用者層級設定優先);
+#   .NET CLI 家目錄、NuGet 套件 / HTTP 快取 / 外掛快取 / 暫存(後三者只能用環境變數改,nuget.config 無對應鍵)。
+#   已設定且在根目錄內者沿用;未設定、或指到根目錄以外者(例如專案從 D: 複製到 G: 後殘留的使用者層級設定、或指到 C: 的舊值)改指到本根目錄;
 #   TEMP / TMP → <根目錄>\build\tmp。環境變數 SIMOSA_SYSTEM_TEMP=1 時不改 TEMP/TMP(暫存留在 Windows 預設的
 #   C:\Users\…\AppData\Local\Temp;放在隨身碟會明顯拖慢時,經訓練負責人同意才使用)。
+#   根目錄在系統磁碟時警告(守則;經同意後以環境變數 SIMOSA_ALLOW_SYSTEM_DRIVE=1 關閉警告)。
 function Set-LaunchProjectEnv([string]$Root) {
+    if ((Test-LaunchOnSystemDrive $Root) -and $env:SIMOSA_ALLOW_SYSTEM_DRIVE -ne '1') {
+        Write-Warning "根目錄 $Root 位於系統磁碟 $($env:SystemDrive):守則為本機資料放 D: 或 G:;放系統磁碟須先經訓練負責人同意(同意後設環境變數 SIMOSA_ALLOW_SYSTEM_DRIVE=1 可關閉此警告;docs\ops\本機資料位置.md)"
+    }
     $defaults = [ordered]@{
         'DOTNET_CLI_HOME'          = @('.cache', 'dotnet-home')
         'NUGET_PACKAGES'           = @('.cache', 'nuget', 'packages')
@@ -27,15 +47,35 @@ function Set-LaunchProjectEnv([string]$Root) {
         'NUGET_SCRATCH'            = @('.cache', 'nuget', 'scratch')
     }
     foreach ($k in $defaults.Keys) {
-        if (-not [Environment]::GetEnvironmentVariable($k)) {
+        $cur = [Environment]::GetEnvironmentVariable($k)
+        if (-not (Test-LaunchUnderRoot $cur $Root)) {
             $p = $Root; foreach ($seg in $defaults[$k]) { $p = Join-Path $p $seg }
+            if ($cur) { Write-Host "  $k 原為 $cur(不在 $Root 內),本次改用 $p" }
             [Environment]::SetEnvironmentVariable($k, $p)
         }
     }
     if ($env:SIMOSA_SYSTEM_TEMP -ne '1') {
         $tmp = Join-Path (Join-Path $Root 'build') 'tmp'
-        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        # 建立暫存資料夾不算「輸出」:-WhatIf 模式下仍建立(否則子程序拿到不存在的暫存目錄)
+        New-Item -ItemType Directory -Force -Path $tmp -WhatIf:$false | Out-Null
         $env:TEMP = $tmp; $env:TMP = $tmp
+    }
+}
+
+# Invoke-LaunchWithGodotUserDir <根目錄> { 啟動動作 }:執行動作期間把 APPDATA / LOCALAPPDATA 指到 <根目錄>\.cache\godot\appdata\{roaming,local},結束後還原。
+#   Godot(編輯器與匯出檔)在 Windows 以 APPDATA 決定 user://(project.godot 的 custom_user_dir_name → %APPDATA%\SimosaBRM-Visual:引擎 log、
+#   著色器與管線快取);不導向會寫到 C:\Users\…\AppData\Roaming。子程序在啟動當下繼承環境變數,所以只要包住「啟動」即可;
+#   還原是為了不影響之後啟動的程序(同步服務、瀏覽器)與呼叫端的 PowerShell 工作階段。XDG_* 在 Windows 版 Godot 無效。
+function Invoke-LaunchWithGodotUserDir([string]$Root, [scriptblock]$Action) {
+    $base = Join-Path (Join-Path (Join-Path $Root '.cache') 'godot') 'appdata'
+    $roaming = Join-Path $base 'roaming'; $local = Join-Path $base 'local'
+    New-Item -ItemType Directory -Force -Path $roaming, $local -WhatIf:$false | Out-Null
+    $oldRoaming = $env:APPDATA; $oldLocal = $env:LOCALAPPDATA
+    try {
+        $env:APPDATA = $roaming; $env:LOCALAPPDATA = $local
+        & $Action
+    } finally {
+        $env:APPDATA = $oldRoaming; $env:LOCALAPPDATA = $oldLocal
     }
 }
 
@@ -211,19 +251,50 @@ function Get-LaunchBrowserProfile([string]$Root) {
 }
 
 # 專屬 Edge 設定檔第一次建立時預先寫入下載位置(<根目錄>\build\downloads;與 WebView2 外殼相同):Edge 預設把「下載 YAML / 紀錄 JSON / 報告」
-# 存到 C:\Users\…\Downloads。Chromium 啟動時讀取既有的 Default\Preferences 並補上其餘預設值;設定檔已存在時不動(使用者可在 Edge 設定內自行調整)。
-# Preferences 必須是沒有 BOM 的 UTF-8(有 BOM 會被視為損毀而重設)。
+# 存到 C:\Users\…\Downloads。Chromium 啟動時讀取既有的 Default\Preferences 並補上其餘預設值。
+# 設定檔已存在時:下載位置(download.default_directory、savefile.default_directory)若不在目前根目錄內 — 專案資料夾換了磁碟代號或整個複製到
+# 另一個磁碟(D: → G:)後仍指向舊路徑,舊磁碟不在時 Chromium 會退回 C:\Users 的下載/文件資料夾 — 就改寫成目前的 build\downloads;
+# 該設定檔的 Edge 還開著(lockfile 被占用)時不改檔,只警告。使用者自行改到根目錄內其他資料夾者不動。
+# Preferences 必須是沒有 BOM 的 UTF-8(有 BOM 會被視為損毀而重設);只以文字取代這兩個值,不重寫整份 JSON
+#(Windows PowerShell 5.1 的 ConvertFrom-Json 無法處理 Edge 設定檔內的空白鍵名與僅大小寫不同的鍵名)。
 function Initialize-LaunchBrowserProfile([string]$ProfileDir) {
-    $downloads = Join-Path (Split-Path -Parent (Split-Path -Parent $ProfileDir)) 'downloads'
+    $buildDir = Split-Path -Parent (Split-Path -Parent $ProfileDir)
+    $rootDir = Split-Path -Parent $buildDir
+    $downloads = Join-Path $buildDir 'downloads'
     $default = Join-Path $ProfileDir 'Default'
     New-Item -ItemType Directory -Force -Path $default, $downloads | Out-Null
     $prefs = Join-Path $default 'Preferences'
-    if (Test-Path $prefs) { return }
-    $json = @{
-        download = @{ default_directory = $downloads; prompt_for_download = $false; directory_upgrade = $true }
-        savefile = @{ default_directory = $downloads }
-    } | ConvertTo-Json -Depth 4 -Compress
-    [System.IO.File]::WriteAllText($prefs, $json, (New-Object System.Text.UTF8Encoding($false)))
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    if (-not (Test-Path $prefs)) {
+        $json = @{
+            download = @{ default_directory = $downloads; prompt_for_download = $false; directory_upgrade = $true }
+            savefile = @{ default_directory = $downloads }
+        } | ConvertTo-Json -Depth 4 -Compress
+        [System.IO.File]::WriteAllText($prefs, $json, $utf8)
+        Write-Host "  第一次使用專屬 Edge 設定檔($ProfileDir):先前用其他瀏覽器存的草稿、參與者資料與訓練紀錄不會自動帶過來,搬移步驟見 docs\ops\本機資料位置.md 第 5 節"
+        return
+    }
+    try {
+        $text = [System.IO.File]::ReadAllText($prefs, $utf8)
+        $pattern = '("default_directory"\s*:\s*")((?:[^"\\]|\\.)*)(")'
+        $stale = @()
+        foreach ($m in [regex]::Matches($text, $pattern)) {
+            $cur = $m.Groups[2].Value.Replace('\\', '\')
+            if (-not (Test-LaunchUnderRoot $cur $rootDir)) { $stale += $cur }
+        }
+        if ($stale.Count -eq 0) { return }
+        $lock = Join-Path $ProfileDir 'lockfile'
+        if (Test-Path $lock) {
+            try { $fs = [System.IO.File]::Open($lock, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None); $fs.Close() }
+            catch { Write-Warning "專屬 Edge 設定檔的下載位置仍指向 $($stale[0])(不在 $rootDir 內),但該設定檔的 Edge 還開著,無法修正:請先關閉 Simosa BRM 的 Edge 視窗(stop-all.ps1)再啟動,或在 Edge 設定 → 下載 改為 $downloads"; return }
+        }
+        $escaped = $downloads.Replace('\', '\\')
+        $fixed = [regex]::Replace($text, $pattern, { param($m)
+                $cur = $m.Groups[2].Value.Replace('\\', '\')
+                if (Test-LaunchUnderRoot $cur $rootDir) { $m.Value } else { $m.Groups[1].Value + $escaped + $m.Groups[3].Value } })
+        [System.IO.File]::WriteAllText($prefs, $fixed, $utf8)
+        Write-Host "  專屬 Edge 設定檔的下載位置由 $($stale[0]) 改為 $downloads(專案資料夾換了位置)"
+    } catch { Write-Warning "無法檢查專屬 Edge 設定檔的下載位置($($_.Exception.Message));請在 Edge 設定 → 下載 確認為 $downloads" }
 }
 
 # 找 Microsoft Edge(Windows 10/11 內建);找不到回 $null。非 Windows(測試用的 pwsh)一律 $null。
@@ -244,18 +315,26 @@ function Get-LaunchEdgeArguments([string]$ProfileDir, [string]$Url) {
 
 # 開啟網頁。$ProfileDir 有值且找得到 Edge → 以該設定檔啟動 Edge(瀏覽器端資料留在安裝根目錄內);
 # $ProfileDir 為空(啟動腳本 -DefaultBrowser)→ Windows 預設瀏覽器(資料在該瀏覽器位於 C:\Users 的設定檔,需經同意才使用);
-# 找不到 Edge → 警告後退回預設瀏覽器。
+# $ProfileDir 有值但找不到 Edge → 不自動退回預設瀏覽器(那會把草稿、參與者資料、訓練紀錄與下載檔存到 C:\Users,守則要求先經同意):
+#   列出網址與處理方式後略過開啟。
 function Open-LaunchPages([string]$BaseUrl, $Pages, [hashtable]$Subst, [string]$ProfileDir = '') {
-    $edge = $null
-    if ($ProfileDir) {
-        $edge = Find-LaunchEdge
-        if ($edge) { Initialize-LaunchBrowserProfile $ProfileDir }
-        else { Write-Warning '找不到 Microsoft Edge,改用預設瀏覽器:瀏覽器端資料(草稿、參與者資料、訓練紀錄)會存在該瀏覽器的使用者設定檔(通常在 C:\Users);建議改用 -Shell(WebView2 外殼,資料在 build\webview2)' }
-    }
+    $urls = @()
     foreach ($p in @($Pages)) {
         $u = [string]$p
         foreach ($k in $Subst.Keys) { $u = $u.Replace('{' + $k + '}', [string]$Subst[$k]) }
-        $url = "$BaseUrl/$u"
+        $urls += "$BaseUrl/$u"
+    }
+    $edge = $null
+    if ($ProfileDir) {
+        $edge = Find-LaunchEdge
+        if (-not $edge) {
+            Write-Warning ('找不到 Microsoft Edge,未開啟網頁。用預設瀏覽器開啟會把瀏覽器端資料(草稿、參與者資料、訓練紀錄)與下載的檔案存到 C:\Users,' +
+                '須先經訓練負責人同意:同意後加 -DefaultBrowser 重新啟動;或改用 -Shell(WebView2 外殼,資料在 build\webview2)。網址:' + ($urls -join '、'))
+            return
+        }
+        Initialize-LaunchBrowserProfile $ProfileDir
+    }
+    foreach ($url in $urls) {
         Write-Host "  開啟 $url"
         try {
             if ($edge) { Start-Process -FilePath $edge -ArgumentList (Get-LaunchEdgeArguments $ProfileDir $url) }

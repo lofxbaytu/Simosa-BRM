@@ -5,7 +5,8 @@
 # 品質 low 以 Compatibility 渲染器啟動(--rendering-method gl_compatibility);mid/high 用 Forward+;auto(預設)讀 build\visual\quality.json
 # (視景在偵測、自動降級、離開時寫入):manualOverride 為 low,或無覆寫且 lastAutoTier 為 low → Compatibility,否則 Forward+
 # (與 Visual.Shared QualityPersistence.StartupRenderer 同一規則;第一次啟動沒有檔案 → Forward+,偵測為 low 後下次自動改用 Compatibility)。
-# Godot 的使用者資料以 APPDATA/LOCALAPPDATA 環境變數導向 .cache\godot\appdata(只影響本程序);quality.json、quality.log、smoke.json 在 build\visual\。
+# Godot 的使用者資料以 APPDATA/LOCALAPPDATA 環境變數導向 .cache\godot\appdata(Godot 結束後還原);quality.json、quality.log、smoke.json 在 build\visual\。
+# .NET/NuGet 快取與暫存(TEMP/TMP → build\tmp)留在專案內;SIMOSA_SYSTEM_TEMP=1 時暫存留在 Windows 預設位置(需經同意)。
 param(
   [string]$Godot = $env:SIMOSA_GODOT,
   [ValidateSet('bridge','portWing','stbdWing','aft','overview')][string]$View = 'bridge',
@@ -28,10 +29,14 @@ if (-not $Godot) {
   if ($cand) { $Godot = $cand.FullName }
 }
 if (-not $Godot -or -not (Test-Path $Godot)) { throw '找不到 Godot 4.5 .NET 執行檔;以 -Godot 或環境變數 SIMOSA_GODOT 指定' }
+# 在子範圍內載入共用函式(不把 launch-common.ps1 的 Set-StrictMode 帶進本腳本)
+& { . (Join-Path $root 'tools\launch\launch-common.ps1'); Set-LaunchProjectEnv $root }
 $godotData = Join-Path $root '.cache\godot\appdata'
 New-Item -ItemType Directory -Force -Path (Join-Path $godotData 'roaming'), (Join-Path $godotData 'local') | Out-Null
+$oldAppData = $env:APPDATA; $oldLocalAppData = $env:LOCALAPPDATA
 $env:APPDATA = Join-Path $godotData 'roaming'
 $env:LOCALAPPDATA = Join-Path $godotData 'local'
+try {
 $proj = Join-Path $root 'src\Visual.Godot'
 if ($Build -or -not (Test-Path (Join-Path $proj '.godot\mono\temp\bin\Debug\SimosaBRM.Visual.Godot.dll'))) {
   dotnet build (Join-Path $proj 'Visual.Godot.csproj') -nologo -v q
@@ -58,3 +63,4 @@ if ($StartUtc) { $userArgs += "--start-utc=$StartUtc" }
 if ($Fullscreen) { $userArgs += '--fullscreen' }
 if ($NoHud) { $userArgs += '--no-hud' }
 & $Godot @engineArgs -- @userArgs
+} finally { $env:APPDATA = $oldAppData; $env:LOCALAPPDATA = $oldLocalAppData }

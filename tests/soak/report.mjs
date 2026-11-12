@@ -63,7 +63,7 @@ function readCounters(file) {
 export function loadRun(dir) {
   const metaFile = path.join(dir, 'meta.json');
   if (!fs.existsSync(metaFile)) throw new Error(`找不到 ${metaFile}`);
-  const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+  const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8').replace(/^\uFEFF/, ''));   // 容許開頭的 BOM(Windows PowerShell 5.1 寫的檔)
   const stats = path.join(dir, 'stats');
   return {
     dir,

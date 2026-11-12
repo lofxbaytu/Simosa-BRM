@@ -13,10 +13,10 @@ public sealed class InstallLayoutDefaultRootTests
     private const string G = @"G:\Simosa BRM";
 
     private static string Resolve(string? env = null, string baseDir = "/opt/elsewhere/bin", IEnumerable<string>? existing = null,
-        string? repo = null, bool windows = true, string cwd = "/cwd")
+        string? repo = null, bool windows = true, string cwd = "/cwd", string? systemDrive = "C:")
     {
         var set = new HashSet<string>(existing ?? Array.Empty<string>(), StringComparer.Ordinal);
-        return InstallLayout.DefaultRoot(env, baseDir, set.Contains, () => repo, windows, cwd);
+        return InstallLayout.DefaultRoot(env, baseDir, set.Contains, () => repo, windows, cwd, systemDrive);
     }
 
     [Fact]
@@ -45,6 +45,22 @@ public sealed class InstallLayoutDefaultRootTests
         => Assert.Equal("/repo", Resolve(existing: new[] { D, G }, repo: "/repo"));
 
     [Fact]
+    public void NearestRootWins_WhenAnAncestorOfTheRepositoryLooksInstalled()
+    {
+        // 審查(第二十八輪):專案的上層(例如磁碟根目錄)剛好同時有 data/ 與 app/ 時,儲存庫內的 simosa-pkg 不可把那個上層當安裝根目錄
+        var top = Path.GetFullPath(Path.Combine("/media", "d"));
+        var repo = Path.Combine(top, "dev", "Simosa BRM");
+        var baseDir = Path.Combine(repo, "build", "bin", "Tools.Packaging.Cli", "Release", "net8.0");
+        var existing = new[] { Path.Combine(top, "data"), Path.Combine(top, "app") };
+        Assert.Equal(repo, Resolve(baseDir: baseDir, existing: existing, repo: repo));
+        // 專案根目錄不在那個上層之下(例如 SIMOSA_BRM_ROOT 指向別處)→ 仍以執行檔所在的安裝根目錄為準
+        Assert.Equal(top, Resolve(baseDir: Path.Combine(top, "app", "pkg"), existing: existing, repo: "/somewhere/else"));
+        // 安裝根目錄本身就是(或在)專案內:較近的安裝根目錄優先
+        var inner = Path.Combine(repo, "build", "release", "2026.11.28");
+        Assert.Equal(inner, Resolve(baseDir: Path.Combine(inner, "app", "pkg"), existing: new[] { Path.Combine(inner, "data"), Path.Combine(inner, "app") }, repo: repo));
+    }
+
+    [Fact]
     public void WindowsFallback_PrefersExistingFolder_ThenExistingDrive_DThenG()
     {
         Assert.Equal(D, Resolve(existing: new[] { D, G }));
@@ -60,6 +76,11 @@ public sealed class InstallLayoutDefaultRootTests
         var root = Resolve(existing: new[] { @"C:\", @"C:\Simosa BRM" }, cwd: @"C:\Users\someone");
         Assert.Equal(D, root);
         Assert.DoesNotContain(InstallLayout.WindowsDefaultRoots, r => r.StartsWith("C:", StringComparison.OrdinalIgnoreCase));
+        // Windows 本身裝在 D: 的機器:清單中的 D: 略過 → G:(即使 G: 不存在也不落到系統磁碟)
+        Assert.Equal(G, Resolve(existing: new[] { @"D:\", D, @"G:\" }, systemDrive: "D:"));
+        Assert.Equal(G, Resolve(existing: new[] { @"D:\", D }, systemDrive: @"D:\"));
+        // 未提供系統磁碟(非 Windows 的呼叫端)→ 不排除
+        Assert.Equal(D, Resolve(existing: new[] { @"D:\" }, systemDrive: null));
     }
 
     [Fact]
@@ -67,10 +88,36 @@ public sealed class InstallLayoutDefaultRootTests
         => Assert.Equal("/cwd", Resolve(windows: false, existing: new[] { D, G }));
 
     [Fact]
+    public void LocalConfigFileWithUtf8BomIsAccepted_ButSignedDocumentsAreNot()
+    {
+        // 審查(第二十八輪):Windows PowerShell 5.1 的 Set-Content -Encoding UTF8、或記事本「UTF-8 with BOM」存的 config/packaging.json
+        // 開頭有 BOM;本機設定檔(PackageJson.Load)要能讀,簽章文件與更新包內容(PackageJson.FromBytes)不放寬
+        var root = SimosaBRM.SimCore.Ship.RepositoryPaths.FindRoot();
+        var dir = Path.Combine(root, "build", "test-tmp", "packaging", "bom-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "packaging.json");
+            var json = "{ \"role\": \"ship\", \"shipId\": \"FSB1\", \"deviceId\": \"FSB1-BOM\" }";
+            File.WriteAllBytes(path, new byte[] { 0xEF, 0xBB, 0xBF }.Concat(System.Text.Encoding.UTF8.GetBytes(json)).ToArray());
+            var cfg = PackagingConfig.LoadOrDefault(path);
+            Assert.Equal("FSB1", cfg.ShipId);
+            Assert.Equal("FSB1-BOM", cfg.DeviceId);
+            File.WriteAllText(path, json, new System.Text.UTF8Encoding(false));
+            Assert.Equal("FSB1-BOM", PackagingConfig.LoadOrDefault(path).DeviceId);
+            var withBom = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(System.Text.Encoding.UTF8.GetBytes(json)).ToArray();
+            Assert.Throws<InvalidDataException>(() => PackageJson.FromBytes<PackagingConfig>(withBom, "簽章文件"));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public void ParameterlessOverloadResolvesToThisRepositoryInTests()
     {
         // 測試程序沒有 SIMOSA_INSTALL_ROOT 時:執行檔在專案的 build/bin/… 之下 → 專案根目錄(不論專案放在哪個磁碟)
+        // SIMOSA_BRM_ROOT(RepositoryPaths 優先採用)指向另一份專案時也略過:那是環境設定,不是本函式的行為
         if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SIMOSA_INSTALL_ROOT"))) return;
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SIMOSA_BRM_ROOT"))) return;
         var root = InstallLayout.DefaultRoot();
         Assert.True(Directory.Exists(Path.Combine(root, "data")), $"預設根目錄 {root} 應含 data/");
         Assert.True(AppContext.BaseDirectory.StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase), $"預設根目錄 {root} 應為執行檔 {AppContext.BaseDirectory} 的上層");

@@ -54,14 +54,10 @@ if (-not $Git -and (Test-Path '.git\HEAD')) {
 
 # 工具鏈與快取(全部留在專案內)
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '找不到 dotnet SDK' }
-if (-not $env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME = Join-Path $root '.cache\dotnet-home' }
-if (-not $env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = Join-Path $root '.cache\nuget\packages' }
-# NuGet 的 HTTP 快取、外掛快取與暫存只能用環境變數導回專案內(nuget.config 無對應鍵;預設在 C:\Users\…\AppData\Local\NuGet 與 %TEMP%)
-if (-not $env:NUGET_HTTP_CACHE_PATH) { $env:NUGET_HTTP_CACHE_PATH = Join-Path $root '.cache\nuget\http' }
-if (-not $env:NUGET_PLUGINS_CACHE_PATH) { $env:NUGET_PLUGINS_CACHE_PATH = Join-Path $root '.cache\nuget\plugins' }
-if (-not $env:NUGET_SCRATCH) { $env:NUGET_SCRATCH = Join-Path $root '.cache\nuget\scratch' }
-# 暫存檔 → 專案內 build\tmp(只影響本程序與子程序;SIMOSA_SYSTEM_TEMP=1 時留在 Windows 預設的 C:\Users\…\Temp,需經同意)
-if ($env:SIMOSA_SYSTEM_TEMP -ne '1') { $simosaTmp = Join-Path $root 'build\tmp'; New-Item -ItemType Directory -Force -Path $simosaTmp | Out-Null; $env:TEMP = $simosaTmp; $env:TMP = $simosaTmp }
+# .NET CLI 家目錄、NuGet 套件 / HTTP 快取 / 外掛快取 / 暫存與 TEMP/TMP(→ build\tmp)留在專案內:共用 tools\launch\launch-common.ps1 的
+# Set-LaunchProjectEnv(已設定但指到專案外者改指回專案;SIMOSA_SYSTEM_TEMP=1 時暫存留在 Windows 預設位置,需經同意)。
+# 在子範圍內載入:不把 launch-common.ps1 的 Set-StrictMode 與函式帶進本腳本;環境變數的變更對本程序與子程序都有效。
+& { . (Join-Path $root 'tools\launch\launch-common.ps1'); Set-LaunchProjectEnv $root }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'; $env:SIMOSA_BRM_ROOT = $root
 $outDir = Join-Path $root (Join-Path $Out $Version)
 $keys = Join-Path $root (Join-Path $Out 'dev-keys')
@@ -109,7 +105,7 @@ Step '1/7 dotnet build SimosaBRM.sln -c Release'
 Run 'dotnet' @('build', 'SimosaBRM.sln', '-c', 'Release', '-nologo', '-v', 'q', '-clp:ErrorsOnly')
 
 Step '2/7 網頁 pnpm build(src\Instruments.Web → build\web\instruments)'
-$webVersion = ((Get-Content 'src\Instruments.Web\package.json' -Raw | ConvertFrom-Json).version)
+$webVersion = ((Get-Content 'src\Instruments.Web\package.json' -Raw -Encoding UTF8 | ConvertFrom-Json).version)
 if ($SkipWeb) { Note '網頁未重新建置(-SkipWeb),沿用 build\web\instruments' }
 elseif (Get-Command pnpm -ErrorAction SilentlyContinue) { Push-Location 'src\Instruments.Web'; try { Run 'pnpm' @('build') } finally { Pop-Location }; Write-Host '  pnpm build 完成' }
 else { Note '找不到 pnpm,網頁沿用既有 build\web\instruments' }
@@ -152,6 +148,7 @@ Copy-Item -Recurse 'build\web\instruments' (Join-Path $outDir 'app\web')
 $components.Add("web=$webVersion=app/web")
 New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'app\launch') | Out-Null
 Copy-Item 'tools\launch\*.ps1', 'tools\launch\*.sh' (Join-Path $outDir 'app\launch')
+Copy-Item 'tools\check-local-data.ps1' (Join-Path $outDir 'app\launch')   # 本機資料位置檢查(安裝版模式;docs\ops\本機資料位置.md 第 6 節)
 # data\:排除 ships\*\confidential\(機密係數與試俥原始檔不進發行版;規劃書第 11.4 節)
 $dataOut = Join-Path $outDir 'data'
 Get-ChildItem -Recurse -File 'data' | Where-Object { $_.FullName -notmatch '[\\/]ships[\\/][^\\/]+[\\/]confidential([\\/]|$)' } | ForEach-Object {
@@ -220,13 +217,18 @@ if ($SkipGodot) {
         Note "視景未匯出:缺匯出範本 $tpl(取得 Godot_v4.5.1-stable_mono_export_templates.tpz 後放入該目錄;docs\design\visual-client.md 第 9 節);船上以 Godot 編輯器 --path src\Visual.Godot 執行"
         $components.Add("visual=$Version==略過:缺匯出範本")
     } else {
-        # Godot 編輯器/使用者資料留在專案內(.cache\godot\appdata;visual-client.md 第 8 節)
-        $env:APPDATA = Join-Path $root '.cache\godot\appdata\roaming'; $env:LOCALAPPDATA = Join-Path $root '.cache\godot\appdata\local'
-        New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA, (Split-Path $visOut), 'build\visual' | Out-Null
-        Run 'dotnet' @('build', 'src\Visual.Godot\Visual.Godot.csproj', '-c', 'Release', '-nologo', '-v', 'q')
-        & $Godot --headless --path 'src\Visual.Godot' --import *> 'build\visual\release-import.log'
-        & $Godot --headless --path 'src\Visual.Godot' --export-release 'Windows Desktop' $visOut *> 'build\visual\release-export.log'
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $visOut)) { Write-Host "  視景已匯出 → app\visual\SimosaBRM.Visual.exe"; $components.Add("visual=$Version=app/visual=已匯出(Windows Desktop)") }
+        # Godot 編輯器/使用者資料留在專案內(.cache\godot\appdata;visual-client.md 第 8 節);匯出後還原 APPDATA / LOCALAPPDATA
+        #(之後的步驟 — 例如 Find-Iscc 找使用者層級安裝的 Inno Setup — 與呼叫端的工作階段要看到原值)
+        $oldAppData = $env:APPDATA; $oldLocalAppData = $env:LOCALAPPDATA
+        try {
+            $env:APPDATA = Join-Path $root '.cache\godot\appdata\roaming'; $env:LOCALAPPDATA = Join-Path $root '.cache\godot\appdata\local'
+            New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA, (Split-Path $visOut), 'build\visual' | Out-Null
+            Run 'dotnet' @('build', 'src\Visual.Godot\Visual.Godot.csproj', '-c', 'Release', '-nologo', '-v', 'q')
+            & $Godot --headless --path 'src\Visual.Godot' --import *> 'build\visual\release-import.log'
+            & $Godot --headless --path 'src\Visual.Godot' --export-release 'Windows Desktop' $visOut *> 'build\visual\release-export.log'
+            $exportRc = $LASTEXITCODE
+        } finally { $env:APPDATA = $oldAppData; $env:LOCALAPPDATA = $oldLocalAppData }
+        if ($exportRc -eq 0 -and (Test-Path $visOut)) { Write-Host "  視景已匯出 → app\visual\SimosaBRM.Visual.exe"; $components.Add("visual=$Version=app/visual=已匯出(Windows Desktop)") }
         else { Note '視景匯出失敗(見 build\visual\release-export.log)'; $components.Add("visual=$Version==匯出失敗"); Remove-Item -Recurse -Force (Join-Path $outDir 'app\visual') -ErrorAction SilentlyContinue }
     }
 }
@@ -262,7 +264,8 @@ if (-not $NoPackage) {
     if (Test-Path $vr) { Remove-Item -Recurse -Force $vr }
     New-Item -ItemType Directory -Force -Path (Join-Path $vr 'config\trusted-keys') | Out-Null
     Copy-Item (Join-Path $keys 'dev-primary.pub.pem') (Join-Path $vr 'config\trusted-keys\dev-primary.pem')
-    '{ "role": "ship", "shipId": "FSB1", "deviceId": "FSB1-VERIFY" }' | Set-Content -Path (Join-Path $vr 'config\packaging.json') -Encoding UTF8
+    # 給其他程式讀的 JSON 一律寫成沒有 BOM 的 UTF-8(Windows PowerShell 5.1 的 Set-Content -Encoding UTF8 會加 BOM)
+    [System.IO.File]::WriteAllText((Join-Path $vr 'config\packaging.json'), '{ "role": "ship", "shipId": "FSB1", "deviceId": "FSB1-VERIFY" }', (New-Object System.Text.UTF8Encoding($false)))
     Pkg @('verify', $swPkg, '--root', $vr)
     Remove-Item -Recurse -Force $vr
 }

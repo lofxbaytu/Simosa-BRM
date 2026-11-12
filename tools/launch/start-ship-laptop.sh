@@ -133,7 +133,11 @@ if [[ $VISUAL == 1 && "$(cfg visual_enabled true)" == true ]]; then
     v="$(cfg visual_views_${i}_view bridge)"; m="$(cfg visual_views_${i}_monitor 0)"
     VARGS=("--view=$v" "--monitor=$m" "--quality=$(cfg visual_quality auto)" "--ws=ws://127.0.0.1:$WS_PORT" "--data-dir=$ROOT")
     [[ "$(cfg visual_views_${i}_fullscreen false)" == true ]] && VARGS+=(--fullscreen)
-    if [[ -n "$VIS_EXE" ]]; then start_bg "visual-$v" "$ROOT/$LOGS/visual-$v.log" "$VIS_EXE" -- "${VARGS[@]}"
+    # 匯出檔的 Godot 使用者資料(user://:log、著色器快取)留在安裝根目錄內(Linux 以 XDG_* 決定位置;Windows 版腳本以 APPDATA 導向)
+    if [[ -n "$VIS_EXE" ]]; then
+      mkdir -p "$ROOT/.cache/godot/xdg/data" "$ROOT/.cache/godot/xdg/config" "$ROOT/.cache/godot/xdg/cache"
+      XDG_DATA_HOME="$ROOT/.cache/godot/xdg/data" XDG_CONFIG_HOME="$ROOT/.cache/godot/xdg/config" XDG_CACHE_HOME="$ROOT/.cache/godot/xdg/cache" \
+        start_bg "visual-$v" "$ROOT/$LOGS/visual-$v.log" "$VIS_EXE" -- "${VARGS[@]}"
     elif [[ -x "$ROOT/tools/visual-run.sh" && -n "${DISPLAY:-}" ]]; then start_bg "visual-$v" "$ROOT/$LOGS/visual-$v.log" "$ROOT/tools/visual-run.sh" "${VARGS[@]}"
     else echo "  視景 $v:略過(無匯出檔 app/visual/、或無 DISPLAY/Godot;Windows 見 start-ship-laptop.ps1)"; fi
   done

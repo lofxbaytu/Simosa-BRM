@@ -8,7 +8,8 @@
 ;   裝在系統磁碟(通常 C:)須明確確認(須經訓練負責人同意;靜默安裝加 /ALLOWSYSTEMDRIVE=1):守則為本機資料放 D: 或 G:。
 ; 另做:開始功能表/桌面捷徑(操船台外殼、教官站、停止)、Windows 防火牆入站規則(僅直連私有網段;全部設定檔,因直連無 DHCP 會被判為公用網路)、
 ;   WebView2 Runtime 離線安裝檔(tools\webview2\)存在且尚未安裝時一併執行、.NET 8 執行階段離線安裝檔(tools\dotnet\)存在時一併執行。
-; 解除安裝:只移除安裝程式放進去的檔案與 build\logs、build\webview2、build\tmp;保留 data\records、build\records、state\、store\、config\(練習紀錄與設定)。
+; 解除安裝:只移除安裝程式放進去的檔案與 build\logs、build\tmp;保留 data\records、build\records、state\、store\、config\(練習紀錄與設定)
+;   以及 build\webview2、build\browser(瀏覽器端資料:草稿、參與者資料、講評報告站的訓練紀錄)、build\downloads(從網頁下載的檔案)。
 ; 本腳本的靜態檢查:python3 -I tools\installer\check-iss.py tools\installer\SimosaBRM.iss(tools\run-ps-tests.sh 一併執行);編譯與安裝需 Windows 實機。
 
 #ifndef AppVersion
@@ -117,9 +118,9 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoExit -E
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoExit -ExecutionPolicy Bypass -Command ""Set-Location -LiteralPath '{app}'; dotnet tools\updater\simosa-pkg.dll release verify --dir ."""; WorkingDir: "{app}"; Description: "核對發行清單(simosa-pkg release verify;第 2.4 節)"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]
-; 只清 log、WebView2 使用者資料與暫存;練習紀錄(build\records、data\records)、state\、store\、config\ 保留(解除安裝後提示路徑)
+; 只清 log 與暫存;練習紀錄(build\records、data\records)、state\、store\、config\ 保留(解除安裝後提示路徑)。
+; 瀏覽器端資料(build\webview2 外殼、build\browser 專屬 Edge 設定檔:草稿、參與者資料、訓練紀錄)與 build\downloads 也保留,不在此刪除。
 Type: filesandordirs; Name: "{app}\build\logs"
-Type: filesandordirs; Name: "{app}\build\webview2"
 Type: filesandordirs; Name: "{app}\build\tmp"
 
 [Code]
@@ -291,7 +292,7 @@ begin
     if not DotNetRuntimePresent('Microsoft.WindowsDesktop.App') then
       Msg := Msg + '• .NET 8 Desktop Runtime(Microsoft.WindowsDesktop.App 8.x):WebView2 操船台外殼需要;離線安裝檔 windowsdesktop-runtime-8.x-win-x64.exe' + #13#10;
     if not WebView2RuntimeInstalled then
-      Msg := Msg + '• WebView2 Runtime:外殼需要;離線安裝檔放 tools\webview2\(第 4.5 節第 1 項),或以預設瀏覽器啟動(不加 -Shell)' + #13#10;
+      Msg := Msg + '• WebView2 Runtime:外殼需要;離線安裝檔放 tools\webview2\(第 4.5 節第 1 項),或以 Microsoft Edge 啟動(不加 -Shell;專屬設定檔 build\browser\edge)' + #13#10;
     if (Msg <> '') and not WizardSilent then
       MsgBox('尚未偵測到下列執行階段(船上完全離線,請以離線安裝檔安裝;docs\ops\安裝與啟動.md 第 1、4.5 節):' + #13#10 + Msg, mbInformation, MB_OK);
   end;
@@ -304,5 +305,6 @@ begin
   if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
     MsgBox('已解除安裝 Simosa BRM。練習紀錄與設定保留在安裝根目錄:' + #13#10 +
            ExpandConstant('{app}') + '\build\records、data\records、state\、store\、config\' + #13#10 +
+           '瀏覽器端資料(草稿、參與者資料、訓練紀錄)與下載的檔案也保留:build\webview2、build\browser、build\downloads' + #13#10 +
            '不再需要時請先依 docs\ops\安裝與啟動.md 第 5 節回傳紀錄,再自行刪除。', mbInformation, MB_OK);
 end;

@@ -72,7 +72,7 @@ if (-not $NoConsole -and (Get-Cfg $cfg 'console.enabled' $true)) {
 }
 # WebView2 外殼(-Shell 或 config web.shell=true;預設仍為瀏覽器)
 $useShell = $Shell -or [bool](Get-Cfg $cfg 'web.shell' $false)
-$shellExe = $null; if ($useShell) { $shellExe = Find-LaunchShellExe $root; if (-not $shellExe) { Write-Warning '找不到 WebView2 外殼 app\shell\SimosaBRM.Shell.exe,改用預設瀏覽器' } }
+$shellExe = $null; if ($useShell) { $shellExe = Find-LaunchShellExe $root; if (-not $shellExe) { Write-Warning '找不到 WebView2 外殼 app\shell\SimosaBRM.Shell.exe,改用瀏覽器(專屬 Edge 設定檔)' } }
 
 if ($CheckOnly) {
     Write-Host "SimCore.Host:$hostDll"; Write-Host "雷達:$(if ($radarDll) { $radarDll } else { '略過' })"
@@ -158,20 +158,21 @@ try {
             try { $q = Get-Content -Raw $qj | ConvertFrom-Json; $ov = "$(Get-Cfg $q 'manualOverride' '')".ToLower(); $la = "$(Get-Cfg $q 'lastAutoTier' '')".ToLower()
                   if ($ov -eq 'low' -or (($ov -eq '' -or $ov -eq 'auto') -and $la -eq 'low')) { $compat = $true } } catch { }
         }
-        foreach ($view in @(Get-Cfg $cfg 'visual.views' @())) {
-            $v = Get-Cfg $view 'view' 'bridge'; $m = Get-Cfg $view 'monitor' 0
-            $vargs = @("--view=$v", "--monitor=$m", "--quality=$quality", "--ws=ws://127.0.0.1:$wsPort", "--data-dir=$root")
-            if (Get-Cfg $view 'fullscreen' $false) { $vargs += '--fullscreen' }
-            $engine = @(); if ($compat) { $engine += @('--rendering-method', 'gl_compatibility') }
-            if (Test-Path $exe) {
-                Start-LaunchProcess -Name "visual-$v" -Log (Join-Path $logDir "visual-$v.log") -File $exe -Arguments ($engine + @('--') + $vargs) -WorkDir (Split-Path $exe) -Window | Out-Null
-            } elseif ($editor -and (Test-Path $editor) -and (Test-Path (Join-Path $proj 'project.godot'))) {
-                # Godot 編輯器/使用者資料留在專案內(.cache\godot\appdata)
-                $env:APPDATA = Join-Path $root '.cache\godot\appdata\roaming'; $env:LOCALAPPDATA = Join-Path $root '.cache\godot\appdata\local'
-                New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA | Out-Null
-                if (-not (Test-Path (Join-Path $proj '.godot\mono\temp\bin\Debug\SimosaBRM.Visual.Godot.dll'))) { & dotnet build (Join-Path $proj 'Visual.Godot.csproj') -nologo -v q }
-                Start-LaunchProcess -Name "visual-$v" -Log (Join-Path $logDir "visual-$v.log") -File $editor -Arguments (@('--path', $proj) + $engine + @('--') + $vargs) -WorkDir $root -Window | Out-Null
-            } else { Write-Host "  視景 ${v}:略過(無 $exe,也無 Godot 編輯器 $editor;docs\ops\安裝與啟動.md)" }
+        # Godot 的使用者資料(user:// = %APPDATA%\SimosaBRM-Visual:引擎 log、著色器與管線快取;編輯器另有設定與快取)留在根目錄內
+        # (.cache\godot\appdata):匯出檔與編輯器兩種啟動方式都要導向,啟動後還原 APPDATA / LOCALAPPDATA(不影響之後啟動的同步服務與呼叫端)。
+        Invoke-LaunchWithGodotUserDir $root {
+            foreach ($view in @(Get-Cfg $cfg 'visual.views' @())) {
+                $v = Get-Cfg $view 'view' 'bridge'; $m = Get-Cfg $view 'monitor' 0
+                $vargs = @("--view=$v", "--monitor=$m", "--quality=$quality", "--ws=ws://127.0.0.1:$wsPort", "--data-dir=$root")
+                if (Get-Cfg $view 'fullscreen' $false) { $vargs += '--fullscreen' }
+                $engine = @(); if ($compat) { $engine += @('--rendering-method', 'gl_compatibility') }
+                if (Test-Path $exe) {
+                    Start-LaunchProcess -Name "visual-$v" -Log (Join-Path $logDir "visual-$v.log") -File $exe -Arguments ($engine + @('--') + $vargs) -WorkDir (Split-Path $exe) -Window | Out-Null
+                } elseif ($editor -and (Test-Path $editor) -and (Test-Path (Join-Path $proj 'project.godot'))) {
+                    if (-not (Test-Path (Join-Path $proj '.godot\mono\temp\bin\Debug\SimosaBRM.Visual.Godot.dll'))) { & dotnet build (Join-Path $proj 'Visual.Godot.csproj') -nologo -v q }
+                    Start-LaunchProcess -Name "visual-$v" -Log (Join-Path $logDir "visual-$v.log") -File $editor -Arguments (@('--path', $proj) + $engine + @('--') + $vargs) -WorkDir $root -Window | Out-Null
+                } else { Write-Host "  視景 ${v}:略過(無 $exe,也無 Godot 編輯器 $editor;docs\ops\安裝與啟動.md)" }
+            }
         }
     }
 
@@ -185,6 +186,7 @@ try {
     }
 
     Write-Host "已啟動;PID 檔 $logs\simosa.pids。網頁 http://$shipIp`:$webPort/instructor.html?mode=simple  狀態 ws://$shipIp`:$wsPort  雷達 ws://$shipIp`:$radarPort/radar/x"
+    Write-Host '  教官筆電請執行 start-instructor-laptop.ps1 開啟教官站(不要在其他瀏覽器手動輸入網址:草稿、參與者資料與訓練紀錄會存到該瀏覽器在 C:\Users 的設定檔)'
     if ($Duration -gt 0) {
         Write-Host "等待 SimCore 於模擬 $Duration s 後結束…"
         $hostProc.WaitForExit()

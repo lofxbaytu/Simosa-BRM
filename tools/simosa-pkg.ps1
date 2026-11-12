@@ -26,16 +26,13 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $dll = Join-Path $repo 'build\bin\Tools.Packaging.Cli\Release\net8.0\simosa-pkg.dll'
 
-# 所有快取留在專案資料夾內(CLAUDE.md)
-$env:DOTNET_CLI_HOME = Join-Path $repo '.cache\dotnet-home'
-$env:NUGET_PACKAGES = Join-Path $repo '.cache\nuget\packages'
-# NuGet 的 HTTP 快取、外掛快取與暫存只能用環境變數導回專案內(nuget.config 無對應鍵;預設在 C:\Users\…\AppData\Local\NuGet 與 %TEMP%)
-if (-not $env:NUGET_HTTP_CACHE_PATH) { $env:NUGET_HTTP_CACHE_PATH = Join-Path $repo '.cache\nuget\http' }
-if (-not $env:NUGET_PLUGINS_CACHE_PATH) { $env:NUGET_PLUGINS_CACHE_PATH = Join-Path $repo '.cache\nuget\plugins' }
-if (-not $env:NUGET_SCRATCH) { $env:NUGET_SCRATCH = Join-Path $repo '.cache\nuget\scratch' }
-# 暫存檔 → 專案內 build\tmp(只影響本程序與子程序;SIMOSA_SYSTEM_TEMP=1 時留在 Windows 預設的 C:\Users\…\Temp,需經同意)
-if ($env:SIMOSA_SYSTEM_TEMP -ne '1') { $simosaTmp = Join-Path $repo 'build\tmp'; New-Item -ItemType Directory -Force -Path $simosaTmp | Out-Null; $env:TEMP = $simosaTmp; $env:TMP = $simosaTmp }
+# 所有快取與暫存留在專案資料夾內(CLAUDE.md):共用 tools\launch\launch-common.ps1 的 Set-LaunchProjectEnv(.NET CLI 家目錄、NuGet 套件 / HTTP 快取 /
+# 外掛快取 / 暫存、TEMP/TMP → build\tmp;已設定但指到專案外者改指回專案;SIMOSA_SYSTEM_TEMP=1 時暫存留在 Windows 預設位置,需經同意)。
+# 在子範圍內載入:不把 launch-common.ps1 的 Set-StrictMode 與函式帶進本腳本。
+& { . (Join-Path $repo 'tools\launch\launch-common.ps1'); Set-LaunchProjectEnv $repo }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+# 專案根目錄以本腳本所在位置為準(不沿用可能指向另一份專案的環境變數 — 例如專案從 D: 複製到 G: 之後)
+$env:SIMOSA_BRM_ROOT = $repo
 
 if ($Rebuild -or -not (Test-Path $dll)) {
     Write-Host '建置 simosa-pkg(Release)…'
@@ -43,9 +40,9 @@ if ($Rebuild -or -not (Test-Path $dll)) {
     if ($LASTEXITCODE -ne 0) { throw '建置失敗' }
 }
 
-# 未指定 -Root 也沒有 SIMOSA_INSTALL_ROOT 時不在此寫死磁碟:由 simosa-pkg 依執行檔所在位置決定
-#(InstallLayout.DefaultRoot:安裝根目錄或專案根目錄 → D:\Simosa BRM → G:\Simosa BRM;不會落到 C:\)。
+# 安裝根目錄:-Root → 環境變數 SIMOSA_INSTALL_ROOT → 本腳本所在的專案根目錄(不寫死磁碟代號;不會落到 C:\)。
 if ($Root) { $env:SIMOSA_INSTALL_ROOT = $Root }
+elseif (-not $env:SIMOSA_INSTALL_ROOT) { $env:SIMOSA_INSTALL_ROOT = $repo }
 
 dotnet $dll @Rest
 exit $LASTEXITCODE

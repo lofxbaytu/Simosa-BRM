@@ -280,7 +280,7 @@ public sealed class MediaUploadTests : IDisposable
         Assert.Null(def.MediaDir);
         Assert.Equal(Path.Combine(_root, "build", "records", "media"), MediaUploadServer.ResolveDir(_root, null));
         Assert.Equal(Path.Combine(_root, "build", "tmp", "media-x"), MediaUploadServer.ResolveDir(_root, "build/tmp/media-x"));
-        Assert.Throws<ArgumentException>(() => MediaUploadServer.ResolveDir(_root, Path.Combine(Path.GetTempPath(), "outside")));
+        Assert.Throws<ArgumentException>(() => MediaUploadServer.ResolveDir(_root, TestData.OutsideOf(_root, "outside")));
         Assert.Throws<ArgumentException>(() => MediaUploadServer.ResolveDir(_root, "../outside"));
     }
 }

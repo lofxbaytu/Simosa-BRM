@@ -14,6 +14,14 @@ build/
 data/ships/*/confidential/
 # 紀錄與錄影
 build/records/
+# simosa-pkg 在安裝根目錄建立的本機狀態(開發機未給 --root 時安裝根目錄就是專案根目錄):更新包狀態與稽核、紀錄庫、裝置金鑰、
+# 本機封裝設定與信任公鑰 — 都是本機資料,不進版控(範例檔 config/packaging.*.example.json 仍在版控內)
+/state/
+/store/
+/config/device/
+/config/packaging.json
+/config/trusted-keys/
+/data/records/
 *.mcap
 *.mp4
 

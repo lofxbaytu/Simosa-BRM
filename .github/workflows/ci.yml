@@ -62,12 +62,40 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - name: 暫存檔導到專案內(本機資料守則)
+        # 與 tools\setup-windows.ps1 相同:TEMP/TMP → <專案>\build\tmp,讓建置與測試在使用者實機的配置下執行
+        # (曾有測試把 Path.GetTempPath() 當成「專案外的路徑」,暫存導回專案後才會失敗)
+        run: |
+          $tmp = Join-Path $env:GITHUB_WORKSPACE 'build\tmp'
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          "TEMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: 建置
         run: dotnet build SimosaBRM.sln -c Release
       - name: 測試
         # -m:1:測試專案依序執行。並行時 Console.Serial 的 HostEndToEndTests(真實 Host 子程序,即時 50 Hz)與雷達單核效能測試
         # 會被同時跑的 SimCore.Tests(900+ 案例)擠到逾時(run 54、55、66);各專案內部仍由 xunit 平行
         run: dotnet test SimosaBRM.sln -c Release --no-build -m:1 --logger "trx;LogFileName=test.trx"
+      - name: PowerShell 腳本(Windows PowerShell 5.1 實跑)
+        # 內建的 Windows PowerShell 5.1(安裝程式的捷徑與使用者雙擊都用它):所有 .ps1 能解析(UTF-8 BOM),
+        # setup-windows.ps1 -SessionOnly、check-local-data.ps1、build-release.ps1 -WhatIf 能執行;
+        # 執行器的工作目錄在 D:、系統磁碟為 C:,與「專案放 D: 或 G:」的實機配置相同
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $errs = @()
+          Get-ChildItem tools -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null; $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors) { $errs += "$($_.FullName): $($parseErrors[0].Message)" }
+          }
+          if ($errs) { throw ("PowerShell 5.1 解析失敗:`n" + ($errs -join "`n")) }
+          $onSys = (Get-Location).Path.StartsWith($env:SystemDrive, [System.StringComparison]::OrdinalIgnoreCase)
+          if ($onSys) { .\tools\setup-windows.ps1 -SessionOnly -AllowSystemDrive } else { .\tools\setup-windows.ps1 -SessionOnly }
+          .\tools\check-local-data.ps1 -Since (Get-Date)
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0 -and -not ($onSys -and $rc -eq 2)) { throw "check-local-data.ps1 結束碼 $rc(setup-windows.ps1 -SessionOnly 之後應為 0)" }
+          .\tools\build-release.ps1 -WhatIf
   e2e:
     name: 端對端(Playwright + 真實核心)
     needs: detect

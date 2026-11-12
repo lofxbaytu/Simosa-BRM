@@ -2,6 +2,17 @@
 
 > 版本號 = `VERSION` 檔(`<年>.<月>.<輪次>`,例如 2026.11.24;更新包只接受版本遞增,此方案大於舊的 `0.<日期>.<時分>` 後備與文件示例 2026.11.1,船上曾套用的任何版本都不會把它判為降版;`tools/build-release.*` 無 `--version` 時以此為發行版本,與更新包版本規則相同:1–4 段數字)。每輪一條,只列新增/修正/已知限制的摘要;細節、驗證指令與測試數見 `docs/dev-log/2026-10-08-工作階段交接.md` 各輪與各 `docs/design/*.md`。日期為該輪提交日。
 
+## 2026.11.28 — 2026-11-12(第二十八輪)
+
+- 守則(使用者指示):**所有要儲存在本機的資料放在專案(安裝)資料夾內,即 D: 或 G:;C: 只放應用程式本身;放在隨身碟會嚴重拖慢進度的項目,先取得同意才可放 C:**。位置表、例外開關與實機檢查見 `docs/ops/本機資料位置.md`;`CLAUDE.md` 同步。
+- 修正(原本會寫到 C: 的項目):NuGet HTTP / 外掛快取與還原暫存(`nuget.config` 的對應鍵無效,改用環境變數)、TEMP/TMP(→ `build\tmp`)、瀏覽器端資料(草稿、參與者資料、訓練紀錄:以專屬 Edge 設定檔 `build\browser\edge` 開啟;找不到 Edge 時不再自動改用預設瀏覽器)、從網頁下載的檔案(→ `build\downloads`)、匯出版視景的 Godot 使用者資料(引擎 log、著色器快取 → `.cache\godot\appdata`)、npm 快取、Node 編譯快取、Playwright 轉譯快取。
+- 修正:不再寫死 `D:\Simosa BRM` — simosa-pkg 的預設根目錄(程式所在的安裝根目錄或專案根目錄 → D: → G:,不落到系統磁碟)、安裝程式預設位置(D: → G:;裝在系統磁碟須確認,預設「否」,靜默安裝 `/ALLOWSYSTEMDRIVE=1`)、`setup-windows.ps1`(專案在系統磁碟時預設拒絕;`-AllowSystemDrive`)。
+- 修正:所有 PowerShell 腳本改存 **UTF-8 with BOM + CRLF**(繁體中文 Windows 內建的 PowerShell 5.1 會把無 BOM 的檔案當 Big5 讀,中文變亂碼甚至無法執行;安裝程式的捷徑就是用 5.1);`tools/pscheck.py` 檢查;本機設定檔(`config\packaging.json` 等)開頭有 BOM 時也能讀。
+- 新增:`tools/check-local-data.ps1`(只讀取:列出根目錄磁碟與檔案系統、環境變數、C: 上各工具預設位置是否有新資料;發行版也附一份,安裝好的筆電可執行)、`tools/dev-shell.cmd`(雙擊開啟已設定好的 PowerShell 視窗)、`setup-windows.ps1 -SessionOnly / -SystemTemp / -Unregister`、`stop-all.ps1` 會請專屬設定檔的 Edge 視窗關閉(`-KeepBrowser` 保留)。
+- 修正(審查):`setup-windows.ps1` 不再改 corepack 的位置(會讓已下載的 pnpm 失效、連線時改抓不相容的新版),pnpm 固定建議 10.28.0 並對 11 以上提出警告;檢查專案磁碟的檔案系統(exFAT / FAT32 上 `pnpm install` 會失敗,開發用磁碟須為 NTFS)與抽取式磁碟;`SIMOSA_BRM_ROOT` 不再寫成使用者層級;各腳本對「已設定但指到專案外」的快取變數改指回專案;3 個把系統暫存當成「專案外路徑」的測試改寫;解除安裝不再刪 `build\webview2`(內含訓練紀錄);`.gitignore` 加入 simosa-pkg 的本機狀態(`state/`、`store/`、`config/device/` 等)。
+- CI:Windows 工作在 TEMP/TMP 指到 `build\tmp` 的配置下建置與測試,並以內建的 Windows PowerShell 5.1 實跑 `setup-windows.ps1 -SessionOnly`、`check-local-data.ps1`、`build-release.ps1 -WhatIf`。
+- 已知限制:專屬 Edge 設定檔與預先寫入的下載位置、WebView2 外殼的下載位置與「另存為 PDF」對話框預設資料夾、匯出版視景的導向、安裝程式的新對話框、exFAT / FAT32 上的行為都**尚未在 Windows 實機確認**(`docs/ops/本機資料位置.md` 第 7 節);直接雙擊視景執行檔或手動用其他瀏覽器開網頁仍會寫到 C:(文件已註明);安裝程式的預設位置只以磁碟是否存在判斷;`build\tmp` 不自動清理。
+
 ## 2026.11.27 — 2026-11-11(第二十七輪)
 
 - 新增(R2):浪一階運動——情境 `ship.seakeeping`(預設關閉)啟用且有浪(Hs > 0)時輸出 `state.waveMotion`(`heave_m` 向上為正、`pitch_deg` 艏仰為正、`heaveRate_mps`、`pitchRate_dps`)。線性、只輸出、不回饋 3-DOF;沿用橫搖的同一波場與相位,各成分以遭遇頻率的 RAO 閉式合成(含長度濾波與 Smith 修正);純函數,快照不需新欄位。未啟用、無浪或 Hs = 0 時狀態、雜湊、快照逐位元不變(既有夾具與黃金檔不動)。C# `SeakeepingModel` 與 Python `seakeeping.py` 逐位元一致(`Golden/seakeeping_table.csv`、`seakeeping_run.{yaml,csv}`)。係數皆為 ASSUMED(無耐航試驗可校正)。

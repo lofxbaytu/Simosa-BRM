@@ -117,6 +117,7 @@ cp -r build/web/instruments "$OUT/app/web"
 COMPONENTS+=("web=$WEB_VERSION=app/web")
 mkdir -p "$OUT/app/launch"
 cp tools/launch/*.sh tools/launch/*.ps1 "$OUT/app/launch/"
+cp tools/check-local-data.ps1 "$OUT/app/launch/"   # 本機資料位置檢查(安裝版模式;docs/ops/本機資料位置.md 第 6 節)
 mkdir -p "$OUT/data"
 tar -C data --exclude='./ships/*/confidential' --exclude='./ships/*/confidential/*' -cf - . | tar -C "$OUT/data" -xf -
 [[ -z "$(find "$OUT/data" -type d -name confidential)" ]] || { echo "data/ 複製後仍含 confidential/" >&2; exit 1; }

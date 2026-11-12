@@ -280,7 +280,7 @@ public class SessionInfoRecordTests
         var root = Path.Combine(TestData.TestRecordsDirectory, $"stoproot-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         Assert.Throws<ArgumentException>(() => StopFileWatcher.Resolve(root, Path.Combine("..", "outside.stop")));
-        Assert.Throws<ArgumentException>(() => StopFileWatcher.Resolve(root, Path.GetTempPath()));
+        Assert.Throws<ArgumentException>(() => StopFileWatcher.Resolve(root, TestData.OutsideOf(root)));
         Assert.Equal(Path.GetFullPath(Path.Combine(root, "build", "run", "simcore.stop")), StopFileWatcher.Resolve(root));
         // 殘留檔:建立時刪除,不視為停止請求
         var stale = Path.Combine(root, "run", "simcore.stop");

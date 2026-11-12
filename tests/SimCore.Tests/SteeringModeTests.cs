@@ -455,7 +455,7 @@ public class SteeringModeTests
         Assert.Equal("data/parameters/company-procedures.yaml", set.Path);
         Assert.Equal("data/parameters/company-procedures.yaml", TestData.E07().ParameterSetInfo!.Path);
         Assert.Equal("data/parameters/company-procedures.yaml", Ship.RepositoryPaths.ToProjectRelative(Path.Combine(TestData.Root, "data", "parameters", "company-procedures.yaml")));
-        var outside = Path.Combine(Path.GetTempPath(), "x.yaml");
+        var outside = TestData.OutsideRoot("x.yaml");
         Assert.Equal(outside, Ship.RepositoryPaths.ToProjectRelative(outside));
     }
 

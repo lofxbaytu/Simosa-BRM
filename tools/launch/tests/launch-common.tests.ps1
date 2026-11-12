@@ -251,7 +251,7 @@ Invoke-Test 'Start-LaunchShellPages 找不到外殼時退回 Open-LaunchPages �
 }
 
 # ---- 本機資料位置(守則:放 D: 或 G:,不寫 C:\):快取、暫存、瀏覽器端資料都在安裝根目錄內 ----
-Invoke-Test 'Set-LaunchProjectEnv:NuGet/.NET 快取與 TEMP/TMP 導到根目錄內;已設定者不覆寫;SIMOSA_SYSTEM_TEMP=1 不改暫存' {
+Invoke-Test 'Set-LaunchProjectEnv:NuGet/.NET 快取與 TEMP/TMP 導到根目錄內;已在根目錄內者沿用、指到根目錄外者改回;SIMOSA_SYSTEM_TEMP=1 不改暫存' {
     . (Join-Path $launch 'launch-common.ps1')
     $names = @('DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH', 'NUGET_PLUGINS_CACHE_PATH', 'NUGET_SCRATCH', 'TEMP', 'TMP', 'SIMOSA_SYSTEM_TEMP')
     $saved = @{}; foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
@@ -260,11 +260,18 @@ Invoke-Test 'Set-LaunchProjectEnv:NuGet/.NET 快取與 TEMP/TMP 導到根目錄�
         Remove-Item -Recurse -Force $fakeRoot -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $fakeRoot | Out-Null
         foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $null) }
-        [Environment]::SetEnvironmentVariable('NUGET_PACKAGES', 'already-set')
-        Set-LaunchProjectEnv $fakeRoot
+        # 已設定且在根目錄內 → 沿用;指到根目錄外(例如專案從 D: 複製到 G: 後殘留的使用者層級設定,或指到 C: 的舊值)→ 改指回本根目錄
+        $inside = Join-Path (Join-Path $fakeRoot 'custom') 'packages'
+        [Environment]::SetEnvironmentVariable('NUGET_PACKAGES', $inside)
+        [Environment]::SetEnvironmentVariable('NUGET_SCRATCH', (Join-Path (Join-Path $tmp 'other-copy') 'scratch'))
+        $note = (Set-LaunchProjectEnv $fakeRoot 6>&1 | Out-String)
         $norm = { param($p) ([string]$p) -replace '\\', '/' }
         $base = & $norm $fakeRoot
-        Assert-True ($env:NUGET_PACKAGES -eq 'already-set') "已設定的變數不應被覆寫:$($env:NUGET_PACKAGES)"
+        Assert-True ($env:NUGET_PACKAGES -eq $inside) "已設定且在根目錄內的變數應沿用:$($env:NUGET_PACKAGES)"
+        Assert-True ($note.Contains('NUGET_SCRATCH') -and $note.Contains('other-copy')) "改掉指到根目錄外的變數時應說明原值:$note"
+        Assert-True (Test-LaunchUnderRoot (Join-Path $fakeRoot 'a') $fakeRoot) 'Test-LaunchUnderRoot:根目錄下的路徑'
+        Assert-True (-not (Test-LaunchUnderRoot ($fakeRoot + '-other') $fakeRoot)) 'Test-LaunchUnderRoot:名稱以根目錄為字首的同層資料夾不算在其下'
+        Assert-True (-not (Test-LaunchUnderRoot '' $fakeRoot)) 'Test-LaunchUnderRoot:空字串不算'
         Assert-True ((& $norm $env:DOTNET_CLI_HOME) -eq "$base/.cache/dotnet-home") "DOTNET_CLI_HOME:$($env:DOTNET_CLI_HOME)"
         Assert-True ((& $norm $env:NUGET_HTTP_CACHE_PATH) -eq "$base/.cache/nuget/http") "NUGET_HTTP_CACHE_PATH:$($env:NUGET_HTTP_CACHE_PATH)"
         Assert-True ((& $norm $env:NUGET_PLUGINS_CACHE_PATH) -eq "$base/.cache/nuget/plugins") "NUGET_PLUGINS_CACHE_PATH:$($env:NUGET_PLUGINS_CACHE_PATH)"
@@ -277,6 +284,32 @@ Invoke-Test 'Set-LaunchProjectEnv:NuGet/.NET 快取與 TEMP/TMP 導到根目錄�
         Set-LaunchProjectEnv $fakeRoot
         Assert-True ($env:TEMP -eq 'system-temp' -and $env:TMP -eq 'system-tmp') "SIMOSA_SYSTEM_TEMP=1 時不應改 TEMP/TMP:$($env:TEMP) / $($env:TMP)"
     } finally { foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) } }
+}
+
+Invoke-Test 'Invoke-LaunchWithGodotUserDir:啟動期間 APPDATA/LOCALAPPDATA 在根目錄內(子程序繼承),結束後還原;動作丟例外也還原' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $savedA = $env:APPDATA; $savedL = $env:LOCALAPPDATA
+    try {
+        $fakeRoot = Join-Path $tmp 'godotroot'
+        Remove-Item -Recurse -Force $fakeRoot -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $fakeRoot | Out-Null
+        $env:APPDATA = 'orig-roaming'; $env:LOCALAPPDATA = 'orig-local'
+        $seen = @{}
+        # 子程序(視景執行檔的替身)在啟動當下繼承環境變數
+        Invoke-LaunchWithGodotUserDir $fakeRoot {
+            $seen['inner'] = $env:APPDATA; $seen['innerLocal'] = $env:LOCALAPPDATA
+            $seen['child'] = if ($IsWindows) { (& cmd /c 'echo %APPDATA%' | Out-String).Trim() } else { (& sh -c 'printf %s "$APPDATA"' | Out-String).Trim() }
+        }
+        $norm = { param($p) ([string]$p) -replace '\\', '/' }
+        $base = & $norm $fakeRoot
+        Assert-True ((& $norm $seen['inner']) -eq "$base/.cache/godot/appdata/roaming" -and (& $norm $seen['innerLocal']) -eq "$base/.cache/godot/appdata/local") "動作期間應指到根目錄內:$($seen['inner']) / $($seen['innerLocal'])"
+        Assert-True ((& $norm $seen['child']) -eq "$base/.cache/godot/appdata/roaming") "子程序應繼承導向後的 APPDATA:$($seen['child'])"
+        Assert-True (Test-Path $seen['inner']) '應建立 .cache/godot/appdata/roaming'
+        Assert-True ($env:APPDATA -eq 'orig-roaming' -and $env:LOCALAPPDATA -eq 'orig-local') "結束後應還原:$($env:APPDATA) / $($env:LOCALAPPDATA)"
+        $threw = $false
+        try { Invoke-LaunchWithGodotUserDir $fakeRoot { throw '啟動失敗' } } catch { $threw = $true }
+        Assert-True ($threw -and $env:APPDATA -eq 'orig-roaming' -and $env:LOCALAPPDATA -eq 'orig-local') "動作丟例外時也應還原:$($env:APPDATA) / $($env:LOCALAPPDATA)"
+    } finally { $env:APPDATA = $savedA; $env:LOCALAPPDATA = $savedL }
 }
 
 Invoke-Test '瀏覽器端資料位置:Get-LaunchBrowserProfile 在根目錄內;Edge 參數含 --user-data-dir 且路徑加引號' {
@@ -297,11 +330,39 @@ Invoke-Test '瀏覽器端資料位置:Get-LaunchBrowserProfile 在根目錄內;E
     Assert-True ($bytes[0] -eq 0x7B) "Preferences 應為無 BOM 的 JSON(第一個位元組 '{'):0x$('{0:X2}' -f $bytes[0])"
     $prefs = Get-Content -Raw -Encoding UTF8 $prefsPath | ConvertFrom-Json
     Assert-True ($prefs.download.default_directory -eq $downloads -and $prefs.download.prompt_for_download -eq $false -and $prefs.savefile.default_directory -eq $downloads) "下載位置應為 ${downloads};實際:$(Get-Content -Raw $prefsPath)"
-    Set-Content -Path $prefsPath -Value '{"download":{"default_directory":"user-choice"}}' -Encoding ASCII -NoNewline
+    # 既有設定檔:使用者改到根目錄內其他資料夾 → 不動(逐位元相同)
+    $userChoice = (Join-Path (Join-Path $fakeRoot 'data') 'exports')
+    $esc = { param($s) ([string]$s).Replace('\', '\\') }
+    $keep = '{"browser":{"x":1},"download":{"default_directory":"' + (& $esc $userChoice) + '","prompt_for_download":true},"savefile":{"default_directory":"' + (& $esc $downloads) + '"}}'
+    [System.IO.File]::WriteAllText($prefsPath, $keep, (New-Object System.Text.UTF8Encoding($false)))
     Initialize-LaunchBrowserProfile $p
-    Assert-True ((Get-Content -Raw $prefsPath) -eq '{"download":{"default_directory":"user-choice"}}') '既有的 Preferences 不應被覆寫'
-    # 非 Windows(容器內的 pwsh)沒有 Edge;Open-LaunchPages 會警告並退回預設瀏覽器(此處不實際開啟)
-    if (-not $IsWindows) { Assert-True ($null -eq (Find-LaunchEdge)) '非 Windows 應回傳 $null' }
+    Assert-True ([System.IO.File]::ReadAllText($prefsPath) -eq $keep) '下載位置在根目錄內的既有 Preferences 不應被改寫'
+    # 既有設定檔:下載位置指到根目錄外(專案資料夾換了磁碟代號或整個複製後的舊路徑)→ 只改寫這兩個值,其餘內容與「無 BOM」不變
+    $oldRoot = Join-Path $tmp 'old drive'
+    $oldDl = Join-Path (Join-Path $oldRoot 'build') 'downloads'
+    $stale = '{"browser":{"x":1},"download":{"default_directory":"' + (& $esc $oldDl) + '","prompt_for_download":true},"savefile":{"default_directory":"' + (& $esc $oldDl) + '"},"zz":"中文不受影響"}'
+    [System.IO.File]::WriteAllText($prefsPath, $stale, (New-Object System.Text.UTF8Encoding($false)))
+    $msg = (Initialize-LaunchBrowserProfile $p 6>&1 | Out-String)
+    $after = [System.IO.File]::ReadAllText($prefsPath)
+    $expect = $stale.Replace((& $esc $oldDl), (& $esc $downloads))
+    Assert-True ($after -eq $expect) "指到根目錄外的下載位置應改回 build/downloads,其餘不變:$after"
+    Assert-True ([System.IO.File]::ReadAllBytes($prefsPath)[0] -eq 0x7B) '改寫後仍應為無 BOM 的 JSON'
+    Assert-True ($msg.Contains('下載位置')) "改寫時應說明:$msg"
+    # 找不到 Edge(非 Windows 的 pwsh 一律如此):不自動退回預設瀏覽器(資料與下載會落到 C:\Users,須先經同意)— 只警告並列出網址,不開啟任何東西
+    if (-not $IsWindows) {
+        Assert-True ($null -eq (Find-LaunchEdge)) '非 Windows 應回傳 $null'
+        $script:started = @()
+        function Start-Process { $script:started += ,@($args) }
+        try {
+            $warn = (Open-LaunchPages 'http://127.0.0.1:18080' @('instructor.html?mode={m}', 'report.html') @{ m = 'simple' } $p 3>&1 | Out-String)
+        } finally { Remove-Item Function:\Start-Process }
+        Assert-True ($script:started.Count -eq 0) "找不到 Edge 時不應開啟任何瀏覽器:$($script:started.Count) 次"
+        Assert-True ($warn.Contains('-DefaultBrowser') -and $warn.Contains('-Shell') -and $warn.Contains('http://127.0.0.1:18080/instructor.html?mode=simple') -and $warn.Contains('http://127.0.0.1:18080/report.html')) "警告應說明處理方式並列出網址:$warn"
+        # -DefaultBrowser(ProfileDir 為空):用預設瀏覽器開啟每個網址
+        function Start-Process { $script:started += ,@($args) }
+        try { Open-LaunchPages 'http://127.0.0.1:18080' @('report.html') @{} '' 6>$null } finally { Remove-Item Function:\Start-Process }
+        Assert-True ($script:started.Count -eq 1 -and "$($script:started[0][0])" -eq 'http://127.0.0.1:18080/report.html') "ProfileDir 為空時應以預設瀏覽器開啟:$($script:started | ForEach-Object { $_ -join ' ' })"
+    }
 }
 
 # ---- USB 操控台服務(src\Contracts\console-serial.md;start-ship-laptop.ps1 -Console)----

@@ -128,7 +128,8 @@ function Write-Meta {
         counters = [bool]$dc
         thresholds = [ordered]@{ maxLatencyMs = $MaxLatencyMs; maxRssSlopeMbPerMin = $MaxRssSlopeMbPerMin; maxRssGrowthMb = $MaxRssGrowthMb; warmupS = $WarmupSeconds }
     }
-    $meta | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $outDir 'meta.json') -Encoding UTF8
+    # 沒有 BOM 的 UTF-8:tests\soak\report.mjs 以 JSON.parse 讀(Windows PowerShell 5.1 的 Set-Content -Encoding UTF8 會加 BOM)
+    [System.IO.File]::WriteAllText((Join-Path $outDir 'meta.json'), ($meta | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
 }
 
 # 程序取樣:CPU% = TotalProcessorTime 差 / 牆鐘差(可 > 100);RSS = WorkingSet64

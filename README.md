@@ -4,15 +4,15 @@
 
 - 規劃書:[docs/Simosa-BRM-操船模擬器規劃書.md](docs/Simosa-BRM-操船模擬器規劃書.md)(需求 R1–R14、決策 D1–D20)
 - 開發守則:[CLAUDE.md](CLAUDE.md)
-- 版本:`VERSION`(目前 2026.11.27(年.月.輪次);變更紀錄 [CHANGELOG.md](CHANGELOG.md),每輪一條;發行組裝 `tools/build-release.*` 無 `--version` 時讀此檔)
+- 版本:`VERSION`(目前 2026.11.28(年.月.輪次);變更紀錄 [CHANGELOG.md](CHANGELOG.md),每輪一條;發行組裝 `tools/build-release.*` 無 `--version` 時讀此檔)
 
-## 目前狀態(第二十七輪,2026-11-11)
+## 目前狀態(第二十八輪,2026-11-12)
 
 **已實作(軟體,含自動測試;容器與開發機可跑)**:C# 50 Hz 確定性核心(MMG 3-DOF、拖船/錨/繫纜/碰墊、岸壁、潮汐/時變與空間流場、浪漂移力、船間交互作用、解耦橫搖、浪中升沉/縱搖(只輸出);C#↔Python 黃金夾具)、感測器故障層與 BAM/BNWAS、情境引擎(時間表/評估/參數集;E01–E22(含變體)、F01–F03 共 38 個情境)、目標船/AIS/COLREG、紀錄/重播/重新評分、雷達/ARPA 服務與 PPI 頁、NMEA/AIS 閘道與 `nmea_check` 檢驗、網頁操船台/教官站(完整/簡化/重播、靠離泊預演組題、情境編輯器與海圖點選)/報告站/簡化 ECDIS、內建 VHF 角色扮演與練習錄影、3D 視景(Godot,品質分級)、WebView2 外殼、USB 序列操控台服務與 Teensy 參考韌體、簽章更新包/紀錄包/直連同步、發行組裝與 Inno Setup 腳本、啟動腳本、Playwright 端對端、長時間穩定性(soak)測試工具。
 
 **需實機/實資料才能完成**(`docs/驗收/需求追溯表.md` 第 3 節):內顯筆電視景幀率與 2 小時連續(soak 工具已可實跑)、ENC 與港方座標校正、實船 3D 模型、FSB2 試俥資料與各物理係數校正、OpenCPN 顯示、WebView2 外殼/安裝程式/VHF 麥克風/錄影的 Windows 實機驗證、操控台硬體製作與韌體燒錄、評估者校準與課程試行、三份訓練文件核准。
 
-**如何開始**:`git clone` 到 `D:\Simosa BRM` → 系統管理員 PowerShell 執行 `.\tools\setup-windows.ps1`(工具與快取設定,見下節)→ `dotnet build SimosaBRM.sln -c Release` 與 `cd src\Instruments.Web && pnpm install && pnpm build` → 啟動 `.\tools\launch\start-ship-laptop.ps1`(船上)或 `.\tools\launch\start-instructor-laptop.ps1 -Standalone`(單機教官站),瀏覽器開 `http://127.0.0.1:8080/instructor.html?mode=simple`;結束用 `.\tools\launch\stop-all.ps1`。發行版改用 `.\tools\build-release.ps1` 產出 `build\release\<版本>\` 後依 `docs/ops/安裝與啟動.md` 安裝。
+**如何開始**:`git clone` 到 `D:\Simosa BRM` 或 `G:\Simosa BRM`(本機資料守則:資料放 D: 或 G:,不放 C:;見下節)→ 系統管理員 PowerShell 執行 `.\tools\setup-windows.ps1`(工具與快取設定,見下節)→ `dotnet build SimosaBRM.sln -c Release` 與 `cd src\Instruments.Web && pnpm install && pnpm build` → 啟動 `.\tools\launch\start-ship-laptop.ps1`(船上)或 `.\tools\launch\start-instructor-laptop.ps1 -Standalone`(單機教官站);啟動腳本會以專屬 Edge 設定檔開啟教官站 `http://127.0.0.1:8080/instructor.html?mode=simple`(不要手動在其他瀏覽器輸入網址:瀏覽器端的草稿與訓練紀錄會存到該瀏覽器在 C: 的設定檔);結束用 `.\tools\launch\stop-all.ps1`。發行版改用 `.\tools\build-release.ps1` 產出 `build\release\<版本>\` 後依 `docs/ops/安裝與啟動.md` 安裝。
 
 ## 已決定的事項(摘要)
 
@@ -23,16 +23,16 @@
 
 ## 開發資料夾與磁碟
 
-請把本儲存庫 clone 到 **D: 或 G:**(例如 `D:\Simosa BRM`、`G:\Simosa BRM`;可以是隨身碟,程式不寫死磁碟代號)。**本機資料守則**:所有建置輸出(`build\`)、套件與快取(`.cache\`)、暫存(`build\tmp\`)、船模與圖資(`data\`)、紀錄(`build\records\`)、瀏覽器端資料(`build\browser\`、`build\webview2\`)都留在這個資料夾內,不寫到 `C:\`;C: 只放應用程式本身;某項目放在隨身碟會嚴重拖慢進度時,先取得同意才用例外開關放 C:。完整的位置表、例外開關與實機檢查方式見 [docs/ops/本機資料位置.md](docs/ops/本機資料位置.md);相關設定在 `Directory.Build.props`、`nuget.config`、`.npmrc`、`uv.toml`。第一次使用先在 PowerShell 執行:
+請把本儲存庫 clone 到 **D: 或 G:**(例如 `D:\Simosa BRM`、`G:\Simosa BRM`;可以是隨身碟,但**開發用的磁碟須為 NTFS** — exFAT / FAT32 上 `pnpm install` 會失敗;程式不寫死磁碟代號)。**本機資料守則**:所有建置輸出(`build\`)、套件與快取(`.cache\`)、暫存(`build\tmp\`)、船模與圖資(`data\`)、紀錄(`build\records\`)、瀏覽器端資料(`build\browser\`、`build\webview2\`)都留在這個資料夾內,不寫到 `C:\`;C: 只放應用程式本身;某項目放在隨身碟會嚴重拖慢進度時,先取得同意才用例外開關放 C:。完整的位置表、例外開關與實機檢查方式見 [docs/ops/本機資料位置.md](docs/ops/本機資料位置.md);相關設定在 `Directory.Build.props`、`nuget.config`、`.npmrc`、`uv.toml`。第一次使用先在 PowerShell 執行:
 
 ```powershell
 cd "D:\Simosa BRM"        # 或 G:\Simosa BRM
 .\tools\setup-windows.ps1
 ```
 
-之後每次開新終端機做建置或測試前執行 `.\tools\setup-windows.ps1 -SessionOnly`(把這個工作階段的暫存檔 TEMP/TMP 指到 `build\tmp`);收工時可用 `.\tools\check-local-data.ps1` 確認沒有新資料落到 C:。專案位於系統磁碟時 setup-windows.ps1 預設拒絕執行(`-AllowSystemDrive` 須經同意)。
+之後每次開新終端機做建置或測試前執行 `.\tools\setup-windows.ps1 -SessionOnly`(把這個工作階段的暫存檔 TEMP/TMP 指到 `build\tmp`),或直接雙擊 `tools\dev-shell.cmd` 開啟已設定好的 PowerShell 視窗(專案在隨身碟時建議只用這個方式,不寫使用者層級環境變數;已寫入的可用 `-Unregister` 移除);收工時可用 `.\tools\check-local-data.ps1` 確認沒有新資料落到 C:。專案位於系統磁碟時 setup-windows.ps1 預設拒絕執行(`-AllowSystemDrive` 須經同意)。
 
-setup-windows.ps1 會設定使用者環境變數(NUGET_PACKAGES、NUGET_HTTP_CACHE_PATH、NUGET_PLUGINS_CACHE_PATH、NUGET_SCRATCH、DOTNET_CLI_HOME、PNPM_HOME、COREPACK_HOME、npm_config_cache、UV_CACHE_DIR、UV_PYTHON_INSTALL_DIR、UV_TOOL_DIR、PLAYWRIGHT_BROWSERS_PATH 等指到 `.cache\`)並檢查工具版本。需要的工具:.NET 8 SDK、Node.js 22 LTS(pnpm)、uv、Git + Git LFS;這些應用程式本身可以裝在 C:,也可選擇裝到專案磁碟的 `\Tools\`。Python 3.12+ 不必另外安裝:機器上沒有時 `uv sync` 會自動下載受管 CPython,setup-windows.ps1 以 UV_PYTHON_INSTALL_DIR 把它放在 `.cache\uv-python\`(uv 預設為 `%APPDATA%\uv\python`,即 `C:\`,而且只能用環境變數改)。uv 的相對 `cache-dir` 設定是以執行時的目前目錄解析,因此 uv 指令請在專案根目錄或 `src\Tools.Calibration` 下執行(或從別處用 `uv --directory src\Tools.Calibration …`);執行過 setup-windows.ps1 後 UV_CACHE_DIR 為絕對路徑,不受此限。
+setup-windows.ps1 會設定使用者環境變數(NUGET_PACKAGES、NUGET_HTTP_CACHE_PATH、NUGET_PLUGINS_CACHE_PATH、NUGET_SCRATCH、DOTNET_CLI_HOME、PNPM_HOME、npm_config_cache、NODE_COMPILE_CACHE、PWTEST_CACHE_DIR、UV_CACHE_DIR、UV_PYTHON_INSTALL_DIR、UV_TOOL_DIR、PLAYWRIGHT_BROWSERS_PATH 等指到 `.cache\`)並檢查工具版本。需要的工具:.NET 8 SDK、Node.js 22 LTS(pnpm 固定用 10.28.0:`corepack enable pnpm; corepack install -g pnpm@10.28.0`;11 以上不讀 `.npmrc` 的快取位置設定)、uv、Git + Git LFS;這些應用程式本身可以裝在 C:,也可選擇裝到專案磁碟的 `\Tools\`。Python 3.12+ 不必另外安裝:機器上沒有時 `uv sync` 會自動下載受管 CPython,setup-windows.ps1 以 UV_PYTHON_INSTALL_DIR 把它放在 `.cache\uv-python\`(uv 預設為 `%APPDATA%\uv\python`,即 `C:\`,而且只能用環境變數改)。uv 的相對 `cache-dir` 設定是以執行時的目前目錄解析,因此 uv 指令請在專案根目錄或 `src\Tools.Calibration` 下執行(或從別處用 `uv --directory src\Tools.Calibration …`);執行過 setup-windows.ps1 後 UV_CACHE_DIR 為絕對路徑,不受此限。
 
 ## 儲存庫結構
 

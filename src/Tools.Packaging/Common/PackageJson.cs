@@ -45,7 +45,16 @@ public static class PackageJson
 
     public static T FromText<T>(string text, string what) => FromBytes<T>(Encoding.UTF8.GetBytes(text), what);
 
-    public static T Load<T>(string path, string what) => FromBytes<T>(File.ReadAllBytes(path), $"{what}({path})");
+    /// <summary>
+    /// 讀本機的設定/狀態檔。開頭的 UTF-8 BOM 略過:人工以「UTF-8 with BOM」存檔,或 Windows PowerShell 5.1 的
+    /// <c>Set-Content -Encoding UTF8</c> 都會加 BOM(System.Text.Json 不接受)。簽章文件與更新包內容走 <see cref="FromBytes{T}"/>,不放寬。
+    /// </summary>
+    public static T Load<T>(string path, string what)
+    {
+        ReadOnlySpan<byte> bytes = File.ReadAllBytes(path);
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) bytes = bytes[3..];
+        return FromBytes<T>(bytes, $"{what}({path})");
+    }
 
     /// <summary>先寫暫存檔再取代,避免中途斷電留下半個檔案。</summary>
     public static void SaveAtomic<T>(string path, T value)

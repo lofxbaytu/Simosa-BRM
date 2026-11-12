@@ -10,6 +10,19 @@ internal static class TestData
 {
     public static string Root { get; } = RepositoryPaths.FindRoot();
 
+    /// <summary>
+    /// 保證在專案根目錄之外的絕對路徑(只當字串用,不建立檔案):根目錄的同層、名稱以根目錄名為字首的資料夾(同時涵蓋「字首相同但不在其下」的判斷)。
+    /// 不可用 <c>Path.GetTempPath()</c> 當「專案外」:本機資料守則把 TEMP/TMP 導到 <c>&lt;專案&gt;/build/tmp</c>(tools/setup-windows.ps1)。
+    /// </summary>
+    public static string OutsideRoot(params string[] parts) => OutsideOf(Root, parts);
+
+    public static string OutsideOf(string root, params string[] parts)
+    {
+        var full = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var sibling = full + "-outside";
+        return parts.Length == 0 ? sibling : Path.Combine(new[] { sibling }.Concat(parts).ToArray());
+    }
+
     public static ShipParticulars Fsb1() => ShipParticulars.LoadFromDataRoot(Root, "FSB1");
     public static ShipParticulars Fsb2() => ShipParticulars.LoadFromDataRoot(Root, "FSB2");
     public static ShipParticulars Ship(string id) => ShipParticulars.LoadFromDataRoot(Root, id);

@@ -22,6 +22,9 @@ done
 load_config "$CONFIG"
 cd "$ROOT"
 export SIMOSA_BRM_ROOT="$ROOT" SIMOSA_INSTALL_ROOT="$ROOT" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+# 快取留在安裝根目錄內(與 start-ship-laptop.sh 相同;NuGet HTTP/外掛快取與暫存只能用環境變數導回專案內)
+export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}" NUGET_PACKAGES="${NUGET_PACKAGES:-$ROOT/.cache/nuget/packages}"
+export NUGET_HTTP_CACHE_PATH="${NUGET_HTTP_CACHE_PATH:-$ROOT/.cache/nuget/http}" NUGET_PLUGINS_CACHE_PATH="${NUGET_PLUGINS_CACHE_PATH:-$ROOT/.cache/nuget/plugins}" NUGET_SCRATCH="${NUGET_SCRATCH:-$ROOT/.cache/nuget/scratch}"
 LOGS="$(cfg logs build/logs)"
 SHIP="${SHIP:-$(cfg ship FSB1)}"
 # --ship 可為 ships 表的名稱(FSB1/FSB2)或直接給 IP;IP 不查表(cfg 會把「.」換成 _,查不到也只回傳預設值)

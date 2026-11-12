@@ -55,31 +55,50 @@ public sealed class InstallLayout
     /// 預設安裝根目錄:
     /// 1. 環境變數 SIMOSA_INSTALL_ROOT;
     /// 2. 執行檔所在位置往上找到的安裝根目錄(含 data/ 與 app/;發行版 &lt;root&gt;/app/…)或專案根目錄(Directory.Build.props + data/,
-    ///    或環境變數 SIMOSA_BRM_ROOT)— 程式放在哪個磁碟就用哪個磁碟(D:、G: 皆可),不寫死磁碟代號;
-    /// 3. Windows:<see cref="WindowsDefaultRoots"/> 中第一個已存在的資料夾,其次第一個磁碟存在者;兩個磁碟都沒有時仍回傳 D:\Simosa BRM
-    ///   (磁碟不存在,後續建立目錄會明確失敗)— **不會自動落到系統磁碟 C:**(要放 C: 須以 --root 或 SIMOSA_INSTALL_ROOT 明確指定,即經同意);
+    ///    或環境變數 SIMOSA_BRM_ROOT)— 程式放在哪個磁碟就用哪個磁碟(D:、G: 皆可),不寫死磁碟代號;兩者都找到時離執行檔較近者優先
+    ///   (專案的某個上層剛好同時有 data/ 與 app/ 時,不把那個上層當成安裝根目錄);
+    /// 3. Windows:<see cref="WindowsDefaultRoots"/> 中第一個已存在的資料夾,其次第一個磁碟存在者;兩個磁碟都沒有時仍回傳清單的第一個
+    ///   (磁碟不存在,後續建立目錄會明確失敗)— **不會自動落到系統磁碟**(清單中與系統磁碟同代號者略過,例如 Windows 本身裝在 D: 的機器;
+    ///    要放系統磁碟須以 --root 或 SIMOSA_INSTALL_ROOT 明確指定,即經同意);
     /// 4. 其他平台:目前目錄。
     /// </summary>
     public static string DefaultRoot()
         => DefaultRoot(System.Environment.GetEnvironmentVariable("SIMOSA_INSTALL_ROOT"), AppContext.BaseDirectory,
-            Directory.Exists, () => RepositoryPaths.TryFindRoot(), OperatingSystem.IsWindows(), Directory.GetCurrentDirectory());
+            Directory.Exists, () => RepositoryPaths.TryFindRoot(), OperatingSystem.IsWindows(), Directory.GetCurrentDirectory(),
+            System.Environment.GetEnvironmentVariable("SystemDrive"));
 
-    /// <summary>可測版本:所有對環境的查詢由參數注入。</summary>
+    /// <summary>可測版本:所有對環境的查詢由參數注入。<paramref name="systemDrive"/>:Windows 的系統磁碟(例如 "C:";null = 不排除)。</summary>
     public static string DefaultRoot(string? envRoot, string baseDirectory, Func<string, bool> directoryExists,
-        Func<string?> findRepositoryRoot, bool isWindows, string currentDirectory)
+        Func<string?> findRepositoryRoot, bool isWindows, string currentDirectory, string? systemDrive = null)
     {
         if (!string.IsNullOrEmpty(envRoot)) return envRoot;
-        if (FindInstalledRoot(baseDirectory, directoryExists) is { } installed) return installed;
-        if (findRepositoryRoot() is { Length: > 0 } repo) return repo;
+        var installed = FindInstalledRoot(baseDirectory, directoryExists);
+        var repo = findRepositoryRoot() is { Length: > 0 } found ? found : null;
+        if (installed is not null && repo is not null && IsUnder(repo, installed, strictly: true) && IsUnder(baseDirectory, repo, strictly: false))
+            return repo;   // 專案根目錄比「含 data/ 與 app/ 的上層」更接近執行檔
+        if (installed is not null) return installed;
+        if (repo is not null) return repo;
         if (isWindows)
         {
-            foreach (var r in WindowsDefaultRoots)
+            var sys = string.IsNullOrEmpty(systemDrive) ? null : systemDrive.TrimEnd('\\', '/') + "\\";
+            var candidates = WindowsDefaultRoots.Where(r => sys is null || !r.StartsWith(sys, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (candidates.Count == 0) candidates = WindowsDefaultRoots.ToList();
+            foreach (var r in candidates)
                 if (directoryExists(r)) return r;
-            foreach (var r in WindowsDefaultRoots)
+            foreach (var r in candidates)
                 if (directoryExists(r[..3])) return r;   // 磁碟根目錄(D:\、G:\)存在
-            return WindowsDefaultRoots[0];
+            return candidates[0];
         }
         return currentDirectory;
+    }
+
+    /// <summary><paramref name="path"/> 是否在 <paramref name="parent"/> 之下(strictly = false 時相等也算);不分大小寫(Windows 路徑)。</summary>
+    private static bool IsUnder(string path, string parent, bool strictly)
+    {
+        static string Norm(string p) => Path.GetFullPath(p).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var a = Norm(path); var b = Norm(parent);
+        if (a.Equals(b, StringComparison.OrdinalIgnoreCase)) return !strictly;
+        return a.StartsWith(b + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>自 <paramref name="start"/> 往上找發行版的安裝根目錄(同時含 data/ 與 app/ 的目錄);找不到回傳 null。</summary>
