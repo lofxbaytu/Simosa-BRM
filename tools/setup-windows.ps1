@@ -25,7 +25,8 @@ if ($sysDrive -and $root.StartsWith($sysDrive, [System.StringComparison]::Ordina
     if (-not $AllowSystemDrive) { throw "專案位於系統磁碟 $sysDrive($root)。守則:本機資料放 D: 或 G:;確實要放在 $sysDrive 須先取得訓練負責人同意,再加 -AllowSystemDrive 執行。" }
     Write-Warning "專案位於系統磁碟 $sysDrive(已加 -AllowSystemDrive):建置輸出、快取、紀錄都會寫在 $sysDrive。"
 }
-$drive = Split-Path -Qualifier $root   # 專案所在磁碟(D: 或 G:);下方安裝建議以它為準
+# 專案所在磁碟(D: 或 G:);下方安裝建議以它為準。UNC 路徑(\\server\share\…)沒有磁碟代號,不支援
+try { $drive = Split-Path -Qualifier $root } catch { throw "專案路徑 $root 沒有磁碟代號(網路路徑?):請把專案放在有磁碟代號的 D: 或 G:。" }
 # 專案磁碟的檔案系統與種類:
 #   非 NTFS(隨身碟出廠多為 exFAT / FAT32)不支援目錄連結(junction)→ pnpm install 會以 EISDIR 失敗,網頁無法建置;FAT32 另有單檔 4 GB 上限。
 #   只執行發行版(船上 / 教官筆電)不受影響。抽取式磁碟:使用者層級環境變數會讓這個帳號的其他專案也把快取寫到這顆磁碟,拔除後它們會失敗。
@@ -79,7 +80,8 @@ if ($Unregister) {
     foreach ($k in (@($vars.Keys) + $legacyUserVars | Sort-Object -Unique)) {
         $cur = [Environment]::GetEnvironmentVariable($k, 'User')
         if (-not $cur) { continue }
-        if (Test-UnderRoot $cur) { [Environment]::SetEnvironmentVariable($k, $null, 'User'); Write-Host "  已移除使用者層級 $k($cur)" }
+        # [NullString]::Value:PowerShell 會把 $null 轉成空字串再傳給 .NET 的 string 參數;較新的 .NET 對空字串是「設成空值」而不是刪除
+        if (Test-UnderRoot $cur) { [Environment]::SetEnvironmentVariable($k, [NullString]::Value, 'User'); Write-Host "  已移除使用者層級 $k($cur)" }
         else { Write-Host "  保留使用者層級 $k = $cur(不是指向本專案)" }
     }
     Write-Host '完成(-Unregister):之後請用 .\tools\setup-windows.ps1 -SessionOnly 或 tools\dev-shell.cmd 設定各個終端機。'
@@ -88,7 +90,7 @@ if ($Unregister) {
 if (-not $SessionOnly) {
     foreach ($k in $legacyUserVars) {
         $cur = [Environment]::GetEnvironmentVariable($k, 'User')
-        if ($cur -and ($k -eq 'SIMOSA_BRM_ROOT' -or (Test-UnderRoot $cur))) { [Environment]::SetEnvironmentVariable($k, $null, 'User'); Write-Host "已移除舊的使用者層級 $k($cur)" }
+        if ($cur -and ($k -eq 'SIMOSA_BRM_ROOT' -or (Test-UnderRoot $cur))) { [Environment]::SetEnvironmentVariable($k, [NullString]::Value, 'User'); Write-Host "已移除舊的使用者層級 $k($cur)" }
     }
 }
 # 本工作階段內殘留、且指向本專案的 COREPACK_HOME(舊版腳本所設)一併清掉,讓 pnpm 回到 corepack 的預設位置
@@ -102,7 +104,17 @@ else { Write-Host '已設定使用者環境變數:' ($vars.Keys -join ', ') }
 # 不改使用者層級的 TEMP(會影響這個帳號的所有程式;隨身碟拔除時 Windows 其他程式會失敗)— 所以每次開新終端機要重新執行本腳本
 #(可加 -SessionOnly),或由 tools\ 下的建置/啟動腳本自行設定(它們各自把 TEMP/TMP 指到 build\tmp)。
 # -SystemTemp:暫存留在 Windows 預設位置(C:\Users\…\AppData\Local\Temp);放在隨身碟會明顯拖慢建置時,經同意才使用。
-if ($SystemTemp) { Write-Warning "暫存檔留在系統預設位置($env:TEMP);須經訓練負責人同意。" }
+# -SystemTemp 同時設定本工作階段的 SIMOSA_SYSTEM_TEMP=1:之後在同一個視窗執行的 tools\ 腳本不會把 TEMP/TMP 改回 build\tmp,
+# check-local-data.ps1 也把它標為「已同意的例外」。先前在這個視窗被導到 build\tmp 的 TEMP/TMP 還原為使用者層級的設定值。
+if ($SystemTemp) {
+    $env:SIMOSA_SYSTEM_TEMP = '1'
+    foreach ($n in @('TEMP', 'TMP')) {
+        $cur = [Environment]::GetEnvironmentVariable($n)
+        $user = [Environment]::GetEnvironmentVariable($n, 'User')
+        if ((Test-UnderRoot $cur) -and $user) { Set-Item -Path "Env:$n" -Value ([Environment]::ExpandEnvironmentVariables($user)) }
+    }
+    Write-Warning "暫存檔留在系統預設位置($env:TEMP;本工作階段已設 SIMOSA_SYSTEM_TEMP=1);須經訓練負責人同意。"
+}
 else {
     $tmp = Join-Path $root 'build\tmp'
     $env:TEMP = $tmp; $env:TMP = $tmp

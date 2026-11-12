@@ -18,8 +18,12 @@ internal static class TestData
 
     public static string OutsideOf(string root, params string[] parts)
     {
-        var full = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullRoot = Path.GetFullPath(root);
+        var full = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var sibling = full + "-outside";
+        // 根目錄本身就是磁碟根目錄(整顆磁碟就是專案,例如 G:\):"G:" + "-outside" 是磁碟相對路徑,會被解析回專案內 → 改用另一個磁碟代號
+        if (OperatingSystem.IsWindows() && string.Equals(Path.GetPathRoot(fullRoot), fullRoot, StringComparison.OrdinalIgnoreCase))
+            sibling = (fullRoot.StartsWith("Z", StringComparison.OrdinalIgnoreCase) ? "Y" : "Z") + @":\simosa-outside";
         return parts.Length == 0 ? sibling : Path.Combine(new[] { sibling }.Concat(parts).ToArray());
     }
 

@@ -37,6 +37,10 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$ROOT/.cache/dotnet-home}" NUGET_PACKAGES="${NUGET_PACKAGES:-$ROOT/.cache/nuget/packages}"
 export NUGET_HTTP_CACHE_PATH="${NUGET_HTTP_CACHE_PATH:-$ROOT/.cache/nuget/http}" NUGET_PLUGINS_CACHE_PATH="${NUGET_PLUGINS_CACHE_PATH:-$ROOT/.cache/nuget/plugins}" NUGET_SCRATCH="${NUGET_SCRATCH:-$ROOT/.cache/nuget/scratch}"  # NuGet HTTP/外掛快取與暫存只能用環境變數導回專案內(nuget.config 的註解)
 export DOTNET_ROLL_FORWARD="${DOTNET_ROLL_FORWARD:-Major}"
+# pwsh 自己的啟動快取與遙測識別碼(Linux 預設寫 ~/.cache/powershell、~/.local/share/powershell)也留在專案內,不寫家目錄
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$ROOT/.cache/pwsh/cache}" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$ROOT/.cache/pwsh/config}" XDG_DATA_HOME="${XDG_DATA_HOME:-$ROOT/.cache/pwsh/data}"
+export POWERSHELL_TELEMETRY_OPTOUT=1
+mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
 if [[ -z "${DOTNET_ROOT:-}" ]] && command -v dotnet >/dev/null 2>&1; then DOTNET_ROOT="$(dirname "$(readlink -f "$(command -v dotnet)")")"; export DOTNET_ROOT; fi
 
 find_pwsh() {

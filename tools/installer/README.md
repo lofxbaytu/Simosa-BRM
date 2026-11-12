@@ -27,7 +27,7 @@
 | 執行階段 | `tools\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe` 存在且登錄檔無 Runtime 時 `/silent /install`;`tools\dotnet\dotnet-runtime-8*-win-x64.exe`、`windowsdesktop-runtime-8*-win-x64.exe` 存在且缺對應執行階段時 `/install /quiet /norestart`;仍缺者在結尾列出 |
 | 安裝後 | 可選執行 `start-ship-laptop.ps1 -CheckOnly`(列出找到的元件)與 `simosa-pkg release verify --dir .`(清單核對;解除安裝檔 `tools\uninstall\unins000.*` 會被 verify 略過) |
 | 解除安裝 | 移除安裝程式放進去的檔案與 `build\logs`、`build\tmp`、防火牆規則;**保留** `build\records`、`data\records`、`state\`、`store\`、`config\`,以及瀏覽器端資料 `build\webview2`、`build\browser` 與 `build\downloads`(結尾提示路徑) |
-| 不寫 C:\ | 解除安裝檔在 `{app}\tools\uninstall\`;登錄只寫 HKLM 的解除安裝資訊;安裝過程的暫存檔用 Windows 的 `%TEMP%`(結束即刪) |
+| 不寫 C:\ | 解除安裝檔在 `{app}\tools\uninstall\`;登錄只寫 HKLM 的解除安裝資訊;開始功能表與桌面捷徑(`.lnk`)在 Windows 的公用位置(`C:\ProgramData\…\Start Menu`、公用桌面),屬應用程式的一部分;安裝過程的暫存檔用 Windows 的 `%TEMP%`(結束即刪) |
 
 升級:船上以簽章軟體更新包(`simosa-pkg`;`docs/design/packaging-sync.md`)更新 `app\`,不重跑安裝程式;重新執行安裝程式只用於初次安裝或整機重建(同一 `AppId`,會記住先前位置;已修改的 `config\` 保留)。
 

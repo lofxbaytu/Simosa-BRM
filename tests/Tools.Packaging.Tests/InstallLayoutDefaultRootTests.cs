@@ -55,6 +55,10 @@ public sealed class InstallLayoutDefaultRootTests
         Assert.Equal(repo, Resolve(baseDir: baseDir, existing: existing, repo: repo));
         // 專案根目錄不在那個上層之下(例如 SIMOSA_BRM_ROOT 指向別處)→ 仍以執行檔所在的安裝根目錄為準
         Assert.Equal(top, Resolve(baseDir: Path.Combine(top, "app", "pkg"), existing: existing, repo: "/somewhere/else"));
+        // 專案在那個上層之下,但執行檔不在專案內(例如同一顆磁碟上另一個資料夾裡的程式)→ 以執行檔所在的安裝根目錄為準
+        Assert.Equal(top, Resolve(baseDir: Path.Combine(top, "dev", "Simosa BRM-other", "build", "bin"), existing: existing, repo: repo));
+        // 路徑比對不分大小寫(Windows):執行檔路徑與專案根目錄只差大小寫時仍視為在專案內
+        Assert.Equal(repo, Resolve(baseDir: baseDir.Replace("Simosa BRM", "simosa brm"), existing: existing, repo: repo));
         // 安裝根目錄本身就是(或在)專案內:較近的安裝根目錄優先
         var inner = Path.Combine(repo, "build", "release", "2026.11.28");
         Assert.Equal(inner, Resolve(baseDir: Path.Combine(inner, "app", "pkg"), existing: new[] { Path.Combine(inner, "data"), Path.Combine(inner, "app") }, repo: repo));
@@ -79,6 +83,7 @@ public sealed class InstallLayoutDefaultRootTests
         // Windows 本身裝在 D: 的機器:清單中的 D: 略過 → G:(即使 G: 不存在也不落到系統磁碟)
         Assert.Equal(G, Resolve(existing: new[] { @"D:\", D, @"G:\" }, systemDrive: "D:"));
         Assert.Equal(G, Resolve(existing: new[] { @"D:\", D }, systemDrive: @"D:\"));
+        Assert.Equal(G, Resolve(existing: new[] { @"D:\", D, @"G:\" }, systemDrive: "d:"));   // 系統磁碟代號比對不分大小寫
         // 未提供系統磁碟(非 Windows 的呼叫端)→ 不排除
         Assert.Equal(D, Resolve(existing: new[] { @"D:\" }, systemDrive: null));
     }

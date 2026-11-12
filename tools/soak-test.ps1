@@ -176,7 +176,7 @@ function Complete-Soak {
         Start-Sleep -Milliseconds 250
     }
     # 外部程式與子腳本的輸出一律送 Out-Host:本函式以回傳值傳結束碼,不能讓它們的輸出混進回傳值
-    try { & (Join-Path $root 'tools\launch\stop-all.ps1') -Logs $logsRel -StopTimeoutSeconds 20 | Out-Host } catch { Write-Warning "stop-all:$($_.Exception.Message)" }
+    try { & (Join-Path $root 'tools\launch\stop-all.ps1') -Logs $logsRel -StopTimeoutSeconds 20 -KeepBrowser | Out-Host } catch { Write-Warning "stop-all:$($_.Exception.Message)" }
     if ($script:hostProc) { try { $script:hostProc.WaitForExit(5000) | Out-Null; $script:hostExit = $script:hostProc.ExitCode } catch { } }
     $log = Join-Path (Join-Path $root $logsRel) 'simcore.log'
     if ((Test-Path $log) -and ((Get-Content -Raw $log) -match '紀錄已關閉')) { $script:footer = $true }
@@ -248,6 +248,6 @@ try {
 } catch {
     Write-Host "[soak] 失敗:$($_.Exception.Message)"
     $script:aborted = $true
-    if ($script:hostProc) { $exitCode = Complete-Soak } else { try { & (Join-Path $root 'tools\launch\stop-all.ps1') -Logs $logsRel | Out-Host } catch { }; $exitCode = 2 }
+    if ($script:hostProc) { $exitCode = Complete-Soak } else { try { & (Join-Path $root 'tools\launch\stop-all.ps1') -Logs $logsRel -KeepBrowser | Out-Host } catch { }; $exitCode = 2 }
 }
 exit $exitCode

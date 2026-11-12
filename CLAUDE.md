@@ -11,4 +11,4 @@
 - 測試:`pytest`(Python)、`dotnet test`(C#)、`pnpm test`(Web);黃金測試以 `data/ships/*/trial_targets.json` 的公差為準。
 - 語言與文件:程式註解與使用者文件用繁體中文(專有名詞保留英文),識別字用英文。
 - 不做:不連網際網路取資料、不把本機資料寫入 `C:\`(未經使用者同意)、不把機密係數放到公開儲存庫以外的地方。
-- PowerShell 腳本(`*.ps1`)一律存成 **UTF-8 with BOM**、行尾 CRLF(Windows PowerShell 5.1 對無 BOM 檔案以 Big5 讀取;`tools/pscheck.py` 會檢查)。
+- PowerShell 腳本(`*.ps1`)一律存成 **UTF-8 with BOM**、行尾 CRLF(Windows PowerShell 5.1 對無 BOM 檔案以 Big5 讀取;BOM 由 `tools/pscheck.py` 檢查,CRLF 由 `.gitattributes` 保證;雙引號字串內變數後面緊接中文或半形冒號時寫 `${變數}`)。

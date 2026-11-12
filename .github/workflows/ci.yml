@@ -33,6 +33,11 @@ jobs:
         run: |
           uv sync --all-extras
           uv run pytest -q
+      - name: PowerShell 與安裝程式腳本的靜態檢查
+        # tools/pscheck.py(.ps1 的 UTF-8 BOM、括號與字串配對、字串內變數名稱的常見手誤)、tools/installer/check-iss.py(安裝程式腳本的結構)
+        run: |
+          python3 tools/pscheck.py
+          python3 -I tools/installer/check-iss.py tools/installer/SimosaBRM.iss
   web:
     name: 網頁儀器
     needs: detect
@@ -79,7 +84,9 @@ jobs:
       - name: PowerShell 腳本(Windows PowerShell 5.1 實跑)
         # 內建的 Windows PowerShell 5.1(安裝程式的捷徑與使用者雙擊都用它):所有 .ps1 能解析(UTF-8 BOM),
         # setup-windows.ps1 -SessionOnly、check-local-data.ps1、build-release.ps1 -WhatIf 能執行;
-        # 執行器的工作目錄在 D:、系統磁碟為 C:,與「專案放 D: 或 G:」的實機配置相同
+        # 執行器的工作目錄在 D:、系統磁碟為 C:,與「專案放 D: 或 G:」的實機配置相同。
+        # 注意:shell: powershell 的內嵌腳本由執行器寫成「沒有 BOM 的 UTF-8」,5.1 會以系統 ANSI 字碼頁讀取 —
+        # 某些中文字的位元組會被當成引號而讓字串提前結束,所以 run: 內只用 ASCII(訊息用英文),中文說明寫在這裡。
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -89,17 +96,20 @@ jobs:
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
             if ($parseErrors) { $errs += "$($_.FullName): $($parseErrors[0].Message)" }
           }
-          if ($errs) { throw ("PowerShell 5.1 解析失敗:`n" + ($errs -join "`n")) }
+          if ($errs) { throw ("Windows PowerShell 5.1 parse errors:`n" + ($errs -join "`n")) }
           $onSys = (Get-Location).Path.StartsWith($env:SystemDrive, [System.StringComparison]::OrdinalIgnoreCase)
           if ($onSys) { .\tools\setup-windows.ps1 -SessionOnly -AllowSystemDrive } else { .\tools\setup-windows.ps1 -SessionOnly }
           .\tools\check-local-data.ps1 -Since (Get-Date)
           $rc = $LASTEXITCODE
-          if ($rc -ne 0 -and -not ($onSys -and $rc -eq 2)) { throw "check-local-data.ps1 結束碼 $rc(setup-windows.ps1 -SessionOnly 之後應為 0)" }
+          if ($rc -ne 0 -and -not ($onSys -and $rc -eq 2)) { throw "check-local-data.ps1 exit code $rc (expected 0 after setup-windows.ps1 -SessionOnly)" }
           .\tools\build-release.ps1 -WhatIf
-      - name: 本機資料守則實測(依守則設定後建置,系統磁碟不得有新資料)
+          exit 0
+      - name: 本機資料守則實測(依守則設定後還原並建置,系統磁碟不得有新資料)
         # 實機配置的端到端檢查:結束前面步驟留下的建置伺服器(它們帶著舊的環境變數)→ setup-windows.ps1 -SessionOnly →
-        # 以專案內全新的 NuGet 快取還原並建置一個專案(用到 NuGet 套件 / HTTP 快取 / 還原暫存、MSBuild 暫存、.NET CLI 家目錄)→
-        # check-local-data.ps1 -Since <開始時間> 必須回 0(C:\Users 下各工具的預設位置沒有新資料)
+        # 把 NUGET_PACKAGES 指到專案內一個全新的資料夾(否則前面的「建置」步驟已還原過,這裡的還原會是 no-op,
+        # NuGet HTTP 快取與還原暫存的導向根本沒被用到)→ 還原並建置一個專案 → 斷言:套件確實下載到新資料夾、
+        # 專案內的 NuGet HTTP 快取(.cache\nuget\http)有新檔案、check-local-data.ps1 -Since <開始時間> 回 0
+        # (C:\Users 下各工具的預設位置沒有新資料)。run: 內只用 ASCII(理由同上一步)。
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -108,12 +118,21 @@ jobs:
           $t0 = Get-Date
           $onSys = (Get-Location).Path.StartsWith($env:SystemDrive, [System.StringComparison]::OrdinalIgnoreCase)
           if ($onSys) { .\tools\setup-windows.ps1 -SessionOnly -AllowSystemDrive | Out-Null } else { .\tools\setup-windows.ps1 -SessionOnly | Out-Null }
+          $env:NUGET_PACKAGES = Join-Path (Get-Location).Path '.cache\nuget\packages-ci-check'
+          if (Test-Path $env:NUGET_PACKAGES) { Remove-Item -Recurse -Force $env:NUGET_PACKAGES }
+          $httpBefore = @(Get-ChildItem -LiteralPath $env:NUGET_HTTP_CACHE_PATH -Recurse -File -ErrorAction SilentlyContinue).Count
           dotnet build src\Tools.Packaging.Cli\Tools.Packaging.Cli.csproj -c Debug --disable-build-servers -nologo -v q
-          if ($LASTEXITCODE -ne 0) { throw "dotnet build 失敗(結束碼 $LASTEXITCODE)" }
+          if ($LASTEXITCODE -ne 0) { throw "dotnet build failed (exit code $LASTEXITCODE)" }
           dotnet build-server shutdown | Out-Null
+          $pkgs = @(Get-ChildItem -LiteralPath $env:NUGET_PACKAGES -Directory -ErrorAction SilentlyContinue).Count
+          $httpAfter = @(Get-ChildItem -LiteralPath $env:NUGET_HTTP_CACHE_PATH -Recurse -File -ErrorAction SilentlyContinue).Count
+          Write-Host "restored package folders: $pkgs; NuGet HTTP cache files inside the project: $httpBefore -> $httpAfter"
+          if ($pkgs -eq 0) { throw 'restore downloaded nothing into the fresh project-local package folder (restore was a no-op?)' }
+          if ($httpAfter -le $httpBefore) { throw 'the NuGet HTTP cache inside the project received no file: NUGET_HTTP_CACHE_PATH is not effective' }
           .\tools\check-local-data.ps1 -Since $t0
           $rc = $LASTEXITCODE
-          if ($rc -ne 0 -and -not ($onSys -and $rc -eq 2)) { throw "依守則設定後建置,check-local-data.ps1 仍回報結束碼 $rc(系統磁碟上有新資料或環境變數未指到專案內)" }
+          if ($rc -ne 0 -and -not ($onSys -and $rc -eq 2)) { throw "check-local-data.ps1 exit code $rc after a build under the local-data rule (new data on the system drive, or a variable not pointing into the project)" }
+          exit 0
       - name: 安裝程式腳本以 Inno Setup 編譯
         # 執行器有 Inno Setup 時實際編譯 tools\installer\SimosaBRM.iss(以最小的假發行版目錄;只驗證腳本與 [Code] 能編譯,不執行安裝)。
         # 容器內只有靜態檢查(tools/installer/check-iss.py),這一步是唯一的編譯驗證;沒有 ISCC 或版本低於 6.3 時略過並留下警告。
@@ -176,6 +195,10 @@ jobs:
           npx playwright install chromium --with-deps
       - name: 建置網頁與 .NET、執行端對端測試(tools/run-e2e.sh)
         run: bash tools/run-e2e.sh
+      - name: PowerShell 腳本測試(pwsh;tools/run-ps-tests.sh)
+        # 以執行器內建的 PowerShell 7 執行:全部 .ps1 的解析、tools/launch/tests/launch-common.tests.ps1(啟動腳本、stop-all、
+        # 本機資料位置的函式)、build-release.ps1 / soak-test.ps1 的 -WhatIf;沒有 pwsh 時失敗(--require-pwsh),不默默略過
+        run: bash tools/run-ps-tests.sh --require-pwsh
       - name: 上傳失敗截圖、trace 與程序 log
         if: failure()
         uses: actions/upload-artifact@v4

@@ -149,9 +149,9 @@ $components.Add("web=$webVersion=app/web")
 New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'app\launch') | Out-Null
 Copy-Item 'tools\launch\*.ps1', 'tools\launch\*.sh' (Join-Path $outDir 'app\launch')
 Copy-Item 'tools\check-local-data.ps1' (Join-Path $outDir 'app\launch')   # 本機資料位置檢查(安裝版模式;docs\ops\本機資料位置.md 第 6 節)
-# data\:排除 ships\*\confidential\(機密係數與試俥原始檔不進發行版;規劃書第 11.4 節)
+# data\:排除 ships\*\confidential\(機密係數與試俥原始檔不進發行版;規劃書第 11.4 節)與 data\records\(開發機的本機練習紀錄)
 $dataOut = Join-Path $outDir 'data'
-Get-ChildItem -Recurse -File 'data' | Where-Object { $_.FullName -notmatch '[\\/]ships[\\/][^\\/]+[\\/]confidential([\\/]|$)' } | ForEach-Object {
+Get-ChildItem -Recurse -File 'data' | Where-Object { $_.FullName -notmatch '[\\/]ships[\\/][^\\/]+[\\/]confidential([\\/]|$)' -and $_.FullName -notmatch '[\\/]data[\\/]records([\\/]|$)' } | ForEach-Object {
     $rel = $_.FullName.Substring((Join-Path $root 'data').Length + 1)
     $dst = Join-Path $dataOut $rel
     New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
@@ -181,7 +181,9 @@ Copy-Item 'src\SimCore\README.md' (Join-Path $outDir 'docs\components\模擬核�
 Copy-Item 'src\Contracts\README.md' (Join-Path $outDir 'docs\components\契約-Contracts.md')
 $components.Add("docs=$Version=docs")
 New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'config') | Out-Null
-Copy-Item 'config\*.json', 'config\README.md' (Join-Path $outDir 'config')
+# 只複製受版控的設定範例:config\packaging.json、config\device\、config\trusted-keys\ 是 simosa-pkg 在開發機建立的本機資料
+#(shipId / deviceId、金鑰),不可帶進發行版(船上 device init 會因 ShipId 已有值而沿用開發機的身分)
+Copy-Item 'config\ship-laptop.json', 'config\instructor-laptop.json', 'config\packaging.*.example.json', 'config\README.md' (Join-Path $outDir 'config')
 # Windows 安裝程式腳本隨發行版(tools\installer\;在有 Inno Setup 的機器可直接編譯本發行版)
 New-Item -ItemType Directory -Force -Path (Join-Path $outDir 'tools\installer') | Out-Null
 Copy-Item $issScript, (Join-Path $root 'tools\installer\README.md') (Join-Path $outDir 'tools\installer')

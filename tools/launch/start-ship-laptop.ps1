@@ -16,7 +16,7 @@
                       loopback:<讀取檔>,<寫入檔> 為測試用假裝置。-NoConsole 停用
 .PARAMETER DefaultBrowser  網頁改用 Windows 預設瀏覽器開啟(其設定檔在 C:\Users;瀏覽器端的草稿與紀錄會存在 C:,需經訓練負責人同意)。
                       未指定時以專屬設定檔啟動 Microsoft Edge(build\browser\edge),瀏覽器端資料留在安裝根目錄內
-.PARAMETER Shell      以 WebView2 操船台外殼(app\shell\SimosaBRM.Shell.exe;kiosk 全螢幕,每個 web.openPages 一個程序)開啟網頁,取代預設瀏覽器;
+.PARAMETER Shell      以 WebView2 操船台外殼(app\shell\SimosaBRM.Shell.exe;kiosk 全螢幕,每個 web.openPages 一個程序)開啟網頁,取代 Microsoft Edge(專屬設定檔 build\browser\edge);
                       config 的 web.shell=true 同義;找不到外殼時退回瀏覽器(docs\ops\安裝與啟動.md 第 4.5 節)
 .EXAMPLE
   .\start-ship-laptop.ps1

@@ -86,14 +86,14 @@ Invoke-Test 'stop-all.ps1 -KeepSync 保留同步服務' {
     $sync = Start-Process -FilePath $sleeper.File -ArgumentList $sleeper.Args -PassThru
     try {
         Set-Content -Path (Join-Path $dir 'simosa.pids') -Value @("web:$($web.Id)", "sync:$($sync.Id)") -Encoding UTF8
-        & (Join-Path $launch 'stop-all.ps1') -Logs $logs -KeepSync | Out-Null
+        & (Join-Path $launch 'stop-all.ps1') -Logs $logs -KeepSync -KeepBrowser | Out-Null
         Start-Sleep -Milliseconds 500
         Assert-True $web.HasExited 'web 程序應已結束'
         Assert-True (-not $sync.HasExited) 'sync 程序應被保留'
         $lines = @(Get-Content (Join-Path $dir 'simosa.pids') | Where-Object { $_ })
         Assert-True ($lines -contains "sync:$($sync.Id)") "PID 檔應保留 sync 列:$($lines -join '、')"
         Assert-True (-not ($lines -like 'web:*')) 'PID 檔不應再有 web 列'
-        & (Join-Path $launch 'stop-all.ps1') -Logs $logs | Out-Null
+        & (Join-Path $launch 'stop-all.ps1') -Logs $logs -KeepBrowser | Out-Null
         Start-Sleep -Milliseconds 500
         Assert-True $sync.HasExited '第二次 stop-all 應結束 sync'
         Assert-True (-not (Test-Path (Join-Path $dir 'simosa.pids'))) 'PID 檔應被移除'
@@ -116,7 +116,7 @@ Invoke-Test 'stop-all.ps1 先寫停止檔讓 SimCore 自行結束,逾時才強�
     try {
         Set-Content -Path (Join-Path $dir 'simosa.pids') -Value @("simcore:$($core.Id)") -Encoding UTF8
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $out = (& (Join-Path $launch 'stop-all.ps1') -Logs $logs -StopTimeoutSeconds 1 *>&1 | Out-String)
+        $out = (& (Join-Path $launch 'stop-all.ps1') -Logs $logs -StopTimeoutSeconds 1 -KeepBrowser *>&1 | Out-String)
         $sw.Stop()
         Assert-True ($out.Contains('寫入停止檔')) "應回報寫入停止檔:$out"
         Assert-True ($out.Contains('強制結束')) "假核心不會自行結束,逾時後應強制結束:$out"
@@ -222,7 +222,7 @@ Invoke-Test 'Start-LaunchShellPages 參數組合(--url/--kiosk/--no-close-confir
     Assert-True ($hdr2[1].EndsWith('--url http://127.0.0.1:18080/radar.html?radar=s --kiosk --no-close-confirm --monitor 1')) "單一頁面字串與單一螢幕數值應可用:$($hdr2[1])"
     $names2 = @(Get-Content $pidFile | Where-Object { $_ } | ForEach-Object { $_.Split(':', 2)[0] })
     Assert-True (($names2 -join ',') -eq 'shell-report,shell-radar') "PID 名稱應為 shell-report、shell-radar:$($names2 -join ',')"
-    & (Join-Path $launch 'stop-all.ps1') -Logs $logs | Out-Null
+    & (Join-Path $launch 'stop-all.ps1') -Logs $logs -KeepBrowser | Out-Null
 }
 
 Invoke-Test 'Start-LaunchShellPages 找不到外殼時退回 Open-LaunchPages 且不登錄 PID' {
@@ -348,6 +348,15 @@ Invoke-Test '瀏覽器端資料位置:Get-LaunchBrowserProfile 在根目錄內;E
     Assert-True ($after -eq $expect) "指到根目錄外的下載位置應改回 build/downloads,其餘不變:$after"
     Assert-True ([System.IO.File]::ReadAllBytes($prefsPath)[0] -eq 0x7B) '改寫後仍應為無 BOM 的 JSON'
     Assert-True ($msg.Contains('下載位置')) "改寫時應說明:$msg"
+    # 與平台無關的案例:Preferences 內是 Windows 樣式的字面路徑(JSON 內反斜線加倍、結尾帶反斜線、含空白與中文)— 在 Linux 上也屬根目錄外,
+    # 走到「還原 \\ → 判斷 → 改寫」的分支(上面的案例在 Linux 上路徑沒有反斜線,這段邏輯等於沒執行)
+    $winStale = '{"download":{"default_directory":"D:\\old drive\\訓練\\build\\downloads\\","directory_upgrade":true},"note":"\"default_directory\":\"x\"","savefile":{"default_directory":"D:\\old drive\\訓練\\build\\downloads"}}'
+    [System.IO.File]::WriteAllText($prefsPath, $winStale, (New-Object System.Text.UTF8Encoding($false)))
+    Initialize-LaunchBrowserProfile $p 6>$null
+    $winAfter = [System.IO.File]::ReadAllText($prefsPath)
+    $dlJson = (& $esc $downloads)
+    $winExpect = '{"download":{"default_directory":"' + $dlJson + '","directory_upgrade":true},"note":"\"default_directory\":\"x\"","savefile":{"default_directory":"' + $dlJson + '"}}'
+    Assert-True ($winAfter -eq $winExpect) "Windows 樣式的舊路徑應改回 build/downloads,字串內被跳脫的同名文字不動:$winAfter"
     # 找不到 Edge(非 Windows 的 pwsh 一律如此):不自動退回預設瀏覽器(資料與下載會落到 C:\Users,須先經同意)— 只警告並列出網址,不開啟任何東西
     if (-not $IsWindows) {
         Assert-True ($null -eq (Find-LaunchEdge)) '非 Windows 應回傳 $null'

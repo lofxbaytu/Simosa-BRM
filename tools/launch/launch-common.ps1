@@ -34,6 +34,8 @@ function Test-LaunchOnSystemDrive([string]$Root) {
 #   已設定且在根目錄內者沿用;未設定、或指到根目錄以外者(例如專案從 D: 複製到 G: 後殘留的使用者層級設定、或指到 C: 的舊值)改指到本根目錄;
 #   TEMP / TMP → <根目錄>\build\tmp。環境變數 SIMOSA_SYSTEM_TEMP=1 時不改 TEMP/TMP(暫存留在 Windows 預設的
 #   C:\Users\…\AppData\Local\Temp;放在隨身碟會明顯拖慢時,經訓練負責人同意才使用)。
+#   NODE_COMPILE_CACHE / npm_config_cache / PWTEST_CACHE_DIR:只在「已設定且指到根目錄外」時改指回(其餘如 PNPM_HOME、UV_*、
+#   PLAYWRIGHT_BROWSERS_PATH 不處理:換磁碟後請重新執行 setup-windows.ps1 或改用 dev-shell.cmd)。
 #   根目錄在系統磁碟時警告(守則;經同意後以環境變數 SIMOSA_ALLOW_SYSTEM_DRIVE=1 關閉警告)。
 function Set-LaunchProjectEnv([string]$Root) {
     if ((Test-LaunchOnSystemDrive $Root) -and $env:SIMOSA_ALLOW_SYSTEM_DRIVE -ne '1') {
@@ -51,6 +53,21 @@ function Set-LaunchProjectEnv([string]$Root) {
         if (-not (Test-LaunchUnderRoot $cur $Root)) {
             $p = $Root; foreach ($seg in $defaults[$k]) { $p = Join-Path $p $seg }
             if ($cur) { Write-Host "  $k 原為 $cur(不在 $Root 內),本次改用 $p" }
+            [Environment]::SetEnvironmentVariable($k, $p)
+        }
+    }
+    # Node 的快取(pnpm / node 由 build-release.ps1、soak-test.ps1 執行):未設定時預設在 TEMP 之下或不使用,不必處理;
+    # 已設定但指到根目錄外(換磁碟後殘留的使用者層級設定)者改指回本根目錄
+    $ifSetOutside = [ordered]@{
+        'NODE_COMPILE_CACHE' = @('.cache', 'node-compile-cache')
+        'npm_config_cache'   = @('.cache', 'npm')
+        'PWTEST_CACHE_DIR'   = @('.cache', 'playwright-transform')
+    }
+    foreach ($k in $ifSetOutside.Keys) {
+        $cur = [Environment]::GetEnvironmentVariable($k)
+        if ($cur -and -not (Test-LaunchUnderRoot $cur $Root)) {
+            $p = $Root; foreach ($seg in $ifSetOutside[$k]) { $p = Join-Path $p $seg }
+            Write-Host "  $k 原為 $cur(不在 $Root 內),本次改用 $p"
             [Environment]::SetEnvironmentVariable($k, $p)
         }
     }
@@ -125,7 +142,7 @@ function Initialize-LaunchLogs([string]$Root, [string]$Logs) {
     $script:PidFile = Join-Path $dir 'simosa.pids'
     if ((Test-Path $script:PidFile) -and (Get-Content $script:PidFile | Where-Object { $_ })) {
         Write-Warning "$($script:PidFile) 仍有上次的 PID,先結束"
-        & (Join-Path $script:LaunchDir 'stop-all.ps1') -Logs $Logs
+        & (Join-Path $script:LaunchDir 'stop-all.ps1') -Logs $Logs -KeepBrowser   # 重新啟動:只清上次的程序,不關使用者開著的 Edge 視窗
     }
     Set-Content -Path $script:PidFile -Value '' -Encoding UTF8
 }

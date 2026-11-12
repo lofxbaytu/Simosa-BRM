@@ -186,32 +186,126 @@ def _tracked_ps1() -> list[Path]:
     return [PROJECT_ROOT / line for line in out.splitlines() if line.strip()]
 
 
+def _strip_ps_comments(text: str) -> str:
+    """去掉 <# #> 區塊與整行註解(# 開頭);行尾註解不處理(判斷式自行避開)。"""
+    text = re.sub(r"<#.*?#>", "", text, flags=re.S)
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+_RUNS_DOTNET_OR_GODOT = re.compile(
+    r"(?im)^(?!\s*#).*(\bdotnet\b['\"]?\s*(@\()?\s*['\"]?(build|publish|test|run|tool|restore|pack|msbuild)\b|&\s*\$Godot\w*\b|-File\s+\$editor\b)")
+# 真正的呼叫(不在註解內;函式定義「function Set-LaunchProjectEnv(…」名稱後是左括號,不算)或直接指派 $env:TEMP
+_REDIRECTS_TEMP = re.compile(r"(?m)^[^#\n]*(\bSet-LaunchProjectEnv\s+\$\w+|\$env:TEMP\s*=)")
+
+
+def _missing_temp_redirect(text: str) -> bool:
+    """腳本會執行 dotnet / Godot,卻沒有(在註解以外)呼叫 Set-LaunchProjectEnv 或指派 $env:TEMP。"""
+    return bool(_RUNS_DOTNET_OR_GODOT.search(text)) and not _REDIRECTS_TEMP.search(_strip_ps_comments(text))
+
+
 def test_every_ps1_that_runs_dotnet_or_godot_redirects_temp_into_project():
     """審查(第二十八輪):會執行 dotnet build/publish/test/run/tool 或 Godot 的 .ps1,必須自己把暫存與快取導回專案內
-    (Set-LaunchProjectEnv,或直接設定 $env:TEMP)— setup-windows.ps1 不改使用者層級的 TEMP,不能假設使用者先執行過它。"""
-    runs = re.compile(r"(?im)^(?!\s*#).*(\bdotnet\b['\"]?\s*(@\()?\s*['\"]?(build|publish|test|run|tool)\b|&\s*\$Godot\b|-File\s+\$editor\b)")
-    missing = []
+    (呼叫 Set-LaunchProjectEnv,或直接設定 $env:TEMP)— setup-windows.ps1 不改使用者層級的 TEMP,不能假設使用者先執行過它。
+    判斷的是「真正的呼叫」:註解裡提到函式名不算(複核發現原本的字串比對擋不住「刪掉或註解掉呼叫行」)。"""
+    missing, checked = [], []
     for path in _tracked_ps1():
-        text = path.read_text(encoding="utf-8-sig")
         if path.name.endswith(".tests.ps1"):
             continue
-        if runs.search(text) and "Set-LaunchProjectEnv" not in text and "$env:TEMP =" not in text:
+        text = path.read_text(encoding="utf-8-sig")
+        if _RUNS_DOTNET_OR_GODOT.search(text):
+            checked.append(path.name)
+        if _missing_temp_redirect(text):
             missing.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert not missing, f"以下腳本會執行 dotnet / Godot 卻沒有把暫存導回專案內:{missing}"
+    for name in ("build-release.ps1", "simosa-pkg.ps1", "visual-run.ps1", "visual-headless-check.ps1", "start-ship-laptop.ps1", "soak-test.ps1"):
+        assert name in checked, f"{name} 應被判定為會執行 dotnet / Godot 的腳本(判斷式失效?)"
+
+
+@pytest.mark.parametrize("script", ["tools/build-release.ps1", "tools/simosa-pkg.ps1", "tools/visual-run.ps1", "tools/visual-headless-check.ps1",
+                                    "tools/soak-test.ps1", "tools/launch/start-ship-laptop.ps1"])
+@pytest.mark.parametrize("mutation", ["delete", "comment-out"])
+def test_temp_redirect_check_catches_removed_call(script: str, mutation: str):
+    """反例:把腳本裡真正的 Set-LaunchProjectEnv 呼叫行刪掉或註解掉(只在記憶體內),檢查必須判為違規 — 證明上一個測試真的擋得住。"""
+    text = (PROJECT_ROOT / script).read_text(encoding="utf-8-sig")
+    assert not _missing_temp_redirect(text)
+    lines = text.splitlines()
+    hits = [i for i, line in enumerate(lines) if not line.lstrip().startswith("#") and re.search(r"\bSet-LaunchProjectEnv\s+\$\w+", line)]
+    assert hits, f"{script} 應有 Set-LaunchProjectEnv 的呼叫行"
+    for i in hits:
+        lines[i] = "" if mutation == "delete" else "# " + lines[i]
+    assert _missing_temp_redirect("\n".join(lines)), f"{script}:{mutation} 呼叫行後,檢查應判為違規"
+
+
+def _godot_wrapper_violations(ship: str) -> list[str]:
+    """start-ship-laptop.ps1:視景的匯出檔(-File $exe)與編輯器(-File $editor)兩種啟動,都必須在 Invoke-LaunchWithGodotUserDir $root { … } 的本體內。
+    回傳違規說明(空清單 = 合格)。先去掉註解,再以大括號配對取出每個包裝呼叫的本體。"""
+    code = _strip_ps_comments(ship)
+    bodies, outside, pos = [], [], 0
+    marker = "Invoke-LaunchWithGodotUserDir $root {"
+    while True:
+        k = code.find(marker, pos)
+        if k < 0:
+            outside.append(code[pos:])
+            break
+        outside.append(code[pos:k])
+        start = k + len(marker) - 1
+        depth, i = 0, start
+        while i < len(code):
+            if code[i] == "{":
+                depth += 1
+            elif code[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        bodies.append(code[start:i + 1])
+        pos = i + 1
+    problems = []
+    if not bodies:
+        problems.append("沒有 Invoke-LaunchWithGodotUserDir $root { … }")
+    inside, rest = "\n".join(bodies), "\n".join(outside)
+    for needle, what in (("-File $exe", "匯出檔"), ("-File $editor", "編輯器")):
+        if needle not in inside:
+            problems.append(f"{what}分支({needle})不在 Invoke-LaunchWithGodotUserDir 的本體內")
+        if needle in rest:
+            problems.append(f"{what}分支({needle})出現在 Invoke-LaunchWithGodotUserDir 的本體外")
+    if "$env:APPDATA =" in code:
+        problems.append("start-ship-laptop.ps1 不應自行改 APPDATA(由 Invoke-LaunchWithGodotUserDir 設定並還原)")
+    return problems
 
 
 def test_check_local_data_watches_the_real_godot_user_dir():
     """check-local-data.ps1 檢查的視景使用者資料夾名稱,必須與 project.godot 的 custom_user_dir_name 相同(曾寫成另一個名稱而漏報);
-    啟動腳本對匯出檔與編輯器兩種啟動方式都要導向 APPDATA(Invoke-LaunchWithGodotUserDir)。"""
+    啟動腳本對匯出檔與編輯器兩種啟動方式都要導向 APPDATA(Invoke-LaunchWithGodotUserDir 的本體內)。"""
     godot = (PROJECT_ROOT / "src" / "Visual.Godot" / "project.godot").read_text(encoding="utf-8")
     m = re.search(r'config/custom_user_dir_name="([^"]+)"', godot)
     assert m and 'config/use_custom_user_dir=true' in godot
     check = (PROJECT_ROOT / "tools" / "check-local-data.ps1").read_text(encoding="utf-8-sig")
     assert f"(Join-Base $roaming '{m.group(1)}')" in check, f"check-local-data.ps1 應檢查 %APPDATA%\\{m.group(1)}"
     ship = (PROJECT_ROOT / "tools" / "launch" / "start-ship-laptop.ps1").read_text(encoding="utf-8-sig")
-    block = ship[ship.index("Invoke-LaunchWithGodotUserDir $root {"):]
-    assert block.index("-File $exe") > 0 and block.index("-File $editor") > 0, "匯出檔與編輯器兩個分支都應在 Invoke-LaunchWithGodotUserDir 之內"
-    assert "$env:APPDATA =" not in ship, "start-ship-laptop.ps1 不應自行改 APPDATA(由 Invoke-LaunchWithGodotUserDir 設定並還原)"
+    assert _godot_wrapper_violations(ship) == []
+
+
+def test_godot_wrapper_check_catches_branches_outside_the_wrapper():
+    """反例(只在記憶體內改文字):把編輯器分支搬到包裝之外、把包裝改成空殼、把包裝行註解掉、只包一個分支 — 都必須被判為違規。"""
+    ship = (PROJECT_ROOT / "tools" / "launch" / "start-ship-laptop.ps1").read_text(encoding="utf-8-sig")
+    marker = "Invoke-LaunchWithGodotUserDir $root {"
+    assert ship.count(marker) == 1
+    lines = ship.splitlines()
+    editor_line = next(i for i, line in enumerate(lines) if "-File $editor" in line and not line.lstrip().startswith("#"))
+    # G1:編輯器分支的啟動行搬到檔尾(包裝之外)
+    g1 = lines[:editor_line] + lines[editor_line + 1:] + [lines[editor_line]]
+    assert _godot_wrapper_violations("\n".join(g1))
+    # G2:包裝變空殼,原本的本體改由 & { … } 執行
+    assert _godot_wrapper_violations(ship.replace(marker, "Invoke-LaunchWithGodotUserDir $root { }\n& {"))
+    # G3:拿掉包裝
+    assert _godot_wrapper_violations(ship.replace(marker, "& {"))
+    # G4:包裝行被註解掉,改成 & {
+    assert _godot_wrapper_violations(ship.replace(marker, "# " + marker + "\n& {"))
+    # G5:匯出檔分支的啟動行搬到檔尾(只剩編輯器分支在包裝內)
+    exe_line = next(i for i, line in enumerate(lines) if "-File $exe" in line and not line.lstrip().startswith("#"))
+    g5 = lines[:exe_line] + lines[exe_line + 1:] + [lines[exe_line]]
+    assert _godot_wrapper_violations("\n".join(g5))
 
 
 def test_readme_mentions_managed_python_location():

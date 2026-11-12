@@ -119,7 +119,7 @@ mkdir -p "$OUT/app/launch"
 cp tools/launch/*.sh tools/launch/*.ps1 "$OUT/app/launch/"
 cp tools/check-local-data.ps1 "$OUT/app/launch/"   # 本機資料位置檢查(安裝版模式;docs/ops/本機資料位置.md 第 6 節)
 mkdir -p "$OUT/data"
-tar -C data --exclude='./ships/*/confidential' --exclude='./ships/*/confidential/*' -cf - . | tar -C "$OUT/data" -xf -
+tar -C data --exclude='./ships/*/confidential' --exclude='./ships/*/confidential/*' --exclude='./records' --exclude='./records/*' -cf - . | tar -C "$OUT/data" -xf -
 [[ -z "$(find "$OUT/data" -type d -name confidential)" ]] || { echo "data/ 複製後仍含 confidential/" >&2; exit 1; }
 PARAM_VERSION="$(sed -n 's/^version: *"\([^"]*\)".*/\1/p' data/parameters/company-procedures.yaml | head -1)"
 COMPONENTS+=("data=${PARAM_VERSION:-$VERSION}=data=參數集 company-procedures.yaml 版次;ships/*/confidential 已排除")
@@ -140,7 +140,8 @@ cp src/Instruments.Web/RADAR.md "$OUT/docs/components/雷達PPI-RADAR.md"
 cp src/SimCore/README.md "$OUT/docs/components/模擬核心-SimCore.md"
 cp src/Contracts/README.md "$OUT/docs/components/契約-Contracts.md"
 COMPONENTS+=("docs=$VERSION=docs")
-mkdir -p "$OUT/config" && cp config/*.json config/README.md "$OUT/config/"
+# 只複製受版控的設定範例:config/packaging.json、config/device/、config/trusted-keys/ 是 simosa-pkg 在開發機建立的本機資料,不可帶進發行版
+mkdir -p "$OUT/config" && cp config/ship-laptop.json config/instructor-laptop.json config/packaging.*.example.json config/README.md "$OUT/config/"
 # Windows 安裝程式腳本隨發行版(tools/installer/;在有 Inno Setup 的 Windows 機器可直接編譯本發行版)
 mkdir -p "$OUT/tools/installer" && cp tools/installer/SimosaBRM.iss tools/installer/README.md "$OUT/tools/installer/"
 COMPONENTS+=("installer-script=$VERSION=tools/installer=Inno Setup 腳本 SimosaBRM.iss(Windows 以 build-release.ps1 -Installer 編譯;tools/installer/README.md)")

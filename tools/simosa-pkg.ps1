@@ -31,7 +31,10 @@ $dll = Join-Path $repo 'build\bin\Tools.Packaging.Cli\Release\net8.0\simosa-pkg.
 # 在子範圍內載入:不把 launch-common.ps1 的 Set-StrictMode 與函式帶進本腳本。
 & { . (Join-Path $repo 'tools\launch\launch-common.ps1'); Set-LaunchProjectEnv $repo }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-# 專案根目錄以本腳本所在位置為準(不沿用可能指向另一份專案的環境變數 — 例如專案從 D: 複製到 G: 之後)
+# 專案根目錄以本腳本所在位置為準(不沿用可能指向另一份專案的環境變數 — 例如專案從 D: 複製到 G: 之後)。
+# SIMOSA_BRM_ROOT / SIMOSA_INSTALL_ROOT 在結束時還原:本腳本自己設的值不留在呼叫端的工作階段
+#(否則同一個視窗接著執行另一份專案的 simosa-pkg.ps1 會操作到這一份的安裝根目錄)。
+$oldBrmRoot = $env:SIMOSA_BRM_ROOT; $oldInstallRoot = $env:SIMOSA_INSTALL_ROOT
 $env:SIMOSA_BRM_ROOT = $repo
 
 if ($Rebuild -or -not (Test-Path $dll)) {
@@ -41,8 +44,11 @@ if ($Rebuild -or -not (Test-Path $dll)) {
 }
 
 # 安裝根目錄:-Root → 環境變數 SIMOSA_INSTALL_ROOT → 本腳本所在的專案根目錄(不寫死磁碟代號;不會落到 C:\)。
-if ($Root) { $env:SIMOSA_INSTALL_ROOT = $Root }
-elseif (-not $env:SIMOSA_INSTALL_ROOT) { $env:SIMOSA_INSTALL_ROOT = $repo }
-
-dotnet $dll @Rest
-exit $LASTEXITCODE
+$rc = 1
+try {
+    if ($Root) { $env:SIMOSA_INSTALL_ROOT = $Root }
+    elseif (-not $env:SIMOSA_INSTALL_ROOT) { $env:SIMOSA_INSTALL_ROOT = $repo }
+    dotnet $dll @Rest
+    $rc = $LASTEXITCODE
+} finally { $env:SIMOSA_BRM_ROOT = $oldBrmRoot; $env:SIMOSA_INSTALL_ROOT = $oldInstallRoot }
+exit $rc

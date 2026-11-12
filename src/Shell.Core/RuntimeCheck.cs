@@ -52,7 +52,7 @@ public static class RuntimeCheck
                 "以系統管理員身分執行(或在命令列加 /silent /install),安裝完成後按「重試」。\n" +
                 "若發行版或隨身碟沒有這個檔案,請訪船船長自岸上下載後隨更新包帶上船;" +
                 $"步驟與版次登錄見 {DocsReference}。\n" +
-                "(在未改用外殼前,仍可用 start-ship-laptop.ps1 的預設瀏覽器開啟同一網頁。)" +
+                "(在未改用外殼前,仍可用 start-ship-laptop.ps1(不加 -Shell)以 Microsoft Edge 開啟同一網頁;外殼與 Edge 的瀏覽器端資料各自獨立,切換前先匯出。)" +
                 (error is null ? "" : $"\n\n錯誤:{error.Message}"));
         }
 

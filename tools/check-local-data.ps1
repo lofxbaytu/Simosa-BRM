@@ -152,8 +152,11 @@ if ($envBad.Count -gt 0 -or $leakBad.Count -gt 0 -or $fsBad) { $exit = 1 }
 if ($onSystemDrive) { $exit = 2 }
 
 if ($Json) {
+    # 日期一律輸出 ISO 8601 字串(Windows PowerShell 5.1 的 ConvertTo-Json 會把 DateTime 寫成 \/Date(…)\/,與 PowerShell 7 不同)
+    $leakOut = @($leakRows | ForEach-Object { [pscustomobject]@{ what = $_.what; path = $_.path; exists = $_.exists; sizeMb = $_.sizeMb
+            lastWrite = $(if ($_.lastWrite) { $_.lastWrite.ToString('o') } else { $null }); newData = $_.newData; consented = $_.consented } })
     [pscustomobject]@{ root = $root; mode = $(if ($devMode) { 'development' } else { 'runtime' }); systemDrive = $sysDrive; rootOnSystemDrive = $onSystemDrive
-        fileSystem = $fileSystem; driveType = $driveType; fileSystemOk = (-not $fsBad); since = $Since; environment = $envRows; defaultLocations = $leakRows
+        fileSystem = $fileSystem; driveType = $driveType; fileSystemOk = (-not $fsBad); since = $Since.ToString('o'); environment = $envRows; defaultLocations = $leakOut
         insideProject = $insideRows; exitCode = $exit } | ConvertTo-Json -Depth 4
     exit $exit
 }

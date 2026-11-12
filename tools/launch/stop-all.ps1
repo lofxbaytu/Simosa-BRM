@@ -33,13 +33,18 @@ function Close-ProfileEdge {
     try {
         $mains = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction Stop |
             Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($profileDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -notmatch '--type=' })
-        $closed = 0
+        $asked = @()
         foreach ($m in $mains) {
             $p = Get-Process -Id $m.ProcessId -ErrorAction SilentlyContinue
-            if ($p -and $p.MainWindowHandle -ne [IntPtr]::Zero) { if ($p.CloseMainWindow()) { $closed++ } }
+            if ($p) { if ($p.MainWindowHandle -ne [IntPtr]::Zero) { [void]$p.CloseMainWindow() }; $asked += $p }
         }
-        if ($closed -gt 0) { Write-Host "已請 Simosa BRM 的 Edge 視窗關閉($closed 個;設定檔 $profileDir)" }
-        elseif ($mains.Count -gt 0) { Write-Warning "Simosa BRM 的 Edge(設定檔 $profileDir)仍在執行:拔除隨身碟前請先關閉這些 Edge 視窗" }
+        if ($asked.Count -eq 0) { return }
+        # 等它們真的結束(最多 5 秒):Edge 可能跳出「要關閉所有分頁嗎」確認,或還有第二個視窗 — 那樣程序不會結束
+        $deadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $deadline -and ($asked | Where-Object { -not $_.HasExited })) { Start-Sleep -Milliseconds 250 }
+        $still = @($asked | Where-Object { -not $_.HasExited })
+        if ($still.Count -eq 0) { Write-Host "已關閉 Simosa BRM 的 Edge 視窗(設定檔 $profileDir)" }
+        else { Write-Warning "Simosa BRM 的 Edge(設定檔 $profileDir)仍在執行(可能在等「要關閉所有分頁嗎」的確認,或還有其他視窗):拔除隨身碟前請手動關閉這些 Edge 視窗" }
     } catch { Write-Warning "無法確認 Simosa BRM 的 Edge 視窗是否已關閉($($_.Exception.Message)):拔除隨身碟前請先關閉以啟動腳本開啟的 Edge 視窗" }
 }
 

@@ -8,7 +8,8 @@
   - 捷徑:start-ship-laptop.ps1 -Shell、start-instructor-laptop.ps1、stop-all.ps1
   - 防火牆:8765、8766、8767、8768、7300 各有規則,remoteip 限 DirectLinkSubnet、profile=any
   - WebView2 離線安裝檔在 [Run] 中以 FileExists 條件納入並 Check: not WebView2RuntimeInstalled
-  - [UninstallDelete] 不得刪 records、state、store、config、data
+  - [UninstallDelete] 只允許刪 {app}\\build\\logs 與 {app}\\build\\tmp(白名單;不得刪 records、state、store、config、data,
+    也不得刪瀏覽器端資料 build\\webview2、build\\browser 與 build\\downloads,或它們的上層、萬用字元)
   - 前置處理指令 #if/#ifdef/#ifndef/#ifexist/#ifnexist 與 #endif 成對;[Code] 的 begin/case/try/record 與 end 數量相等、括號成對
 只能抓結構性錯誤,不能取代 ISCC 編譯(需 Windows + Inno Setup 6.3+)。用法:python3 -I tools/installer/check-iss.py <檔案>...
 """
@@ -252,13 +253,14 @@ def check(path):
     if not re.search(r'#if\s+FileExists\([^\n]*(WebView2Installer|MicrosoftEdgeWebView2RuntimeInstallerX64)', '\n'.join(lines)):
         errs.append('WebView2 離線安裝檔應以 #if FileExists(…) 條件納入(發行版沒有該檔時仍可編譯)')
 
-    # [UninstallDelete]:保留紀錄與設定
+    # [UninstallDelete]:白名單 — 只允許刪 log 與暫存。其餘一律保留:練習紀錄與設定(records、state、store、config、data)、
+    # 瀏覽器端資料(build\webview2、build\browser:草稿、參與者資料、講評報告站的訓練紀錄)、build\downloads;
+    # 以名稱比對會漏掉「刪它們的上層」({app}\build、{app})與萬用字元({app}\build\*),所以改用白名單
+    allowed_delete = {'{app}\\build\\logs', '{app}\\build\\tmp'}
     for no, p in parsed['UninstallDelete']:
-        n = p.get('Name', '').lower()
-        # webview2 / browser:瀏覽器端資料(草稿、參與者資料、講評報告站的訓練紀錄);downloads:從網頁下載的檔案
-        for keep in ['records', 'state', 'store', 'config', 'data', 'webview2', 'browser', 'downloads']:
-            if re.search(r'[\\/]' + keep + r'([\\/]|$)', n):
-                errs.append(f'{no}: [UninstallDelete] 不得刪除 {keep}(解除安裝保留紀錄與設定):{p.get("Name")}')
+        n = p.get('Name', '').lower().replace('/', '\\').rstrip('\\')
+        if '*' in n or '?' in n or n not in allowed_delete:
+            errs.append(f'{no}: [UninstallDelete] 只允許 {{app}}\\build\\logs 與 {{app}}\\build\\tmp(解除安裝保留紀錄、設定與瀏覽器端資料;不得用萬用字元或刪上層):{p.get("Name")}')
     if not any(p.get('Name', '').startswith('{app}') for _, p in parsed['Dirs']):
         errs.append('[Dirs] 應建立 {app} 下的紀錄/log 目錄')
 

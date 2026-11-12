@@ -47,10 +47,20 @@ def check(path):
             else: stack.pop()
         i += 1
     for ch, ln in stack: errs.append(f'{ln}: {ch} 未關閉')
-    # 常見手誤:$var: 需寫 ${var}: 或 `:
-    for m in re.finditer(r'"[^"\n]*\$[A-Za-z_]\w*:[^"\n]*"', s):
+    # 常見手誤(雙引號字串內;都是合法語法,解析器不會報錯,執行時變數展開成空字串,StrictMode 下丟例外):
+    #  (1) $var: 需寫 ${var}: 或 `:(半形冒號會被解析成範圍限定詞;全形冒號沒有這個問題)— 逐一檢查每個 $name:,
+    #      同一字串內另有 ${…} 不代表其他的 $name: 沒問題;
+    #  (2) $var 緊接中文字或全形數字(例如 "$root內"):PowerShell 把這些字元當成變數名稱的一部分,需寫 ${var}。
+    scopes = ('script', 'env', 'global', 'local', 'private', 'using', 'function', 'variable', 'alias')
+    for m in re.finditer(r'"(?:[^"`\n]|`.)*"', s):
         txt = m.group(0)
-        if '`:' not in txt and '${' not in txt and not re.search(r'\$\((script|env|global|local):|\$(script|env|global|local):', txt): errs.append(f'{s.count(chr(10),0,m.start())+1}: 字串中 $變數: 會被解析成範圍限定詞:{txt[:60]}')
+        ln = s.count(chr(10), 0, m.start()) + 1
+        for v in re.finditer(r'(?<!`)\$([A-Za-z_][A-Za-z0-9_]*)(.?)', txt):
+            name, nxt = v.group(1), v.group(2)
+            if nxt == ':' and name.lower() not in scopes:
+                errs.append(f'{ln}: 字串中 ${name}: 會被解析成範圍限定詞(改寫 ${{{name}}}:):{txt[:60]}')
+            elif nxt and ord(nxt) > 127 and (nxt.isalnum() or nxt == '_'):
+                errs.append(f'{ln}: 字串中 ${name} 緊接「{nxt}」會被當成變數名稱的一部分(改寫 ${{{name}}}):{txt[:60]}')
     return errs
 bad = 0
 for p in sys.argv[1:]:
