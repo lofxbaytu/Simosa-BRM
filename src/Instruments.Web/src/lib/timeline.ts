@@ -569,7 +569,7 @@ export interface ScenarioBriefing {
   planningTimeMin?: number;
   /** 同儕評估提示(規劃書第 9.1 節;簡報與講評時列出) */
   peerAssessmentPrompts: string[];
-  /** 講評引導問題(規劃書第 11 章;簡報區可摺疊、講評報告列於講評紀錄旁) */
+  /** 講評引導問題(規劃書第 8.4 節;簡報區可摺疊、講評報告列於講評紀錄旁) */
   debriefQuestions: string[];
 }
 
@@ -632,7 +632,7 @@ export function parseBriefing(raw: unknown, issues: string[] = []): ScenarioBrie
   if (min !== undefined) out.minParticipants = Math.trunc(min);
   const dur = optNumber(raw['duration_s']);
   if (dur !== undefined) out.duration_s = dur;
-  // 規劃時間(分鐘)、同儕評估提示、講評引導問題(第二十六輪 R7;規劃書第 9.1 節、第 11 章)
+  // 規劃時間(分鐘)、同儕評估提示、講評引導問題(第二十六輪 R7;規劃書第 9.1 節、第 8.4 節)
   const planning = optNumber(raw['planningTimeMin']);
   if (planning !== undefined) {
     if (planning < 0) issues.push('briefing.planningTimeMin 不可為負');

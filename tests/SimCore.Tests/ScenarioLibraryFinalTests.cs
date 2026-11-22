@@ -716,19 +716,41 @@ public class ScenarioLibraryFinalTests
         AssertReplays(path!);
     }
 
+    /// <summary>情境庫全部情境檔的 id(data/scenarios/*.yaml;不含 templates/ 子目錄)。</summary>
+    public static TheoryData<string> AllScenarioIds()
+    {
+        var data = new TheoryData<string>();
+        foreach (var f in Directory.GetFiles(Path.Combine(TestData.Root, "data", "scenarios"), "*.yaml").OrderBy(f => f, StringComparer.Ordinal))
+            data.Add(Path.GetFileNameWithoutExtension(f));
+        return data;
+    }
+
     /// <summary>
-    /// 規劃書第 9.1 節簡報內容(規劃時間、同儕評估提示)與第 11 章講評引導問題:E20 兩檔與 E22a–d 的 briefing 有 planningTimeMin > 0、
-    /// 3–5 條同儕評估提示、3–5 條講評引導問題(E22 的引導問題對應 1.39 單元討論點);E20 兩檔內容相同。
+    /// R7(規劃書第 2.7 節:簡報/講評模組的目標、規劃時間、同儕評估提示)與第 8.4 節講評方法:**情境庫每一個情境**的 briefing 都有
+    /// planningTimeMin(0 &lt; x ≤ 120)、3–5 條同儕評估提示、3–5 條講評引導問題(第二十六輪先做 E20 兩檔與 E22a–d,第二十九輪補齊其餘 32 個)。
+    /// 寫法規則(docs/design/scenario-library.md 第 20.1 節):同儕提示以「觀察」開頭、句尾不加標點(簡報時就會給學員看,不透露簡報未告知的事件
+    /// — 內容是否劇透無法由程式判斷,由審查把關);講評問題以問號結尾;全庫慣例用半形 , ( ) ? : ;(只有 、。「」 用全形);每項一句、不超過 90 字;
+    /// 同一情境內不重複。E20 兩檔內容相同;12 分鐘迷你情境的規劃時間不超過 10 分鐘。
     /// </summary>
     [Theory]
-    [MemberData(nameof(BriefingGuideIds))]
+    [MemberData(nameof(AllScenarioIds))]
     public void BriefingHasPlanningTimeAndDebriefGuide(string id)
     {
-        var b = Load(id).Briefing!;
+        var b = Load(id).Briefing;
+        Assert.True(b is not null, $"{id} 沒有 briefing 區段");
+        Assert.False(string.IsNullOrWhiteSpace(b!.Text), $"{id} briefing.text 空白");
         Assert.True(b.PlanningTimeMin is > 0 and <= 120, $"{id} planningTimeMin {b.PlanningTimeMin}");
         Assert.InRange(b.PeerAssessmentPrompts.Count, 3, 5);
         Assert.InRange(b.DebriefQuestions.Count, 3, 5);
-        Assert.All(b.PeerAssessmentPrompts.Concat(b.DebriefQuestions), q => Assert.False(string.IsNullOrWhiteSpace(q)));
+        var all = b.PeerAssessmentPrompts.Concat(b.DebriefQuestions).ToList();
+        Assert.All(all, q => Assert.False(string.IsNullOrWhiteSpace(q)));
+        Assert.Equal(all.Count, all.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(all, q => Assert.True(q.Length <= 90, $"{id} 項目過長({q.Length} 字):{q}"));
+        Assert.All(all, q => Assert.True(q.IndexOfAny(new[] { '，', '（', '）', '？', '：', '；', '！' }) < 0, $"{id} 用了全形標點(全庫慣例為半形):{q}"));
+        Assert.All(all, q => Assert.True(q == q.Trim() && !q.Contains('\n'), $"{id} 項目前後有空白或含換行:{q}"));
+        Assert.All(b.PeerAssessmentPrompts, q => Assert.True(q.StartsWith("觀察", StringComparison.Ordinal), $"{id} 同儕評估提示應以「觀察」開頭:{q}"));
+        Assert.All(b.PeerAssessmentPrompts, q => Assert.False(q.EndsWith('。') || q.EndsWith('?'), $"{id} 同儕評估提示句尾不加標點:{q}"));
+        Assert.All(b.DebriefQuestions, q => Assert.True(q.EndsWith('?'), $"{id} 講評引導問題應以問號結尾:{q}"));
         if (MiniIds.Contains(id)) Assert.InRange(b.PlanningTimeMin!.Value, 1, 10); // 12 分鐘迷你情境:規劃時間短
         if (id == E20D)
         {

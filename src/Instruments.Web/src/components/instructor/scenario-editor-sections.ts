@@ -1,5 +1,6 @@
 // 情境編輯器的擴充區段(規劃書第 9.1 節;R4;設計文件 docs/design/scenario-engine.md 第 6.1 節):航線、區域、時間表項目逐項編輯、
-// 簡報角色/附件、感測器/警報/BNWAS、評估必要事件與設定、拖船/錨/泊位/岸壁、環境進階(潮汐 / 浪 / 流場模型(表、潮流、空間網格)/ 船間交互作用 / 橫搖)。
+// 簡報角色/附件、感測器/警報/BNWAS、評估必要事件與設定、拖船/錨/泊位/岸壁、環境進階(潮汐 / 浪 / 流場模型(表、潮流、空間網格)/ 船間交互作用 / 橫搖 /
+// 升沉與縱搖 ship.seakeeping(第二十九輪;R4 練習編輯、R2「浪」))。
 // 第二十一輪:航線/區域的「在圖上編輯」鈕開啟海圖點選編輯面板(scenario-editor-plot.ts;EditorHost.plotTarget),
 // 空間網格加「由均勻流產生網格」「由兩端流速線性內插」產生器與「網格預覽」。
 // 以純函式渲染,透過 EditorHost 讀寫 <brm-scenario-editor> 的草稿,樣式沿用主元件(模板渲染在同一個 shadow root)。
@@ -23,6 +24,8 @@ import {
   FIELD_OUTSIDE_OPTIONS,
   FIELD_TIME_SCALE_OPTIONS,
   ROLL_FIELDS,
+  SEAKEEPING_FIELDS,
+  SEAKEEPING_NO_WAVES_WARNING,
   SHIP_INTERACTION_FIELDS,
   TIDE_MODES,
   TIDE_MODE_LABEL,
@@ -39,6 +42,7 @@ import {
   patchCurrentModel,
   patchCurrentTablePoint,
   patchRoll,
+  patchSeakeeping,
   patchShipInteraction,
   patchTide,
   patchTideConstituent,
@@ -49,6 +53,9 @@ import {
   removeTidePoint,
   rollEnabled,
   rollPeriodEstimate,
+  scenarioHasWaves,
+  seakeepingEnabled,
+  seakeepingPeriodEstimate,
   setCurrentFieldArray,
   setCurrentFieldEnabled,
   setCurrentFieldFromUniform,
@@ -56,6 +63,7 @@ import {
   setCurrentTableTimeKey,
   setCurrentTimeModel,
   setRollEnabled,
+  setSeakeepingEnabled,
   setShipInteractionEnabled,
   setTideMode,
   setTideTimeKey,
@@ -505,7 +513,7 @@ export function renderBriefingSection(h: EditorHost): TemplateResult {
       <input class="b-planning" type="number" step="1" min="0" max=${PLANNING_TIME_MAX_MIN} placeholder="未設 = 不顯示計時器" .value=${txt(d.briefing['planningTimeMin'])} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'planningTimeMin', numberFromText(textOf(e))))} />
       <label title="簡報與講評時列出,供學員互相觀察(規劃書第 9.1 節)">同儕評估提示(每行一條)</label>
       <textarea class="full b-peer" rows="3" .value=${prompts} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'peerAssessmentPrompts', linesToList(textOf(e))))}></textarea>
-      <label title="講評時由帶領者帶領討論;教官站簡報區可摺疊、講評報告列於講評紀錄旁(規劃書第 11 章)">講評引導問題(每行一條)</label>
+      <label title="講評時由帶領者帶領討論;教官站簡報區可摺疊、講評報告列於講評紀錄旁(規劃書第 8.4 節;練習後使用,題目可寫明事件)">講評引導問題(每行一條)</label>
       <textarea class="full b-questions" rows="3" .value=${questions} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'debriefQuestions', linesToList(textOf(e))))}></textarea>
       ${kept.length > 0 ? html`<div class="full hint">範本的 ${kept.join('、')} 原樣保留</div>` : nothing}
     </div>
@@ -815,17 +823,21 @@ function renderBanks(h: EditorHost): TemplateResult {
   </fieldset>`;
 }
 
-// ------------------------------------------------------------------ 環境進階:潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖(第二十輪)
+// ------------------------------------------------------------------ 環境進階:潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖(第二十輪)/ 升沉與縱搖(第二十九輪)
 
-/** 環境進階面板:environment.tide、environment.waves、environment.current 的 table / tidal / field、environment.shipInteraction、ship.roll(皆選填、預設關閉)。 */
+/**
+ * 環境進階面板:environment.tide、environment.waves、environment.current 的 table / tidal / field、environment.shipInteraction、
+ * ship.roll、ship.seakeeping(皆選填、預設關閉;船的兩個運動契約 roll / seakeeping 相鄰排在最後)。
+ */
 export function renderEnvironmentExtras(h: EditorHost): TemplateResult {
   return html`<div class="panel environment-extras">
-    <div class="panel-title"><span>環境進階 ENVIRONMENT+</span><span class="zh">潮汐 · 浪 · 時變/空間流場 · 船間交互作用 · 橫搖(皆選填、預設關閉)</span></div>
+    <div class="panel-title"><span>環境進階 ENVIRONMENT+</span><span class="zh">潮汐 · 浪 · 時變/空間流場 · 船間交互作用 · 橫搖 · 升沉/縱搖(皆選填、預設關閉)</span></div>
     ${renderTide(h)}
     ${renderWaves(h)}
     ${renderCurrentModel(h)}
     ${renderShipInteraction(h)}
     ${renderRoll(h)}
+    ${renderSeakeeping(h)}
   </div>`;
 }
 
@@ -902,7 +914,7 @@ function renderWaves(h: EditorHost): TemplateResult {
   const w = h.draft.waves;
   const kept = w ? Object.keys(w).filter((k) => !['significantHeight_m', 'peakPeriod_s', 'direction_deg', 'spectrum', 'gamma'].includes(k)) : [];
   return html`<fieldset class="waves">
-    <legend>浪 environment.waves(平均漂移力、雷達海況、視景海面、橫搖激勵)</legend>
+    <legend>浪 environment.waves(平均漂移力、雷達海況、視景海面、橫搖與升沉/縱搖的激勵)</legend>
     <label class="full pair"><input class="waves-enabled" type="checkbox" .checked=${w !== null} @change=${(e: Event) => h.setDraft(setWavesEnabled(h.draft, checked(e)))} /><span>${w ? `有浪:Hs ${txt(w['significantHeight_m']) || '?'} m / Tp ${txt(w['peakPeriod_s']) || '?'} s / ${txt(w['direction_deg']) || '?'}°` : '無浪(零力;練習中仍可由教官站 setEnvironment waves 建立)'}</span></label>
     ${w
       ? html`
@@ -1092,5 +1104,30 @@ function renderRoll(h: EditorHost): TemplateResult {
       ? html`${ROLL_FIELDS.map(([key, label, hint]) => html`<label>${label}</label>${numInput(`roll-${key}`, r[key], (v) => h.setDraft(patchRoll(h.draft, key, v)), key === 'naturalPeriod_s' ? `估計 ${est.period_s} s` : hint)}`)}
           <div class="full hint">自然週期未給時核心以 Weiss 公式 T = 0.8·B/√GM 估計 ≈ ${est.period_s} s(${h.draft.ship.id} B ${est.breadth_m} m、GM ${est.gm_m} m${est.gmFromParticulars ? '' : ' 預設'});迴轉離心傾角右轉向外(左傾)、風傾依側面積與風速平方,角度右傾正${kept.length > 0 ? `;保留:${kept.join('、')}` : ''}</div>`
       : nothing}
+  </fieldset>`;
+}
+
+/**
+ * 升沉/縱搖 ship.seakeeping(浪一階運動 → state.waveMotion;R4 練習編輯、R2「浪」;docs/design/physics-waves.md 第 11 節):比照橫搖區段——
+ * 啟用勾選、選填參數(留白 = 核心預設;placeholder 顯示預設值或 particulars 估計)、說明與自然週期估計;啟用但情境沒有浪時在區段內顯示提醒
+ * (與「驗證與輸出」面板的 ⚠ 同一句;不阻止載入)。
+ */
+function renderSeakeeping(h: EditorHost): TemplateResult {
+  const k = h.draft.seakeeping;
+  const on = seakeepingEnabled(h.draft);
+  const est = seakeepingPeriodEstimate(h.draft);
+  const hy = est.hydro;
+  const kept = k ? Object.keys(k).filter((key) => !['enabled', ...SEAKEEPING_FIELDS.map((f) => f[0])].includes(key)) : [];
+  const round3 = (v: number) => Math.round(v * 1000) / 1000;
+  const f1 = (v: number) => v.toFixed(1);
+  return html`<fieldset class="seakeeping">
+    <legend>升沉/縱搖 ship.seakeeping(浪一階運動:線性、只輸出、不回饋操船運動)</legend>
+    <label class="full pair"><input class="sk-enabled" type="checkbox" .checked=${on} @change=${(e: Event) => h.setDraft(setSeakeepingEnabled(h.draft, checked(e)))} /><span>${on ? '啟用(有浪時輸出 state.waveMotion、雜湊追加 SEAKEEP1)' : k ? '有區段但未啟用(enabled: false)' : '未啟用(無升沉/縱搖,與舊版相同)'}</span></label>
+    ${k
+      ? html`${SEAKEEPING_FIELDS.map(([key, label, hint]) => html`<label>${label}</label>${numInput(`sk-${key}`, k[key], (v) => h.setDraft(patchSeakeeping(h.draft, key, v)), key === 'gmL_m' ? `估計 ${f1(est.gmLEstimate_m)} m` : hint)}`)}
+          <div class="full hint sk-estimate">自然週期估計:升沉 ≈ ${f1(est.heavePeriod_s)} s、縱搖 ≈ ${f1(est.pitchPeriod_s)} s(${h.draft.ship.id} L ${hy.lpp_m} m、B ${hy.breadth_m} m、T ${round3(hy.draft_m)} m、C_b ${round3(hy.cb)}${hy.estimated ? ' 估計' : ''};GM_L ${f1(est.gmL_m)} m${est.gmLFromScenario ? '' : ' 估計'}、k_yy/L ${est.pitchGyradiusRatio};與核心同式,阻尼比不影響週期)</div>
+          <div class="full hint sk-note">線性、只輸出:升沉(向上為正)與縱搖(艏仰為正)供視景相機/船模與 conning 海況方塊顯示,不回饋 3 自由度運動(航跡、舵效、UKC 與未啟用時相同),可與橫搖同時啟用;要有浪(上方「浪」區段或練習中 setEnvironment waves,Hs > 0)才有輸出;阻尼比、k_yy/L、GM_L 估計式等係數皆為 ASSUMED(兩船無耐航模型試驗),留白 = 用核心預設${kept.length > 0 ? `;保留:${kept.join('、')}` : ''}</div>`
+      : nothing}
+    ${on && !scenarioHasWaves(h.draft) ? html`<div class="full hint bad sk-no-waves">⚠ ${SEAKEEPING_NO_WAVES_WARNING}</div>` : nothing}
   </fieldset>`;
 }

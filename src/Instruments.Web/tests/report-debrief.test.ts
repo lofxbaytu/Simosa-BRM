@@ -30,7 +30,10 @@ import { renderFormDoc, renderReportDoc } from '../src/report/report-views.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const E07 = readFileSync(path.join(here, 'fixtures/record-E07-core.jsonl'), 'utf8');
-const E07_SHA = '502CC597A0B143A41B99A0C5155F29B028029A9BCF63F819C7BE188998B34728';
+// 夾具的檔案雜湊與建立時刻每次重錄都會變(tools/fixtures/rerecord-core-fixtures.py):雜湊由夾具的 footer 取得、建立時刻在測試內固定,不把重錄當下的值寫死
+const E07_SHA = (JSON.parse(E07.trim().split('\n').at(-1)!) as { sha256: string }).sha256;
+const E07_PARAMS_SHA = (JSON.parse(E07.split('\n')[0]!) as { parameterSet: { sha256: string } }).parameterSet.sha256;
+const E07_CREATED = '2026-10-17T11:37:24.998Z';
 const NOW = new Date('2026-10-17T12:00:00Z');
 
 function html(t: ReturnType<typeof renderReportDoc>): HTMLElement {
@@ -82,6 +85,7 @@ function withManoeuvres(text: string): string {
 
 describe('由核心紀錄 E07 產生講評報告', () => {
   const data = parseReplay(E07);
+  data.header.createdUtc = E07_CREATED;
   const meta = emptyReportMeta();
   meta.courseVersion = '1.0';
   meta.instructor = '陳船長';
@@ -112,7 +116,7 @@ describe('由核心紀錄 E07 產生講評報告', () => {
     });
     expect(recordKey(data)).toBe(`sha256:${E07_SHA}`);
     expect(r.reportNo).toBe(defaultReportNo(data));
-    expect(r.reportNo).toBe('RPT-20261017-E07-502CC5');
+    expect(r.reportNo).toBe(`RPT-20261017-E07-${E07_SHA.slice(0, 6)}`);
     expect(exerciseNoFromScenario('F01_FSB2_ballast')).toBe('F01');
     expect(buildDebriefReport({ data, meta: { ...meta, reportNo: 'R-1' } }).reportNo).toBe('R-1');
   });
@@ -144,7 +148,8 @@ describe('由核心紀錄 E07 產生講評報告', () => {
     const r = buildDebriefReport({ data, meta });
     expect(r.parameters.id).toBe('simosa-company-procedures');
     expect(r.parameters.version).toBe('2026.10.1');
-    expect(r.parameters.sha256).toBe('058285D5DE1EB5D1EEBA0A424D76A5A6F726C437BA457B471FC42365B8B5F538');
+    expect(r.parameters.sha256).toBe(E07_PARAMS_SHA);
+    expect(E07_PARAMS_SHA).toMatch(/^[0-9A-F]{64}$/);
     expect(r.parameters.warnings).toEqual([]);
     const docs = Object.fromEntries(r.parameters.documents.map((d) => [d.source, d]));
     expect(Object.keys(docs).sort()).toEqual(['BRM-TRN-001', 'DWO-007', 'PORT-MLW', 'SMS-EMG-004', 'SMS-NAV-012']);
@@ -247,14 +252,25 @@ describe('F01 操縱量測與試俥目標比較', () => {
 });
 
 describe('情境簡報的講評引導問題與同儕評估提示(R7)', () => {
-  it('紀錄標頭 header.scenario.briefing 有引導問題/提示 → 報告講評紀錄段列出;舊紀錄(E07 夾具)沒有 → null、不印該段', () => {
-    const plain = buildDebriefReport({ data: parseReplay(E07), now: NOW });
+  it('紀錄標頭 header.scenario.briefing 有引導問題/提示 → 報告講評紀錄段列出;沒有這三個欄位的紀錄(舊紀錄)→ null、不印該段', () => {
+    // 情境庫每個情境都已有引導問題與提示(第二十九輪):E07 夾具本身就帶 5 題與 3 條提示
+    const real = buildDebriefReport({ data: parseReplay(E07), now: NOW });
+    expect(real.briefingGuide!.debriefQuestions).toHaveLength(5);
+    expect(real.briefingGuide!.peerAssessmentPrompts).toHaveLength(3);
+    expect(real.briefingGuide!.planningTimeMin).toBe(10);
+
+    // 舊紀錄(錄製時情境還沒有這三個欄位):由夾具去掉三個欄位模擬
+    const lines = E07.split('\n');
+    const header = JSON.parse(lines[0]!) as { scenario: Record<string, unknown> };
+    const stripped = { ...(header.scenario['briefing'] as Record<string, unknown>) };
+    for (const k of ['planningTimeMin', 'peerAssessmentPrompts', 'debriefQuestions']) delete stripped[k];
+    header.scenario['briefing'] = stripped;
+    lines[0] = JSON.stringify(header);
+    const plain = buildDebriefReport({ data: parseReplay(lines.join('\n')), now: NOW });
     expect(plain.briefingGuide).toBeNull();
     expect(html(renderReportDoc(plain)).querySelector('[data-part="briefing-guide"]')).toBeNull();
     expect(reportOutline(plain).some((l) => l.startsWith('講評引導問題'))).toBe(false);
 
-    const lines = E07.split('\n');
-    const header = JSON.parse(lines[0]!) as { scenario: Record<string, unknown> };
     header.scenario['briefing'] = {
       text: '交班',
       planningTimeMin: 5,

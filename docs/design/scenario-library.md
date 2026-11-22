@@ -631,21 +631,39 @@ bands:
 
 xunit:`E22_NoOperatorRunsScriptAndMissesRequirements`(腳本時刻、討論點為唯一的階段變化、必要事件全部 missed、分數 < passMark、E22c 未質疑分支)、`E22_ScriptedResponsesMeetRequirements`(各期望行為於期限內:必要事件 met、100 分;E22c 質疑後 180 s 船長接受、舵工照令分支不出現),皆紀錄 → 重播一致。
 
-### 20.1 簡報結構:規劃時間、同儕評估提示、講評引導問題(第二十六輪,R7)
+### 20.1 簡報結構:規劃時間、同儕評估提示、講評引導問題(R7;第二十六輪 E20/E22,第二十九輪補齊全部情境)
 
-規劃書第 9.1 節簡報內容(情境、角色、規劃時間、同儕評估提示)與第 11 章講評:E20 兩檔與 E22a–d 的 `briefing` 補 `planningTimeMin`、
-`peerAssessmentPrompts`(3–5 條)、`debriefQuestions`(3–5 條;E22a 原本寫在簡報文字末行的三個問題搬成清單並保留原文),其他情境暫不補
-(schema 選填;情境引擎設計第 1.4 節)。教官站:情境面板詳細區與簡化教官模式簡報頁的 `<brm-briefing-block>` 顯示規劃時間倒數
-(本地計時,到時記入學員操作紀錄)、提示清單(展開)與引導問題(摺疊);練習結束頁與講評報告(來源:核心 JSON Lines 紀錄標頭的 `header.scenario.briefing`;教官站紀錄為 `header.scenario.briefingDoc`)
-列於講評摘要/講評紀錄旁。xunit `ScenarioLibraryFinalTests.BriefingHasPlanningTimeAndDebriefGuide`(六檔皆有、E20 兩檔相同)。
+R7(規劃書第 2.7 節:簡報/講評模組的目標、規劃時間、同儕評估提示)與第 8.4 節講評方法:情境庫**全部 38 個情境**的 `briefing` 都有
+`planningTimeMin`、`peerAssessmentPrompts`、`debriefQuestions`(schema 選填;情境引擎設計第 1.4 節)。第二十六輪先做 E20 兩檔與 E22a–d;
+第二十九輪補齊其餘 32 個(E05 原本沒有 `briefing` 區段,一併補上簡報文字與角色),並依同一套寫法規則修訂了前六檔。
+教官站:情境面板詳細區與簡化教官模式簡報頁的 `<brm-briefing-block>` 顯示規劃時間倒數(本地計時,到時記入學員操作紀錄)、提示清單(展開)
+與引導問題(收合,標示「練習後使用」);練習結束頁與講評報告(來源:核心 JSON Lines 紀錄標頭的 `header.scenario.briefing`;
+教官站紀錄為 `header.scenario.briefingDoc`)列於講評摘要/講評紀錄旁。
 
-| 情境 | 規劃時間 | 講評引導問題(摘要;全文見 YAML) |
+**寫法規則**(xunit `ScenarioLibraryFinalTests.BriefingHasPlanningTimeAndDebriefGuide` 對每個情境檔檢查形式;內容由審查把關):
+
+| 欄位 | 規則 |
+|---|---|
+| `peerAssessmentPrompts` | 3 條(E20 為 5 條)。簡報時就給學員看:以「觀察」開頭、句尾不加標點,**只用 `briefing.text` 已告知的內容**,不透露升級觸發、故障種類、他船不守規則、「引水人/船長是錯的」等劇情(評估者指引 4.1 第 3 步);要點出異常時用不指明事件的說法(例如「情況發展與預期不同時,誰先說出來」)。每條對應一個可觀察的行為(誰、做了什麼) |
+| `debriefQuestions` | 5 條(E22 為 4 條)。**練習後使用**,可以寫明事件、時刻與數值(依時間表與參數集查證過);開放式問法、以問號結尾、不預設有缺失;至少各有一題「資訊與判斷」「團隊互動/分工」「下次怎麼做(帶回船上)」。一項一個主題(可含兩個相連的問句) |
+| `planningTimeMin` | 依情境長度與簡報後要核對/分工的份量:見下表。不計入 `duration_s` |
+| 共同 | 繁體中文;全庫慣例用半形 `, ( ) ? : ;`(只有 `、。「」` 用全形);每項不超過 90 字;同一情境內不重複;跨情境不照抄(成對變體如 E06 漲/退潮、F 系列兩船各自反映差異) |
+
+| 規劃時間 | 情境 | 數量 |
 |---|---|---|
-| E20 ×2 | 15 min | 交班資訊哪些確認過;第一次故障誰先察覺、首個動作與通報;干擾時的分工;引水人建議與書面計畫衝突時的決定;靠泊接近速度/拖船與中止標準 |
-| E22a | 5 min | 交班者說法/航海日誌/ARPA 何者為真;延後接班的權利;閉環確認交班內容;如何交班才不留矛盾 |
-| E22b | 5 min | 疲勞徵兆與對判斷的影響;「錨泊船」解釋為何易被接受(確認偏誤);何時該依夜令叫船長;下次夜班改變什麼 |
-| E22c | 5 min | 聽到錯誤舵令時想說什麼、為何(沒)說出口;PACE 四層次;船長如何讓部屬敢質疑;船長堅持不改的下一步 |
-| E22d | 5 min | 「Yes sir」卻做錯與權力距離/語言;閉環溝通三步驟哪一步斷掉;讓成員敢說聽不懂、SMCP 的作用;機艙英語電話如何確認 |
+| 5 分鐘 | E08、E22a、E22b、E22c、E22d、F01_FSB1_ballast、F01_FSB1_full、F01_FSB2_ballast、F01_FSB2_full | 9 |
+| 8 分鐘 | E01、E05、E11、E14、F02_FSB1_low_speed、F02_FSB2_low_speed | 6 |
+| 10 分鐘 | E02、E03、E06_taichung_channel_ebb、E06_taichung_channel_flood、E06b、E07、E09、E10、E12、E13、E15、E16、E17、E17b、E18、E18b、E19、E21、F03_FSB1_channel、F03_FSB2_channel | 20 |
+| 12 分鐘 | E04 | 1 |
+| 15 分鐘 | E20_comprehensive_assessment_default、E20_comprehensive_assessment_kaohsiung | 2 |
+
+**維護注意**:
+- 題目裡內嵌了參數集的現值與時間表時刻(字串不做 `${params:…}` 替換),例如 E01「開闊海最小 CPA 1.0 nm、ROT 每分鐘 30° 以內」、E02「會遇開始後 6 分鐘內」、
+  E03「8 kn/6 kn」、E04 的「第 7、15、33、40 分鐘」(`pilot.e04.*`)。參數集(多為 ASSUMED 假設值)或時間表改版時要一併檢查這些文字。
+- 改了 `briefing`(含只改文字)要重錄該情境的紀錄夾具(簡報在紀錄標頭):`python3 tools/fixtures/rerecord-core-fixtures.py <情境 id>`(docs/修改指南.md 第 4 節)。
+- 內容由開發階段撰寫並逐情境對照時間表複核,**尚待 BRM 教官定稿**。已知待決定事項:(1) E04(執行上限 80 分鐘)、E20(75 分鐘)與 F01(90–120 分鐘)
+  加上簡報、規劃與講評後超過課程大綱的 2 小時上限(既有設計);(2) E01 沒有交班事件與叫船長的必要事件,與課程大綱單元 1 的學習目標「依公司程序完成交接班」不一致,
+  所以 E01 沒有交班題;(3) 條件式題目(例如 E04 第 4 題只在引水人已登船時適用)目前由帶領者自行略過;(4) E15 的簡報用「值班駕駛員」、其他情境用「船副」,用語尚未統一。
 
 ## 21. 第三批共同:參數、契約、測試、限制、待辦
 

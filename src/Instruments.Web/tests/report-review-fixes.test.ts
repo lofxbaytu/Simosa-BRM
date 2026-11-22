@@ -33,6 +33,9 @@ import { buildIndividualRecord, emptyCourseSession, isoDate, normalizeCourseSess
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fx = (n: string) => readFileSync(path.join(here, 'fixtures', n), 'utf8');
 const E07 = fx('record-E07-core.jsonl');
+// 夾具的檔案雜湊與建立時刻每次重錄都會變(tools/fixtures/rerecord-core-fixtures.py):雜湊由夾具的 footer 取得、建立時刻在測試內固定,不把重錄當下的值寫死
+const E07_SHA = (JSON.parse(E07.trim().split('\n').at(-1)!) as { sha256: string }).sha256;
+const E07_SHA6 = E07_SHA.slice(0, 6);
 const E05 = fx('record-E05-core.jsonl');
 
 const SCENARIO = { id: 'E07_steering_failure', name: 'E07', loading: 'full', seed: 1 } as unknown as ScenarioSummary;
@@ -124,7 +127,7 @@ describe('(1) 教官站紀錄的紀錄鍵用練習開始時刻,不隨匯出時�
     expect(d.header.startedUtc).toBeUndefined();
     expect(recordKey(d)).toBe('E07_steering_failure@2026-10-17T02:00:00.000Z');
     // 核心紀錄不變
-    expect(recordKey(parseReplay(E07))).toMatch(/^sha256:502CC5/);
+    expect(recordKey(parseReplay(E07))).toBe(`sha256:${E07_SHA}`);
   });
 
   it('報告頁:同一練習第二次交接時,講評、參與者與評估表都還在', async () => {
@@ -434,7 +437,9 @@ describe('(10) 教官站紀錄的報告編號尾碼取紀錄鍵雜湊', () => {
     expect(a).toMatch(/^RPT-20261017-E07-[0-9A-Z]{6}$/);
     expect(a.endsWith('E07STE')).toBe(false);
     // 核心紀錄維持 SHA-256 前 6 碼
-    expect(defaultReportNo(parseReplay(E07))).toBe('RPT-20261017-E07-502CC5');
+    const core = parseReplay(E07);
+    core.header.createdUtc = '2026-10-17T11:37:24.998Z';
+    expect(defaultReportNo(core)).toBe(`RPT-20261017-E07-${E07_SHA6}`);
   });
 });
 
@@ -483,7 +488,7 @@ describe('(13) 報告編號日期與練習日期同為本地日期', () => {
       const data = parseReplay(E07);
       data.header.createdUtc = '2026-10-17T17:30:00Z';
       const rep = buildDebriefReport({ data });
-      expect(rep.reportNo).toBe('RPT-20261018-E07-502CC5');
+      expect(rep.reportNo).toBe(`RPT-20261018-E07-${E07_SHA6}`);
       expect(isoDate(rep.exercise.createdUtc)).toBe('2026-10-18');
       const s = oneTraineeSession();
       expect(upsertExerciseFromReport(s, rep, []).date).toBe('2026-10-18');

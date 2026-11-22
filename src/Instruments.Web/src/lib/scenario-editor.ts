@@ -7,18 +7,21 @@
 // 航線(航點表格、檢查點、走廊/速限/到達半徑)、區域(型別、屬性、多邊形頂點)、簡報(角色、附件、最少人數、時長)、
 // sensors/alerts/bnwas、拖船/錨/泊位(file 參照與繫纜)/岸壁(file 參照與倍率;lines/definitions 原樣保留)、
 // 環境進階(第二十輪;草稿版本 3):environment.tide(潮高表或調和分潮表)、environment.waves(Hs/Tp/來向/浪譜/γ)、
-// environment.current 的 table / tidal / field(流場表、潮流、空間網格:grid 參數與 u/v 陣列文字區塊)、environment.shipInteraction、ship.roll(橫搖契約)。
+// environment.current 的 table / tidal / field(流場表、潮流、空間網格:grid 參數與 u/v 陣列文字區塊)、environment.shipInteraction、ship.roll(橫搖契約)、
+// ship.seakeeping(浪一階運動:升沉/縱搖;第二十九輪;草稿版本 4;R4 練習編輯、R2「浪」;docs/design/physics-waves.md 第 11 節)。
 // 其餘欄位(origin、environment.seabed/radar、目標船的 AIS/行為細節/trigger、assessment.parameterSet、
 // 時間表項目的 repeat/cooldown_s/description、berth.definition、banks.lines/definitions …)原樣保留在 draft.raw 或各區段的原樣物件內,
 // 輸出時覆寫涵蓋欄位、不遺失其餘資料(設計文件 docs/design/scenario-engine.md 第 6.1 節)。
 // 新區段(route、zones、briefing、sensors、alerts、bnwas、assessment.required/settings、tugs、anchors、berth、banks、tide、waves、currentModel、
-// shipInteraction、roll)在草稿裡是情境物件的原樣複本(Record),以 withPath 點路徑逐鍵修改:未改的鍵完全不動,round-trip 與既有情境檔深相等
+// shipInteraction、roll、seakeeping)在草稿裡是情境物件的原樣複本(Record),以 withPath 點路徑逐鍵修改:未改的鍵完全不動,round-trip 與既有情境檔深相等
 // (tests/scenario-editor.test.ts、scenario-editor-sections.test.ts、scenario-editor-environment.test.ts)。
 // 輸出 YAML 以 yaml Document 產生:會被 YAML 1.1 解析器誤判的字串(on/off/yes/no、時間戳、數字樣、參數引用)一律加雙引號,
 // 與 data/scenarios 既有寫法一致(C# YamlJson 只把 true/false/null/數字當非字串;Python 參考實作以 PyYAML 讀檔)。YAML 註解不保留。
 
 import { Document, Scalar, isCollection, parse as parseYaml, visit } from 'yaml';
 import { SHIP_IDS, TELEGRAPH_POSITIONS, type LoadingCondition, type ShipId, type TelegraphPosition } from '../types/state.js';
+import fsb1Particulars from '@data/ships/FSB1/particulars.json';
+import fsb2Particulars from '@data/ships/FSB2/particulars.json';
 import { faultCatalogue, type FaultDefinition } from './instructor-command.js';
 import { AREA_FILES, parseScenario, type ScenarioSummary } from './scenario.js';
 import { getShipConfig, maxDraft } from './ship-config.js';
@@ -123,7 +126,7 @@ export interface DraftAssessment {
 export type RawSection = Record<string, unknown>;
 
 export interface ScenarioDraft {
-  version: 3;
+  version: 4;
   /** 範本來源(情境 id;'' = 空白範本;顯示與 YAML 註解用) */
   template: string;
   general: DraftGeneral;
@@ -164,11 +167,13 @@ export interface ScenarioDraft {
   shipInteraction: RawSection | null;
   /** 橫搖(ship.roll 原樣:enabled/naturalPeriod_s/dampingRatio/windHeelGain/turnHeelGain/waveGain);null = 無區段(= 關閉) */
   roll: RawSection | null;
+  /** 浪一階運動:升沉/縱搖(ship.seakeeping 原樣:enabled/heaveDampingRatio/pitchDampingRatio/pitchGyradiusRatio/gmL_m);null = 無區段(= 關閉) */
+  seakeeping: RawSection | null;
   /** 範本的完整情境物件(未涵蓋欄位由此保留;toScenarioObject 以草稿覆寫涵蓋欄位) */
   raw: Record<string, unknown>;
 }
 
-export const DRAFT_VERSION = 3;
+export const DRAFT_VERSION = 4;
 
 // ------------------------------------------------------------------ 共用
 
@@ -331,7 +336,7 @@ export function fromScenarioObject(obj: Record<string, unknown>, template = ''):
   for (const k of CURRENT_MODEL_KEYS) if (current[k] !== undefined) currentModel[k] = clone(current[k]);
 
   return {
-    version: 3,
+    version: 4,
     template,
     general,
     ship,
@@ -355,6 +360,7 @@ export function fromScenarioObject(obj: Record<string, unknown>, template = ''):
     currentModel,
     shipInteraction: sectionOf(envRaw['shipInteraction']),
     roll: sectionOf(shipRaw['roll']),
+    seakeeping: sectionOf(shipRaw['seakeeping']),
     raw: clone(obj),
   };
 }
@@ -478,6 +484,7 @@ export function toScenarioObject(draft: ScenarioDraft): Record<string, unknown> 
   setOrDelete(ship, 'loading', draft.ship.loading);
   setOrDelete(ship, 'mmsi', draft.ship.mmsi);
   setOrDelete(ship, 'roll', nonEmpty(draft.roll));
+  setOrDelete(ship, 'seakeeping', nonEmpty(draft.seakeeping));
   out['ship'] = ship;
 
   const init = recordOf(out['initial']);
@@ -1569,7 +1576,7 @@ export function bankLineCount(banks: RawSection | null): number {
   return lines + defs;
 }
 
-// ------------------------------------------------------------------ 環境進階:潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖(第二十輪)
+// ------------------------------------------------------------------ 環境進階:潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖(第二十輪)/ 升沉與縱搖(第二十九輪)
 
 export type TideMode = 'none' | 'table' | 'harmonic';
 export const TIDE_MODES: readonly TideMode[] = ['none', 'table', 'harmonic'] as const;
@@ -2050,6 +2057,195 @@ export function rollPeriodEstimate(draft: ScenarioDraft): { period_s: number; br
   return { period_s: Math.round(estimateRollPeriod(cfg.breadth_m, gm_m) * 10) / 10, breadth_m: cfg.breadth_m, gm_m, gmFromParticulars: gm !== undefined };
 }
 
+/**
+ * 浪一階運動契約(ship.seakeeping → state.waveMotion;R4 練習編輯、R2「浪」;docs/design/physics-waves.md 第 11 節、scenario-engine.md 第 1.5.6 節):選填、預設關閉。
+ * 線性、只輸出、不回饋 3 自由度運動;需要有浪(environment.waves 或 setEnvironment waves,Hs > 0)才有輸出;所有係數為 ASSUMED(兩船無耐航模型試驗)。
+ */
+export const SEAKEEPING_FIELDS: ReadonlyArray<readonly [key: string, label: string, hint: string]> = [
+  ['heaveDampingRatio', '升沉阻尼比 ζ', '預設 0.35(0–1 之間,不含)'],
+  ['pitchDampingRatio', '縱搖阻尼比 ζ', '預設 0.35(0–1 之間,不含)'],
+  ['pitchGyradiusRatio', '縱搖迴轉半徑比 k_yy/L', '預設 0.25(> 0 且 ≤ 0.5)'],
+  ['gmL_m', '縱穩心高 GM_L (m)', '未給 = 由 particulars 估計'],
+] as const;
+/** 核心 SeakeepingModel 的預設值與常數(DefaultHeaveDampingRatio … PitchAddedInertiaFactor、Gravity、WaterDensity;皆 ASSUMED,physics-waves.md 第 11.4 節)。 */
+export const SEAKEEPING_DEFAULTS = {
+  heaveDampingRatio: 0.35,
+  pitchDampingRatio: 0.35,
+  pitchGyradiusRatio: 0.25,
+  heaveAddedMassRatio: 1.0,
+  pitchAddedInertiaFactor: 1.2,
+  gravity_mps2: 9.80665,
+  waterDensity_kgpm3: 1025,
+} as const;
+
+/** 啟用升沉/縱搖但情境沒有浪時的提醒(validateEnvironmentExtras 的 warnings 與表單區段共用)。 */
+export const SEAKEEPING_NO_WAVES_WARNING = 'ship.seakeeping 已啟用但情境沒有浪(environment.waves 未給或 Hs = 0,時間表也沒有 setEnvironment waves):不會輸出 state.waveMotion;請在「浪」區段建立,或練習中由教官站以 setEnvironment 給浪';
+
+export function seakeepingEnabled(draft: ScenarioDraft): boolean {
+  return draft.seakeeping?.['enabled'] === true;
+}
+
+/** 啟用 = enabled: true(保留其他參數);關閉 = 只有 enabled 時移除整段,否則 enabled: false(與未給相同:不輸出 state.waveMotion、雜湊不變)。 */
+export function setSeakeepingEnabled(draft: ScenarioDraft, on: boolean): ScenarioDraft {
+  return { ...draft, seakeeping: on ? withPath(draft.seakeeping, 'enabled', true) : disabledSection(draft.seakeeping) };
+}
+
+/** 改升沉/縱搖欄位(heaveDampingRatio、pitchDampingRatio、pitchGyradiusRatio、gmL_m;空值刪鍵 = 用核心預設;刪到只剩空物件時區段移除)。 */
+export function patchSeakeeping(draft: ScenarioDraft, path: string, value: unknown): ScenarioDraft {
+  const next = withPath(draft.seakeeping, path, value);
+  return { ...draft, seakeeping: Object.keys(next).length > 0 ? next : null };
+}
+
+/** particulars loadingConditions.<loading> 中自然週期估計用到的欄位(null = 無資料)。 */
+interface LoadingHydroRaw {
+  displacement_t?: number | null | undefined;
+  draftFore_m?: number | null | undefined;
+  draftAft_m?: number | null | undefined;
+  draftMean_m?: number | null | undefined;
+  blockCoefficient?: number | null | undefined;
+}
+
+/** 與核心共用的同一份 data/ships/<ID>/particulars.json(CLAUDE.md「船舶資料」;getShipConfig 的顯示摘要不含 C_b 與排水量)。 */
+const HYDRO_PARTICULARS: Readonly<Record<ShipId, { hull: { lengthBetweenPerpendiculars_m: number; breadth_m: number }; loadingConditions: unknown }>> = { FSB1: fsb1Particulars, FSB2: fsb2Particulars };
+
+/** 升沉/縱搖自然週期估計所用的船型資料(與核心 SeakeepingModel 建構子同一組量)。 */
+export interface SeakeepingHydrostatics {
+  /** 垂線間長 L_pp (m) */
+  lpp_m: number;
+  breadth_m: number;
+  /** 平均吃水 T (m):draftMean_m,缺值時艏艉平均 */
+  draft_m: number;
+  /** 方形係數 C_b:particulars 值;缺值時由滿載 C_b 依吃水比估計 */
+  cb: number;
+  /** 排水體積 ∇ (m³):particulars 排水量 / ρ;缺值時 C_b·L·B·T */
+  volume_m3: number;
+  /** C_b 或排水量不是 particulars 的直接值(缺值估計,或 intermediate 由 full/ballast 平均) */
+  estimated: boolean;
+}
+
+/**
+ * 由 particulars 取升沉/縱搖估計所需的量(與核心 SeakeepingModel 建構子、ShipParticulars.GetLoading 同式同順序):
+ * intermediate 無資料時 full 與 ballast 各分量平均(一邊缺值取另一邊);T = draftMean_m ?? 艏艉平均;
+ * C_b 缺值 = C_b,full − 0.11·max(0, 1 − T/T_full);排水量缺值 = C_b·L·B·T·ρ。
+ */
+export function seakeepingHydrostatics(shipId: ShipId, loading: LoadingCondition): SeakeepingHydrostatics {
+  const p = HYDRO_PARTICULARS[shipId];
+  const all = (isRecord(p.loadingConditions) ? p.loadingConditions : {}) as Record<string, LoadingHydroRaw | undefined>;
+  const full = all['full'] ?? {};
+  const ballast = all['ballast'] ?? {};
+  const avg = (a: unknown, b: unknown): number | undefined => {
+    const x = finite(a);
+    const y = finite(b);
+    return x === undefined || y === undefined ? (x ?? y) : (x + y) / 2;
+  };
+  const given = all[loading];
+  const lc: LoadingHydroRaw = given ?? {
+    displacement_t: avg(full.displacement_t, ballast.displacement_t),
+    draftFore_m: avg(full.draftFore_m, ballast.draftFore_m),
+    draftAft_m: avg(full.draftAft_m, ballast.draftAft_m),
+    draftMean_m: avg(full.draftMean_m, ballast.draftMean_m),
+    blockCoefficient: avg(full.blockCoefficient, ballast.blockCoefficient),
+  };
+  const lpp_m = p.hull.lengthBetweenPerpendiculars_m;
+  const breadth_m = p.hull.breadth_m;
+  const draft_m = finite(lc.draftMean_m) ?? 0.5 * ((finite(lc.draftFore_m) ?? 0) + (finite(lc.draftAft_m) ?? 0));
+  const cbGiven = finite(lc.blockCoefficient);
+  const cb = cbGiven ?? (finite(full.blockCoefficient) ?? 0.75) - 0.11 * Math.max(0, 1 - draft_m / (finite(full.draftMean_m) ?? draft_m));
+  const dispGiven = finite(lc.displacement_t);
+  const disp_t = dispGiven ?? (cb * lpp_m * breadth_m * draft_m * SEAKEEPING_DEFAULTS.waterDensity_kgpm3) / 1000;
+  return { lpp_m, breadth_m, draft_m, cb, volume_m3: (disp_t * 1000) / SEAKEEPING_DEFAULTS.waterDensity_kgpm3, estimated: given === undefined || cbGiven === undefined || dispGiven === undefined };
+}
+
+/** 水線面係數 C_wp = (1 + 2·C_b)/3(ASSUMED;與核心波浪漂移力的水線幾何同式)。 */
+function waterplaneCoefficient(cb: number): number {
+  return (1 + 2 * cb) / 3;
+}
+
+/**
+ * 升沉自然週期 T_h = 2π/ω_h(秒),ω_h² = g·A_wp/(∇·(1 + A_33/ρ∇)),A_wp = C_wp·L·B、A_33 = ρ∇(ASSUMED)
+ * (與核心 SeakeepingModel.HeaveOmega 同式);水線面積或排水體積非正時回 0。
+ */
+export function estimateHeavePeriod(h: SeakeepingHydrostatics): number {
+  const awp = waterplaneCoefficient(h.cb) * h.lpp_m * h.breadth_m;
+  if (!(awp > 0) || !(h.volume_m3 > 0)) return 0;
+  return (2 * Math.PI) / Math.sqrt((SEAKEEPING_DEFAULTS.gravity_mps2 * awp) / (h.volume_m3 * (1 + SEAKEEPING_DEFAULTS.heaveAddedMassRatio)));
+}
+
+/** 縱穩心高估計 GM_L ≈ BM_L = 3·C_wp²·L²/(40·C_b·T)(m;ASSUMED,核心未給 gmL_m 時的估計式);C_b 或吃水非正時回 0。 */
+export function estimateGmL(h: SeakeepingHydrostatics): number {
+  if (!(h.cb > 0) || !(h.draft_m > 0)) return 0;
+  const cwp = waterplaneCoefficient(h.cb);
+  return (3 * cwp * cwp * h.lpp_m * h.lpp_m) / (40 * h.cb * h.draft_m);
+}
+
+/**
+ * 縱搖自然週期 T_p = 2π/ω_p(秒),ω_p² = g·GM_L/(1.2·(k_yy/L·L)²)(附加慣量倍率 1.2 為 ASSUMED;與核心 SeakeepingModel.PitchOmega 同式);
+ * 船長、GM_L 或迴轉半徑比非正時回 0。
+ */
+export function estimatePitchPeriod(lpp_m: number, gmL_m: number, gyradiusRatio: number = SEAKEEPING_DEFAULTS.pitchGyradiusRatio): number {
+  const kyy = gyradiusRatio * lpp_m;
+  if (!(kyy > 0) || !(gmL_m > 0)) return 0;
+  return (2 * Math.PI) / Math.sqrt((SEAKEEPING_DEFAULTS.gravity_mps2 * gmL_m) / (SEAKEEPING_DEFAULTS.pitchAddedInertiaFactor * (kyy * kyy)));
+}
+
+export interface SeakeepingEstimate {
+  /** 升沉自然週期估計 (s,0.1) */
+  heavePeriod_s: number;
+  /** 縱搖自然週期估計 (s,0.1;以下列 gmL_m 與 pitchGyradiusRatio 計算) */
+  pitchPeriod_s: number;
+  /** 計算所用的 GM_L (m,0.1):草稿 gmL_m(合法數值時)或 particulars 估計 */
+  gmL_m: number;
+  /** particulars 估計的 GM_L (m,0.1;表單 placeholder) */
+  gmLEstimate_m: number;
+  /** GM_L 取自草稿 ship.seakeeping.gmL_m */
+  gmLFromScenario: boolean;
+  /** 計算所用的 k_yy/L:草稿值(合法數值時)或預設 0.25 */
+  pitchGyradiusRatio: number;
+  hydro: SeakeepingHydrostatics;
+}
+
+/**
+ * 草稿的船與裝載狀態對應的升沉/縱搖自然週期估計(比照 rollPeriodEstimate;核心公式為閉式、只用 particulars 與情境欄位,前端可重算):
+ * 草稿給了合法的 gmL_m(> 0)與 pitchGyradiusRatio(0 < r ≤ 0.5)時代入,參數引用或不合法值改用估計/預設。阻尼比不影響自然週期。
+ */
+export function seakeepingPeriodEstimate(draft: ScenarioDraft): SeakeepingEstimate {
+  const hydro = seakeepingHydrostatics(draft.ship.id, draft.ship.loading ?? 'ballast');
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  const gmGiven = finite(draft.seakeeping?.['gmL_m']);
+  const gmLFromScenario = gmGiven !== undefined && gmGiven > 0;
+  const gmLEstimate = estimateGmL(hydro);
+  const gmL = gmLFromScenario ? gmGiven : gmLEstimate;
+  const ratioGiven = finite(draft.seakeeping?.['pitchGyradiusRatio']);
+  const pitchGyradiusRatio = ratioGiven !== undefined && ratioGiven > 0 && ratioGiven <= 0.5 ? ratioGiven : SEAKEEPING_DEFAULTS.pitchGyradiusRatio;
+  return {
+    heavePeriod_s: round1(estimateHeavePeriod(hydro)),
+    pitchPeriod_s: round1(estimatePitchPeriod(hydro.lpp_m, gmL, pitchGyradiusRatio)),
+    gmL_m: round1(gmL),
+    gmLEstimate_m: round1(gmLEstimate),
+    gmLFromScenario,
+    pitchGyradiusRatio,
+    hydro,
+  };
+}
+
+/**
+ * 情境是否會有浪(升沉/縱搖要有浪才有輸出):environment.waves 存在且 Hs 不是 0,或時間表有 setEnvironment waves 且其 Hs > 0(或為參數引用)。
+ * Hs = 0 與 waves: null 皆為關閉;時間表的部分更新(未給 Hs)沿用當下 Hs,無法從無浪建立浪(physics-waves.md 第 6.1 節)。
+ * environment.waves 的 Hs 缺漏或不合法時另有錯誤訊息,這裡視為有浪(不重複提醒)。
+ */
+export function scenarioHasWaves(draft: ScenarioDraft): boolean {
+  if (draft.waves && draft.waves['significantHeight_m'] !== 0) return true;
+  const raises = (w: unknown): boolean => {
+    if (!isRecord(w)) return false;
+    const hs = numericOf(w['significantHeight_m']);
+    return hs === 'ref' || (typeof hs === 'number' && hs > 0);
+  };
+  return draft.timeline.some((item) => {
+    const actions = item['actions'];
+    return Array.isArray(actions) && actions.some((a) => isRecord(a) && isRecord(a['setEnvironment']) && raises(a['setEnvironment']['waves']));
+  });
+}
+
 /** 潮高表 / 流場表的共同檢查:至少 2 點、每點 t 或 utc 擇一、utc 需 startTimeUtc、t 嚴格遞增;perPoint 檢查各表的數值欄位。 */
 function checkTimeTable(points: readonly RawSection[], path: string, minMessage: string, orderMessage: string, startTimeUtc: string | undefined, issues: string[], perPoint: (p: RawSection, pp: string) => void): void {
   if (points.length < 2) issues.push(`${path} ${minMessage}`);
@@ -2082,7 +2278,8 @@ function checkTimeTable(points: readonly RawSection[], path: string, minMessage:
  * tide table ≥ 2 點、t/utc 擇一且嚴格遞增、utc 需 startTimeUtc、height_m 有限;harmonic ≥ 1 分潮、period_s > 0、amplitude_m ≥ 0;
  * current table/tidal 擇一、流場表 ≥ 2 點且 speed_kn ≥ 0、tidal 需 tide 與 flood/ebb、slackWindow_min ≥ 0、field 尺寸(currentFieldIssues);
  * waves Hs ≥ 0、Tp > 0、來向 0–360、spectrum pm|jonswap、gamma ≥ 1;shipInteraction coefficientScale/eventThreshold_t ≥ 0;
- * ship.roll naturalPeriod_s > 0、0 < dampingRatio < 1、增益 ≥ 0(未給週期為提醒,附 Weiss 估計)。
+ * ship.roll naturalPeriod_s > 0、0 < dampingRatio < 1、增益 ≥ 0(未給週期為提醒,附 Weiss 估計);
+ * ship.seakeeping 兩個阻尼比在 0–1 之間(不含)、0 < pitchGyradiusRatio ≤ 0.5、gmL_m > 0(路徑 ship.seakeeping.<欄位>;啟用但情境沒有浪為提醒)。
  */
 export function validateEnvironmentExtras(draft: ScenarioDraft): { issues: string[]; warnings: string[] } {
   const issues: string[] = [];
@@ -2199,6 +2396,28 @@ export function validateEnvironmentExtras(draft: ScenarioDraft): { issues: strin
       const est = rollPeriodEstimate(draft);
       warnings.push(`${rp} 未給 naturalPeriod_s:核心依 GM 與船寬估計(T = 0.8·B/√GM ≈ ${est.period_s} s;B ${est.breadth_m} m、GM ${est.gm_m} m${est.gmFromParticulars ? '' : ' 預設'})`);
     }
+  }
+
+  // 浪一階運動(ship.seakeeping;physics-waves.md 第 11.2 節):規則與訊息同核心 Scenario.StructuralIssues / Python seakeeping_issues(enabled 與否都檢查);參數引用略過數值規則
+  if (draft.seakeeping) {
+    const kp = 'ship.seakeeping';
+    const k = draft.seakeeping;
+    if (k['enabled'] !== undefined && typeof k['enabled'] !== 'boolean') issues.push(`${kp}.enabled enabled 須為布林值`);
+    for (const key of ['heaveDampingRatio', 'pitchDampingRatio']) {
+      if (k[key] === undefined) continue;
+      const zeta = numericOf(k[key]);
+      if (zeta === undefined || (zeta !== 'ref' && (zeta <= 0 || zeta >= 1))) issues.push(`${kp}.${key} ${key} 須在 0–1 之間(不含)`);
+    }
+    if (k['pitchGyradiusRatio'] !== undefined) {
+      const ratio = numericOf(k['pitchGyradiusRatio']);
+      if (ratio === undefined || (ratio !== 'ref' && (ratio <= 0 || ratio > 0.5))) issues.push(`${kp}.pitchGyradiusRatio pitchGyradiusRatio 須大於 0 且不超過 0.5`);
+    }
+    if (k['gmL_m'] !== undefined) {
+      const gml = numericOf(k['gmL_m']);
+      if (gml === undefined || (gml !== 'ref' && gml <= 0)) issues.push(`${kp}.gmL_m gmL_m 必須為正`);
+    }
+    // 啟用但沒有浪:不是錯誤(教官可在練習中以 setEnvironment waves 給浪),只提醒此時不會有 state.waveMotion
+    if (k['enabled'] === true && !scenarioHasWaves(draft)) warnings.push(SEAKEEPING_NO_WAVES_WARNING);
   }
   return { issues, warnings };
 }
@@ -2387,7 +2606,7 @@ export function validateDraft(draft: ScenarioDraft, catalogue: readonly FaultDef
   // 簡報:最少人數、角色 playedBy(缺 role / 附件缺 file 由 parseScenario 報)
   const minP = draft.briefing['minParticipants'];
   if (minP !== undefined && (typeof minP !== 'number' || !Number.isInteger(minP) || minP < 1)) issues.push('briefing.minParticipants 需為 ≥ 1 的整數');
-  // 規劃時間 0–120 分鐘;同儕評估提示與講評引導問題需為字串陣列(R7;規劃書第 9.1 節、第 11 章)
+  // 規劃時間 0–120 分鐘;同儕評估提示與講評引導問題需為字串陣列(R7;規劃書第 9.1 節、第 8.4 節)
   const planning = draft.briefing['planningTimeMin'];
   if (planning !== undefined && (typeof planning !== 'number' || !Number.isFinite(planning) || planning < 0 || planning > PLANNING_TIME_MAX_MIN))
     issues.push(`briefing.planningTimeMin 需為 0–${PLANNING_TIME_MAX_MIN} 的分鐘數`);
@@ -2487,7 +2706,7 @@ export function validateDraft(draft: ScenarioDraft, catalogue: readonly FaultDef
   }
   if (summary.stats.timelineItems === 0) warnings.push('時間表沒有項目(無故障、語音與結束條件;練習由教官手動結束)');
 
-  // 環境進階(潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖):與核心 Scenario.StructuralIssues 相同的規則與訊息
+  // 環境進階(潮汐 / 浪 / 流場模型 / 船間交互作用 / 橫搖 / 升沉與縱搖):與核心 Scenario.StructuralIssues 相同的規則與訊息
   const extras = validateEnvironmentExtras(draft);
   issues.push(...extras.issues);
   warnings.push(...extras.warnings);
@@ -2536,7 +2755,7 @@ export function saveDraft(draft: ScenarioDraft, storage: DraftStorage | null = d
   }
 }
 
-/** 讀回草稿;沒有、格式不符或版本不合回 null。 */
+/** 讀回草稿;沒有、格式不符或版本不合回 null;舊版(1–3)草稿升級為目前版本(migrateDraftV1 / V2 / V3:當時不可編輯的區段由草稿的 raw 重建)。 */
 export function loadDraft(storage: DraftStorage | null = defaultStorage()): ScenarioDraft | null {
   if (!storage) return null;
   try {
@@ -2547,12 +2766,10 @@ export function loadDraft(storage: DraftStorage | null = defaultStorage()): Scen
     if (v['version'] === 1) return migrateDraftV1(v);
     if (!Array.isArray(v['zones']) || !isRecord(v['briefing']) || !Array.isArray(v['tugs'])) return null;
     if (v['version'] === 2) return migrateDraftV2(v);
-    if (v['version'] !== DRAFT_VERSION || !isRecord(v['currentModel']) || !('tide' in v) || !('waves' in v) || !('shipInteraction' in v) || !('roll' in v)) return null;
-    const draft = v as unknown as ScenarioDraft;
-    // 加入 ship.mmsi 欄位前存下的版本 3 草稿:範本的 ship.mmsi 只在 raw,由 raw 補回(否則輸出時 setOrDelete 會把它移除)
-    const rawMmsi = finite(recordOf(draft.raw['ship'])['mmsi']);
-    if (draft.ship.mmsi === undefined && rawMmsi !== undefined) draft.ship = { ...draft.ship, mmsi: rawMmsi };
-    return draft;
+    if (!isRecord(v['currentModel']) || !('tide' in v) || !('waves' in v) || !('shipInteraction' in v) || !('roll' in v)) return null;
+    if (v['version'] === 3) return migrateDraftV3(v);
+    if (v['version'] !== DRAFT_VERSION || !('seakeeping' in v)) return null;
+    return v as unknown as ScenarioDraft;
   } catch {
     return null;
   }
@@ -2560,7 +2777,7 @@ export function loadDraft(storage: DraftStorage | null = defaultStorage()): Scen
 
 /**
  * 第十七輪(版本 1)草稿升級:當時無法編輯的區段(route、zones、簡報角色/附件、sensors/alerts/bnwas、必要事件、拖船/錨/泊位/岸壁)
- * 仍以範本 raw 為準,由 raw 重建;已可編輯的欄位沿用舊草稿。
+ * 仍以範本 raw 為準,由 raw 重建(含之後才加入的環境進階區段與 seakeeping);已可編輯的欄位沿用舊草稿;當時草稿沒有 ship.mmsi 欄位,由 raw 補回。
  */
 function migrateDraftV1(v: Record<string, unknown>): ScenarioDraft {
   const old = v as unknown as ScenarioDraft;
@@ -2573,18 +2790,32 @@ function migrateDraftV1(v: Record<string, unknown>): ScenarioDraft {
   const pass = numOrRef(a['passMark']);
   if (pass !== undefined) assessment.passMark = pass;
   else delete assessment.passMark;
-  return { ...base, general: old.general, ship: old.ship, initial: old.initial, environment: old.environment, targets: old.targets, timeline: old.timeline, assessment };
+  const ship = old.ship.mmsi === undefined && base.ship.mmsi !== undefined ? { ...old.ship, mmsi: base.ship.mmsi } : old.ship; // 舊草稿的 ship.mmsi 只在 raw,由 raw 補回(同版本 2 的升級)
+  return { ...base, general: old.general, ship, initial: old.initial, environment: old.environment, targets: old.targets, timeline: old.timeline, assessment };
 }
 
 /**
- * 第十八、十九輪(版本 2)草稿升級:環境進階區段(tide / waves / currentModel / shipInteraction / roll)當時不可編輯、仍以範本 raw 為準,由 raw 重建;
+ * 第十八、十九輪(版本 2)草稿升級:環境進階區段(tide / waves / currentModel / shipInteraction / roll / seakeeping)當時不可編輯、仍以範本 raw 為準,由 raw 重建;
  * 其餘已可編輯的區段沿用舊草稿。
  */
 function migrateDraftV2(v: Record<string, unknown>): ScenarioDraft {
   const old = v as unknown as ScenarioDraft;
   const base = fromScenarioObject(old.raw, typeof v['template'] === 'string' ? v['template'] : '');
   const ship = old.ship.mmsi === undefined && base.ship.mmsi !== undefined ? { ...old.ship, mmsi: base.ship.mmsi } : old.ship; // 舊草稿的 ship.mmsi 只在 raw,由 raw 補回
-  return { ...old, version: 3, ship, tide: base.tide, waves: base.waves, currentModel: base.currentModel, shipInteraction: base.shipInteraction, roll: base.roll };
+  return { ...old, version: 4, ship, tide: base.tide, waves: base.waves, currentModel: base.currentModel, shipInteraction: base.shipInteraction, roll: base.roll, seakeeping: base.seakeeping };
+}
+
+/**
+ * 第二十至二十八輪(版本 3)草稿升級:ship.seakeeping 當時沒有表單、只在範本 raw(輸出時原樣帶出),由 raw 重建;其餘欄位沿用舊草稿不動。
+ * 另:加入 ship.mmsi 欄位前存下的版本 3 草稿,範本的 ship.mmsi 只在 raw,由 raw 補回(否則輸出時 setOrDelete 會把它移除);
+ * 版本 4 起草稿一定帶 ship.mmsi 的編輯結果,不再補回(清空 MMSI 後重新整理不會復原)。
+ */
+function migrateDraftV3(v: Record<string, unknown>): ScenarioDraft {
+  const old = v as unknown as ScenarioDraft;
+  const rawShip = recordOf(old.raw['ship']);
+  const rawMmsi = finite(rawShip['mmsi']);
+  const ship = old.ship.mmsi === undefined && rawMmsi !== undefined ? { ...old.ship, mmsi: rawMmsi } : old.ship;
+  return { ...old, version: 4, ship, seakeeping: sectionOf(rawShip['seakeeping']) };
 }
 
 export function clearDraft(storage: DraftStorage | null = defaultStorage()): void {

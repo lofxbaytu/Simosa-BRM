@@ -176,7 +176,7 @@ public class ScenarioTests
 
     /// <summary>
     /// 第二十六輪 R7:簡報的規劃時間(planningTimeMin)、同儕評估提示與講評引導問題讀入後原樣寫入 JSON(紀錄標頭 header.scenario)
-    /// 並可再讀回;只有文字時仍序列化為純字串;欄位不影響引擎狀態雜湊(規劃書第 9.1 節、第 11 章)。
+    /// 並可再讀回;只有文字時仍序列化為純字串;欄位不影響引擎狀態雜湊(規劃書第 9.1 節、第 8.4 節)。
     /// </summary>
     [Fact]
     public void BriefingPlanningTimeAndDebriefGuideRoundTrip()

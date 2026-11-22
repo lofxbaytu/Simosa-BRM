@@ -174,7 +174,7 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
   </article>`;
 }
 
-/** 情境簡報的講評引導問題與同儕評估提示(規劃書第 9.1 節、第 11 章;R7):列在講評紀錄五段之前供講評者引導討論。 */
+/** 情境簡報的講評引導問題與同儕評估提示(規劃書第 9.1 節、第 8.4 節;R7):列在講評紀錄五段之前供講評者引導討論。 */
 function renderBriefingGuide(g: BriefingGuide): TemplateResult {
   return html`<div class="debrief-part briefing-guide" data-part="briefing-guide">
     ${g.debriefQuestions.length > 0

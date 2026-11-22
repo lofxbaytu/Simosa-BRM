@@ -311,6 +311,15 @@ export class ScenarioEditor extends LitElement {
       fieldset .full {
         grid-column: 1 / -1;
       }
+      /* 升沉/縱搖(ship.seakeeping):標籤較長(k_yy/L、GM_L),四欄排法在 1536 寬(內顯 1080p 125 % 縮放)會把區段撐出面板而被裁切,
+         改為一列一個欄位、輸入框可縮,placeholder(預設值/估計值)才看得完整 */
+      fieldset.seakeeping {
+        grid-template-columns: auto 1fr;
+      }
+      fieldset.seakeeping input[type='text'] {
+        width: 100%;
+        min-width: 0;
+      }
       legend {
         color: var(--ob-text-muted);
         font-size: 11px;

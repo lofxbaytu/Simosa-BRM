@@ -12,6 +12,7 @@ import {
   DRAFT_STORAGE_KEY,
   ENCOUNTER_FIELDS,
   MANOEUVRING_FIELDS,
+  SEAKEEPING_FIELDS,
   SENSOR_FIELDS,
   WAYPOINT_FIELDS,
   addAttachment,
@@ -33,6 +34,7 @@ import {
   patchCurrentModel,
   patchCurrentTablePoint,
   patchRoll,
+  patchSeakeeping,
   patchShipInteraction,
   patchTide,
   patchTideConstituent,
@@ -40,6 +42,7 @@ import {
   patchWaves,
   setCurrentFieldArray,
   setRollEnabled,
+  setSeakeepingEnabled,
   setShipInteractionEnabled,
   tideConstituents,
   tidePoints,
@@ -275,6 +278,11 @@ function touchAll(d0: ScenarioDraft): ScenarioDraft {
     d = setRollEnabled(d, d.roll['enabled'] === true);
     for (const k of ['naturalPeriod_s', 'dampingRatio', 'windHeelGain', 'turnHeelGain', 'waveGain']) if (d.roll?.[k] !== undefined) d = patchRoll(d, k, same(d.roll, k));
   }
+  // 升沉/縱搖(第二十九輪;E17b 的 ship.seakeeping)
+  if (d.seakeeping) {
+    d = setSeakeepingEnabled(d, d.seakeeping['enabled'] === true);
+    for (const [k] of SEAKEEPING_FIELDS) if (d.seakeeping?.[k] !== undefined) d = patchSeakeeping(d, k, same(d.seakeeping, k));
+  }
   return d;
 }
 
@@ -299,6 +307,8 @@ describe('擴充區段 round-trip(data/scenarios 全部情境;每個區段不改
     expect(docs.some((x) => isRecord(x['assessment']) && Array.isArray(x['assessment']['required']))).toBe(true);
     expect(docs.some((x) => isRecord(x['assessment']) && isRecord(x['assessment']['ukc']))).toBe(true);
     expect(docs.some((x) => isRecord(x['assessment']) && isRecord(x['assessment']['encounter']))).toBe(true);
+    // ship.seakeeping(E17b):草稿區段讀入後經表單寫回,而不是只靠 raw 原樣保留
+    expect(docs.some((x) => isRecord(x['ship']) && isRecord(x['ship']['seakeeping']))).toBe(true);
   });
 
   for (const file of files) {
@@ -865,14 +875,15 @@ describe('工具函式與草稿版本', () => {
     const storage = new MemoryStorage();
     storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(v1));
     const back = loadDraft(storage)!;
-    expect(back.version).toBe(3);
+    expect(back.version).toBe(4);
+    expect(back.seakeeping).toBeNull();
     expect(back.general.name).toBe('舊草稿');
     expect(back.tugs.map((t) => t['id'])).toEqual(['TG1', 'TG2']);
     expect(back.zones).toHaveLength(1);
     expect(back.assessment.required).toHaveLength(v2.assessment.required.length);
     expect(back.assessment.passMark).toBe(70);
     expect(parseYaml(toYaml(back))).toEqual({ ...parseYaml(text), name: '舊草稿', assessment: { ...(parseYaml(text) as RawSection)['assessment'] as RawSection, scoring: { start: 100, passMark: 70 } } });
-    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v2, version: 4 }));
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v2, version: 5 }));
     expect(loadDraft(storage)).toBeNull();
     storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v2, zones: undefined }));
     expect(loadDraft(storage)).toBeNull();

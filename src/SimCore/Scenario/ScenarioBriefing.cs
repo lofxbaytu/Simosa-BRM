@@ -21,7 +21,7 @@ public sealed class ScenarioBriefing
     public double? PlanningTimeMin { get; set; }
     /// <summary>同儕評估提示(規劃書第 9.1 節)</summary>
     public List<string> PeerAssessmentPrompts { get; set; } = new();
-    /// <summary>講評引導問題(規劃書第 11 章)</summary>
+    /// <summary>講評引導問題(規劃書第 8.4 節)</summary>
     public List<string> DebriefQuestions { get; set; } = new();
 
     /// <summary>除文字外沒有任何結構欄位(序列化時可寫成純字串)。</summary>

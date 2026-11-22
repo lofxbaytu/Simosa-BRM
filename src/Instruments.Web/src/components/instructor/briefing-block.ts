@@ -1,7 +1,9 @@
-// 簡報結構區塊(規劃書第 9.1 節簡報內容:規劃時間、同儕評估提示;第 11 章講評引導問題;R7):
+// 簡報結構區塊(規劃書第 9.1 節簡報內容:規劃時間、同儕評估提示;第 8.4 節講評引導問題;R7):
 // 情境面板詳細區(完整教官站)與簡化教官模式的簡報頁共用。規劃時間為教官站本地倒數計時器(開始/暫停/重設;剩 1 分鐘變色;
 // 到時顯示「規劃時間結束」並發 planning-time-ended 事件,教官站記入學員操作紀錄),不送核心指令、不影響紀錄雜湊。
 // mode="debrief" 時只列講評引導問題與同儕評估提示(練習結束頁的講評摘要旁),兩者預設展開。
+// 簡報模式下講評引導問題預設收合並標示「練習後使用」:題目寫明故障、時刻與他船行為,練習前對學員展開等於劇透
+//(船上簡化教官模式常與學員共用螢幕;同儕評估提示則是簡報時就要給學員看的,寫法上不透露未告知的事件)。
 // 情境沒有這三個欄位時整個區塊不顯示(既有情境畫面不變)。
 
 import { LitElement, html, css, nothing } from 'lit';
@@ -98,6 +100,12 @@ export class BriefingBlock extends LitElement {
         color: var(--ob-text-muted);
         font-weight: 400;
         margin-left: 4px;
+      }
+      summary .note {
+        color: var(--ob-text-muted);
+        font-weight: 400;
+        margin-left: 8px;
+        font-size: 0.9em;
       }
       ol {
         margin: 2px 0 2px 0;
@@ -205,7 +213,7 @@ export class BriefingBlock extends LitElement {
     return html`<div class="block">
       ${this.timer ? this.renderTimer(this.timer) : nothing}
       ${this.renderList('prompts', '同儕評估提示', b!.peerAssessmentPrompts, true)}
-      ${this.renderList('questions', '講評引導問題', b!.debriefQuestions, false)}
+      ${this.renderList('questions', '講評引導問題', b!.debriefQuestions, false, '練習後使用;練習前請勿對學員展開')}
     </div>`;
   }
 
@@ -225,10 +233,10 @@ export class BriefingBlock extends LitElement {
     </div>`;
   }
 
-  private renderList(cls: string, title: string, items: readonly string[], open: boolean) {
+  private renderList(cls: string, title: string, items: readonly string[], open: boolean, note = '') {
     if (items.length === 0) return nothing;
     return html`<details class=${cls} ?open=${open}>
-      <summary>${title}<span class="count">${items.length} 條</span></summary>
+      <summary>${title}<span class="count">${items.length} 條</span>${note ? html`<span class="note">(${note})</span>` : nothing}</summary>
       <ol>
         ${items.map((q) => html`<li>${q}</li>`)}
       </ol>

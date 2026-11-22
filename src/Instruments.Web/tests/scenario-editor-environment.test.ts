@@ -1,7 +1,9 @@
 // 情境編輯器環境進階區段(lib/scenario-editor.ts 第二十輪;設計文件 docs/design/scenario-engine.md 第 6.1 節;R3/R4):
-// environment.tide(潮高表 / 調和分潮)、environment.waves、environment.current 的 table / tidal / field、environment.shipInteraction、ship.roll
-// 的讀入 / 新增 / 修改 / 寫回結構、驗證規則(與核心 Scenario.StructuralIssues 相同訊息)、合成情境與情境庫(E06b/E18b)的 round-trip、草稿版本 2 → 3 升級。
-import { readFileSync } from 'node:fs';
+// environment.tide(潮高表 / 調和分潮)、environment.waves、environment.current 的 table / tidal / field、environment.shipInteraction、ship.roll、
+// ship.seakeeping(第二十九輪;R4 練習編輯、R2「浪」;浪一階運動 升沉/縱搖,docs/design/physics-waves.md 第 11 節)
+// 的讀入 / 新增 / 修改 / 寫回結構、驗證規則(與核心 Scenario.StructuralIssues 相同訊息)、合成情境與情境庫(E06b/E18b/E17b)的 round-trip、
+// 草稿版本 2 → 4、3 → 4 升級。
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
@@ -9,6 +11,10 @@ import { describe, expect, it } from 'vitest';
 import { parseScenario } from '../src/lib/scenario.js';
 import {
   DRAFT_STORAGE_KEY,
+  DRAFT_VERSION,
+  SEAKEEPING_DEFAULTS,
+  SEAKEEPING_FIELDS,
+  SEAKEEPING_NO_WAVES_WARNING,
   addCurrentTablePoint,
   addTideConstituent,
   addTidePoint,
@@ -17,6 +23,9 @@ import {
   currentFieldIssues,
   currentTablePoints,
   currentTimeModel,
+  estimateGmL,
+  estimateHeavePeriod,
+  estimatePitchPeriod,
   estimateRollPeriod,
   fieldArrayText,
   fromYaml,
@@ -25,6 +34,7 @@ import {
   patchCurrentModel,
   patchCurrentTablePoint,
   patchRoll,
+  patchSeakeeping,
   patchShipInteraction,
   patchTide,
   patchTideConstituent,
@@ -34,11 +44,17 @@ import {
   removeTideConstituent,
   removeTidePoint,
   rollPeriodEstimate,
+  saveDraft,
+  scenarioHasWaves,
+  seakeepingEnabled,
+  seakeepingHydrostatics,
+  seakeepingPeriodEstimate,
   setCurrentFieldArray,
   setCurrentFieldEnabled,
   setCurrentTableTimeKey,
   setCurrentTimeModel,
   setRollEnabled,
+  setSeakeepingEnabled,
   setShipInteractionEnabled,
   setTideMode,
   setTideTimeKey,
@@ -74,11 +90,15 @@ class MemoryStorage implements DraftStorage {
   }
 }
 
-/** 含全部環境進階區段的合成情境(情境庫尚無 waves / field / shipInteraction / roll 的檔案)。 */
+/** 含全部環境進階區段的合成情境(情境庫尚無 field / shipInteraction / roll 的檔案;seakeeping 另有 E17b)。 */
 const FULL_YAML = `id: ENV
 name: 環境進階
 startTimeUtc: "2026-07-07T06:00:00Z"
-ship: { id: FSB1, loading: full, roll: { enabled: true, naturalPeriod_s: 10.5, dampingRatio: 0.08, windHeelGain: 1.0, turnHeelGain: 1.2, waveGain: 0.8 } }
+ship:
+  id: FSB1
+  loading: full
+  roll: { enabled: true, naturalPeriod_s: 10.5, dampingRatio: 0.08, windHeelGain: 1.0, turnHeelGain: 1.2, waveGain: 0.8 }
+  seakeeping: { enabled: true, heaveDampingRatio: 0.3, pitchDampingRatio: 0.4, pitchGyradiusRatio: 0.26, gmL_m: 120 }
 initial: { position: { lat: 23.7696, lon: 120.0857 }, heading: 52, speed: 8 }
 environment:
   wind: { trueSpeed: 18, trueDir: 40 }
@@ -112,7 +132,8 @@ assessment:
 describe('讀入與 round-trip', () => {
   it('合成情境:各區段讀入草稿、不改值寫回深相等、未涵蓋的 seabed 原樣保留', () => {
     const d = fromYaml(FULL_YAML, 'ENV');
-    expect(d.version).toBe(3);
+    expect(d.version).toBe(4);
+    expect(DRAFT_VERSION).toBe(4);
     expect(tideMode(d)).toBe('harmonic');
     expect(tideConstituents(d)).toHaveLength(2);
     expect(d.waves).toEqual({ significantHeight_m: 2.0, peakPeriod_s: 7.0, direction_deg: 90, spectrum: 'jonswap', gamma: 3.3 });
@@ -121,6 +142,7 @@ describe('讀入與 round-trip', () => {
     expect(d.environment).toEqual({ windSpeed: 18, windDir: 40, currentSet: 85, currentDrift: 2.5, waterDepth: 14 });
     expect(d.shipInteraction).toEqual({ enabled: true, coefficientScale: 1.0, eventThreshold_t: 3 });
     expect(d.roll).toEqual({ enabled: true, naturalPeriod_s: 10.5, dampingRatio: 0.08, windHeelGain: 1.0, turnHeelGain: 1.2, waveGain: 0.8 });
+    expect(d.seakeeping).toEqual({ enabled: true, heaveDampingRatio: 0.3, pitchDampingRatio: 0.4, pitchGyradiusRatio: 0.26, gmL_m: 120 });
     expect(parseYaml(toYaml(d))).toEqual(parseYaml(FULL_YAML));
     const v = validateDraft(d);
     expect(v.issues).toEqual([]);
@@ -142,7 +164,29 @@ describe('讀入與 round-trip', () => {
     expect(currentTimeModel(e18b)).toBe('none');
     expect(e18b.waves).toBeNull();
     expect(e18b.roll).toBeNull();
+    expect(e18b.seakeeping).toBeNull();
     expect(validateDraft(e18b).issues).toEqual([]);
+  });
+
+  it('E17b(ship.seakeeping + 港內湧浪):讀入草稿區段、不改值寫回深相等、有浪不提醒;關閉 = 移除整段、其餘內容不動', () => {
+    const text = read('E17b_typhoon_seakeeping.yaml');
+    const e17b = fromYaml(text, 'E17b');
+    expect(e17b.seakeeping).toEqual({ enabled: true });
+    expect(seakeepingEnabled(e17b)).toBe(true);
+    expect(parseYaml(toYaml(e17b))).toEqual(parseYaml(text));
+    const v = validateDraft(e17b);
+    expect(v.issues).toEqual([]);
+    expect(v.warnings.some((w) => w.includes('ship.seakeeping'))).toBe(false);
+    // 草稿區段是複本:改草稿不動 raw;輸出以草稿覆寫 raw 的同名鍵
+    const off = setSeakeepingEnabled(e17b, false);
+    expect(off.seakeeping).toBeNull();
+    expect((off.raw['ship'] as RawSection)['seakeeping']).toEqual({ enabled: true });
+    const expected = parseYaml(text) as RawSection;
+    const { seakeeping: _sk, ...shipWithout } = expected['ship'] as RawSection;
+    expect(parseYaml(toYaml(off))).toEqual({ ...expected, ship: shipWithout });
+    // 改參數:只有該鍵改變
+    const tuned = patchSeakeeping(e17b, 'heaveDampingRatio', 0.3);
+    expect(parseYaml(toYaml(tuned))).toEqual({ ...expected, ship: { ...(expected['ship'] as RawSection), seakeeping: { enabled: true, heaveDampingRatio: 0.3 } } });
   });
 
   it('移除區段 → 輸出不含該鍵(raw 的鍵被覆寫);常數 set/drift 與流場模型各自獨立', () => {
@@ -153,6 +197,7 @@ describe('讀入與 round-trip', () => {
     d = setCurrentFieldEnabled(d, false);
     d = setShipInteractionEnabled(d, false);
     d = setRollEnabled(d, false);
+    d = setSeakeepingEnabled(d, false);
     const o = toScenarioObject(d);
     const env = o['environment'] as RawSection;
     expect(env['tide']).toBeUndefined();
@@ -162,6 +207,7 @@ describe('讀入與 round-trip', () => {
     // 有其他參數的區段關閉時保留並寫 enabled: false
     expect(env['shipInteraction']).toEqual({ enabled: false, coefficientScale: 1.0, eventThreshold_t: 3 });
     expect((o['ship'] as RawSection)['roll']).toEqual({ enabled: false, naturalPeriod_s: 10.5, dampingRatio: 0.08, windHeelGain: 1.0, turnHeelGain: 1.2, waveGain: 0.8 });
+    expect((o['ship'] as RawSection)['seakeeping']).toEqual({ enabled: false, heaveDampingRatio: 0.3, pitchDampingRatio: 0.4, pitchGyradiusRatio: 0.26, gmL_m: 120 });
     expect(validateDraft(d).issues).toEqual([]);
   });
 });
@@ -427,27 +473,314 @@ describe('船間交互作用與橫搖', () => {
   });
 });
 
+describe('升沉/縱搖 ship.seakeeping(浪一階運動契約)', () => {
+  const WAVES = { significantHeight_m: 2.5, peakPeriod_s: 8, direction_deg: 45 };
+  const shipOf = (d: ScenarioDraft) => toScenarioObject(d)['ship'] as RawSection;
+  const skWarned = (d: ScenarioDraft) => validateEnvironmentExtras(d).warnings.includes(SEAKEEPING_NO_WAVES_WARNING);
+  /** 加一個時間表項目,動作為 setEnvironment(args)。 */
+  const withSetEnvironment = (d: ScenarioDraft, args: unknown): ScenarioDraft => ({ ...d, timeline: [...d.timeline, { id: 'swell', when: { type: 'time', atLeast: 60 }, actions: [{ setEnvironment: args }] }] });
+
+  it('啟用 / 改參數 / 清空參數 / 關閉 → ship 區段與 YAML;欄位以 schema 為準', () => {
+    // schema ship.seakeeping 的欄位:enabled + 4 個選填參數(表單欄位與 schema 一致,不自創欄位)
+    expect(SEAKEEPING_FIELDS.map((f) => f[0])).toEqual(['heaveDampingRatio', 'pitchDampingRatio', 'pitchGyradiusRatio', 'gmL_m']);
+    let d = blankDraft();
+    expect(d.seakeeping).toBeNull();
+    expect(seakeepingEnabled(d)).toBe(false);
+    expect(shipOf(d)).toEqual({ id: 'FSB1', loading: 'ballast' });
+    // 啟用:只有 enabled: true(其餘用核心預設)
+    d = setSeakeepingEnabled(d, true);
+    expect(d.seakeeping).toEqual({ enabled: true });
+    expect(seakeepingEnabled(d)).toBe(true);
+    expect(shipOf(d)).toEqual({ id: 'FSB1', loading: 'ballast', seakeeping: { enabled: true } });
+    expect(validateDraft(d).issues).toEqual([]);
+    // 改參數
+    d = patchSeakeeping(d, 'heaveDampingRatio', 0.3);
+    d = patchSeakeeping(d, 'pitchDampingRatio', 0.4);
+    d = patchSeakeeping(d, 'pitchGyradiusRatio', 0.26);
+    d = patchSeakeeping(d, 'gmL_m', 150);
+    expect(shipOf(d)).toEqual({ id: 'FSB1', loading: 'ballast', seakeeping: { enabled: true, heaveDampingRatio: 0.3, pitchDampingRatio: 0.4, pitchGyradiusRatio: 0.26, gmL_m: 150 } });
+    expect(validateDraft(d).issues).toEqual([]);
+    expect(parseScenario(toYaml(d), 'x').issues).toEqual([]);
+    expect((parseYaml(toYaml(d)) as RawSection)['ship']).toEqual({ id: 'FSB1', loading: 'ballast', seakeeping: { enabled: true, heaveDampingRatio: 0.3, pitchDampingRatio: 0.4, pitchGyradiusRatio: 0.26, gmL_m: 150 } });
+    // 清空單一參數(表單留白 = undefined)→ 刪鍵(用核心預設),其他鍵不動
+    d = patchSeakeeping(d, 'gmL_m', undefined);
+    d = patchSeakeeping(d, 'pitchDampingRatio', undefined);
+    expect(d.seakeeping).toEqual({ enabled: true, heaveDampingRatio: 0.3, pitchGyradiusRatio: 0.26 });
+    // 關閉:有其他參數 → enabled: false 保留參數;再啟用 → 參數仍在
+    const off = setSeakeepingEnabled(d, false);
+    expect(off.seakeeping).toEqual({ enabled: false, heaveDampingRatio: 0.3, pitchGyradiusRatio: 0.26 });
+    expect(seakeepingEnabled(off)).toBe(false);
+    expect(shipOf(off)['seakeeping']).toEqual({ enabled: false, heaveDampingRatio: 0.3, pitchGyradiusRatio: 0.26 });
+    expect(setSeakeepingEnabled(off, true).seakeeping).toEqual({ enabled: true, heaveDampingRatio: 0.3, pitchGyradiusRatio: 0.26 });
+    // 關閉:只有 enabled → 移除整段(輸出不含 seakeeping 鍵)
+    const bare = setSeakeepingEnabled(setSeakeepingEnabled(blankDraft(), true), false);
+    expect(bare.seakeeping).toBeNull();
+    expect(shipOf(bare)).toEqual({ id: 'FSB1', loading: 'ballast' });
+    expect(toYaml(bare)).not.toContain('seakeeping');
+    // 清到空物件 → 區段移除;未啟用時先填參數 → 有區段但沒有 enabled(= 關閉),勾選後保留參數
+    expect(patchSeakeeping(setSeakeepingEnabled(blankDraft(), true), 'enabled', undefined).seakeeping).toBeNull();
+    const paramOnly = patchSeakeeping({ ...blankDraft(), seakeeping: { enabled: false, gmL_m: 150 } }, 'enabled', undefined);
+    expect(paramOnly.seakeeping).toEqual({ gmL_m: 150 });
+    expect(seakeepingEnabled(paramOnly)).toBe(false);
+    expect(setSeakeepingEnabled(paramOnly, true).seakeeping).toEqual({ gmL_m: 150, enabled: true });
+    // 未列在表單的鍵(日後 schema 新增)原樣保留
+    const extra = fromYaml('id: X\nship: { id: FSB2, loading: full, seakeeping: { enabled: true, futureKey: 7 } }\ninitial: { position: { lat: 23, lon: 120 }, heading: 0 }\nenvironment: { waterDepth: 30 }\n', 'X');
+    expect(shipOf(patchSeakeeping(extra, 'heaveDampingRatio', 0.2))['seakeeping']).toEqual({ enabled: true, futureKey: 7, heaveDampingRatio: 0.2 });
+    // 草稿不改 raw:raw 只是範本複本,輸出以草稿區段覆寫
+    expect((setSeakeepingEnabled(extra, false).raw['ship'] as RawSection)['seakeeping']).toEqual({ enabled: true, futureKey: 7 });
+  });
+
+  it('驗證邊界(與核心 Scenario.StructuralIssues 同規則同訊息;路徑 ship.seakeeping.<欄位>;enabled 與否都檢查)', () => {
+    const base = { ...blankDraft(), waves: WAVES };
+    const issuesOf = (sk: RawSection) => validateEnvironmentExtras({ ...base, seakeeping: sk }).issues;
+    const damping = (key: string) => `ship.seakeeping.${key} ${key} 須在 0–1 之間(不含)`;
+    const ratioMsg = 'ship.seakeeping.pitchGyradiusRatio pitchGyradiusRatio 須大於 0 且不超過 0.5';
+    const gmMsg = 'ship.seakeeping.gmL_m gmL_m 必須為正';
+    // 全部不合法(依欄位順序列出)
+    expect(issuesOf({ enabled: 'yes', heaveDampingRatio: 0, pitchDampingRatio: 1, pitchGyradiusRatio: 0, gmL_m: 0 })).toEqual([
+      'ship.seakeeping.enabled enabled 須為布林值',
+      damping('heaveDampingRatio'),
+      damping('pitchDampingRatio'),
+      ratioMsg,
+      gmMsg,
+    ]);
+    // 阻尼比:開區間 (0, 1)
+    for (const key of ['heaveDampingRatio', 'pitchDampingRatio']) {
+      for (const bad of [0, 1, -0.1, 1.5, 'x', true, null]) expect(issuesOf({ enabled: true, [key]: bad }), `${key}=${String(bad)}`).toEqual([damping(key)]);
+      for (const ok of [0.01, 0.35, 0.99, '${params:ship.damping}']) expect(issuesOf({ enabled: true, [key]: ok }), `${key}=${String(ok)}`).toEqual([]);
+    }
+    // k_yy/L:(0, 0.5](0.5 含)
+    for (const bad of [0, -0.25, 0.51, 1, 'x']) expect(issuesOf({ enabled: true, pitchGyradiusRatio: bad }), String(bad)).toEqual([ratioMsg]);
+    for (const ok of [0.01, 0.25, 0.5, '${params:ship.kyy}']) expect(issuesOf({ enabled: true, pitchGyradiusRatio: ok }), String(ok)).toEqual([]);
+    // GM_L:> 0
+    for (const bad of [0, -1, 'x']) expect(issuesOf({ enabled: true, gmL_m: bad }), String(bad)).toEqual([gmMsg]);
+    for (const ok of [0.1, 104.7, 500, '${params:ship.gmL}']) expect(issuesOf({ enabled: true, gmL_m: ok }), String(ok)).toEqual([]);
+    // 未啟用(enabled: false 或未給 enabled)也檢查參數;全部留白沒有問題
+    expect(issuesOf({ enabled: false, heaveDampingRatio: 2 })).toEqual([damping('heaveDampingRatio')]);
+    expect(issuesOf({ gmL_m: -5 })).toEqual([gmMsg]);
+    expect(issuesOf({ enabled: true })).toEqual([]);
+    expect(issuesOf({ enabled: false })).toEqual([]);
+    // validateDraft 併入同一批問題(阻止載入)
+    expect(validateDraft({ ...base, seakeeping: { enabled: true, pitchGyradiusRatio: 0.6 } }).issues).toEqual([ratioMsg]);
+    // 預設值在合法範圍內(表單 placeholder 顯示的預設)
+    expect(issuesOf({ enabled: true, heaveDampingRatio: SEAKEEPING_DEFAULTS.heaveDampingRatio, pitchDampingRatio: SEAKEEPING_DEFAULTS.pitchDampingRatio, pitchGyradiusRatio: SEAKEEPING_DEFAULTS.pitchGyradiusRatio })).toEqual([]);
+  });
+
+  it('啟用但情境沒有浪 → 提醒(不是錯誤);environment.waves 的 Hs > 0 或時間表 setEnvironment waves 給浪即不提醒', () => {
+    const on = setSeakeepingEnabled(blankDraft(), true);
+    expect(scenarioHasWaves(on)).toBe(false);
+    const v = validateDraft(on);
+    expect(v.issues).toEqual([]);
+    expect(v.warnings).toContain(SEAKEEPING_NO_WAVES_WARNING);
+    expect(SEAKEEPING_NO_WAVES_WARNING.startsWith('ship.seakeeping 已啟用但情境沒有浪')).toBe(true);
+    // 未啟用(無區段、enabled: false)不提醒
+    expect(skWarned(blankDraft())).toBe(false);
+    expect(skWarned({ ...on, seakeeping: { enabled: false, gmL_m: 150 } })).toBe(false);
+    // environment.waves:Hs > 0 或參數引用 → 有浪;Hs = 0 = 關閉 → 提醒
+    expect(skWarned({ ...on, waves: WAVES })).toBe(false);
+    expect(skWarned({ ...on, waves: { ...WAVES, significantHeight_m: '${params:env.hs}' } })).toBe(false);
+    expect(skWarned({ ...on, waves: { ...WAVES, significantHeight_m: 0 } })).toBe(true);
+    // Hs 缺漏/負值已有錯誤訊息,不再重複提醒
+    const negative = validateEnvironmentExtras({ ...on, waves: { ...WAVES, significantHeight_m: -1 } });
+    expect(negative.issues).toEqual(['environment.waves significantHeight_m 必須為 ≥ 0 的有限數值']);
+    expect(negative.warnings).not.toContain(SEAKEEPING_NO_WAVES_WARNING);
+    // 時間表 setEnvironment waves:Hs > 0(或參數引用)才算給浪;null / Hs 0 / 只改來向的部分更新都不算
+    expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: 0.8, peakPeriod_s: 10, direction_deg: 225 }, ramp_s: 600 }))).toBe(false);
+    expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: '${params:env.hs}', peakPeriod_s: 10, direction_deg: 225 } }))).toBe(false);
+    expect(skWarned(withSetEnvironment(on, { waves: null }))).toBe(true);
+    expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: 0 } }))).toBe(true);
+    expect(skWarned(withSetEnvironment(on, { waves: { direction_deg: 180 } }))).toBe(true);
+    expect(skWarned(withSetEnvironment(on, { wind: { trueSpeed: 30 } }))).toBe(true);
+    // 起始 Hs = 0、由時間表加浪 → 不提醒
+    expect(skWarned(withSetEnvironment({ ...on, waves: { ...WAVES, significantHeight_m: 0 } }, { waves: { significantHeight_m: 1.2 } }))).toBe(false);
+    // E17b:拿掉 environment.waves 後時間表仍有 setEnvironment waves(Hs 0.8 / 1.2)→ 不提醒;再把時間表清空 → 提醒
+    const e17b = fromYaml(read('E17b_typhoon_seakeeping.yaml'), 'E17b');
+    const noStatic = setWavesEnabled(e17b, false);
+    expect(noStatic.waves).toBeNull();
+    expect(scenarioHasWaves(noStatic)).toBe(true);
+    expect(skWarned(noStatic)).toBe(false);
+    expect(skWarned({ ...noStatic, timeline: [] })).toBe(true);
+    // 提醒不阻止載入:issues 為空
+    expect(validateEnvironmentExtras({ ...noStatic, timeline: [] }).issues).toEqual([]);
+  });
+
+  it('自然週期估計與核心 SeakeepingModel 同式(physics-waves.md 第 11.4 節的 FSB 量級表);草稿的 gmL_m / k_yy/L 代入', () => {
+    // 表列:船/裝載 → C_wp、∇、T_h、GM_L、T_p
+    const table: Array<[ship: 'FSB1' | 'FSB2', loading: 'full' | 'ballast', cwp: number, volume: number, th: number, gmL: number, tp: number, estimated: boolean]> = [
+      ['FSB1', 'full', 0.825, 7536, 6.42, 119.0, 4.99, false],
+      ['FSB1', 'ballast', 0.8, 4364, 4.96, 180.7, 4.05, false],
+      ['FSB2', 'full', 0.843, 11486, 7.26, 104.7, 5.58, false],
+      ['FSB2', 'ballast', 0.826, 8369, 6.26, 137.4, 4.88, true], // FSB2 壓載 C_b、排水量無資料 → 估計
+    ];
+    for (const [ship, loading, cwp, volume, th, gmL, tp, estimated] of table) {
+      const h = seakeepingHydrostatics(ship, loading);
+      const label = `${ship} ${loading}`;
+      expect((1 + 2 * h.cb) / 3, label).toBeCloseTo(cwp, 3);
+      expect(Math.round(h.volume_m3), label).toBe(volume);
+      expect(h.estimated, label).toBe(estimated);
+      expect(estimateHeavePeriod(h), label).toBeCloseTo(th, 2);
+      expect(estimateGmL(h), label).toBeCloseTo(gmL, 1);
+      expect(estimatePitchPeriod(h.lpp_m, estimateGmL(h)), label).toBeCloseTo(tp, 2);
+      const est = seakeepingPeriodEstimate({ ...blankDraft(), ship: { id: ship, loading } });
+      // 表單顯示值:由未進位的估計值取 0.1(不是把表列的 0.01 值再進位一次)
+      const round1 = (x: number) => Math.round(x * 10) / 10;
+      expect([est.heavePeriod_s, est.pitchPeriod_s, est.gmL_m, est.gmLEstimate_m], label).toEqual([round1(estimateHeavePeriod(h)), round1(estimatePitchPeriod(h.lpp_m, estimateGmL(h))), gmL, gmL]);
+      expect(Math.abs(est.heavePeriod_s - th), label).toBeLessThanOrEqual(0.05 + 1e-9);
+      expect(Math.abs(est.pitchPeriod_s - tp), label).toBeLessThanOrEqual(0.05 + 1e-9);
+      expect(est.gmLFromScenario, label).toBe(false);
+      expect(est.pitchGyradiusRatio, label).toBe(0.25);
+    }
+    // 核心測試 NaturalPeriodsAndAssumedDefaultsFollowParticulars 的同一組式子(FSB2 滿載:L 104、C_b 0.765、T 7.2)
+    const fsb2 = seakeepingHydrostatics('FSB2', 'full');
+    expect(fsb2).toMatchObject({ lpp_m: 104, breadth_m: 20, draft_m: 7.2, cb: 0.765 });
+    const cwp = (1 + 2 * 0.765) / 3;
+    expect(estimateGmL(fsb2)).toBeCloseTo((3 * cwp * cwp * 104 * 104) / (40 * 0.765 * 7.2), 12);
+    expect((2 * Math.PI) / estimatePitchPeriod(104, estimateGmL(fsb2))).toBeCloseTo(Math.sqrt((9.80665 * estimateGmL(fsb2)) / (1.2 * 26 * 26)), 12);
+    expect((2 * Math.PI) / estimateHeavePeriod(fsb2)).toBeCloseTo(Math.sqrt((9.80665 * cwp * 104 * 20) / (2 * (11773.2 * 1000) / 1025)), 12);
+    // FSB2 壓載:C_b = 0.765 − 0.11·(1 − 5.45/7.2);排水量 = C_b·L·B·T·ρ
+    const fsb2b = seakeepingHydrostatics('FSB2', 'ballast');
+    expect(fsb2b.cb).toBeCloseTo(0.765 - 0.11 * (1 - 5.45 / 7.2), 12);
+    expect(fsb2b.volume_m3).toBeCloseTo(fsb2b.cb * 104 * 20 * 5.45, 6);
+    // intermediate(particulars 無資料):full 與 ballast 各分量平均(核心 GetLoading);FSB2 的 C_b 與排水量只有 full 有值 → 取 full
+    const fsb1i = seakeepingHydrostatics('FSB1', 'intermediate');
+    expect(fsb1i).toMatchObject({ draft_m: (5.701 + 3.72) / 2, cb: (0.738 + 0.7) / 2, estimated: true });
+    expect(fsb1i.volume_m3).toBeCloseTo((((7724.77 + 4472.8) / 2) * 1000) / 1025, 6);
+    const fsb2i = seakeepingHydrostatics('FSB2', 'intermediate');
+    expect(fsb2i).toMatchObject({ draft_m: (7.2 + 5.45) / 2, cb: 0.765, estimated: true });
+    expect(fsb2i.volume_m3).toBeCloseTo((11773.2 * 1000) / 1025, 6);
+    // 草稿的 gmL_m 與 pitchGyradiusRatio 代入縱搖週期(T_p ∝ k_yy/√GM_L);升沉週期不受影響;阻尼比不影響週期
+    const d = { ...blankDraft(), ship: { id: 'FSB2' as const, loading: 'full' as const } };
+    const given = seakeepingPeriodEstimate({ ...d, seakeeping: { enabled: true, gmL_m: 95, pitchGyradiusRatio: 0.22, heaveDampingRatio: 0.2, pitchDampingRatio: 0.5 } });
+    expect(given).toMatchObject({ heavePeriod_s: 7.3, gmL_m: 95, gmLEstimate_m: 104.7, gmLFromScenario: true, pitchGyradiusRatio: 0.22 });
+    expect(given.pitchPeriod_s).toBe(Math.round(estimatePitchPeriod(104, 95, 0.22) * 10) / 10);
+    expect(estimatePitchPeriod(104, 95, 0.22)).toBeCloseTo(estimatePitchPeriod(104, estimateGmL(fsb2)) * (0.22 / 0.25) * Math.sqrt(estimateGmL(fsb2) / 95), 12);
+    // 參數引用或不合法值 → 改用估計/預設(錯誤另由驗證報)
+    for (const sk of [{ gmL_m: '${params:ship.gmL}', pitchGyradiusRatio: '${params:ship.kyy}' }, { gmL_m: -3, pitchGyradiusRatio: 0.8 }, { gmL_m: 0, pitchGyradiusRatio: 0 }]) {
+      expect(seakeepingPeriodEstimate({ ...d, seakeeping: { enabled: true, ...sk } })).toMatchObject({ pitchPeriod_s: 5.6, gmL_m: 104.7, gmLFromScenario: false, pitchGyradiusRatio: 0.25 });
+    }
+    // 非正輸入回 0(不丟例外、不出現 NaN)
+    expect(estimatePitchPeriod(104, 0)).toBe(0);
+    expect(estimatePitchPeriod(0, 100)).toBe(0);
+    expect(estimateHeavePeriod({ ...fsb2, volume_m3: 0 })).toBe(0);
+    expect(estimateGmL({ ...fsb2, draft_m: 0 })).toBe(0);
+  });
+});
+
 describe('草稿版本', () => {
-  it('版本 2 草稿升級為 3:已編輯欄位沿用、環境進階區段由 raw 重建;版本 3 原樣;版本 4 或缺區段回 null', () => {
-    const v3 = fromYaml(FULL_YAML, 'ENV');
-    const v2 = { ...v3, version: 2, general: { ...v3.general, name: '舊草稿' } } as unknown as RawSection;
-    for (const k of ['tide', 'waves', 'currentModel', 'shipInteraction', 'roll']) delete v2[k];
+  it('版本 2 草稿升級為 4:已編輯欄位沿用、環境進階區段(含 seakeeping)由 raw 重建;版本 4 原樣;版本 5 或缺區段回 null', () => {
+    const v4 = fromYaml(FULL_YAML, 'ENV');
+    const v2 = { ...v4, version: 2, general: { ...v4.general, name: '舊草稿' } } as unknown as RawSection;
+    for (const k of ['tide', 'waves', 'currentModel', 'shipInteraction', 'roll', 'seakeeping']) delete v2[k];
     const storage = new MemoryStorage();
     storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(v2));
     const back = loadDraft(storage)!;
-    expect(back.version).toBe(3);
+    expect(back.version).toBe(4);
     expect(back.general.name).toBe('舊草稿');
-    expect(back.tide).toEqual(v3.tide);
-    expect(back.waves).toEqual(v3.waves);
-    expect(back.currentModel).toEqual(v3.currentModel);
-    expect(back.shipInteraction).toEqual(v3.shipInteraction);
-    expect(back.roll).toEqual(v3.roll);
+    expect(back.tide).toEqual(v4.tide);
+    expect(back.waves).toEqual(v4.waves);
+    expect(back.currentModel).toEqual(v4.currentModel);
+    expect(back.shipInteraction).toEqual(v4.shipInteraction);
+    expect(back.roll).toEqual(v4.roll);
+    expect(back.seakeeping).toEqual(v4.seakeeping);
     expect(parseYaml(toYaml(back))).toEqual({ ...parseYaml(FULL_YAML), name: '舊草稿' });
-    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(v3));
-    expect(loadDraft(storage)).toEqual(JSON.parse(JSON.stringify(v3)));
-    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v3, version: 4 }));
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(v4));
+    expect(loadDraft(storage)).toEqual(JSON.parse(JSON.stringify(v4)));
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v4, version: 5 }));
     expect(loadDraft(storage)).toBeNull();
-    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v3, currentModel: undefined }));
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v4, currentModel: undefined }));
     expect(loadDraft(storage)).toBeNull();
+    // 版本 4 但缺 seakeeping 欄位(格式不符)→ null
+    const { seakeeping: _sk, ...noSeakeeping } = v4;
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(noSeakeeping));
+    expect(loadDraft(storage)).toBeNull();
+  });
+
+  it('版本 3 草稿(第二十至二十八輪)升級為 4:seakeeping 由範本 raw 重建、其他欄位(含已編輯的環境進階區段)原樣不動', () => {
+    // 版本 3 的草稿沒有 seakeeping 欄位;範本的 ship.seakeeping 只在 raw(當時輸出靠 raw 原樣帶出)
+    const toV3 = (d: ScenarioDraft): RawSection => {
+      const { seakeeping: _sk, ...rest } = d;
+      return { ...rest, version: 3 };
+    };
+    const storage = new MemoryStorage();
+    // (1) 範本有 seakeeping(E17b),使用者在版本 3 編輯過名稱、浪、橫搖、時間表以外的區段
+    const text = read('E17b_typhoon_seakeeping.yaml');
+    let edited = fromYaml(text, 'E17b');
+    edited = { ...edited, general: { ...edited.general, name: '舊草稿 E17b' } };
+    edited = patchWaves(edited, 'significantHeight_m', 0.7);
+    edited = patchRoll(setRollEnabled(edited, true), 'dampingRatio', 0.1);
+    const stored = toV3(edited);
+    expect('seakeeping' in stored).toBe(false);
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(stored));
+    const back = loadDraft(storage)!;
+    expect(back.version).toBe(4);
+    expect(back.seakeeping).toEqual({ enabled: true });
+    // 其他欄位逐一與舊草稿相同(只多了 seakeeping、version 改 4)
+    const { seakeeping: _a, version: _b, ...backRest } = back;
+    const { version: _c, ...storedRest } = JSON.parse(JSON.stringify(stored)) as RawSection;
+    expect(backRest).toEqual(storedRest);
+    // 輸出內容不遺失:與版本 3 當時的輸出相同(seakeeping 仍在、編輯過的欄位沿用)
+    const expected = parseYaml(text) as RawSection;
+    const env = expected['environment'] as RawSection;
+    expect(parseYaml(toYaml(back))).toEqual({
+      ...expected,
+      name: '舊草稿 E17b',
+      ship: { ...(expected['ship'] as RawSection), roll: { enabled: true, dampingRatio: 0.1 } },
+      environment: { ...env, waves: { ...(env['waves'] as RawSection), significantHeight_m: 0.7 } },
+    });
+    expect(validateDraft(back).issues).toEqual([]);
+    // 升級後即可在表單編輯:關閉 → 輸出不含 seakeeping
+    expect((toScenarioObject(setSeakeepingEnabled(back, false))['ship'] as RawSection)['seakeeping']).toBeUndefined();
+    // 升級後再存 → 版本 4,往返相同
+    expect(saveDraft(back, storage)).toBe(true);
+    expect(loadDraft(storage)).toEqual(JSON.parse(JSON.stringify(back)));
+
+    // (2) 範本的 seakeeping 帶參數且未啟用 → 原樣重建
+    const full = fromYaml(FULL_YAML, 'ENV');
+    const tuned = { ...full, raw: { ...full.raw, ship: { ...(full.raw['ship'] as RawSection), seakeeping: { enabled: false, gmL_m: 130 } } } };
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(toV3(tuned)));
+    expect(loadDraft(storage)!.seakeeping).toEqual({ enabled: false, gmL_m: 130 });
+
+    // (3) 範本沒有 seakeeping → null,輸出與原檔深相等
+    const e18b = fromYaml(read('E18b_tide_table.yaml'), 'E18b');
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(toV3(e18b)));
+    const plain = loadDraft(storage)!;
+    expect(plain.version).toBe(4);
+    expect(plain.seakeeping).toBeNull();
+    expect(parseYaml(toYaml(plain))).toEqual(parseYaml(read('E18b_tide_table.yaml')));
+
+    // (4) 版本 3 但缺環境進階區段(格式不符)→ null
+    const { roll: _r, ...broken } = toV3(e18b);
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(broken));
+    expect(loadDraft(storage)).toBeNull();
+  });
+
+  it('版本 1 草稿(第十七輪)升級為 4:範本的 ship.seakeeping 與 ship.mmsi(當時都只在 raw)不遺失', () => {
+    const text = 'id: OLD\nship: { id: FSB2, loading: full, mmsi: 416000002, seakeeping: { enabled: true, gmL_m: 110 } }\ninitial: { position: { lat: 23, lon: 120 }, heading: 0 }\nenvironment: { waterDepth: 30, waves: { significantHeight_m: 1.5, peakPeriod_s: 8, direction_deg: 45 } }\nassessment: { hardFail: [{ id: grounding, rule: grounding }] }\n';
+    const now = fromYaml(text, 'OLD');
+    // 版本 1 草稿只有:general / ship(無 mmsi)/ initial / environment / targets / timeline / assessment{hardFail, bands, start, passMark} / raw
+    const { mmsi: _m, ...oldShip } = now.ship;
+    const v1 = { version: 1, template: 'OLD', general: { ...now.general, name: '舊草稿' }, ship: oldShip, initial: now.initial, environment: now.environment, targets: now.targets, timeline: now.timeline, assessment: { hardFail: now.assessment.hardFail, bands: now.assessment.bands }, raw: now.raw };
+    const storage = new MemoryStorage();
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(v1));
+    const back = loadDraft(storage)!;
+    expect(back.version).toBe(4);
+    expect(back.seakeeping).toEqual({ enabled: true, gmL_m: 110 });
+    expect(back.ship).toEqual({ id: 'FSB2', loading: 'full', mmsi: 416000002 });
+    expect(back.waves).toEqual({ significantHeight_m: 1.5, peakPeriod_s: 8, direction_deg: 45 });
+    expect(parseYaml(toYaml(back))).toEqual({ ...(parseYaml(text) as RawSection), name: '舊草稿' });
+  });
+
+  it('data/scenarios 全部情境:版本 3 草稿升級後輸出與原檔深相等(既有草稿不遺失內容)', () => {
+    const storage = new MemoryStorage();
+    const files = readdirSync(scenarioDir).filter((f) => /\.ya?ml$/i.test(f));
+    expect(files.length).toBeGreaterThan(20);
+    expect(files).toContain('E17b_typhoon_seakeeping.yaml');
+    for (const f of files) {
+      const { seakeeping: _sk, ...v3 } = fromYaml(read(f), f);
+      storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v3, version: 3 }));
+      const back = loadDraft(storage);
+      expect(back?.version, f).toBe(4);
+      expect(parseYaml(toYaml(back!)), f).toEqual(parseYaml(read(f)));
+    }
   });
 });

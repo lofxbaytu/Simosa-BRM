@@ -544,7 +544,7 @@ describe('草稿還原(含新區段)', () => {
     await click(el, 'button.add-tug');
     await setInput(el, 'input.al-offHeading_deg', '15');
     const stored = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY)!) as ScenarioDraft;
-    expect(stored.version).toBe(3);
+    expect(stored.version).toBe(4);
     expect(stored.zones).toHaveLength(2);
     expect(stored.tugs).toHaveLength(2);
     el.remove();
@@ -561,7 +561,7 @@ describe('草稿還原(含新區段)', () => {
     again.remove();
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(v1));
     const migrated = await mountEditor();
-    expect(migrated.value.version).toBe(3);
+    expect(migrated.value.version).toBe(4);
     expect(migrated.value.general.name).toBe('舊草稿');
     expect(migrated.value.zones).toHaveLength(1);
     expect(migrated.value.tugs).toHaveLength(1);

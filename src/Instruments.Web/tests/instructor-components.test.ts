@@ -137,6 +137,9 @@ describe('簡報結構區塊(規劃時間、同儕評估提示、講評引導問
     expect(text).toContain('同儕評估提示2 條');
     expect(text).toContain('觀察接班前是否逐項查證');
     expect(text).toContain('講評引導問題3 條');
+    // 簡報模式:引導問題收合並標示練習後使用(題目會劇透);同儕評估提示沒有這個標示
+    expect(block.shadowRoot!.querySelector('details.questions summary .note')!.textContent).toContain('練習後使用');
+    expect(block.shadowRoot!.querySelector('details.prompts summary .note')).toBeNull();
     expect(block.shadowRoot!.querySelector('details.prompts')!.hasAttribute('open')).toBe(true);
     expect(block.shadowRoot!.querySelector('details.questions')!.hasAttribute('open')).toBe(false);
     expect(block.shadowRoot!.querySelectorAll('details.questions li')).toHaveLength(3);

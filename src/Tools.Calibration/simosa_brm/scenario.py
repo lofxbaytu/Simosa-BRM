@@ -645,7 +645,7 @@ def structural_issues(raw: dict[str, Any], origin: dict[str, Any] | None = None)
                     if not isinstance(role, dict) or not str(role.get("role") or "").strip():
                         error(f"briefing.roles[{i}]", "角色需要 role")
         # minParticipants / duration_s 的數值範圍 C# 不檢查(只讀取),此處亦不檢查以免 C# 可載入的情境在此被拒
-        # 規劃時間與兩個提示清單(規劃書第 9.1 節、第 11 章;R7):C# 為 double? / List<string>,型別不符即無法反序列化,此處同步報錯;
+        # 規劃時間與兩個提示清單(規劃書第 9.1 節、第 8.4 節;R7):C# 為 double? / List<string>,型別不符即無法反序列化,此處同步報錯;
         # 數值範圍(≥ 0、編輯器 0–120)與 C# 一樣不檢查
         ptm = briefing.get("planningTimeMin")
         if ptm is not None and (isinstance(ptm, bool) or not isinstance(ptm, (int, float))):

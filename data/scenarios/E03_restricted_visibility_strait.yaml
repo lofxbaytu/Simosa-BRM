@@ -47,6 +47,17 @@ briefing:
     - { role: ecr, playedBy: voiceScript }
   minParticipants: 3
   duration_s: 3600
+  planningTimeMin: 10                             # 簡報後的規劃 / 分工時間(分鐘;教官站本地倒數;R7,規劃書第 2.7 節)
+  peerAssessmentPrompts:                          # 同儕評估提示(簡報時提示學員互相觀察的重點,不透露簡報未告知的事件;R7,規劃書第 2.7 節)
+    - "觀察團隊多早提出減速、由誰提出,安全速度(8 kn/6 kn)與通知船長的時機是否事先說清楚"
+    - "觀察瞭望的目視與霧號報告是否有方位、距離並獲複誦確認,且與雷達標繪互相對照"
+    - "觀察能見度變差時,檢查表、霧號、手操舵與雷達監看如何分工,是否有人同時負責兩件事"
+  debriefQuestions:                               # 講評引導問題(練習後由帶領者帶領討論,練習前不對學員展開;規劃書第 8.4 節)
+    - "交班時能見度 2 nm、預報將降到 0.5 nm 以下,你們依據哪些資訊決定何時減速?進霧區後花了多久降到 8 kn?"
+    - "能見度降到約 0.5 nm 時,通知船長、能見度不良檢查表、霧號與手操舵怎麼分工?先後順序是怎麼決定的?"
+    - "聽到一長二短霧號時,瞭望報告的方向與雷達上的無 AIS 弱回波怎麼對照?團隊如何判斷那是什麼船?"
+    - "右舷前方 2 nm 多出現無 AIS 回波、約 2 分鐘後轉向本船時,你們掌握什麼、不確定什麼?為何選擇那樣的行動?"
+    - "下次實船遇霧,你會在能見度多少、提前多久開始減速與加派瞭望?哪些做法要帶回船上的當值與交班?"
 route:
   name: 示意北行航道(CL0 → CL3,霧區)
   xtdLimit_m: "${params:navigation.xtd.coastalLane_m}"
@@ -89,7 +100,7 @@ timeline:
     name: 聽到 R1 霧號(一長二短)
     when: { type: ownDistance, target: R1, lessThan: 1.0 }
     actions:
-      - voiceScript: { role: lookout, channel: bridge, text: "右舷前方聽到一長二短的霧號,看不到船。", lang: zh-TW }
+      - voiceScript: { role: lookout, channel: bridge, text: "左舷前方聽到一長二短的霧號,看不到船。", lang: zh-TW }
   - id: r1FogSignal
     name: R1 霧號(每 2 分鐘)
     repeat: { every_s: 120, max: 20 }

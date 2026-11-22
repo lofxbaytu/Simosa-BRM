@@ -299,14 +299,21 @@ describe('驗證問題', () => {
 });
 
 describe('localStorage 草稿', () => {
-  it('加入 ship.mmsi 欄位前存下的版本 3 草稿:ship.mmsi 由 raw 補回', () => {
+  it('加入 ship.mmsi 欄位前存下的版本 3 草稿:ship.mmsi 由 raw 補回;版本 4 草稿清空 MMSI 後不由 raw 復原', () => {
     const storage = new MemoryStorage();
     const d = fromYaml('id: T\nship: { id: FSB1, mmsi: 416000001 }\ninitial: { position: { lat: 23, lon: 120 }, heading: 0 }\nenvironment: { waterDepth: 10 }\n', 'T');
     const { mmsi: _m, ...oldShip } = d.ship;
-    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...d, ship: oldShip }));
+    const { seakeeping: _s, ...v3Fields } = d; // 版本 3 草稿沒有 seakeeping 欄位
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...v3Fields, version: 3, ship: oldShip }));
     const loaded = loadDraft(storage);
+    expect(loaded?.version).toBe(4);
     expect(loaded?.ship).toEqual({ id: 'FSB1', mmsi: 416000001 });
     expect((toScenarioObject(loaded!)['ship'] as Record<string, unknown>)['mmsi']).toBe(416000001);
+    // 版本 4 草稿一定帶 ship.mmsi 的編輯結果:教官清空 MMSI 後重新整理不由 raw 復原
+    storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ...d, ship: oldShip }));
+    const cleared = loadDraft(storage);
+    expect(cleared?.ship).toEqual({ id: 'FSB1' });
+    expect((toScenarioObject(cleared!)['ship'] as Record<string, unknown>)['mmsi']).toBeUndefined();
   });
 
   it('saveDraft / loadDraft 往返;壞資料或版本不合回 null;clearDraft 移除', () => {

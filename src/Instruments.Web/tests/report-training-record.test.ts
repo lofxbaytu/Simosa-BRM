@@ -47,6 +47,7 @@ function session(): CourseSession {
 
 function e07Report(s: CourseSession) {
   const data = parseReplay(E07);
+  data.header.createdUtc = '2026-10-17T11:37:24.998Z'; // 夾具的建立時刻每次重錄都不同:固定成一個值
   const meta = emptyReportMeta();
   meta.instructor = '陳船長';
   meta.participants = [

@@ -575,7 +575,7 @@ export interface ExerciseInfo {
   rewinds: number;
 }
 
-/** 情境簡報中的講評引導結構(規劃書第 9.1 節同儕評估提示、第 11 章講評引導問題;R7):來源為紀錄標頭 header.scenario.briefing。 */
+/** 情境簡報中的講評引導結構(規劃書第 9.1 節同儕評估提示、第 8.4 節講評引導問題;R7):來源為紀錄標頭 header.scenario.briefing。 */
 export interface BriefingGuide {
   debriefQuestions: string[];
   peerAssessmentPrompts: string[];
