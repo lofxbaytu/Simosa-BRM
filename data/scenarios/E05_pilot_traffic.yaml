@@ -33,6 +33,24 @@ environment:
   waterDepth: 25
 assessment:
   minCpa_nm: 0.5
+briefing:                                         # 簡報內容(規劃書第 9.1 節);本情境無時間表與語音腳本,港外對象由帶領者扮演
+  text: |
+    交班(06:30 地方時):No.1 滿載瀝青自西南方接近高雄第二港口,距 Charlie 引水站約 3 nm,HAH 8 kn,手操舵航向 045°。
+    環境:西南風 10 kn(自艉來)、漲潮向西北約 1.2 kn(流自右舷正橫來,船位會被帶向航線左側)、水深約 25 m,能見度良好。
+    目前雷達/AIS 目標:正前方約 4 nm 出港貨櫃船 EVER ORIENT(對遇)、右舷前方約 5 nm 西行油輪 GOLDEN WAVE(橫越,自船為讓路船)、
+    左舷前方約 3 nm 向東南橫越的漁船 CHIN FU 66(依規則應讓路,但漁船動向不可預期);引水船 PILOT 3 於自船進入引水站 1.5 nm 內時出港會合,跟在自船右舷後方。
+    船長常規命令:港外最小 CPA 0.5 nm(本情境評估門檻),CPA 低於 1 nm 須通知船長;讓路時及早、大幅行動並讓對方明顯看出;
+    對他船動向有疑慮時以聲號或 VHF 表明,並備妥減速。引水梯備於右舷,登船航速依引水站要求;登船前完成船位/航速通報。
+    三艘交通船均安全通過、引水船會合後由教官結束練習。
+  roles:
+    - { role: master, playedBy: leader }
+    - { role: officer, required: true }
+    - { role: lookout, required: true }
+    - { role: helmsman }
+    - { role: otherShip, playedBy: leader }
+    - { role: pilotStation, playedBy: leader }
+  minParticipants: 2
+  duration_s: 2400
 targets:
   - id: T1
     name: EVER ORIENT

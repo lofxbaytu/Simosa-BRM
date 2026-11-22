@@ -124,6 +124,22 @@ function Show-CoreLog([string]$LogDir, [int]$Lines = 24) {
     $err = Join-Path $LogDir 'simcore.err.log'
     if ((Test-Path $err) -and (Get-Item $err).Length -gt 0) { Show-File $err 12 }
 }
+# 核心每秒狀態列的「ws N」(狀態 WebSocket 的連線數;雷達主機算 1 個):取最近 15 筆的最大值。
+# 用來確認頁面真的在瀏覽器 / WebView2 內載入、執行並連上核心(只看網頁伺服器回 200 不代表頁面能動)
+function Get-CoreWsClients([string]$LogDir) {
+    $log = Join-Path $LogDir 'simcore.log'
+    if (-not (Test-Path $log)) { return -1 }
+    $m = [regex]::Matches((Get-Content -Raw -Encoding UTF8 $log), 'steps/s\s+\d+\s+ws\s+(\d+)')
+    if ($m.Count -eq 0) { return -1 }
+    $vals = @($m | ForEach-Object { [int]$_.Groups[1].Value } | Select-Object -Last 15)
+    return [int](($vals | Measure-Object -Maximum).Maximum)
+}
+function Assert-PagesConnected([string]$LogDir, [string]$What, [int]$Min = 2, [int]$WaitSec = 25) {
+    $script:wsSeen = -1
+    $ok = Wait-Until { $script:wsSeen = Get-CoreWsClients $LogDir; return ($script:wsSeen -ge $Min) } $WaitSec
+    if (-not $ok) { throw "$WaitSec 秒內狀態 WebSocket 連線數最多 $($script:wsSeen)(預期至少 ${Min}:雷達主機 1 個 + ${What} 至少 1 個)" }
+    return "連線數 $($script:wsSeen)(含雷達主機 1 個)"
+}
 function Test-Tcp([string]$HostName, [int]$Port, [int]$TimeoutMs = 1000) {
     $c = New-Object System.Net.Sockets.TcpClient
     try { $t = $c.ConnectAsync($HostName, $Port); return ($t.Wait($TimeoutMs) -and $c.Connected) } catch { return $false } finally { $c.Close() }
@@ -366,6 +382,7 @@ if ($Stage -contains 'launch') {
             if ($last -lt 45) { throw "最後一筆 steps/s = $last" }
             return "最後一筆 $last($($vals.Count) 筆)"
         } -Soft)
+        if ($edgeOk) { [void](Check 'Edge 內的頁面已連上核心(狀態 WebSocket 連線數)' { return (Assert-PagesConnected $logs 'Edge 頁面') } -Soft) }
 
         # stop-all.ps1:核心經停止檔寫完 footer;專屬設定檔的 Edge 視窗關閉
         $swStop = [System.Diagnostics.Stopwatch]::StartNew()
@@ -441,6 +458,7 @@ if ($Stage -contains 'shell') {
                 if ($text -match '下載.*失敗|無法設定下載') { throw "log 回報設定下載資料夾失敗:$(($text -split "`r?`n" | Where-Object { $_ -match '下載' } | Select-Object -First 1))" }
                 if ($text -notmatch 'downloads') { throw 'log 沒有提到 downloads' }
             } -Soft)
+            [void](Check 'WebView2 外殼內的頁面已連上核心(狀態 WebSocket 連線數)' { return (Assert-PagesConnected $logs 'WebView2 外殼頁面') } -Soft)
         }
         $rs = Invoke-Ps51 (Join-Path $launch 'stop-all.ps1') @() 120 $inst
         Show-Tail 'stop-all.ps1' $rs.Output 20
@@ -596,6 +614,7 @@ if ($Stage -contains 'instructor') {
         [void](Check '教官站以專屬 Edge 設定檔開啟' {
             if (-not (Wait-Until { @(Get-ProcByCommandLine 'msedge.exe' $profileDir).Count -gt 0 } 40)) { throw "40 秒內沒有命令列含 $profileDir 的 msedge.exe" }
         } -Soft)
+        [void](Check '教官站頁面已連上本機核心(狀態 WebSocket 連線數)' { return (Assert-PagesConnected $logs '教官站頁面') } -Soft)
         Start-Sleep -Seconds 5
         $rs = Invoke-Ps51 (Join-Path $launch 'stop-all.ps1') @() 120 $inst
         Show-Tail 'stop-all.ps1' $rs.Output 14
