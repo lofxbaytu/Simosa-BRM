@@ -19,6 +19,8 @@ const MIC_LABEL = {
 } as const;
 /** DSC 二次確認的有效秒數 */
 const DSC_ARM_MS = 6000;
+/** DSC 列的說明(空間不足時只在 title) */
+const DSC_HINT = '簡化 DSC:文字警示送所有站(非真實 DSC 編碼)';
 
 function clock(ms: number): string {
   const d = new Date(ms);
@@ -48,9 +50,12 @@ export class VhfPanel extends LitElement {
       :host {
         display: block;
       }
-      /* 駕駛台右欄在 768 高的筆電上以 --brm-vhf-* 略縮(間距、PTT、訊息列最小高度;app.ts),未設定時為原尺寸 */
+      /* 駕駛台右欄高度不足時以 --brm-vhf-*(app.ts 的 @container side)只縮訊息紀錄列、DSC 說明整句移到 title;
+         字級、頻道鈕 / PTT / 文字欄 / DSC 鈕的大小不縮。未設定時為原尺寸 */
       .tile {
-        gap: var(--brm-vhf-gap, 5px);
+        gap: 5px;
+        /* 外層給的高度比內容矮時在面板內捲動,不以 overflow: hidden 裁掉頻道鈕 / PTT / 音量(各頁面都讓 VHF 取自然高度) */
+        overflow-y: auto;
       }
       .status {
         display: flex;
@@ -132,7 +137,7 @@ export class VhfPanel extends LitElement {
         align-items: center;
       }
       .ptt {
-        min-height: var(--brm-vhf-ptt-height, 44px);
+        min-height: 44px;
         font-size: 15px;
         font-weight: 700;
         letter-spacing: 0.06em;
@@ -163,7 +168,7 @@ export class VhfPanel extends LitElement {
       .log {
         flex: 1 1 auto;
         min-height: var(--brm-vhf-log-min, 54px);
-        max-height: 150px;
+        max-height: var(--brm-vhf-log-max, 150px);
         overflow-y: auto;
         font-size: 11px;
         display: flex;
@@ -171,7 +176,7 @@ export class VhfPanel extends LitElement {
         gap: 1px;
       }
       :host([compact]) .log {
-        max-height: 90px;
+        max-height: var(--brm-vhf-log-max, 90px);
       }
       .log .item {
         display: flex;
@@ -224,12 +229,10 @@ export class VhfPanel extends LitElement {
         align-items: center;
         font-size: 11px;
       }
-      /* 平時的說明文字可設為單行(--brm-vhf-hint-wrap: nowrap;放不下以 … 截斷,完整文字在 title);二次確認中的提示照常換行 */
+      /* 平時的說明文字照常換行;空間不足時(--brm-vhf-hint-display: none)整句不顯示,完整文字在 DSC 列的 title。二次確認中的提示一律顯示 */
       .dsc .hint:not(.warn) {
         min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: var(--brm-vhf-hint-wrap, normal);
+        display: var(--brm-vhf-hint-display, inline);
       }
       .dsc button {
         min-height: 22px;
@@ -259,6 +262,10 @@ export class VhfPanel extends LitElement {
       }
       .hint.warn {
         color: var(--ob-warning);
+      }
+      /* 麥克風說明(尚未授權、等待授權):空間不足時(--brm-vhf-mic-hint-display: none)只在 PTT 的 title;無權限 / 無麥克風 API 的警示一律顯示 */
+      .hint.mic:not(.warn) {
+        display: var(--brm-vhf-mic-hint-display, block);
       }
     `,
   ];
@@ -442,7 +449,7 @@ export class VhfPanel extends LitElement {
           <button
             class="ptt ${state}"
             ?disabled=${!canPtt}
-            title=${canPtt ? '按住說話(滑鼠/觸控/空白鍵)' : (c ? MIC_LABEL[c.mic] : '未連線')}
+            title=${canPtt ? `按住說話(滑鼠/觸控/空白鍵)${c && c.mic !== 'granted' ? `;${MIC_LABEL[c.mic]}` : ''}` : (c ? MIC_LABEL[c.mic] : '未連線')}
             @pointerdown=${this.pttDown}
             @pointerup=${this.pttUp}
             @pointercancel=${this.pttUp}
@@ -455,7 +462,7 @@ export class VhfPanel extends LitElement {
             <input type="range" min="0" max="100" .value=${String(Math.round(this.volume * 100))} @input=${this.setVolume} />
           </label>
         </div>
-        ${c && c.mic !== 'granted' ? html`<div class="hint ${c.mic === 'denied' || c.mic === 'unavailable' ? 'warn' : ''}">${MIC_LABEL[c.mic]}${c.micError ? `(${c.micError})` : ''}${c.playback === 'none' ? ';此環境無法播放音訊,只收文字' : ''}</div>` : nothing}
+        ${c && c.mic !== 'granted' ? html`<div class="hint mic ${c.mic === 'denied' || c.mic === 'unavailable' || c.playback === 'none' ? 'warn' : ''}">${MIC_LABEL[c.mic]}${c.micError ? `(${c.micError})` : ''}${c.playback === 'none' ? ';此環境無法播放音訊,只收文字' : ''}</div>` : nothing}
         <div class="log" aria-label="VHF 訊息">
           ${log.length === 0 ? html`<div class="hint">尚無通話;同頻道的語音會自動播放,文字訊息列於此</div>` : nothing}
           ${log.map((item) => html`<div class="item ${item.direction} ${item.severity}" data-kind=${item.kind}><span class="time">${clock(item.at)}</span><span class="ch">${item.kind === 'system' ? '' : `CH${item.channel}`}</span><span class="text">${vhfLogText(item)}</span></div>`)}
@@ -472,11 +479,11 @@ export class VhfPanel extends LitElement {
           />
           <button class="send" ?disabled=${!m?.joined || !this.draft.trim()} @click=${this.sendText}>送出</button>
         </div>
-        <div class="dsc">
+        <div class="dsc" title=${this.armed ? '' : DSC_HINT}>
           <span class="label">DSC</span>
           <button class="distress ${this.armed === 'distress' ? 'armed' : ''}" ?disabled=${!m?.joined} @click=${() => this.dsc('distress')}>${this.armed === 'distress' ? '再按一次送出 DISTRESS' : 'DISTRESS'}</button>
           <button class="urgency ${this.armed === 'urgency' ? 'armed' : ''}" ?disabled=${!m?.joined} @click=${() => this.dsc('urgency')}>${this.armed === 'urgency' ? '再按一次送出 URGENCY' : 'URGENCY'}</button>
-          ${this.armed ? html`<button class="cancel" @click=${() => this.disarm()}>取消</button><span class="hint warn">文字欄內容會附在 DSC 警示;${DSC_ARM_MS / 1000} s 內未確認自動取消</span>` : html`<span class="hint" title="簡化 DSC:文字警示送所有站(非真實 DSC 編碼)">簡化 DSC:文字警示送所有站(非真實 DSC 編碼)</span>`}
+          ${this.armed ? html`<button class="cancel" @click=${() => this.disarm()}>取消</button><span class="hint warn">文字欄內容會附在 DSC 警示;${DSC_ARM_MS / 1000} s 內未確認自動取消</span>` : html`<span class="hint">${DSC_HINT}</span>`}
         </div>
       </div>
     `;

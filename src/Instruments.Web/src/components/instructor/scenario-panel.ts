@@ -1,8 +1,10 @@
 // 情境選擇(規劃書第 9.1 節執行控制「載入/啟動」):列出建置時匯入的 data/scenarios/*.yaml,
 // 顯示 id、標題、船、裝載、環境摘要、時間表/航線/規則/參數引用數、簡報附件與角色,以及簡報結構(規劃時間倒數、同儕評估提示、
 // 講評引導問題;<brm-briefing-block>,R7);按「載入」發出 scenario-load 事件(由教官站送 loadScenario 指令)。
-// 版面:面板高度由外層決定(教官站左欄捲動區內至少 250 px;簡化模式選擇頁整欄)。清單與詳細區平分剩餘高度
-// (清單至少 96 px;詳細區不超過自己的內容高度,放不下時在面板內捲動);「載入」鈕固定在面板底部,不會被詳細區擠出面板(第二十九輪 L2)。
+// 版面:面板高度由外層決定(教官站左欄捲動區內至少 250 px;簡化模式選擇頁整欄)。完整教官站:清單與詳細區平分剩餘高度
+// (清單至少 80 px、詳細區至少 120 px;詳細區不超過自己的內容高度,放不下時在面板內捲動);簡化模式(simple 屬性):詳細區優先取自然高度、
+// 清單吃剩餘高度。「載入」鈕固定在面板底部,不會被詳細區擠出面板(第二十九輪 L2);鈕內與清單的情境 id、詳細區的檔案路徑可換行
+// (底線後優先斷行),長 id(E20_comprehensive_assessment_kaohsiung)不撐寬面板、不以 … 截斷(第二十九輪 L3)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -22,23 +24,39 @@ export class ScenarioPanel extends LitElement {
     tileStyles,
     instructorStyles,
     css`
+      /* 尺寸容器(container: scenario):高度由外層決定(不隨內容),面板矮時清單與詳細區的下限改小(@container scenario,見下) */
       :host {
         display: flex;
         flex-direction: column;
         min-height: 0;
+        container: scenario / size;
       }
       .panel {
         flex: 1 1 auto;
         min-height: 0;
       }
-      /* 清單與詳細區平分剩餘高度:清單至少 96 px(約 3 個情境),詳細區最多到自己的內容高度(多的給清單);
-         拒絕說明可縮(自己捲動),「載入」鈕列不縮 */
+      /* 清單與詳細區平分剩餘高度:清單至少 80 px(約 2 個情境),詳細區至少 120 px、最多到自己的內容高度(多的給清單);
+         拒絕說明可縮(自己捲動),「載入」鈕列不縮。兩個捲動區都只直向捲動:長 id 與路徑換行,不出現水平捲軸 */
       .list {
         flex: 1 1 0;
+        min-height: 80px;
+        overflow-x: hidden;
+      }
+      /* 簡化模式選擇頁(整欄高):詳細區優先取自然高度(講評引導問題的標題不被推到可見範圍外),清單吃剩餘高度、至少 96 px */
+      :host([simple]) .list {
         min-height: 96px;
+      }
+      :host([simple]) .detail {
+        flex: 0 1 auto;
       }
       .btn-row {
         flex: 0 0 auto;
+      }
+      /* 「載入 <id>」:按鈕不比所在的列寬,長 id 在底線後換行(<wbr>),仍放不下時任意處換行;完整文字都看得到 */
+      .btn-row button.load {
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
       }
       /* 選擇器要比共用樣式的 .list .item(align-items: baseline)明確:否則各行不會撐滿項目寬度,
          過長的摘要行不是以 … 截斷而是把清單撐出水平捲動 */
@@ -48,17 +66,21 @@ export class ScenarioPanel extends LitElement {
         gap: 1px;
         cursor: pointer;
       }
+      /* 標題列:id 很長時標題換到下一行(標題的基準寬 8em);id 本身也可在底線後換行,不撐寬清單 */
       .item .head {
         display: flex;
-        gap: 6px;
+        flex-wrap: wrap;
+        gap: 0 6px;
         align-items: baseline;
       }
       .item .id {
         font-weight: 600;
         font-variant-numeric: tabular-nums;
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       .item .name {
-        flex: 1;
+        flex: 1 1 8em;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -73,9 +95,11 @@ export class ScenarioPanel extends LitElement {
       }
       .detail {
         flex: 1 1 0;
-        min-height: 0;
+        min-height: 120px;
         max-height: max-content;
         overflow-y: auto;
+        overflow-x: hidden;
+        overflow-wrap: anywhere;
         scrollbar-width: thin;
         font-size: 11px;
         color: var(--ob-text-secondary);
@@ -130,6 +154,16 @@ export class ScenarioPanel extends LitElement {
       .rejected .muted {
         color: var(--ob-text-muted);
       }
+      /* 面板矮(≤ 300 px;1280×720 的完整教官站左欄、header 兩行時約 260 px):清單至少 64 px、詳細區至少 96 px,
+         兩行的「載入 <長 id>」鈕仍在面板內(放在最後:蓋過上面 .list / .detail 的下限) */
+      @container scenario (max-height: 300px) {
+        .list {
+          min-height: 64px;
+        }
+        .detail {
+          min-height: 96px;
+        }
+      }
     `,
   ];
 
@@ -137,6 +171,8 @@ export class ScenarioPanel extends LitElement {
   /** 目前核心載入中的情境 id(顯示用) */
   @property({ type: String }) activeId = '';
   @property({ type: Boolean }) compact = false;
+  /** 簡化教官模式的選擇頁:詳細區優先取自然高度(完整教官站左欄則與清單平分) */
+  @property({ type: Boolean, reflect: true }) simple = false;
   /** 核心拒絕上一次載入的原因(scenarioLoadRejected 事件 / Python ack ok=false);null = 無 */
   @property({ attribute: false }) rejection: ScenarioLoadRejection | null = null;
   /** 已送 loadScenario、等待核心結果:載入鈕停用並顯示載入中 */
@@ -170,7 +206,7 @@ export class ScenarioPanel extends LitElement {
             (s) => html`
               <div class="item ${sel?.id === s.id ? 'selected' : ''}" role="option" aria-selected=${sel?.id === s.id} @click=${() => this.select(s)}>
                 <div class="head">
-                  <span class="id">${s.id}</span>
+                  <span class="id">${breakableId(s.id)}</span>
                   <span class="name" title=${s.name}>${s.name}</span>
                   ${this.activeId === s.id ? html`<span class="tag ok">已載入</span>` : nothing}
                   ${s.issues.length > 0 ? html`<span class="tag unsupported" title=${s.issues.join('; ')}>有問題</span>` : nothing}
@@ -186,7 +222,7 @@ export class ScenarioPanel extends LitElement {
               <div class="desc">${sel.description || '(無說明)'}</div>
               <div>初始:${initialSummary(sel.initial)}</div>
               <div>種子 ${sel.seed} · 倍率 ×${sel.timeScale}${sel.startTimeUtc ? ` · 開始 ${sel.startTimeUtc}` : ''}</div>
-              <div class="muted">${sel.path}${sel.assessment.parameterSet ? ` · 參數集 ${sel.assessment.parameterSet}` : ''}</div>
+              <div class="muted path">${breakableId(sel.path, /([_/])/)}${sel.assessment.parameterSet ? ` · 參數集 ${sel.assessment.parameterSet}` : ''}</div>
               ${sel.briefingDoc.roles.length > 0
                 ? html`<div class="roles">角色:${sel.briefingDoc.roles.map((r) => `${ROLE_LABEL[r.role] ?? r.role}(${PLAYED_BY_LABEL[r.playedBy] ?? r.playedBy}${r.required ? ',必要' : ''})`).join('、')}${sel.briefingDoc.minParticipants !== undefined ? ` · 最少 ${sel.briefingDoc.minParticipants} 人` : ''}</div>`
                 : nothing}
@@ -199,11 +235,20 @@ export class ScenarioPanel extends LitElement {
           : nothing}
         ${this.rejection ? renderRejection(this.rejection) : nothing}
         <div class="btn-row">
-          <button class="primary load" ?disabled=${!sel || this.busy} @click=${this.load}>${this.busy ? '載入中…' : `載入${sel ? ` ${sel.id}` : ''}`}</button>
+          <button class="primary load" ?disabled=${!sel || this.busy} @click=${this.load}>${this.busy ? '載入中…' : html`載入${sel ? html` ${breakableId(sel.id)}` : nothing}`}</button>
         </div>
       </div>
     `;
   }
+}
+
+/**
+ * 長識別字(情境 id、檔案路徑)的換行點:在每個分隔字元(預設底線)後插入 <wbr>,窄欄內優先在這些位置換行;
+ * 文字內容(textContent)不變,測試與複製貼上仍得到原字串。
+ */
+export function breakableId(text: string, separator: RegExp = /(_)/) {
+  const parts = text.split(separator);
+  return parts.map((p, i) => (i % 2 === 1 && i < parts.length - 1 ? html`${p}<wbr />` : p));
 }
 
 /** 核心拒絕載入的說明區塊(情境面板與靠離泊預演面板共用):摘要訊息與問題清單(path:message),核心狀態不變。 */

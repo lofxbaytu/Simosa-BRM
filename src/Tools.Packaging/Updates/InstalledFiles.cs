@@ -32,8 +32,9 @@ public sealed class InstalledFiles
     public string? Version { get; set; }
     public DateTime UpdatedUtc { get; set; }
     /// <summary>
-    /// 本清單所依據的發行清單(安裝根目錄 manifest.json 的版本與 SHA-256;沒有 manifest.json 時 null)。
-    /// 與目前的 manifest.json 不同 = 之後又重新安裝過發行版(安裝程式先清空程式目錄,再覆寫清單所列的每個檔案),見 <see cref="Rebase"/>。
+    /// 本清單所依據的發行清單(安裝根目錄 manifest.json 的版本、SHA-256、建置時間與內容身分;沒有 manifest.json 時 null)。
+    /// 與目前的 manifest.json 不是同一個發行版(<see cref="InstalledBaseline.SameRelease"/>)= 之後又重新安裝過發行版
+    /// (安裝程式先清空程式目錄,再覆寫清單所列的每個檔案),見 <see cref="Rebase"/>。
     /// </summary>
     public InstalledBaseline? Baseline { get; set; }
     /// <summary>已納入本清單的更新包(新到舊,最多 <see cref="MaxPackages"/> 筆)</summary>
@@ -121,8 +122,9 @@ public sealed class InstalledFiles
     /// <summary>
     /// 把現有的覆蓋清單(可為 null)對齊到目前的 installed.json 與發行清單,回傳「記錄下一個更新包之前」應有的內容(不修改傳入的物件)。依序:
     /// <list type="number">
-    /// <item>發行清單換過(覆蓋清單最後一次寫入之後重新安裝了發行版):<see cref="Rebase"/>。先做,因為它只能作廢「清單最後一次寫入之前」的紀錄,
-    ///   不能作廢下一項才發現的更新包。</item>
+    /// <item>發行清單換過(覆蓋清單最後一次寫入之後重新安裝了發行版;<see cref="InstalledBaseline.SameRelease"/> 為否,
+    ///   覆蓋清單沒有記錄身分而目前讀得到 manifest.json 也算):<see cref="Rebase"/>。先做,因為它只能作廢「清單最後一次寫入之前」的紀錄,
+    ///   不能作廢下一項才發現的更新包。同一個發行版、只是記錄的原始 SHA-256 不同(只改編碼)時,改記目前的身分。</item>
     /// <item>沒有覆蓋清單、installed.json 卻有套用中的更新包(舊版 simosa-pkg 套用,或清單遺失/損毀):這些更新包列入 <see cref="Untracked"/>
     ///   (<see cref="UntrackedReasons.NotRecorded"/>)。</item>
     /// <item>現行更新包與 installed.json 不同(套用或回復中途中斷):兩邊對不上的更新包列入 <see cref="Untracked"/>
@@ -131,6 +133,14 @@ public sealed class InstalledFiles
     /// 第 2、3 項的例外:套用時間早於目前發行版建置時間(<see cref="InstalledBaseline.BuiltUtc"/>)的更新包不列入 — 發行版一定是在它之後才安裝的,
     /// 安裝已覆寫清單所列的每個檔案(<see cref="ReconcileInfo.SupersededPackages"/>)。這正是實際的舊安裝:simosa-pkg 放在 tools/updater/,
     /// 不會被軟體更新包替換,船上要有會寫覆蓋清單的版本,唯一途徑就是重新安裝發行版。
+    /// rollback 在沒有覆蓋清單時也以同一個結果判斷「套用之後重新安裝過」(UpdateApplier.ReinstalledSinceLastApply,不另寫時間規則)。
+    /// <para>
+    /// <b>時鐘偏差</b>:appliedUtc 取自船上筆電(離線)的時鐘,builtUtc 取自岸上建置機。船上時鐘<b>落後</b>(慢)時,在發行版之後套用的更新包
+    /// 可能被當成「早於發行版」:核對改以發行清單比對更新包換過的檔案(多報不符,不會漏報),rollback 被拒絕(誤擋,較安全)。
+    /// 船上時鐘<b>超前</b>(快)時,在發行版之前套用的更新包可能被當成「之後套用」:核對列為無法核對(不誤報),rollback 不會因此被擋(漏擋)。
+    /// 另外,發行版若在套用更新包之前就已建置、之後才安裝(例如以較舊的安裝程式重新安裝),時間規則本來就看不出來;
+    /// 有覆蓋清單或新版 previous.json 時改以發行清單身分判斷,不受時鐘影響。
+    /// </para>
     /// <para>
     /// 第 3 項的另一個例外 — <b>套用中斷後以原包重試</b>(<paramref name="applyingPackageId"/>):覆蓋清單的現行更新包正是現在要套用的更新包,
     /// 而 installed.json 完全沒有它的紀錄(連 rolledBack 都沒有)= 上一次套用在「覆蓋清單已寫、installed.json 未寫」之間中斷。
@@ -161,11 +171,17 @@ public sealed class InstalledFiles
         {
             f = existing.Clone();
             var known = f.Packages.Concat(f.Untracked).Select(p => p.PackageId).ToHashSet(StringComparer.Ordinal);
-            if (baseline is not null && manifestPaths is not null && !Sha256Hex.Equal(f.Baseline?.Sha256, baseline.Sha256))
+            if (baseline is not null && manifestPaths is not null)
             {
-                info.Rebased = true;
-                info.PreviousBaseline = f.Baseline;
-                (info.SupersededFiles, info.DroppedProgramFiles) = f.Rebase(manifestPaths, baseline, comparison);
+                if (!InstalledBaseline.SameRelease(f.Baseline, baseline))
+                {
+                    info.Rebased = true;
+                    info.PreviousBaseline = f.Baseline;
+                    (info.SupersededFiles, info.DroppedProgramFiles) = f.Rebase(manifestPaths, baseline, comparison);
+                }
+                // 同一個發行版、但紀錄的原始 SHA-256 不同(manifest.json 只改了編碼)或是沒有內容身分的舊紀錄:換成目前的身分
+                // (下一次套用時寫回,之後即以內容身分比較)
+                else if (!Sha256Hex.Equal(f.Baseline!.Sha256, baseline.Sha256) || f.Baseline.ContentSha256 is null) f.Baseline = baseline;
             }
             if (applyingPackageId is not null && f.PackageId == applyingPackageId && !Known(applyingPackageId))
             {
@@ -207,7 +223,7 @@ public sealed class InstalledFiles
     }
 
     /// <summary>
-    /// 發行清單換過(覆蓋清單寫入之後又重新安裝了發行版;以 manifest.json 的身分改變偵測):
+    /// 發行清單換過(覆蓋清單寫入之後又重新安裝了發行版;以 manifest.json 的身分改變偵測,<see cref="InstalledBaseline.SameRelease"/>):
     /// <list type="bullet">
     /// <item><b>清單所列路徑</b>改以新的發行清單為準(安裝會覆寫清單所列的每個檔案):丟棄這些路徑的紀錄與涵蓋它們的刪除紀錄。</item>
     /// <item><b>程式目錄</b>(<see cref="InstalledPaths.ProgramPrefixes"/>:app/、tools/updater/)之下、新清單沒有列的紀錄<b>一律作廢</b>:
@@ -307,14 +323,63 @@ public sealed class ReconcileInfo
     public List<TrackedPackage> SupersededPackages { get; set; } = new();
 }
 
-/// <summary>發行清單 manifest.json 的身分。</summary>
+/// <summary>
+/// 發行清單 manifest.json 的身分(覆蓋清單的 <see cref="InstalledFiles.Baseline"/>、state/previous/previous.json 的
+/// <see cref="PreviousMeta.Release"/>)。是否為「同一個發行版」一律以 <see cref="SameRelease"/> 判斷(Reconcile、安裝模式核對、
+/// rollback 的「重新安裝過」共用)。
+/// </summary>
 public sealed class InstalledBaseline
 {
     public string? Version { get; set; }
-    /// <summary>manifest.json 檔案本身的 SHA-256</summary>
+    /// <summary>manifest.json 檔案本身的 SHA-256(原始位元組)</summary>
     public string Sha256 { get; set; } = "";
     /// <summary>發行版的建置時間(manifest.json 的 builtUtc)</summary>
     public DateTime? BuiltUtc { get; set; }
+    /// <summary>
+    /// 解析後內容的 SHA-256(<see cref="ContentHash"/>:version、builtUtc、gitRevision 與排序後的「path\tsha256\tsize」各行)。
+    /// 只改編碼(加 BOM、LF→CRLF、縮排)不會改變它。舊版 simosa-pkg 寫的紀錄沒有這個欄位(null)。
+    /// </summary>
+    public string? ContentSha256 { get; set; }
+
+    /// <summary>由已讀入的發行清單與 manifest.json 檔案的 SHA-256 組出身分。</summary>
+    public static InstalledBaseline Of(Release.ReleaseManifest m, string fileSha256)
+        => new() { Version = m.Version, Sha256 = fileSha256, BuiltUtc = m.BuiltUtc == default ? null : m.BuiltUtc, ContentSha256 = ContentHash(m) };
+
+    /// <summary>
+    /// 發行清單內容的身分:以 '\n' 連接的「version\t…」「builtUtc\t…(UTC,往返格式)」「gitRevision\t…」與
+    /// 依路徑(ordinal)排序的「path\tsha256(小寫)\tsize」各行,取 UTF-8 的 SHA-256。null 的檔案項目略過(損毀的清單由核對另行回報)。
+    /// </summary>
+    public static string ContentHash(Release.ReleaseManifest m)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("version\t").Append(m.Version).Append('\n');
+        sb.Append("builtUtc\t").Append(ToUtc(m.BuiltUtc).ToString("O", System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
+        sb.Append("gitRevision\t").Append(m.GitRevision ?? "").Append('\n');
+        foreach (var f in (m.Files ?? new()).Where(f => f is not null).OrderBy(f => f.Path ?? "", StringComparer.Ordinal))
+            sb.Append(f.Path ?? "").Append('\t').Append((f.Sha256 ?? "").ToLowerInvariant()).Append('\t').Append(f.Size.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
+        return Sha256Hex.Of(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+    }
+
+    /// <summary>
+    /// <paramref name="recorded"/>(先前記錄的身分)與 <paramref name="current"/>(目前的 manifest.json)是否為同一個發行版:
+    /// 原始 SHA-256 相同 → 是;否則兩邊都有內容身分 → 比 <see cref="ContentSha256"/>(只改編碼仍是同一個);
+    /// 舊紀錄沒有內容身分 → 以版本 + 建置時間比較(兩者都要有且相同)。任一邊為 null → 否(呼叫端各自決定 null 的意義)。
+    /// </summary>
+    public static bool SameRelease(InstalledBaseline? recorded, InstalledBaseline? current)
+    {
+        if (recorded is null || current is null) return false;
+        if (recorded.Sha256 is { Length: > 0 } && Sha256Hex.Equal(recorded.Sha256, current.Sha256)) return true;
+        if (recorded.ContentSha256 is { Length: > 0 } rc && current.ContentSha256 is { Length: > 0 } cc) return Sha256Hex.Equal(rc, cc);
+        return recorded.Version is not null && recorded.Version == current.Version
+               && recorded.BuiltUtc is { } rb && current.BuiltUtc is { } cb && ToUtc(rb) == ToUtc(cb);
+    }
+
+    private static DateTime ToUtc(DateTime t) => t.Kind switch
+    {
+        DateTimeKind.Local => t.ToUniversalTime(),
+        DateTimeKind.Utc => t,
+        _ => DateTime.SpecifyKind(t, DateTimeKind.Utc),
+    };
 }
 
 public static class UntrackedReasons

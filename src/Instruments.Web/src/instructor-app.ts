@@ -158,6 +158,12 @@ export class InstructorApp extends LitElement {
         border-radius: 4px;
         padding: 1px 6px;
       }
+      /* 核心位址:寬度 ≤ 1500 px 時不另外顯示(位址仍在連線狀態徽章的 title),徽章多的時候 header 少折一行 */
+      @media (max-width: 1500px) {
+        header .ws-url {
+          display: none;
+        }
+      }
       .pill {
         display: inline-flex;
         align-items: center;
@@ -260,6 +266,7 @@ export class InstructorApp extends LitElement {
         flex: 0 8 auto;
         min-height: 138px;
       }
+      /* 捲動區只直向捲動(面板內的長 id 與路徑換行,不撐出水平捲軸) */
       .left-scroll {
         flex: 1 1 520px;
         min-height: 220px;
@@ -267,21 +274,28 @@ export class InstructorApp extends LitElement {
         flex-direction: column;
         gap: 6px;
         overflow-y: auto;
+        overflow-x: hidden;
         scrollbar-width: thin;
       }
       .left-scroll > * {
         flex: 0 0 auto;
       }
-      /* 情境面板:捲動區高度的 70%(250–440 px;捲動區不到 250 px 時與捲動區同高),不捲動時「載入」鈕就在捲動區的可見範圍內,
-         下面露出時間表面板的開頭;捲動區放得下全部面板時(高螢幕)情境面板吃掉剩餘高度 */
+      /* 情境面板:捲動區高度的 70%(300–440 px;捲動區不到 300 px 時與捲動區同高,但至少 260 px),不捲動時「載入」鈕就在捲動區的可見範圍內,
+         選了情境時清單(至少 80 px)與詳細區(至少 120 px;面板矮於 300 px 時 64 / 96 px)都看得到;下面露出時間表面板的開頭;
+         捲動區放得下全部面板時(高螢幕)情境面板吃掉剩餘高度。捲動區不到 260 px(1093×614 等)時面板仍是 260 px,「載入」鈕要捲動才看得到,
+         但面板內容不溢出、不被時間表面板蓋住(情境面板是尺寸容器,高度不隨內容,下限由這裡保證) */
       .left-scroll > brm-scenario-panel {
-        flex: 1 0 min(100%, clamp(250px, 70%, 440px));
+        flex: 1 0 max(260px, min(100%, clamp(300px, 70%, 440px)));
       }
       /* 時間表面板取自然高度,項目清單超過 220 px 時在面板內捲動(確認快速鈕留在清單下方) */
       .left-scroll > brm-timeline-panel {
         --brm-timeline-list-max: 220px;
       }
-      /* 中欄:航跡圖至少 180 px;下方面板區依內容高度,最多 36vh,放不下時自己捲動 */
+      /* 中欄:航跡圖至少 180 px;下方面板區依內容高度,最多 36vh,放不下時自己捲動。
+         中欄是尺寸容器:下方面板區的欄數依中欄寬度(@container center,見下方 .center .bottom) */
+      .col.center {
+        container: center / inline-size;
+      }
       .col.center > .plot {
         flex: 1 1 0;
         min-height: 180px;
@@ -368,6 +382,13 @@ export class InstructorApp extends LitElement {
           max-height: 42vh;
         }
       }
+      /* 中欄窄於 720 px(1280、1093 寬的視窗):下方面板改一欄。兩欄時每格只有約 230–325 px,感測器真值 / 環境 / 本船面板的表格與輸入列
+         (約 240–350 px)溢出面板、浪向輸入框被「套用」鈕蓋住(1366 寬時中欄約 740 px,兩欄各約 368 px 放得下) */
+      @container center (max-width: 720px) {
+        .center .bottom {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
 
       /* ---- 簡化教官模式 ---- */
       .simple {
@@ -435,6 +456,10 @@ export class InstructorApp extends LitElement {
         grid-template-rows: auto minmax(0, 1fr) auto;
         grid-template-columns: minmax(0, 1fr) 380px;
       }
+      /* 有語音 / 訊息橫幅時多一列(橫幅取自然高度;原本橫幅被排進 1fr 那一列、被壓到約 10 px,文字溢出到航跡圖上) */
+      .simple .stage.running.has-voice {
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+      }
       .simple .stage.running .strip {
         grid-column: 1 / -1;
         display: flex;
@@ -453,13 +478,21 @@ export class InstructorApp extends LitElement {
         font-size: 13px;
         margin-right: 4px;
       }
+      /* 側欄是直向 flex:各面板取自然高度(不被擠壓;VHF 原本落在固定的格列裡被壓到約 88 px、頻道鈕與 PTT 被 overflow: hidden 裁掉),
+         學員操作紀錄吃剩餘高度(至少 90 px);放不下時側欄整欄捲動。順序:BRM 標記 → VHF(PTT 不必捲動就點得到)→ 拖船 / 操舵 / 錄影
+         → 警報監看 → 時間表 → 學員操作(第二十九輪 L3) */
       .simple .stage.running .side {
-        display: grid;
-        /* 標記鈕、操舵面板、時間表依內容高度;操作紀錄吃剩餘高度,1366×768 放不下時側欄捲動 */
-        grid-template-rows: max-content max-content max-content max-content minmax(90px, 1fr);
+        display: flex;
+        flex-direction: column;
         gap: 10px;
         min-height: 0;
         overflow-y: auto;
+      }
+      .simple .stage.running .side > * {
+        flex: 0 0 auto;
+      }
+      .simple .stage.running .side > brm-operation-log {
+        flex: 1 0 90px;
       }
       .simple .stage.running .actions {
         grid-column: 1 / -1;
@@ -1255,8 +1288,8 @@ export class InstructorApp extends LitElement {
       <header>
         <span class="title">${MODE_TITLE[this.pageMode]}</span>
         ${live ? html`<span class="ship">${cfg.name}(${cfg.id})${this.activeScenario ? ` · ${this.activeScenario.id}` : ''}${s.scenario?.parameterSetVersion ? html` · <span class="param-version" title="公司程序參數集版次(state.scenario.parameterSetVersion)">參數集 ${s.scenario.parameterSetVersion}</span>` : ''}</span>` : nothing}
-        ${live ? html`<span class="pill ${pillClass}" title=${this.statusDetail}>${pillText}</span>` : nothing}
-        ${live && this.sourceMode === 'live' ? html`<span class="muted">${this.wsUrl}</span>` : nothing}
+        ${live ? html`<span class="pill ${pillClass}" title=${this.sourceMode === 'live' ? `核心 ${this.wsUrl}${this.statusDetail ? `(${this.statusDetail})` : ''}` : this.statusDetail}>${pillText}</span>` : nothing}
+        ${live && this.sourceMode === 'live' ? html`<span class="muted ws-url">${this.wsUrl}</span>` : nothing}
         ${live
           ? html`<div class="alarms">
               ${flags.frozen ? html`<span class="caution">已凍結</span>` : nothing}
@@ -1380,7 +1413,7 @@ export class InstructorApp extends LitElement {
               </div>
             </div>
             ${this.simpleSelectTab === 'list'
-              ? html`<brm-scenario-panel .scenarios=${this.scenarios} .activeId=${sc?.id ?? ''} .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-scenario-panel>`
+              ? html`<brm-scenario-panel simple .scenarios=${this.scenarios} .activeId=${sc?.id ?? ''} .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-scenario-panel>`
               : html`<brm-berthing-rehearsal-panel .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-berthing-rehearsal-panel>`}
           </div>
         </div>`;
@@ -1410,7 +1443,7 @@ export class InstructorApp extends LitElement {
       case 'running': {
         const simpleOverlay = this.liveOverlay();
         return html`<div class="simple">
-          <div class="stage running">
+          <div class="stage running ${this.lastVoice ? 'has-voice' : ''}">
             <div class="strip">
               <span><span class="l">模擬時間</span><span class="v ${frozen ? 'caution' : ''}">${formatSimTime(s.t)}</span></span>
               <span><span class="l">HDG</span><span class="v">${formatHeading(s.heading)}</span></span>
@@ -1430,6 +1463,7 @@ export class InstructorApp extends LitElement {
             <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${simpleOverlay} .targets=${s.targets} .alarmTargets=${this.alarmTargets}></brm-track-plot>
             <div class="side">
               <brm-marker-bar large .markers=${this.markers}></brm-marker-bar>
+              ${this.vhfUrl && this.sourceMode === 'live' ? html`<brm-vhf compact dualWatch .url=${this.vhfUrl} .station=${this.vhfStation}></brm-vhf>` : nothing}
               <div class="ctl-stack">
                 ${s.tugs && s.tugs.length > 0 ? html`<brm-tug-panel compact .tugs=${s.tugs} .defs=${simpleOverlay?.tugDefs ?? sc?.tugs ?? []} .epoch=${this.exerciseEpoch}></brm-tug-panel>` : nothing}
                 <brm-steering-panel compact .state=${this.hasReceived ? s : null}></brm-steering-panel>
@@ -1437,7 +1471,6 @@ export class InstructorApp extends LitElement {
               </div>
               <brm-alert-monitor compact .alerts=${s.alerts ?? []} .bnwas=${s.bnwas} .events=${this.events} .simTime=${s.t} .unsupported=${this.alertsUnsupported}></brm-alert-monitor>
               <brm-timeline-panel compact .timeline=${sc?.timeline ?? []} .events=${this.events} .scenarioStatus=${s.scenario ?? null} .assessment=${sc?.assessment ?? null} .simTime=${s.t} .unsupported=${this.engineUnsupported}></brm-timeline-panel>
-              ${this.vhfUrl && this.sourceMode === 'live' ? html`<brm-vhf compact dualWatch .url=${this.vhfUrl} .station=${this.vhfStation}></brm-vhf>` : nothing}
               <brm-operation-log .events=${this.opEvents} .max=${50}></brm-operation-log>
             </div>
             <div class="actions">

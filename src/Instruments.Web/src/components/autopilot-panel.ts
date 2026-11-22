@@ -72,7 +72,7 @@ export class AutopilotPanel extends LitElement {
         font-size: 11px;
         color: var(--ob-text-secondary);
       }
-      /* 窄格(內容寬 < 240 px):±1 / ±10 鈕與航向輸入框縮小內距,整列留在格內 */
+      /* 窄格(內容寬 < 240 px):±1 / ±10 鈕與航向輸入框只縮左右內距,整列留在格內;字級與鈕 / 輸入框的高度不變 */
       @container (max-width: 240px) {
         .panel {
           gap: 4px;
@@ -82,11 +82,36 @@ export class AutopilotPanel extends LitElement {
           min-width: 0;
         }
         .set input {
-          font-size: 16px;
           padding: 3px 2px;
         }
-        .toggle {
-          min-height: 30px;
+      }
+      /* 更窄(< 180 px,1093 寬的視窗):±10 移到第二列(−10 在左半、+10 在右半),第一列是 −1、航向輸入框、+1,輸入框放得下三位數;
+         面板比格子高時(1093×614 約多 6–22 px)在面板內捲動,「採用現在航向」不被格子裁掉 */
+      @container (max-width: 180px) {
+        .panel {
+          overflow-y: auto;
+          scrollbar-width: thin;
+        }
+        .set {
+          grid-template-columns: auto 1fr 1fr auto;
+          grid-template-areas:
+            'm1 in in p1'
+            'm10 m10 p10 p10';
+        }
+        .set .m10 {
+          grid-area: m10;
+        }
+        .set .m1 {
+          grid-area: m1;
+        }
+        .set input {
+          grid-area: in;
+        }
+        .set .p1 {
+          grid-area: p1;
+        }
+        .set .p10 {
+          grid-area: p10;
         }
       }
     `,
@@ -164,11 +189,11 @@ export class AutopilotPanel extends LitElement {
           ${this.enabled ? '自動舵 開' : this.available ? '自動舵 關' : '自動舵 不可用'}
         </button>
         <div class="set">
-          <button title="−10°" @click=${() => this.adjust(-10)}>−10</button>
-          <button title="−1°" @click=${() => this.adjust(-1)}>−1</button>
+          <button class="m10" title="−10°" @click=${() => this.adjust(-10)}>−10</button>
+          <button class="m1" title="−1°" @click=${() => this.adjust(-1)}>−1</button>
           <input type="number" min="0" max="359" step="1" aria-label="設定航向" .value=${String(this.setHeading)} @change=${this.onHeadingInput} />
-          <button title="+1°" @click=${() => this.adjust(1)}>+1</button>
-          <button title="+10°" @click=${() => this.adjust(10)}>+10</button>
+          <button class="p1" title="+1°" @click=${() => this.adjust(1)}>+1</button>
+          <button class="p10" title="+10°" @click=${() => this.adjust(10)}>+10</button>
         </div>
         <div class="rot">
           <span class="label">ROT 限制</span>

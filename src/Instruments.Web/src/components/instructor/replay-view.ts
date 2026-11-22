@@ -137,11 +137,24 @@ export class ReplayView extends LitElement {
       .main brm-conning-bar {
         grid-column: 1 / -1;
       }
+      /* 寬度 ≤ 1900 px:conning 條折成兩列(conning-bar.ts 同一門檻),與教官站相同給 220 px / 30vh;
+         原本 22vh(1366×768 約 169 px)時兩列方塊的下半(LON、航向刻度)被方塊邊界切掉 */
+      @media (max-width: 1900px) {
+        .main {
+          grid-template-rows: minmax(220px, 30vh) minmax(0, 1fr);
+        }
+      }
+      /* 右欄四個面板依比例分高度,各有下限:事件串流至少 140 px(標題、六個篩選鈕、清單至少 64 px;原本講評摘要先取 40vh,
+         1366×768 的事件串流只剩 38 px,篩選鈕被下一個面板蓋住)、輸入事件 / BRM 標記各約 2 列、講評摘要至少 110 px 並在自己的面板內捲動。
+         欄寬固定(minmax(0, 1fr):面板內容不撐寬欄);欄高連下限都放不下時整欄捲動(第二十九輪 L3) */
       .side {
         display: grid;
-        grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.6fr) auto;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(140px, 1fr) minmax(64px, 0.6fr) minmax(56px, 0.5fr) minmax(110px, 1fr);
         gap: 6px;
         min-height: 0;
+        overflow-y: auto;
+        scrollbar-width: thin;
       }
       .side brm-event-stream {
         min-height: 0;
@@ -153,9 +166,15 @@ export class ReplayView extends LitElement {
       .side .panel {
         min-height: 0;
       }
-      .side .summary {
-        max-height: 40vh;
-        overflow: auto;
+      /* 講評摘要:面板高度由格列決定,摘要本身是捲動區(長的指標名稱在表格內換行,不撐寬面板) */
+      .side .summary > * {
+        flex: 0 0 auto;
+      }
+      .side .summary > brm-debrief-summary {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        scrollbar-width: thin;
       }
       .item.current {
         background: var(--ob-accent-soft);

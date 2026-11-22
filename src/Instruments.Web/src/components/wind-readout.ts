@@ -33,6 +33,21 @@ export class WindReadout extends LitElement {
           height: 28px;
         }
       }
+      /* 更窄(方塊 ≤ 150 px,1093 寬的視窗):玫瑰圖放到數值上方,兩列數值用滿方塊寬度(並排時數值列只剩約 91 px,
+         「040° 12.0 kn」以最小字級 11 px 也放不下、被方塊邊界裁切)。字級下限不變 */
+      @container (max-width: 150px) {
+        .body {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 2px;
+        }
+        .rose {
+          align-self: center;
+        }
+        .rows {
+          flex: 0 0 auto;
+        }
+      }
       .rows {
         flex: 1;
         display: flex;

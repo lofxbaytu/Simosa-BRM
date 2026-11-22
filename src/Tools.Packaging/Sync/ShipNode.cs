@@ -36,6 +36,8 @@ public sealed class ShipNode
         if (trust.Keys.Count == 0) warnings.Add("信任清單為空(config/trusted-keys/),無法驗證更新包");
         else if (!trust.Keys.Any(k => k.Role == KeyRoles.Backup)) warnings.Add("信任清單沒有備援金鑰");
         warnings.AddRange(Records.RetentionWarnings());
+        // 降版(以較舊的安裝程式重新安裝過):status 顯示的 software 版次不是實際執行的程式;與安裝模式核對同一個判斷(只讀 manifest.json 與狀態檔,不做逐檔雜湊)
+        var downgrade = Release.InstalledVerifier.DetectDowngrade(Layout.Root, out var releaseVersion);
         return new ShipStatus
         {
             ShipId = Layout.Config.ShipId ?? dev?.ShipId, DeviceId = dev?.DeviceId,
@@ -47,6 +49,8 @@ public sealed class ShipNode
             // 環境版次(作業系統 / .NET / WebView2 Runtime):收集時刻用 Clock,測試可固定;非 Windows 的 webview2 為 null
             Environment = EnvironmentInfo.Collect(Clock),
             Warnings = warnings,
+            ReleaseVersion = releaseVersion,
+            ReleaseDowngrade = downgrade,
         };
     }
 }

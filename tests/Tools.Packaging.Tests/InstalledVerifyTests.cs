@@ -1541,4 +1541,353 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.Contains("初始安裝", after.Out);
         Assert.Contains("沒有提醒", after.Out);
     }
+    // ── 審查第二十九輪 P3:降版、重新安裝後的 rollback 保護、更新包新增檔案的下一步、manifest.json 只改編碼 ──
+
+    /// <summary>以安裝程式重新安裝指定版本的發行版,建置時間由 <paramref name="builtUtc"/> 指定(模擬「在套用更新包之前就已建置」的較舊發行版)。</summary>
+    private static void ReinstallBuiltAt(InstallLayout ship, string version, DateTimeOffset builtUtc, params string[] notInRelease)
+    {
+        foreach (var prefix in InstalledPaths.ProgramPrefixes)
+        {
+            var dir = P(ship, prefix.TrimEnd('/'));
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+        WriteNewerProgramFiles(ship);
+        WriteManifest(ship, version, new ManualClock(builtUtc), notInRelease);
+    }
+
+    /// <summary>把 state/previous/previous.json 改成舊版 simosa-pkg 的格式(沒有 release、releaseRecorded)。</summary>
+    private static void MakeLegacyPreviousMeta(InstallLayout ship)
+    {
+        var path = Path.Combine(ship.PreviousDir, "previous.json");
+        var node = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        Assert.True(node.Remove("releaseRecorded"));
+        node.Remove("release");
+        File.WriteAllText(path, node.ToJsonString());
+    }
+
+    private static string ShipStatusJson(InstallLayout ship) => PackageJson.ToText(new Sync.ShipNode(ship).Status());
+
+    [Fact]
+    public void ReinstallWithOlderInstaller_AfterSoftwareUpdate_IsDowngradeNotice_AndStatusWarns()
+    {
+        // 2026.12.1 上套用軟體更新包 2026.12.2,再以 2026.11.1 的安裝程式重新安裝:以舊版安裝程式回到舊版是允許的作法(rollback 拒絕訊息的建議),
+        // 所以不是錯誤,但核對與 status 都要明說「降版」— status 的 software 版次 2026.12.2 不是實際執行的程式
+        var ship = NewInstall(version: "2026.12.1");
+        using var key = _env.Primary();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(SoftwarePackage("2026.12.2", key, ("app/version.txt", "app 3\n"), ("app/simcore/plugin2.dll", "p2"))).Ok);
+        Assert.Null(AssertOk(ship).Downgrade);
+        Assert.Null(new Sync.ShipNode(ship).Status().ReleaseDowngrade);
+
+        ReinstallBuiltAt(ship, "2026.11.1", DateTimeOffset.UtcNow.AddDays(-30));
+        var r = AssertOk(ship);
+        var dg = r.Downgrade;
+        Assert.NotNull(dg);
+        Assert.Equal("2026.11.1", dg!.ReleaseVersion);
+        Assert.Equal("2026.12.2", dg.BasisVersion);
+        Assert.Equal("2026.12.1", dg.PreviousReleaseVersion);
+        Assert.Equal("2026.12.2", dg.SoftwareVersion);
+        Assert.True(dg.SoftwareStale);
+        var notice = Assert.Single(r.Notices, n => n.Detail?.Contains("降版") == true);
+        Assert.Equal(C.State, notice.Category);
+        Assert.Equal("manifest.json", notice.Path);
+        Assert.Contains("目前的發行版 2026.11.1 比先前安裝的發行版 2026.12.1、曾套用的軟體更新包 2026.12.2 舊", notice.Detail);
+        Assert.Contains("simosa-pkg status 顯示的軟體版次 2026.12.2 不是實際執行的程式", notice.Detail);
+        Assert.Contains("版本不低於 2026.12.2 的安裝程式", notice.Detail);
+        Assert.False(applier.CanRollback(out _));
+
+        // status:文字(stderr 的警告)與 --json(既有欄位不變,只新增 releaseVersion、releaseDowngrade)
+        var st = Run("status", "--root", ship.Root);
+        Assert.Equal(0, st.Code);
+        Assert.Contains("software    2026.12.2", st.Out);
+        Assert.Contains("警告:降版:目前的發行版 2026.11.1", st.Err);
+        var json = Run("status", "--root", ship.Root, "--json");
+        var node = JsonNode.Parse(json.Out)!;
+        Assert.Equal("2026.12.2", (string?)node["version"]);
+        Assert.Equal("2026.12.2", (string?)node["components"]!["software"]!["version"]);
+        Assert.False((bool)node["rollbackAvailable"]!);
+        Assert.Equal("2026.11.1", (string?)node["releaseVersion"]);
+        Assert.True((bool)node["releaseDowngrade"]!["softwareStale"]!);
+        Assert.Equal("2026.12.2", (string?)node["releaseDowngrade"]!["basisVersion"]);
+        // verify-install --json:downgrade 物件(只新增)
+        var vj = JsonNode.Parse(Run("verify-install", "--root", ship.Root, "--json").Out)!;
+        Assert.True((bool)vj["ok"]!);
+        Assert.Equal("2026.11.1", (string?)vj["downgrade"]!["releaseVersion"]);
+
+        // 有錯誤時的下一步不再說「較舊的安裝程式…核對會指出」
+        File.AppendAllText(P(ship, "app/web/index.html"), "x");
+        var bad = InstalledVerifier.Verify(ship.Root);
+        Assert.DoesNotContain(bad.NextSteps, s => s.Contains("核對會指出"));
+        Assert.Contains("不要用較舊的安裝程式:那會把整個發行版降版", bad.NextSteps[0]);
+    }
+
+    [Fact]
+    public void Downgrade_IsOnlyReportedAfterAReinstallToAnOlderRelease()
+    {
+        using var key = _env.Primary();
+        // 正常狀態:發行版 2026.11.1 上套用 2026.11.2 的軟體更新包(software 版次比發行版新是常態,不是降版)
+        var normal = NewInstall("normal", "2026.11.1");
+        Assert.True(new UpdateApplier(normal).Apply(SoftwarePackage("2026.11.2", key, ("app/version.txt", "app 2\n"))).Ok);
+        Assert.Null(AssertOk(normal).Downgrade);
+        Assert.Null(new Sync.ShipNode(normal).Status().ReleaseDowngrade);
+        Assert.Equal("2026.11.1", new Sync.ShipNode(normal).Status().ReleaseVersion);
+        Assert.DoesNotContain("降版", Run("status", "--root", normal.Root).Err);
+
+        // 以較新的安裝程式(2027.1.1)重新安裝:升級,不是降版
+        var up = NewInstall("up", "2026.12.1");
+        Assert.True(new UpdateApplier(up).Apply(SoftwarePackage("2026.12.2", key, ("app/version.txt", "app 3\n"))).Ok);
+        ReinstallWithInstaller(up, "2027.1.1");
+        var r = AssertOk(up);
+        Assert.True(r.InstalledFiles!.Reinstalled);
+        Assert.Null(r.Downgrade);
+        Assert.DoesNotContain(r.Notices, n => n.Detail?.Contains("降版") == true);
+        Assert.Null(new Sync.ShipNode(up).Status().ReleaseDowngrade);
+    }
+
+    [Fact]
+    public void Rollback_AfterReinstall_IsRefused_WhenOverlayBaselineIsNull()
+    {
+        // 套用時 manifest.json 讀不到(覆蓋清單 baseline = null),之後依下一步重新安裝:舊版 previous.json(沒有發行清單身分)與新版 previous.json 都要拒絕
+        foreach (var legacyMeta in new[] { true, false })
+        {
+            var ship = NewInstall(legacyMeta ? "nullbase-legacy" : "nullbase-new");
+            using var key = _env.Primary();
+            var applier = new UpdateApplier(ship);
+            var manifest = P(ship, "manifest.json");
+            var saved = File.ReadAllBytes(manifest);
+            File.Delete(manifest);
+            Assert.True(applier.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"), ("app/added.dll", "a"))).Ok);
+            File.WriteAllBytes(manifest, saved);
+            Assert.Null(InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Baseline);
+            if (legacyMeta) MakeLegacyPreviousMeta(ship);
+            else Assert.True(PackageJson.Load<PreviousMeta>(Path.Combine(ship.PreviousDir, "previous.json"), "previous.json").ReleaseRecorded);
+
+            ReinstallWithInstaller(ship, "2026.11.0");
+            var r = AssertOk(ship);
+            var notice = Assert.Single(r.Notices);
+            Assert.Contains("覆蓋清單寫入時安裝根目錄沒有可讀的發行清單", notice.Detail);
+            Assert.Contains("請不要執行 rollback", notice.Detail);
+            Assert.False(applier.CanRollback(out var reason), legacyMeta ? "legacy" : "new");
+            Assert.Contains("重新安裝", reason);
+            Assert.True(applier.CheckRollback().ReinstalledSinceApply);
+            Assert.False(new Sync.ShipNode(ship).Status().RollbackAvailable);
+            Assert.False(applier.Rollback("測試").Ok);
+            Assert.Equal("app 5.0\n", File.ReadAllText(P(ship, "app/version.txt")));
+            AssertOk(ship);
+        }
+    }
+
+    [Fact]
+    public void Rollback_AfterReinstall_IsRefused_WhenThereIsNoOverlay_SameRuleAsVerify()
+    {
+        // 舊安裝:舊版 simosa-pkg 套用過更新包(沒有覆蓋清單、previous.json 沒有發行清單身分),之後以安裝程式裝了較新的發行版 —
+        // 與核對相同的 Reconcile 判斷(更新包的套用時間早於發行版的建置時間 → SupersededPackages)
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"))).Ok);
+        File.Delete(ship.InstalledFilesPath);
+        MakeLegacyPreviousMeta(ship);
+        Assert.True(applier.CanRollback(out var before), before);       // 還沒重新安裝:照常可回復
+
+        ReinstallBuiltAt(ship, "2026.11.0", DateTimeOffset.UtcNow.AddMinutes(5));
+        var r = AssertOk(ship);
+        var notice = Assert.Single(r.Notices);
+        Assert.Contains("之前套用", notice.Detail);
+        Assert.Contains("請不要執行 rollback", notice.Detail);           // 由 CheckRollback 的實際結果產生
+        Assert.False(applier.CanRollback(out var reason));
+        Assert.Contains("套用時間早於目前的發行版 2026.11.0 的建置時間", reason);
+        Assert.Contains("時鐘", reason);
+        Assert.False(new Sync.ShipNode(ship).Status().RollbackAvailable);
+        Assert.Contains("無上一版", Run("status", "--root", ship.Root).Out);
+        Assert.False(applier.Rollback("測試").Ok);
+        AssertOk(ship);
+    }
+
+    [Fact]
+    public void Rollback_AfterReinstall_PreviousMetaIdentityIsPreferred()
+    {
+        // 新版 previous.json 記錄了套用當時的發行清單身分:覆蓋清單遺失、而重新安裝的發行版又在套用之前就已建置(時間規則看不出來)時仍拒絕
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"))).Ok);
+        var meta = PackageJson.Load<PreviousMeta>(Path.Combine(ship.PreviousDir, "previous.json"), "previous.json");
+        Assert.True(meta.ReleaseRecorded);
+        Assert.Equal("2026.10.0", meta.Release!.Version);
+        Assert.False(string.IsNullOrEmpty(meta.Release.ContentSha256));
+        File.Delete(ship.InstalledFilesPath);
+        Assert.True(applier.CanRollback(out var before), before);
+
+        ReinstallBuiltAt(ship, "2026.9.5", DateTimeOffset.UtcNow.AddDays(-10));
+        Assert.False(applier.CanRollback(out var reason));
+        Assert.Contains("2026.10.0 → 2026.9.5", reason);
+        Assert.False(new Sync.ShipNode(ship).Status().RollbackAvailable);
+
+        // 覆蓋清單「看起來」依據目前的發行清單(例如被手動改過)也一樣:previous.json 的身分優先
+        var overlay = new InstalledFiles { PackageId = meta.ReplacedByPackageId, Version = meta.ReplacedByVersion, Baseline = InstalledVerifier.ReadBaseline(ship.Root, out _) };
+        overlay.Save(ship.InstalledFilesPath);
+        Assert.False(applier.CanRollback(out _));
+    }
+
+    [Fact]
+    public void Rollback_WithoutReinstall_StillWorks_ForNewAndLegacyState()
+    {
+        using var key = _env.Primary();
+        // 新版狀態檔
+        var a = NewInstall("rb-new");
+        var applierA = new UpdateApplier(a);
+        Assert.True(applierA.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"))).Ok);
+        Assert.True(new Sync.ShipNode(a).Status().RollbackAvailable);
+        Assert.True(applierA.Rollback("測試").Ok);
+        AssertOk(a);
+        // 舊版 previous.json + 沒有覆蓋清單(更新包在發行版建置之後套用:不是重新安裝)
+        var b = NewInstall("rb-legacy");
+        var applierB = new UpdateApplier(b);
+        Assert.True(applierB.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"))).Ok);
+        File.Delete(b.InstalledFilesPath);
+        MakeLegacyPreviousMeta(b);
+        Assert.True(applierB.CanRollback(out var reason), reason);
+        Assert.True(applierB.Rollback("測試").Ok);
+        // 沒有 manifest.json 的根目錄(開發/測試):無從判斷,不擋
+        var c = _env.NewShip("rb-nomanifest");
+        var applierC = new UpdateApplier(c);
+        Assert.True(applierC.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"))).Ok);
+        Assert.Null(PackageJson.Load<PreviousMeta>(Path.Combine(c.PreviousDir, "previous.json"), "previous.json").Release);
+        Assert.True(applierC.CanRollback(out var reasonC), reasonC);
+    }
+
+    [Fact]
+    public void FileAddedByUpdateOutsideProgramDirs_Damaged_NextStepIsAPackage_NotReinstall()
+    {
+        // 圖資更新包在 data/ 新增、發行版沒有的檔案損毀:安裝程式修不好(重新安裝後仍是同樣的錯誤),下一步要含這些檔案的更新包,
+        // 不叫人重新安裝、也不套用「重新安裝後仍有錯誤 → 換磁碟」
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        var src = _env.PathIn("chart-new.dat");
+        File.WriteAllText(src, "chart new");
+        var pkg = UpdatePackageBuilder.Build(new UpdateBuildRequest
+        {
+            Version = "2026.10.3", Kind = UpdateKinds.Charts, Summary = "圖資",
+            Files = { new PackageSource("data/charts/new.dat", src) },
+        }, key, _env.PathIn("charts.sbupd")).OutputPath;
+        Assert.True(new UpdateApplier(ship).Apply(pkg).Ok);
+        ReinstallWithInstaller(ship, "2026.11.0", "data/charts/new.dat");
+        AssertOk(ship);
+
+        File.WriteAllText(P(ship, "data/charts/new.dat"), "corrupted!");
+        for (var round = 0; round < 2; round++)
+        {
+            var r = InstalledVerifier.Verify(ship.Root);
+            var err = Assert.Single(r.Errors);
+            Assert.Equal("data/charts/new.dat", err.Path);
+            Assert.Equal("package:2026.10.3", err.Source);
+            Assert.Equal(InstallFinding.RepairByPackage, err.RepairableBy);
+            var step = Assert.Single(r.NextSteps);
+            Assert.Contains("包含這些檔案、版本高於 2026.10.3 的更新包", step);
+            Assert.Contains("安裝程式不會修復", step);
+            Assert.DoesNotContain("的安裝程式」重新安裝", step);
+            Assert.DoesNotContain("可能故障", step);
+            // 照舊的下一步重新安裝:錯誤不變(要求的版本也不會往上推)
+            ReinstallWithInstaller(ship, "2026.11.0", "data/charts/new.dat");
+            File.WriteAllText(P(ship, "data/charts/new.dat"), "corrupted!");
+        }
+        var json = JsonNode.Parse(Run("verify-install", "--root", ship.Root, "--json").Out)!;
+        Assert.Equal("package", (string?)json["errors"]![0]!["repairableBy"]);
+
+        // 同時有發行清單所列的檔案損毀:兩種下一步分開寫,換磁碟那一句註明不含更新包新增的檔案
+        File.AppendAllText(P(ship, "app/web/index.html"), "x");
+        var mixed = InstalledVerifier.Verify(ship.Root);
+        Assert.Equal(2, mixed.Errors.Count);
+        Assert.Null(mixed.Errors.Single(e => e.Path == "app/web/index.html").RepairableBy);
+        Assert.Equal(3, mixed.NextSteps.Count);
+        Assert.Contains("版本不低於 2026.11.0 的安裝程式", mixed.NextSteps[0]);
+        Assert.Contains("另見下一項", mixed.NextSteps[0]);
+        Assert.Contains("可能故障", mixed.NextSteps[1]);
+        Assert.Contains("更新包新增的檔案除外", mixed.NextSteps[1]);
+        Assert.Contains("包含這些檔案", mixed.NextSteps[2]);
+        Assert.DoesNotContain("資料檔損壞或不完整,請先不要用於相關的訓練", mixed.NextSteps[2]);
+
+        // 更新包新增的檔案只是缺少:同樣是更新包才修得好
+        File.WriteAllText(P(ship, "app/web/index.html"), "<!doctype html><title>儀器 5</title>\n");
+        File.Delete(P(ship, "data/charts/new.dat"));
+        var missing = Assert.Single(InstalledVerifier.Verify(ship.Root).Errors);
+        Assert.Equal(C.Missing, missing.Category);
+        Assert.Equal(InstallFinding.RepairByPackage, missing.RepairableBy);
+    }
+
+    [Fact]
+    public void ManifestOnlyReencoded_IsTheSameRelease_ButARealReinstallIsStillDetected()
+    {
+        // manifest.json 只改編碼(加 BOM、LF→CRLF;例如以編輯器開過存檔):內容身分相同,不是重新安裝 — 核對通過、rollback 允許
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"), ("app/added.dll", "a"))).Ok);
+        Assert.False(string.IsNullOrEmpty(InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Baseline!.ContentSha256));
+        var manifest = P(ship, "manifest.json");
+        var original = File.ReadAllBytes(manifest);
+        void Reencode()
+        {
+            var text = System.Text.Encoding.UTF8.GetString(original).Replace("\r\n", "\n").Replace("\n", "\r\n");
+            File.WriteAllBytes(manifest, new byte[] { 0xEF, 0xBB, 0xBF }.Concat(System.Text.Encoding.UTF8.GetBytes(text)).ToArray());
+        }
+        Reencode();
+        var r = AssertOk(ship);
+        Assert.Empty(r.Notices);
+        Assert.False(r.InstalledFiles!.Reinstalled);
+        Assert.True(applier.CanRollback(out var reason), reason);
+
+        // 舊版 simosa-pkg 寫的覆蓋清單與 previous.json(沒有內容身分):以版本 + 建置時間比較,也是同一個發行版
+        var overlay = JsonNode.Parse(File.ReadAllText(ship.InstalledFilesPath))!.AsObject();
+        Assert.True(overlay["baseline"]!.AsObject().Remove("contentSha256"));
+        File.WriteAllText(ship.InstalledFilesPath, overlay.ToJsonString());
+        MakeLegacyPreviousMeta(ship);
+        Assert.Empty(AssertOk(ship).Notices);
+        Assert.True(applier.CanRollback(out reason), reason);
+
+        // 之後的套用:覆蓋清單的 baseline 換成目前的身分(原始 SHA-256 與內容身分)
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.2", key, ("app/version.txt", "app 3.0\n"))).Ok);
+        var refreshed = InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Baseline!;
+        Assert.Equal(Sha256Hex.OfFile(manifest), refreshed.Sha256);
+        Assert.False(string.IsNullOrEmpty(refreshed.ContentSha256));
+        Assert.Equal(new[] { "app/added.dll", "app/version.txt" }, InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Files.Select(f => f.Path).ToArray());
+        Assert.True(applier.Rollback("測試").Ok);
+        AssertOk(ship);
+
+        // 真的換了發行版(內容不同):仍是重新安裝,rollback 拒絕;舊紀錄(沒有內容身分)以版本 + 建置時間也判得出來
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.3", key, ("app/version.txt", "app 4.0\n"))).Ok);
+        var legacyOverlay = JsonNode.Parse(File.ReadAllText(ship.InstalledFilesPath))!.AsObject();
+        Assert.True(legacyOverlay["baseline"]!.AsObject().Remove("contentSha256"));
+        File.WriteAllText(ship.InstalledFilesPath, legacyOverlay.ToJsonString());
+        MakeLegacyPreviousMeta(ship);
+        ReinstallWithInstaller(ship, "2026.11.0");
+        Assert.True(AssertOk(ship).InstalledFiles!.Reinstalled);
+        Assert.False(applier.CanRollback(out reason));
+        Assert.Contains("2026.10.0 → 2026.11.0", reason);
+    }
+
+    [Fact]
+    public void SameRelease_ComparesContent_ThenVersionAndBuildTimeForLegacyRecords()
+    {
+        var built = new DateTime(2026, 11, 1, 3, 0, 0, DateTimeKind.Utc);
+        var m = new ReleaseManifest { Version = "2026.11.1", BuiltUtc = built, GitRevision = "abc", Files = { new ReleaseFile { Path = "app/a.dll", Sha256 = "AA", Size = 1 } } };
+        var current = InstalledBaseline.Of(m, "1111");
+        // 原始 SHA-256 不同、內容相同
+        Assert.True(InstalledBaseline.SameRelease(InstalledBaseline.Of(m, "2222"), current));
+        // 內容不同(某個檔案的雜湊)
+        var other = new ReleaseManifest { Version = "2026.11.1", BuiltUtc = built, GitRevision = "abc", Files = { new ReleaseFile { Path = "app/a.dll", Sha256 = "BB", Size = 1 } } };
+        Assert.False(InstalledBaseline.SameRelease(InstalledBaseline.Of(other, "3333"), current));
+        // 舊紀錄沒有內容身分:版本 + 建置時間
+        Assert.True(InstalledBaseline.SameRelease(new InstalledBaseline { Version = "2026.11.1", Sha256 = "9999", BuiltUtc = built }, current));
+        Assert.False(InstalledBaseline.SameRelease(new InstalledBaseline { Version = "2026.11.1", Sha256 = "9999", BuiltUtc = built.AddSeconds(1) }, current));
+        Assert.False(InstalledBaseline.SameRelease(new InstalledBaseline { Version = "2026.11.2", Sha256 = "9999", BuiltUtc = built }, current));
+        Assert.False(InstalledBaseline.SameRelease(new InstalledBaseline { Version = "2026.11.1", Sha256 = "9999" }, current));
+        Assert.False(InstalledBaseline.SameRelease(null, current));
+        Assert.False(InstalledBaseline.SameRelease(new InstalledBaseline { Sha256 = "" }, new InstalledBaseline { Sha256 = "" }));
+        // 檔案順序與雜湊大小寫不影響內容身分
+        var reordered = new ReleaseManifest { Version = "2026.11.1", BuiltUtc = built, GitRevision = "abc", Files = { new ReleaseFile { Path = "app/b.dll", Sha256 = "cc", Size = 2 }, new ReleaseFile { Path = "app/a.dll", Sha256 = "aa", Size = 1 } } };
+        var sorted = new ReleaseManifest { Version = "2026.11.1", BuiltUtc = built, GitRevision = "abc", Files = { new ReleaseFile { Path = "app/a.dll", Sha256 = "AA", Size = 1 }, new ReleaseFile { Path = "app/b.dll", Sha256 = "CC", Size = 2 } } };
+        Assert.Equal(InstalledBaseline.ContentHash(sorted), InstalledBaseline.ContentHash(reordered));
+    }
 }

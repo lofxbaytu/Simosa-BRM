@@ -103,15 +103,18 @@ export class HelmWheel extends LitElement {
       .mode b {
         color: var(--ob-accent-strong);
       }
-      /* 窄格(內容寬 < 340 px):九個預設鈕每個只有約 30 px,「P 35°」以 11 px 字放不下(格線會被撐寬、最右邊的鈕被裁掉) */
+      /* 窄格(內容寬 < 340 px):九個預設鈕每個只有約 22–31 px,「P 35°」以 11 px 字放不下一行(格線會被撐寬、最右邊的鈕被裁掉)。
+         字級不縮:鈕內文字在空白處換行(「P」/「35°」上下兩行,鈕變高約 10 px),九個鈕仍是左舵在左、右舵在右的一列 */
       @container (max-width: 340px) {
         .presets {
+          grid-template-columns: repeat(9, minmax(0, 1fr));
           gap: 2px;
         }
         .presets button {
-          font-size: 10px;
-          padding: 3px 0;
+          padding: 2px 0;
           min-width: 0;
+          line-height: 1.15;
+          overflow-wrap: anywhere;
         }
         .side button {
           min-width: 58px;

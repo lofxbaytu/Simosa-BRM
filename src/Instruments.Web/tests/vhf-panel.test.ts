@@ -307,6 +307,36 @@ describe('<brm-vhf>', () => {
     el.remove();
   });
 
+  it('空間不足時移到 title 的說明:DSC 列與 PTT 的 title 帶完整文字;麥克風說明(未授權)可隱藏、警示不可(第二十九輪 L3)', async () => {
+    const { client, ws } = makeClient();
+    const el = await mount({ client });
+    await joined(el, ws());
+    // DSC 說明整句在 .dsc 的 title(--brm-vhf-hint-display: none 時文字不顯示,但不截斷成半句)
+    expect(q<HTMLElement>(el, '.dsc').title).toBe('簡化 DSC:文字警示送所有站(非真實 DSC 編碼)');
+    expect(q<HTMLElement>(el, '.dsc .hint').textContent).toBe('簡化 DSC:文字警示送所有站(非真實 DSC 編碼)');
+    // 麥克風尚未授權:說明列是 .hint.mic(非 .warn,可依 --brm-vhf-mic-hint-display 隱藏),PTT 的 title 帶同一句
+    const mic = q<HTMLElement>(el, '.hint.mic');
+    expect(mic.classList.contains('warn')).toBe(false);
+    expect(q<HTMLButtonElement>(el, 'button.ptt').title).toContain('麥克風:按 PTT 時要求授權');
+    // 二次確認中:DSC 列不帶 title(警示文字照常顯示)
+    q<HTMLButtonElement>(el, 'button.distress').click();
+    await settle(el);
+    expect(q<HTMLElement>(el, '.dsc').title).toBe('');
+    expect(q<HTMLElement>(el, '.dsc .hint.warn').textContent).toContain('s 內未確認自動取消');
+    el.remove();
+  });
+
+  it('無麥克風權限的說明是警示(.warn),不隨空間不足隱藏', async () => {
+    const { client, ws } = makeClient('deny');
+    const el = await mount({ client });
+    await joined(el, ws());
+    q<HTMLButtonElement>(el, 'button.ptt').dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    await settle(el);
+    await settle(el);
+    expect(q<HTMLElement>(el, '.hint.mic').classList.contains('warn')).toBe(true);
+    el.remove();
+  });
+
   it('未注入 client 時依 url/station 自行建立並連線;移除元件時停止', async () => {
     const el = await mount({ url: 'ws://host:8767/', station: 'ecr', clientOptions: { webSocketFactory: (url: string) => new FakeWebSocket(url) as unknown as WebSocket, detectPlayback: () => 'none' } });
     expect(el.client).not.toBeNull();

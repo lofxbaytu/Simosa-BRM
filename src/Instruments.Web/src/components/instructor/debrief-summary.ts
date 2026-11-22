@@ -80,10 +80,14 @@ export class DebriefSummaryView extends LitElement {
         text-align: left;
         vertical-align: top;
       }
+      /* 指標名稱(例:speed(manoeuvring.timeOverSpeedLimit_s))在窄面板內換行,不撐寬表格(重播檢視右欄約 340 px;第二十九輪 L3) */
       th {
         color: var(--ob-text-secondary);
         font-weight: 500;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
+      }
+      td.src {
+        overflow-wrap: anywhere;
       }
       td.num {
         text-align: right;

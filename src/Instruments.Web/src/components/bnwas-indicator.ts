@@ -17,6 +17,8 @@ export class BnwasIndicator extends LitElement {
     css`
       :host {
         display: block;
+        /* 尺寸容器:依格子寬度決定一列或兩列(@container) */
+        container-type: inline-size;
       }
       .tile {
         gap: 3px;
@@ -109,6 +111,45 @@ export class BnwasIndicator extends LitElement {
       @keyframes brm-bnwas-flash {
         50% {
           background: color-mix(in srgb, var(--ob-alarm) 45%, var(--ob-bg-surface));
+        }
+      }
+      /* 寬的格子(駕駛台在視窗高度 ≤ 800 px 時放在航跡圖下方的橫條,約 900–1000 px 寬):標題、模式、階段、倒數、進度條與「重設」排成一列
+         (約 40 px 高;字級與「重設」鈕大小不變)。窄的格子(右欄 344–360 px)維持兩列 */
+      @container (min-width: 560px) {
+        .tile {
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 3px 12px;
+          padding-top: 3px;
+          padding-bottom: 3px;
+        }
+        .top {
+          display: contents;
+        }
+        .top .title {
+          order: 1;
+        }
+        .mode {
+          order: 2;
+        }
+        .stage {
+          order: 3;
+          min-width: 0;
+        }
+        .countdown {
+          order: 4;
+        }
+        .bar {
+          order: 5;
+          flex: 1 1 80px;
+          max-width: 240px;
+        }
+        .top .spacer {
+          order: 6;
+        }
+        .reset {
+          order: 7;
         }
       }
     `,

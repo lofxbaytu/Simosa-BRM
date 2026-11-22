@@ -1,9 +1,11 @@
 // 教官站完整模式(instructor.html):情境清單 → 載入 E07 → 狀態幀情境 id 變更、載入鈕回復;無效內嵌情境 → 核心拒絕(scenarioLoadRejected)
 // 並在面板顯示;下舵令 20°(操船台舵輪預設鈕)→ 操船台舵角指示變化;凍結/恢復(執行控制面板)→ 狀態幟 frozen 與 header「已凍結」;
-// 1536×864 與 1920×1080 下每個控制項都點得到、載入與執行控制不必捲動(版面;判定在 support/layout.ts)。
-import { bridgeUrl, instructorUrl } from '../support/env.ts';
+// 1366×768、1536×864 與 1920×1080 下每個控制項都點得到、載入與執行控制不必捲動;選了最長 id 的情境(E20_comprehensive_assessment_*)時「載入」鈕
+// 不撐出左欄;重播檢視載入紀錄後與簡化模式「開始練習」後(1366×768)事件串流篩選鈕、PTT 等不被蓋住或裁切(版面;判定在 support/layout.ts)。
+import path from 'node:path';
+import { ROOT, bridgeUrl, instructorUrl } from '../support/env.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
-import { INSTRUCTOR_LAYOUT, layoutFailures, probeLayout } from '../support/layout.ts';
+import { INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, probeLayout } from '../support/layout.ts';
 import { PageErrors, scenarioLoadButton, waitConnected } from '../support/pages.ts';
 
 /** 與 tests/SimCore.Tests/ScenarioLoadRejectionTests.cs 相同的兩個結構 error:多邊形只有 2 點、hardFail 引用不存在的區域 */
@@ -154,7 +156,7 @@ test('凍結後教官站顯示「已凍結」且「恢復」鈕可用(核心凍�
   }
 });
 
-test('完整教官站 1536×864 與 1920×1080:控制項不被蓋住,載入、凍結 / 恢復 / 結束、時間倍率不必捲動就點得到', async ({ page, env, core }) => {
+test('完整教官站 1366×768、1536×864 與 1920×1080:控制項不被蓋住,載入、凍結 / 恢復 / 重設 / 結束、時間倍率不必捲動就點得到', async ({ page, env, core }) => {
   // 第二十九輪 L2:左欄四個面板原本以固定比例分列,情境面板的詳細區(簡報結構區塊)比格列高,「載入」「開始規劃時間」被時間表面板蓋住;
   // 1536×864(1920×1080 筆電在 Windows 125% 縮放)下執行控制的「結束練習」「時間倍率」「快照」被畫面錄影面板蓋住、事件串流只剩約 10 px 高。
   // 現在三欄各自捲動、執行控制固定在左欄最上方;判定與開發時的量測腳本共用 support/layout.ts 的 probeLayout。
@@ -163,7 +165,7 @@ test('完整教官站 1536×864 與 1920×1080:控制項不被蓋住,載入、�
   const id = 'E13_tug_berthing_mailiao';
   await ensureRunning(core);
   try {
-    for (const size of [{ width: 1536, height: 864 }, { width: 1920, height: 1080 }]) {
+    for (const size of [{ width: 1366, height: 768 }, { width: 1536, height: 864 }, { width: 1920, height: 1080 }]) {
       await test.step(`${size.width}×${size.height}`, async () => {
         await page.setViewportSize(size);
         await page.goto(instructorUrl(env));
@@ -199,6 +201,7 @@ test('完整教官站 1536×864 與 1920×1080:控制項不被蓋住,載入、�
         await panel.locator('.seg button', { hasText: /^×1$/ }).click();
         await expect(panel.locator('.panel-title .zh')).toContainText('×1');
         await panel.locator('button.end').click({ trial: true });
+        await panel.locator('button.reset').click({ trial: true });
         await load.click({ trial: true });
       });
     }
@@ -254,6 +257,106 @@ test('簡化教官模式簡報頁:規劃時間、同儕評估提示緊接在簡�
     errors.expectNone();
   } finally {
     // 簡報期間核心凍結:還原成執行中,後面的測試各自以 ensureScenario 載入需要的情境
+    await ensureRunning(core);
+  }
+});
+
+test('完整教官站 1280×720 與 1366×768 選了最長 id 的情境:「載入」鈕不撐出左欄(id 換行、不截斷),詳細區有基本高度', async ({ page, env }) => {
+  // 第二十九輪 L3:「載入 E20_comprehensive_assessment_kaohsiung」的 id 不可斷行,鈕寬 276 px > 左欄的鈕列 258 px,鈕右緣被右側面板蓋住、
+  // 左欄出現水平捲軸(顯示捲軸時 _default 也一樣)。現在 id 在底線後換行(<wbr>),清單與詳細區只直向捲動。只選取、不載入(核心狀態不變)。
+  const errors = new PageErrors(page);
+  for (const size of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }]) {
+    for (const id of ['E20_comprehensive_assessment_kaohsiung', 'E20_comprehensive_assessment_default']) {
+      await test.step(`${size.width}×${size.height} 選 ${id}`, async () => {
+        await page.setViewportSize(size);
+        await page.goto(instructorUrl(env));
+        await waitConnected(page);
+        const item = page.locator('brm-scenario-panel .list .item').filter({ hasText: id });
+        await expect(item).toHaveCount(1);
+        await item.scrollIntoViewIfNeeded();
+        await item.click();
+        await expect(item).toHaveClass(/selected/);
+        const load = scenarioLoadButton(page);
+        await expect(load).toHaveText(`載入 ${id}`);
+        const report = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
+        expect(layoutFailures(report), `完整教官站 ${size.width}×${size.height} 選 ${id} 的版面問題`).toEqual([]);
+        // 鈕與詳細區都在情境面板內、不水平溢出;詳細區至少約 96 px(面板矮於 300 px 時的下限;1366×768 為 120 px)
+        const geo = await page.locator('brm-scenario-panel').evaluate((host) => {
+          const root = host.shadowRoot!;
+          const btn = root.querySelector('button.load')!.getBoundingClientRect();
+          const row = root.querySelector('.btn-row')!.getBoundingClientRect();
+          const list = root.querySelector('.list') as HTMLElement;
+          const detail = root.querySelector('.detail') as HTMLElement;
+          return { btnRight: btn.right, rowRight: row.right, listOverflowX: list.scrollWidth - list.clientWidth, detailOverflowX: detail.scrollWidth - detail.clientWidth, detailHeight: detail.getBoundingClientRect().height };
+        });
+        expect(geo.btnRight, '「載入」鈕右緣不超出鈕列').toBeLessThanOrEqual(geo.rowRight + 1);
+        expect(geo.listOverflowX, '情境清單不水平溢出').toBeLessThanOrEqual(1);
+        expect(geo.detailOverflowX, '詳細區不水平溢出').toBeLessThanOrEqual(1);
+        expect(geo.detailHeight, '詳細區高度(px)').toBeGreaterThanOrEqual(95);
+        await load.click({ trial: true });
+      });
+    }
+  }
+  errors.expectNone();
+});
+
+test('重播檢視載入紀錄後(1366×768):事件串流篩選鈕不被蓋住、事件串流有足夠高度,講評摘要在自己的面板內捲動', async ({ page, env }) => {
+  // 第二十九輪 L3:講評摘要原本先取 40vh,事件串流只剩 38 px,六個篩選鈕被下一個面板蓋住(Playwright 點擊被 div.panel 攔截);
+  // 講評摘要的長指標名稱把表格撐到約 1140 px 寬。現在右欄四個面板各有下限,講評摘要在面板內捲動、名稱換行。
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const record = path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E13_tug_berthing_mailiao-core.jsonl');
+  await page.locator('brm-replay-view input.file-input').setInputFiles(record);
+  await expect(page.locator('brm-replay-view input.slider')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('brm-replay-view brm-event-stream .list .item').first()).toBeVisible();
+  const report = await page.evaluate(probeLayout, REPLAY_LAYOUT);
+  expect(layoutFailures(report), '重播檢視 1366×768 的版面問題').toEqual([]);
+  // 真實點擊:篩選鈕(時間表)切換顯示 / 隱藏、播放 / 暫停
+  const filter = page.locator('brm-replay-view brm-event-stream .filters button.src-timeline');
+  await expect(filter).toHaveClass(/active/);
+  await filter.click();
+  await expect(filter).not.toHaveClass(/active/);
+  await filter.click();
+  await expect(filter).toHaveClass(/active/);
+  const play = page.locator('brm-replay-view .timeline button.play');
+  await play.click();
+  await expect(play).toHaveText('暫停');
+  await play.click();
+  await expect(play).toHaveText('播放');
+  errors.expectNone();
+});
+
+test('簡化教官模式「開始練習」後(1366×768):VHF 頻道鈕 / PTT / 音量不被裁切,PTT、凍結、結束、BRM 標記鈕不必捲動就點得到', async ({ page, env, core }) => {
+  // 第二十九輪 L3:側欄原本是固定的格列,VHF 落在給學員操作紀錄的那一列(約 88 px),頻道 69–77、守聽選單、PTT、音量被 overflow: hidden 裁掉。
+  // 現在側欄是直向 flex、各面板取自然高度,VHF 排在 BRM 標記之後。
+  const errors = new PageErrors(page);
+  const id = 'E20_comprehensive_assessment_kaohsiung';
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env, { mode: 'simple' }));
+  await waitConnected(page);
+  const item = page.locator('brm-scenario-panel .list .item').filter({ hasText: id });
+  await expect(item).toHaveCount(1);
+  await item.scrollIntoViewIfNeeded();
+  await item.click();
+  const loaded = core.waitState((s) => s.scenario?.id === id, 30_000, `${id} 的狀態幀`);
+  await scenarioLoadButton(page).click();
+  await loaded;
+  try {
+    await page.locator('.stage.briefing .actions button.start').click({ timeout: 15_000 });
+    await expect(page.locator('.stage.running')).toBeVisible();
+    await expect(page.locator('.stage.running brm-vhf .pill')).toHaveText('已連線');
+    const report = await page.evaluate(probeLayout, SIMPLE_RUN_LAYOUT);
+    expect(layoutFailures(report), '簡化模式執行階段 1366×768 的版面問題').toEqual([]);
+    // 真實點擊:VHF 頻道 77(第二列最後一個)、PTT(點擊前檢查)、音量
+    await page.locator('.stage.running brm-vhf .channels button', { hasText: /^77$/ }).click();
+    await expect(page.locator('.stage.running brm-vhf button.ptt')).toContainText('CH77');
+    await page.locator('.stage.running brm-vhf .channels button', { hasText: /^16$/ }).click();
+    await page.locator('.stage.running brm-vhf button.ptt').click({ trial: true });
+    await page.locator('.stage.running brm-vhf .volume input').click({ trial: true });
+    await page.locator('.stage.running .actions button.end').click({ trial: true });
+    errors.expectNone();
+  } finally {
     await ensureRunning(core);
   }
 });

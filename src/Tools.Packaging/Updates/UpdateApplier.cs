@@ -51,6 +51,26 @@ public sealed class PreviousMeta
     public DateTime CreatedUtc { get; set; }
     /// <summary>元件 → 套用前是否存在</summary>
     public Dictionary<string, bool> Components { get; set; } = new();
+    /// <summary>
+    /// 套用當時安裝根目錄 manifest.json 的身分(<see cref="InstalledBaseline"/>;當時沒有或讀不到時 null)。
+    /// rollback 據以判斷「套用之後是否重新安裝過」(<see cref="UpdateApplier.CheckRollback"/>),優先於覆蓋清單的 baseline。
+    /// </summary>
+    public InstalledBaseline? Release { get; set; }
+    /// <summary>
+    /// 寫入者是否記錄了 <see cref="Release"/>(本版起一律 true;<see cref="Release"/> 為 null 即「套用時沒有可讀的發行清單」)。
+    /// 舊版 simosa-pkg 寫的 previous.json 沒有這兩個欄位(false):改以覆蓋清單判斷,沒有覆蓋清單時以 Reconcile 的時間規則判斷。
+    /// </summary>
+    public bool ReleaseRecorded { get; set; }
+}
+
+/// <summary><see cref="UpdateApplier.CheckRollback"/> 的結果(rollback、status 的 rollbackAvailable 與安裝模式核對的提醒共用)。</summary>
+public sealed class RollbackCheck
+{
+    public bool Allowed { get; init; }
+    /// <summary>不可回復的理由(可回復時 null)</summary>
+    public string? Reason { get; init; }
+    /// <summary>因為「套用現行更新包之後重新安裝過」而拒絕(核對的「狀態」提醒據以註明「請不要執行 rollback」)</summary>
+    public bool ReinstalledSinceApply { get; init; }
 }
 
 /// <summary>
@@ -192,7 +212,7 @@ public sealed class UpdateApplier
             }
 
             // 3b. 覆蓋清單的新內容(state/installed-files.json;此時只在記憶體內組好,尚未變更安裝目錄 — 失敗走「未變更」)
-            var installedFiles = BuildInstalledFiles(installed, m, removePaths, result);
+            var installedFiles = BuildInstalledFiles(installed, m, removePaths, result, out var release);
 
             // 4. 原子替換(目錄改名);失敗時逐一回復
             Directory.CreateDirectory(pendingPrev);
@@ -208,9 +228,11 @@ public sealed class UpdateApplier
                     Directory.Move(Path.Combine(nextRoot, comp), live);
                     options.AfterComponentSwap?.Invoke(comp);
                 }
+                // 套用當時的發行清單身分寫進 previous.json:之後 rollback 判斷「重新安裝過」不必依賴覆蓋清單(可能遺失或沒有 baseline)
                 PackageJson.SaveAtomic(Path.Combine(pendingPrev, "previous.json"), new PreviousMeta
                 {
                     ReplacedByPackageId = m.PackageId, ReplacedByVersion = m.Version, ReplacedByKind = m.Kind, CreatedUtc = Now, Components = existed,
+                    Release = release, ReleaseRecorded = true,
                 });
                 if (File.Exists(_layout.InstalledStatePath)) File.Copy(_layout.InstalledStatePath, Path.Combine(pendingPrev, "installed.json"), overwrite: true);
                 // 覆蓋清單與 installed.json 同在提交點之前寫入(先覆蓋清單、後 installed.json):任何一個寫不進去都整體回復,
@@ -351,11 +373,11 @@ public sealed class UpdateApplier
     /// 傳入本更新包的 packageId:上一次套用同一個更新包時若在「覆蓋清單已寫、installed.json 未寫」之間中斷(斷電),
     /// 這次是原包重試 — 覆蓋清單原樣沿用,不把它列為未記錄(否則 app/ 會長期停在「無法核對」)。
     /// </summary>
-    private InstalledFiles BuildInstalledFiles(InstalledState installed, UpdateManifest m, List<string> removePaths, UpdateApplyResult result)
+    private InstalledFiles BuildInstalledFiles(InstalledState installed, UpdateManifest m, List<string> removePaths, UpdateApplyResult result, out InstalledBaseline? baseline)
     {
         var existing = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out var loadError);
         if (loadError is not null) result.Warnings.Add($"覆蓋清單 state/{InstalledFiles.FileName} 無法讀取,已重新建立(先前更新包的檔案在安裝模式核對時列為無法核對):{loadError}");
-        var baseline = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths);
+        baseline = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths);
         var files = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, InstalledPaths.DefaultComparison, applyingPackageId: m.PackageId);
         files.Record(m, removePaths, Now, InstalledPaths.DefaultComparison);
         return files;
@@ -542,61 +564,83 @@ public sealed class UpdateApplier
 
     /// <summary>
     /// 是否可 rollback:state/previous 須存在、且正是現行更新包取代掉的上一版;上一個套用的是信任清單變更(trust)時不可 rollback
-    /// (否則被撤銷的金鑰會重新受信任;撤回信任變更須以備援金鑰簽章新的 trust 更新包)。
+    /// (否則被撤銷的金鑰會重新受信任;撤回信任變更須以備援金鑰簽章新的 trust 更新包);套用之後重新安裝過時不可 rollback(<see cref="CheckRollback"/>)。
     /// </summary>
-    public bool CanRollback(out string? reason) => CanRollback(out reason, out _, out _);
+    public bool CanRollback(out string? reason)
+    {
+        var check = CheckRollback();
+        reason = check.Reason;
+        return check.Allowed;
+    }
 
-    private bool CanRollback(out string? reason, out PreviousMeta? meta, out InstalledState current)
+    /// <summary>
+    /// rollback 是否可行與理由 — rollback 本身、<c>simosa-pkg status</c> 的 rollbackAvailable 與安裝模式核對的「請不要執行 rollback」提醒
+    /// 都以這個結果為準(單一出處)。
+    /// </summary>
+    public RollbackCheck CheckRollback() => CheckRollback(out _, out _);
+
+    private RollbackCheck CheckRollback(out PreviousMeta? meta, out InstalledState current)
     {
         meta = null;
         current = InstalledState.LoadOrNew(_layout.InstalledStatePath);
         var metaPath = Path.Combine(_layout.PreviousDir, "previous.json");
-        if (!File.Exists(metaPath))
-        {
-            reason = "沒有可回復的上一版(state/previous 不存在)";
-            return false;
-        }
+        if (!File.Exists(metaPath)) return new RollbackCheck { Reason = "沒有可回復的上一版(state/previous 不存在)" };
         try { meta = PackageJson.Load<PreviousMeta>(metaPath, "previous.json"); }
         catch (InvalidDataException ex)
         {
-            reason = $"上一版資料無法讀取:{ex.Message}";
-            return false;
+            return new RollbackCheck { Reason = $"上一版資料無法讀取:{ex.Message}" };
         }
         if (meta.ReplacedByPackageId is null || meta.ReplacedByPackageId != current.PackageId)
-        {
-            reason = $"state/previous 不是現行更新包 {current.PackageId ?? "(無)"} 的上一版(屬於 {meta.ReplacedByPackageId ?? "?"}),拒絕回復";
-            return false;
-        }
+            return new RollbackCheck { Reason = $"state/previous 不是現行更新包 {current.PackageId ?? "(無)"} 的上一版(屬於 {meta.ReplacedByPackageId ?? "?"}),拒絕回復" };
         var replacedId = meta.ReplacedByPackageId;
         var kind = meta.ReplacedByKind ?? current.History.FirstOrDefault(h => h.PackageId == replacedId)?.Kind;
-        if (kind == UpdateKinds.Trust || meta.Components.ContainsKey("config"))
-        {
-            reason = "上一個套用的是信任清單變更(trust),不可 rollback(會讓被撤銷的金鑰重新受信任);要撤回請由備援金鑰簽章新的 trust 更新包";
-            return false;
-        }
-        if (ReinstalledSinceLastApply() is { } reinstalled)
-        {
-            reason = reinstalled;
-            return false;
-        }
-        reason = null;
-        return true;
+        if (kind == UpdateKinds.Trust || (meta.Components ?? new()).ContainsKey("config"))
+            return new RollbackCheck { Reason = "上一個套用的是信任清單變更(trust),不可 rollback(會讓被撤銷的金鑰重新受信任);要撤回請由備援金鑰簽章新的 trust 更新包" };
+        if (ReinstalledSinceLastApply(meta, current) is { } reinstalled)
+            return new RollbackCheck { Reason = reinstalled, ReinstalledSinceApply = true };
+        return new RollbackCheck { Allowed = true };
     }
 
     /// <summary>
-    /// 最近一次套用之後是否曾以安裝程式(或手動複製發行版)重新安裝:覆蓋清單記錄了套用當時 manifest.json 的身分
-    /// (<see cref="InstalledFiles.Baseline"/>),與目前的 manifest.json 不同就是重新安裝過。這時 state/previous 是「重新安裝之前」
-    /// 被更新包換下來的元件,rollback 會把舊版的程式檔或資料放回新的發行版上,留下兩個版本混雜的安裝 — 拒絕並說明回到舊版的正確作法
-    /// (docs/design/packaging-sync.md 第 5.1、10 節)。沒有覆蓋清單(舊版 simosa-pkg 套用)或 manifest.json 讀不到時無從判斷,不擋。
+    /// 最近一次套用之後是否曾以安裝程式(或手動複製發行版)重新安裝。這時 state/previous 是「重新安裝之前」被更新包換下來的元件,
+    /// rollback 會把舊版的程式檔或資料放回新的發行版上,留下兩個版本混雜的安裝 — 拒絕並說明回到舊版的正確作法
+    /// (docs/design/packaging-sync.md 第 5.1、10 節)。是否為同一個發行版一律以 <see cref="InstalledBaseline.SameRelease"/> 比較(只改編碼不算)。依序:
+    /// <list type="number">
+    /// <item>目前沒有可讀的 manifest.json:無從判斷,不擋(核對另會報發行清單的錯誤)。</item>
+    /// <item>previous.json 記錄了套用當時的發行清單身分(本版起,<see cref="PreviousMeta.ReleaseRecorded"/>):與目前不同 → 拒絕;
+    ///   當時沒有可讀的發行清單、現在卻有 → 之後由安裝程式或手動複製放進來的 → 拒絕。</item>
+    /// <item>舊版 previous.json、有覆蓋清單:覆蓋清單的 baseline 與目前不同 → 拒絕;baseline 為 null(套用時讀不到 manifest.json)而現在讀得到 → 拒絕。</item>
+    /// <item>舊版 previous.json、沒有覆蓋清單(舊版 simosa-pkg 套用,或清單遺失):與核對相同的 <see cref="InstalledFiles.Reconcile"/> 判斷 —
+    ///   有更新包的套用時間早於目前發行版的建置時間(<see cref="ReconcileInfo.SupersededPackages"/>)即表示發行版是在套用之後才安裝的 → 拒絕。
+    ///   這一項依賴時鐘(套用時間是船上筆電的時鐘、建置時間是岸上建置機的時鐘):船上時鐘落後會誤擋(較安全),超前則可能漏擋;
+    ///   發行版在套用之前就已建置、之後才安裝(例如以較舊的安裝程式重新安裝)時也看不出來。</item>
+    /// </list>
     /// </summary>
-    private string? ReinstalledSinceLastApply()
+    private string? ReinstalledSinceLastApply(PreviousMeta meta, InstalledState current)
     {
-        var files = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out _);
-        if (files?.Baseline is not { Sha256.Length: > 0 } recorded) return null;
-        var current = Release.InstalledVerifier.ReadBaseline(_layout.Root, out _);
-        if (current is null || Sha256Hex.Equal(recorded.Sha256, current.Sha256)) return null;
-        return $"套用現行更新包之後曾重新安裝(發行版 {recorded.Version ?? "?"} → {current.Version ?? "?"}):state/previous 是重新安裝之前的元件,"
+        var now = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths);
+        if (now is null) return null;
+        string Refuse(string from) => $"套用現行更新包之後曾重新安裝(發行版 {from} → {now.Version ?? "?"}):state/previous 是重新安裝之前的元件,"
             + "回復會把舊版的檔案放回新的發行版上,拒絕 rollback。要回到較舊的版本,請以該版本的安裝程式重新安裝;要撤回某個更新包的變更,請派送版本更高的更新包";
+        const string noManifestThen = "(套用時安裝根目錄沒有可讀的發行清單)";
+        if (meta.ReleaseRecorded)
+        {
+            if (meta.Release is null) return Refuse(noManifestThen);
+            return InstalledBaseline.SameRelease(meta.Release, now) ? null : Refuse(meta.Release.Version ?? "?");
+        }
+        var files = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out _);
+        if (files is not null)
+        {
+            if (files.Baseline is null) return Refuse(noManifestThen);
+            return InstalledBaseline.SameRelease(files.Baseline, now) ? null : Refuse(files.Baseline.Version ?? "?");
+        }
+        var info = new ReconcileInfo();
+        InstalledFiles.Reconcile(null, current, now, manifestPaths, InstalledPaths.DefaultComparison, info);
+        if (info.SupersededPackages.Count == 0) return null;
+        var packages = string.Join("、", info.SupersededPackages.Select(p => p.Version).Distinct());
+        return $"套用現行更新包之後曾重新安裝(更新包 {packages} 的套用時間早於目前的發行版 {now.Version ?? "?"} 的建置時間 {now.BuiltUtc:yyyy-MM-dd HH:mm}Z):"
+            + "state/previous 是重新安裝之前的元件,回復會把舊版的檔案放回新的發行版上,拒絕 rollback。要回到較舊的版本,請以該版本的安裝程式重新安裝;"
+            + "要撤回某個更新包的變更,請派送版本更高的更新包(船上時鐘若比實際落後也會這樣判斷:確認時鐘後請回報開發者)";
     }
 
     /// <summary>回復到上一版(state/previous;只保留一層)。曾套用最高版本不下降,因此回復後不能重新套用同一版或更舊的更新包。trust 類不可回復。</summary>
@@ -605,8 +649,10 @@ public sealed class UpdateApplier
         using var _ = _layout.AcquireLock();
         var audit = _layout.Audit(_clock);
         var result = new UpdateApplyResult();
-        if (!CanRollback(out var reason, out var metaOrNull, out var current))
+        var check = CheckRollback(out var metaOrNull, out var current);
+        if (!check.Allowed)
         {
+            var reason = check.Reason;
             result.Errors.Add(reason!);
             result.Message = "無法回復";
             if (metaOrNull is not null) audit.Write(AuditEvents.UpdateFailed, new { action = "rollback", error = reason, operatorName });

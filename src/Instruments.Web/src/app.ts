@@ -1,6 +1,7 @@
 // <brm-app>:整頁版面(上排 conning 條、中間鳥瞰航跡圖、下排操船台、右欄 BNWAS / 警報 / VHF)、資料來源(WebSocket 或示範模式)、
 // 主題切換(日/黃昏/夜)與指令路由。規劃書第 7 章第一版儀器;教官控制暫放同頁(第 9.1 節)。
 // 版面(docs/design/web-layout.md):右欄跨航跡圖與操船台兩列,文書筆電(1366×768、1536×864)上警報面板與 VHF 都放得下;
+// 視窗高度 ≤ 800 px 時 BNWAS 改到航跡圖下方,失電等 header 折成兩行時 VHF 的文字欄 / DSC 仍不必捲動;
 // 放不下時右欄自己捲動,面板不互相擠壓。判定由端對端測試把關(tests/e2e/support/layout.ts)。
 // 航跡圖左上角另有精簡錨/拖船讀數與接近泊位時的艏/艉橫向速度(<brm-external-readout>;state 有 tugs/anchors/berth 時才顯示),
 // 泊位幾何依 state.scenario.id 由建置時匯入的情境清單取得(示範模式用示範泊位),航跡圖同時畫碼頭線、碰墊、纜繩、拖船與錨鏈。
@@ -78,20 +79,28 @@ export class BrmApp extends LitElement {
       :host {
         display: grid;
         height: 100%;
-        /* 兩欄四列:header 與 conning 條跨兩欄;左欄是航跡圖(中段)與操船台(下段),右欄(BNWAS、警報、VHF)跨中段與下段。
+        /* 兩欄五列:header 與 conning 條跨兩欄;左欄是航跡圖(中段)與操船台(下段),右欄上方是 BNWAS、其下(警報、VHF)跨中段與下段。
            右欄只佔中段時,1366×768 / 1536×864 的中段只剩約 225–300 px,警報面板被擠到高度 0、VHF 下半被操船台蓋住(第二十九輪 L2);
-           跨兩列後右欄有約 435–540 px。寬螢幕也用同一種排法:1920 寬的瀏覽器視窗高度常不足 1080,只佔中段時第 2 筆警報就會被切到 */
+           跨兩列後右欄有約 435–540 px。寬螢幕也用同一種排法:1920 寬的瀏覽器視窗高度常不足 1080,只佔中段時第 2 筆警報就會被切到。
+           conning 條與操船台的列高依視窗寬度(--brm-conning-row / --brm-controls-row,下面的 @media),高度 ≤ 800 px 時 BNWAS 改到航跡圖下方 */
+        --brm-conning-row: minmax(150px, 20vh);
+        --brm-controls-row: minmax(210px, 27vh);
         grid-template-columns: minmax(0, 1fr) 360px;
-        grid-template-rows: auto minmax(150px, 20vh) minmax(0, 1fr) minmax(210px, 27vh);
+        grid-template-rows: auto var(--brm-conning-row) auto minmax(0, 1fr) var(--brm-controls-row);
         grid-template-areas:
           'header header'
           'conning conning'
+          'plot bnwas'
           'plot side'
           'controls side';
         gap: 6px;
         padding: 6px;
         background: var(--ob-bg-app);
         filter: brightness(var(--ob-dim));
+      }
+      brm-bnwas {
+        grid-area: bnwas;
+        min-width: 0;
       }
       brm-conning-bar {
         grid-area: conning;
@@ -114,9 +123,10 @@ export class BrmApp extends LitElement {
         max-width: min(380px, 60%);
         pointer-events: none;
       }
-      /* 右欄:BNWAS、中央警報面板、內建 VHF 角色扮演面板(docs/design/vhf-roleplay.md;?vhf=0 不顯示)。
-         BNWAS 與 VHF 取自然高度(不縮);警報面板吃剩餘高度,至少放得下標題列與 2 筆警報(含「轉移」選單,每筆約 59 px);
-         三者加起來超過欄高時整欄捲動(不互相擠壓、不疊到別的面板上) */
+      /* 右欄:中央警報面板、內建 VHF 角色扮演面板(docs/design/vhf-roleplay.md;?vhf=0 不顯示);BNWAS 在它上方的格子(或高度 ≤ 800 px 時在航跡圖下方)。
+         VHF 取自然高度(不縮);警報面板吃剩餘高度,至少放得下標題列與 2 筆警報(含「轉移」選單,每筆約 59 px);
+         兩者加起來超過欄高時整欄捲動(不互相擠壓、不疊到別的面板上)。
+         右欄是尺寸容器(container: side):欄高不足時 VHF 只縮訊息紀錄列(@container side,見下),字級與觸控目標不縮 */
       .alert-col {
         grid-area: side;
         display: flex;
@@ -126,13 +136,15 @@ export class BrmApp extends LitElement {
         min-width: 0;
         overflow-y: auto;
         scrollbar-width: thin;
+        container: side / size;
       }
       .alert-col > * {
         flex: 0 0 auto;
       }
+      /* 標題列 24 + 2 筆含「轉移」選單的警報(各 59)+ 間距與內距 ≈ 163 px */
       .alert-col > brm-alert-panel {
         flex: 1 1 0;
-        min-height: 170px;
+        min-height: 164px;
       }
       header {
         grid-area: header;
@@ -162,6 +174,12 @@ export class BrmApp extends LitElement {
         border: 1px solid var(--ob-border);
         border-radius: 4px;
         padding: 1px 6px;
+      }
+      /* 核心位址:寬度 ≤ 1500 px 時不另外顯示(位址仍在連線狀態徽章的 title),讓故障 / 警報徽章多的時候 header 少折一行 */
+      @media (max-width: 1500px) {
+        header .ws-url {
+          display: none;
+        }
       }
       .pill {
         display: inline-flex;
@@ -284,7 +302,7 @@ export class BrmApp extends LitElement {
          操船台只有約 1150 px 寬,教官小面板改窄欄(三個鈕直排) */
       @media (max-width: 1900px) {
         :host {
-          grid-template-rows: auto minmax(220px, 32vh) minmax(0, 1fr) minmax(210px, 27vh);
+          --brm-conning-row: minmax(220px, 32vh);
         }
         .controls {
           grid-template-columns: minmax(0, 2fr) minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 1.45fr) minmax(0, 0.65fr);
@@ -293,8 +311,8 @@ export class BrmApp extends LitElement {
       /* 1366×768 等較小螢幕:下排操船台略縮、間距縮小、右欄 344 px(操船台約 1010 px 寬) */
       @media (max-width: 1500px) {
         :host {
+          --brm-controls-row: minmax(200px, 27vh);
           grid-template-columns: minmax(0, 1fr) 344px;
-          grid-template-rows: auto minmax(220px, 32vh) minmax(0, 1fr) minmax(200px, 27vh);
           gap: 4px;
           padding: 4px;
         }
@@ -306,14 +324,31 @@ export class BrmApp extends LitElement {
           gap: 4px;
         }
       }
-      /* 768 高的筆電(1366×768):右欄約 470 px(header 兩行時約 435 px)。VHF 略縮(間距、PTT、訊息列最小高度、DSC 說明單行),
-         header 一行時三個面板剛好放得下、不必捲動;再放不下(header 兩行、BNWAS 作動)時右欄捲動 */
+      /* 高度 ≤ 800 px(1366×768、1280×720 的筆電):BNWAS 改到航跡圖下方(一列的橫條,約 40 px),右欄整欄給警報面板與 VHF。
+         BNWAS 留在右欄上方時,失電等故障讓 header 折成兩行後右欄只剩約 340–370 px,2 筆警報(164)+ VHF(約 230–290)
+         在字級與觸控目標不縮的前提下放不下,VHF 的文字欄 / 送出 / DISTRESS / URGENCY 被擠到視窗外(第二十九輪 L3 量測)。
+         DOM 與 Tab 順序不變(航跡圖 → BNWAS → 警報 → VHF → 操船台) */
       @media (max-height: 800px) {
-        .alert-col {
-          --brm-vhf-gap: 4px;
-          --brm-vhf-ptt-height: 40px;
+        :host {
+          grid-template-rows: auto var(--brm-conning-row) minmax(0, 1fr) auto var(--brm-controls-row);
+          grid-template-areas:
+            'header header'
+            'conning conning'
+            'plot side'
+            'bnwas side'
+            'controls side';
+        }
+      }
+      /* 右欄的實際高度不足(警報 164 + VHF 原尺寸約 292 = 460 px 放不下;例:1536×864 約 460 px、header 折成兩行時 430 px,
+         1366×768 約 470 / 434 px,1280×720 約 438 / 402 px):VHF 的訊息紀錄列固定約兩行高(在列內捲動),
+         DSC 說明與「麥克風:按 PTT 時要求授權」整句移到 title(不截斷成半句;無麥克風權限等警示照常顯示)。
+         頻道鈕、PTT、文字欄、DSC 鈕的字級與大小不變 */
+      @container side (max-height: 480px) {
+        brm-vhf {
           --brm-vhf-log-min: 30px;
-          --brm-vhf-hint-wrap: nowrap;
+          --brm-vhf-log-max: 30px;
+          --brm-vhf-hint-display: none;
+          --brm-vhf-mic-hint-display: none;
         }
       }
     `,
@@ -574,8 +609,8 @@ export class BrmApp extends LitElement {
       <header>
         <span class="title">Simosa BRM 駕駛台儀器</span>
         <span class="ship">${cfg.name}(${cfg.id})</span>
-        <span class="pill ${pillClass}" title=${this.statusDetail}>${pillText}</span>
-        ${this.mode === 'live' ? html`<span class="muted">${this.wsUrl}</span>` : nothing}
+        <span class="pill ${pillClass}" title=${this.mode === 'live' ? `核心 ${this.wsUrl}${this.statusDetail ? `(${this.statusDetail})` : ''}` : this.statusDetail}>${pillText}</span>
+        ${this.mode === 'live' ? html`<span class="muted ws-url">${this.wsUrl}</span>` : nothing}
         <div class="alarms">
           ${flags.aground ? html`<span class="alarm">擱淺</span>` : nothing}
           ${flags.collision ? html`<span class="alarm">碰撞</span>` : nothing}
@@ -617,8 +652,8 @@ export class BrmApp extends LitElement {
           <brm-track-plot .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${extOverlay}></brm-track-plot>
           <brm-external-readout floating .state=${this.hasReceived ? s : null} .config=${cfg} .geometry=${extOverlay?.berth ?? null}></brm-external-readout>
         </div>
+        <brm-bnwas .bnwas=${s.bnwas}></brm-bnwas>
         <div class="alert-col">
-          <brm-bnwas .bnwas=${s.bnwas}></brm-bnwas>
           <brm-alert-panel .alerts=${s.alerts ?? []} .simTime=${s.t} .soundOn=${this.soundOn} .unsupported=${!alertsSupported} .station=${this.station}></brm-alert-panel>
           ${this.vhfUrl && this.mode === 'live' ? html`<brm-vhf compact .url=${this.vhfUrl} .station=${this.station}></brm-vhf>` : nothing}
         </div>

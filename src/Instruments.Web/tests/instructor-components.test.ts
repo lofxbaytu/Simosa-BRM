@@ -105,6 +105,28 @@ describe('情境面板', () => {
     expect(text).toContain('參數集 data/parameters/company-procedures.yaml');
     expect(el.shadowRoot!.querySelector('.attachments a')?.getAttribute('href')).toBe('data/scenarios/E07_steering_failure/docs/passage-plan-mailiao.pdf');
   });
+
+  it('長 id 的載入鈕與清單:底線後可換行(<wbr>),文字內容不變、不以 … 截斷(第二十九輪 L3)', async () => {
+    const E20: ScenarioSummary = { ...E01, id: 'E20_comprehensive_assessment_kaohsiung', path: 'data/scenarios/E20_comprehensive_assessment_kaohsiung.yaml' };
+    const el = await mount('brm-scenario-panel', { scenarios: [E20] });
+    const load = q<HTMLButtonElement>(el, 'button.load');
+    expect(load.textContent?.replace(/\s+/g, ' ').trim()).toBe('載入 E20_comprehensive_assessment_kaohsiung');
+    expect(load.querySelectorAll('wbr').length).toBe(3);
+    const id = q<HTMLElement>(el, '.list .item .id');
+    expect(id.textContent).toBe('E20_comprehensive_assessment_kaohsiung');
+    expect(id.querySelectorAll('wbr').length).toBe(3);
+    // 詳細區的檔案路徑在 / 與 _ 後可換行
+    const pathLine = q<HTMLElement>(el, '.detail .path');
+    expect(pathLine.textContent).toBe('data/scenarios/E20_comprehensive_assessment_kaohsiung.yaml');
+    expect(pathLine.querySelectorAll('wbr').length).toBe(5);
+  });
+
+  it('簡化模式(simple 屬性反映到 host,詳細區優先取自然高度的樣式依此切換)', async () => {
+    const el = await mount<HTMLElement & { simple: boolean }>('brm-scenario-panel', { scenarios: [E01], simple: true });
+    expect(el.hasAttribute('simple')).toBe(true);
+    const full = await mount('brm-scenario-panel', { scenarios: [E01] });
+    expect(full.hasAttribute('simple')).toBe(false);
+  });
 });
 
 const E22X: ScenarioSummary = parseScenario(

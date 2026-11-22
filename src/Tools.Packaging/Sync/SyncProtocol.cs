@@ -239,6 +239,13 @@ public sealed record ShipStatus
     /// <summary>船上筆電環境版次(作業系統 / .NET / WebView2 Runtime;規劃書第 5.5 節兩船版次清單)。舊版船端沒有此欄位時為 null。</summary>
     public EnvironmentInfo? Environment { get; init; }
     public List<string> Warnings { get; init; } = new();
+    /// <summary>安裝根目錄 manifest.json 的發行版本(沒有或讀不到時 null;舊版船端沒有此欄位)。</summary>
+    public string? ReleaseVersion { get; init; }
+    /// <summary>
+    /// 降版(套用更新包之後以較舊的安裝程式重新安裝過;判斷與安裝模式核對相同,<see cref="Release.InstalledVerifier.DetectDowngrade(string, out string?)"/>):
+    /// 這時 <see cref="Components"/> 的 software 版次不是實際執行的程式。沒有時 null(舊版船端沒有此欄位)。
+    /// </summary>
+    public Release.ReleaseDowngrade? ReleaseDowngrade { get; init; }
 }
 
 public sealed record TrustedKeyInfo(string KeyId, string Name, string Role, string? Holder);

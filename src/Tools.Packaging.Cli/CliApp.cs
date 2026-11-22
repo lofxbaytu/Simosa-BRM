@@ -436,6 +436,8 @@ public sealed class CliApp
         _out.WriteLine(st.Version is null ? "現行更新包:(初始安裝,尚未套用更新包)"
             : $"現行更新包 {st.Version} {st.PackageId}  套用於 {st.AppliedUtc:yyyy-MM-dd HH:mm}Z  簽章者 {st.Signer?.Name}({TrustedKey.RoleLabel(st.Signer?.Role ?? "")})");
         foreach (var (k, c) in st.Components) _out.WriteLine($"  {k,-11} {c.Version}({c.AppliedUtc:yyyy-MM-dd}){c.Summary}");
+        // 降版(以較舊的安裝程式重新安裝過):上面的 software 版次不是實際執行的程式 — 與 verify-install 的「狀態」提醒同一段文字
+        if (st.ReleaseDowngrade is { } dg) _err.WriteLine($"警告:{dg.Message}");
         if (st.ParameterSet is { } ps) _out.WriteLine($"  參數集 {ps.Id} 版次 {ps.Version}");
         foreach (var d in st.SmsDocuments) _out.WriteLine($"  SMS {d.DocumentId} 第 {d.Revision} 版(核准人 {d.ApprovedBy})");
         _out.WriteLine($"信任金鑰:{string.Join("、", st.TrustedKeys.Select(k => $"{k.Name}({TrustedKey.RoleLabel(k.Role)})"))}");

@@ -1,5 +1,5 @@
 // 版面可及性量測(第二十九輪 L2;規劃書第 7、9.1 節:船上以文書筆電為基準):駕駛台主畫面與完整教官站在常見筆電解析度下
-// 「每個控制項都點得到」的判定。specs/01-bridge、02-instructor 與開發時的量測腳本(build/tmp/l2-layout/measure.mjs)共用這一份,
+// 「每個控制項都點得到」的判定。specs/01-bridge、02-instructor 與開發時的量測腳本(build/tmp/l3-layout/measure.mjs)共用這一份,
 // 判定邏輯只有一處。本檔沒有執行期相依(只匯入型別),probeLayout 以 page.evaluate 送進頁面執行,函式內不可引用外部符號。
 //
 // 判定(對應 docs/design/web-layout.md 第 4 節):
@@ -372,6 +372,11 @@ export const BRIDGE_LAYOUT: LayoutSpec = {
     { name: 'BNWAS 重設', host: 'brm-bnwas', inner: 'button.reset' },
     { name: 'VHF 頻道鈕', host: 'brm-vhf', inner: '.channels button', min: 14 },
     { name: 'VHF PTT', host: 'brm-vhf', inner: 'button.ptt' },
+    // 第二十九輪 L3:失電等緊急情況下要用的文字通訊與 DSC(header 因故障徽章折成兩行時也必須不捲動就點得到)
+    { name: 'VHF 文字欄', host: 'brm-vhf', inner: '.text-row input' },
+    { name: 'VHF 送出', host: 'brm-vhf', inner: 'button.send' },
+    { name: 'VHF DSC DISTRESS', host: 'brm-vhf', inner: 'button.distress' },
+    { name: 'VHF DSC URGENCY', host: 'brm-vhf', inner: 'button.urgency' },
     { name: '舵輪', host: 'brm-helm', inner: '.wheel' },
     { name: '舵令預設鈕', host: 'brm-helm', inner: '.presets button', min: 9 },
     { name: 'NFU 舵柄', host: 'brm-helm', inner: '.nfu button', min: 2 },
@@ -395,6 +400,7 @@ export const INSTRUCTOR_LAYOUT: LayoutSpec = {
   keys: [
     { name: '執行控制「凍結」', host: 'brm-run-control', inner: 'button.freeze' },
     { name: '執行控制「恢復」', host: 'brm-run-control', inner: 'button.resume' },
+    { name: '執行控制「重設」', host: 'brm-run-control', inner: 'button.reset' },
     { name: '執行控制「結束練習」', host: 'brm-run-control', inner: 'button.end' },
     { name: '執行控制 時間倍率', host: 'brm-run-control', inner: '.seg button', min: 5 },
     { name: '情境面板「載入」', host: 'brm-scenario-panel', inner: 'button.load' },
@@ -403,4 +409,25 @@ export const INSTRUCTOR_LAYOUT: LayoutSpec = {
     // 事件串流:至少 3 列的高度(單行的一列約 20 px、間距 2 px;文字長的事件會換行,不逐列檢查)
     { name: '事件串流', host: 'brm-event-stream', list: '.list', rows: '.item', minRows: 0, minHeightPx: 64 },
   ],
+};
+
+/** 簡化教官模式「開始練習」後(instructor.html?mode=simple 的執行階段):凍結 / 結束、BRM 標記鈕與 VHF PTT 不必捲動就點得到 */
+export const SIMPLE_RUN_LAYOUT: LayoutSpec = {
+  keys: [
+    { name: '簡化模式「凍結 / 恢復」', host: 'brm-instructor-app', inner: '.stage.running .actions button.freeze' },
+    { name: '簡化模式「結束練習」', host: 'brm-instructor-app', inner: '.stage.running .actions button.end' },
+    { name: 'BRM 標記鈕', host: 'brm-marker-bar', inner: '.buttons button.mark', min: 5 },
+    { name: 'VHF PTT', host: 'brm-vhf', inner: 'button.ptt' },
+  ],
+  lists: [],
+};
+
+/** 重播檢視載入紀錄後(instructor.html?mode=replay):時間軸與事件串流篩選鈕不必捲動就點得到,事件串流有足夠的可見高度 */
+export const REPLAY_LAYOUT: LayoutSpec = {
+  keys: [
+    { name: '重播「播放 / 暫停」', host: 'brm-replay-view', inner: '.timeline button.play' },
+    { name: '重播時間軸', host: 'brm-replay-view', inner: '.timeline input.slider' },
+    { name: '事件串流篩選鈕', host: 'brm-event-stream', inner: '.filters button', min: 6 },
+  ],
+  lists: [{ name: '事件串流', host: 'brm-event-stream', list: '.list', rows: '.item', minRows: 0, minHeightPx: 64 }],
 };

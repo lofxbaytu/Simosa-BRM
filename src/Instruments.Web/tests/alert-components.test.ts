@@ -264,6 +264,10 @@ describe('整合(示範模式)', () => {
     const inner = app as unknown as { shipState: { bnwas?: BnwasStatus; truth?: unknown } };
     expect(app.shadowRoot!.querySelector('.middle brm-alert-panel')).not.toBeNull();
     expect(app.shadowRoot!.querySelector('.middle brm-bnwas')).not.toBeNull();
+    // 第二十九輪 L3:BNWAS 是自己的格子(高度 ≤ 800 px 時在航跡圖下方),不在右欄的捲動區內;DOM 順序 航跡圖 → BNWAS → 警報 → VHF
+    expect(app.shadowRoot!.querySelector('.alert-col brm-bnwas')).toBeNull();
+    const middle = [...app.shadowRoot!.querySelector('.middle')!.children].map((c) => c.tagName.toLowerCase() === 'div' ? `.${c.className}` : c.tagName.toLowerCase());
+    expect(middle).toEqual(['.plot-wrap', 'brm-bnwas', '.alert-col']);
     expect(inner.shipState.bnwas).toMatchObject({ mode: 'on', active: true });
     (app.shadowRoot!.querySelector('brm-alert-panel') as HTMLElement).dispatchEvent(new CustomEvent('alert-sound-toggle', { detail: false, bubbles: true, composed: true }));
     await app.updateComplete;

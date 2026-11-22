@@ -14,6 +14,18 @@ export interface BrmMarkDetail {
   polarity?: 'plus' | 'delta';
 }
 
+/**
+ * 類別鈕的英文副標加上軟連字號(U+00AD):320 px 寬的教官站右欄內五個鈕排成一列時,「Communication」等長字可在音節處換行(顯示「-」),
+ * 字級維持 10 px、不以 … 截斷(第二十九輪 L3;離線筆電沒有瀏覽器的斷字字典,不用 CSS hyphens: auto)。匯出與紀錄仍用 brm-markers.ts 的原字
+ */
+const EN_SOFT_HYPHEN: Record<string, string> = {
+  leadership: 'Leader\u00ADship',
+  situationalAwareness: 'Situ\u00ADational aware\u00ADness',
+  communication: 'Commu\u00ADnica\u00ADtion',
+  teamwork: 'Team\u00ADwork',
+  decisionMaking: 'Deci\u00ADsion making',
+};
+
 @customElement('brm-marker-bar')
 export class BrmMarkerBar extends LitElement {
   static override styles = [
@@ -56,6 +68,7 @@ export class BrmMarkerBar extends LitElement {
         font-size: 10px;
         color: var(--ob-text-muted);
         font-weight: 400;
+        text-align: center;
       }
       .note {
         display: flex;
@@ -94,17 +107,18 @@ export class BrmMarkerBar extends LitElement {
         padding: 0 6px;
         font-size: 11px;
       }
-      /* 窄欄(< 340 px):英文副標縮到 9 px、鈕的左右內距與間距縮小,五個類別鈕留在面板內(「Communication」不被擠出欄外) */
+      /* 窄欄(< 340 px):鈕的左右內距與間距縮小(字級與鈕高不變),英文副標在空白與軟連字號處換行,五個類別鈕在 320 px 寬的欄內排成一列;
+         仍放不下時(字型較寬等)換到第二列,不撐出面板、不裁掉「Communication」 */
       @container (max-width: 340px) {
         .buttons {
+          display: flex;
+          flex-wrap: wrap;
           gap: 3px;
         }
+        /* 基準寬 0、下限為內容的最小寬度:依「換行後的最小寬度」決定一列放幾個(英文副標可在空白處換行) */
         .buttons button {
+          flex: 1 1 0;
           padding: 6px 1px;
-        }
-        .buttons .key {
-          font-size: 9px;
-          letter-spacing: -0.02em;
         }
       }
       /* 完整教官站右欄:面板取自然高度,標記清單以 --brm-marker-list-max 限高(超過時清單自己捲動);未設定時吃面板的剩餘高度 */
@@ -148,7 +162,7 @@ export class BrmMarkerBar extends LitElement {
         <div class="buttons" role="group" aria-label="BRM 快速標記">
           ${BRM_CATEGORIES.map(
             (c) => html`<button class="mark" data-category=${c.id} title=${c.elements} @click=${() => this.mark(c.id)}>
-              <span>${c.label}</span><span class="key">${c.key} · ${c.en}</span>
+              <span>${c.label}</span><span class="key">${c.key} · ${EN_SOFT_HYPHEN[c.id] ?? c.en}</span>
             </button>`,
           )}
         </div>
