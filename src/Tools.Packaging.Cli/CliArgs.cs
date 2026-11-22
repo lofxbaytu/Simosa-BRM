@@ -10,7 +10,7 @@ public sealed class CliArgs
     /// <summary>simosa-pkg 所有的布林旗標</summary>
     public static readonly IReadOnlySet<string> BooleanFlags = new HashSet<string>(StringComparer.Ordinal)
     {
-        "all", "allow-unverified", "enroll-device", "force", "json", "no-pull", "no-report", "overwrite", "pem", "help",
+        "all", "allow-unverified", "enroll-device", "force", "installed", "json", "no-pull", "no-report", "overwrite", "pem", "help",
     };
 
     private readonly Dictionary<string, List<string>> _opts = new(StringComparer.Ordinal);

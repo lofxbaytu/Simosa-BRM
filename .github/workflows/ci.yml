@@ -216,6 +216,10 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
         shell: cmd
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage instructor
+      - name: 重新安裝(升級 / 修復:程式目錄殘留檔清除、資料保留、安裝模式核對通過)
+        if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage reinstall
       - name: 靜默解除安裝(程式移除;紀錄、設定、瀏覽器端資料保留)
         if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
         shell: cmd

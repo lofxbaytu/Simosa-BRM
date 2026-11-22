@@ -51,6 +51,7 @@ public sealed class CliApp
           apply <檔.sbupd> [--root <安裝目錄>] [--operator <操作者>] [--allow-unverified]
           rollback [--root <安裝目錄>] [--operator <操作者>]
           status [--root <安裝目錄>] [--json]
+          verify-install [--root <安裝目錄>] [--json] [--max-items <N>]   (程式檔完整性核對;同 release verify --dir <安裝目錄> --installed)
           device init --ship <船舶ID> [--device-id <ID>] [--root] [--overwrite] [--pem]
           device show [--root]
           records pack|list [--root] [--media-max-mb <MB>]   (pack:錄影 media/*.webm 超過上限者只放旁檔並標 omitted;預設 packaging.json mediaMaxMb=2048)
@@ -65,7 +66,10 @@ public sealed class CliApp
         發行版(tools/build-release.*;規劃書第 5.4–5.5 節)
           release manifest --dir <發行目錄> --version <版本> [--git <版次>] [--branch <分支>] [--runtime win-x64|linux-x64]
                            [--component <名稱>=<版本>[=<相對路徑>[=<狀態>]]]... [--note <註記>]...
-          release verify --dir <發行目錄>
+          release verify --dir <發行目錄> [--json]                      (安裝前:目錄內容須與 manifest.json 完全相同)
+          release verify --dir <安裝根目錄> --installed [--json] [--max-items <N>]
+                           (安裝後/使用中:manifest.json 疊上更新包覆蓋清單 state/installed-files.json;執行期資料不算多出、
+                            本機修改的 config\ 設定只列提醒;程式/資料檔缺少或雜湊不符、app\ 內多出檔案為錯誤;每類預設列前 10 筆)
         直連同步與隨身碟備援
           serve [--root] [--listen <直連 IP>] [--port 7300]                            (船上筆電)
           sync --ship <IP|船舶ID> (--key | --cert) [--push <檔.sbupd>]... [--store] [--port 7300]
@@ -101,6 +105,7 @@ public sealed class CliApp
                 "apply" => Apply(a),
                 "rollback" => Rollback(a),
                 "status" => Status(a),
+                "verify-install" => VerifyInstalled(a.Get("root") ?? a.Get("dir") ?? InstallLayout.DefaultRoot(), a),
                 "device" => Device(a),
                 "records" => RecordsCmd(a),
                 "store" => Store(a),
@@ -434,6 +439,8 @@ public sealed class CliApp
         foreach (var d in st.SmsDocuments) _out.WriteLine($"  SMS {d.DocumentId} 第 {d.Revision} 版(核准人 {d.ApprovedBy})");
         _out.WriteLine($"信任金鑰:{string.Join("、", st.TrustedKeys.Select(k => $"{k.Name}({TrustedKey.RoleLabel(k.Role)})"))}");
         _out.WriteLine($"待回傳紀錄包 {st.OutstandingRecordPackages} 個;訪船 #{st.VisitSeq};{(st.RollbackAvailable ? "可回復上一版" : "無上一版")}");
+        // 程式檔完整性不在 status 內做(逐檔 SHA-256 太慢):指向安裝模式核對(規劃書第 5.5 節;packaging-sync.md 第 5.1 節)
+        _out.WriteLine("程式檔完整性核對(逐檔 SHA-256,需一些時間):simosa-pkg verify-install(同 release verify --dir <安裝根目錄> --installed)");
         // 環境版次(作業系統 / .NET / WebView2 Runtime;規劃書第 5.5 節兩船版次清單):同步後寫進教官端 fleet-versions.json
         if (st.Environment is { } env) _out.WriteLine($"環境:{env.Describe()}");
         foreach (var w in st.Warnings) _err.WriteLine($"警告:{w}");
@@ -588,17 +595,44 @@ public sealed class CliApp
             }
             case "verify":
             {
+                if (a.Flag("installed")) return VerifyInstalled(dir, a);
                 var v = ReleaseManifestBuilder.Verify(dir);
+                // 使用中的安裝根目錄(有 state\、build\records…)以一般模式核對時,執行期資料與本機設定都會被列為不符:提示改用 --installed(不改結束碼)
+                var hint = InstalledVerifier.LooksInstalled(dir) is { } sign
+                    ? $"這個目錄看起來是使用中的安裝根目錄(有 {sign}):執行期資料、本機設定與更新包換過的檔案在這個模式都會列為不符;安裝後請改用 release verify --dir <安裝根目錄> --installed"
+                    : null;
+                if (a.Flag("json"))
+                {
+                    _out.WriteLine(PackageJson.ToText(new
+                    {
+                        format = "simosa-release-verify/1", mode = "release", ok = v.Ok, dir = Path.GetFullPath(dir),
+                        version = v.Manifest?.Version, gitRevision = v.Manifest?.GitRevision, runtime = v.Manifest?.Runtime, files = v.Manifest?.FileCount,
+                        @checked = v.Checked, errors = v.Errors, warnings = v.Warnings, hint,
+                    }));
+                    return v.Ok ? 0 : 1;
+                }
                 if (v.Manifest is { } m)
                     _out.WriteLine($"發行清單:版本 {m.Version}{(m.GitRevision is { } g ? $",git {KeyFiles.Short(g)}" : "")},{m.Runtime ?? "(未標示執行階段)"},建置於 {m.BuiltUtc:yyyy-MM-dd HH:mm}Z,{m.FileCount} 個檔案");
                 foreach (var w in v.Warnings) _err.WriteLine($"警告:{w}");
                 foreach (var e in v.Errors) _err.WriteLine($"  - {e}");
                 (v.Ok ? _out : _err).WriteLine(v.Ok ? $"核對通過({v.Checked} 個檔案)" : $"核對失敗({v.Errors.Count} 個問題)");
+                if (hint is not null) _err.WriteLine($"提示:{hint}");
                 return v.Ok ? 0 : 1;
             }
             default:
                 throw new CliUsageException($"未知的 release 子指令:{sub}");
         }
+    }
+
+    /// <summary>
+    /// 安裝模式核對(release verify --installed 與 verify-install 共用;<see cref="InstalledVerifier"/>):結束碼 0 = 沒有錯誤(可有提醒)、1 = 有錯誤。
+    /// </summary>
+    private int VerifyInstalled(string root, CliArgs a)
+    {
+        var rep = InstalledVerifier.Verify(root);
+        if (a.Flag("json")) _out.WriteLine(PackageJson.ToText(rep));
+        else InstalledVerifier.Write(rep, _out, _err, a.Int("max-items", 10));
+        return rep.Ok ? 0 : 1;
     }
 
     // ── 同步 ──────────────────────────────────────────────

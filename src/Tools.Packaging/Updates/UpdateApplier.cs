@@ -19,6 +19,8 @@ public sealed class UpdateApplyOptions
     public Action<string>? AfterComponentSwap { get; init; }
     /// <summary>測試掛勾:提交步驟(上一版移入 state/previous)各階段前呼叫(move-previous、delete-stale;丟出例外以模擬檔案鎖定)</summary>
     public Action<string>? CommitStep { get; init; }
+    /// <summary>測試掛勾:元件替換完成後、寫入狀態檔之前呼叫(installed-files、installed;丟出例外以模擬狀態檔寫入失敗 → 須整體回復)</summary>
+    public Action<string>? StateStep { get; init; }
 }
 
 /// <summary>套用結果(同步訊息 updateResult 與 CLI 輸出)。</summary>
@@ -55,7 +57,8 @@ public sealed class PreviousMeta
 /// 船上套用更新包(規劃書第 5.5 節):驗證(簽章、信任清單、雜湊、版本)→ 解壓到 state/staging 並重算雜湊 → 套用前檢查
 /// (參數集可載入、情境以新參數集可載入且無錯誤、信任清單變更後仍有備援金鑰)→ 每個受影響的頂層元件(app/、data/、config/)
 /// 以「複製現行 + 覆蓋新檔」建立新目錄,再以目錄改名原子替換;舊目錄移到 state/previous/ 供 rollback(保留一層)
-/// → 更新 installed.json → 稽核紀錄。任何一步失敗都完整回復原狀。
+/// → 更新覆蓋清單 installed-files.json(更新包寫入/刪除的路徑與雜湊;安裝模式核對 release verify --installed 用)與 installed.json
+/// → 稽核紀錄。任何一步失敗都完整回復原狀。
 /// </summary>
 public sealed class UpdateApplier
 {
@@ -188,9 +191,13 @@ public sealed class UpdateApplier
                 }
             }
 
+            // 3b. 覆蓋清單的新內容(state/installed-files.json;此時只在記憶體內組好,尚未變更安裝目錄 — 失敗走「未變更」)
+            var installedFiles = BuildInstalledFiles(installed, m, removePaths, result);
+
             // 4. 原子替換(目錄改名);失敗時逐一回復
             Directory.CreateDirectory(pendingPrev);
             var attempted = new List<string>();
+            var installedFilesReplaced = false;
             try
             {
                 foreach (var comp in components)
@@ -206,12 +213,22 @@ public sealed class UpdateApplier
                     ReplacedByPackageId = m.PackageId, ReplacedByVersion = m.Version, ReplacedByKind = m.Kind, CreatedUtc = Now, Components = existed,
                 });
                 if (File.Exists(_layout.InstalledStatePath)) File.Copy(_layout.InstalledStatePath, Path.Combine(pendingPrev, "installed.json"), overwrite: true);
+                // 覆蓋清單與 installed.json 同在提交點之前寫入(先覆蓋清單、後 installed.json):任何一個寫不進去都整體回復,
+                // 更新包視同未套用、可原包重試。選這個順序而不是「提交後只記警告」的理由:同一版本不能重複套用,
+                // 提交後才發現清單寫不進去就再也補不回來,該更新包的前綴會長期停在「無法核對」;寫入失敗多半是 state\ 所在磁碟的問題,
+                // installed.json 也會寫不進去。套用前的清單先存進 previous.pending(rollback 與下方的回復都用它還原;原本沒有就沒有)。
+                if (File.Exists(_layout.InstalledFilesPath)) File.Copy(_layout.InstalledFilesPath, Path.Combine(pendingPrev, InstalledFiles.FileName), overwrite: true);
+                options.StateStep?.Invoke("installed-files");
+                installedFilesReplaced = true;   // Save 中途失敗也可能已換掉檔案:一律還原
+                installedFiles.Save(_layout.InstalledFilesPath);
+                options.StateStep?.Invoke("installed");
                 UpdateInstalled(installed, m, v);
                 installed.Save(_layout.InstalledStatePath);
             }
             catch (Exception ex)
             {
                 var restoreErrors = Restore(attempted, existed, pendingPrev);
+                if (installedFilesReplaced) restoreErrors.AddRange(RestoreInstalledFiles(pendingPrev));
                 result.RolledBack = true;
                 result.Errors.Add($"套用中途失敗,已回復原狀:{ex.Message}");
                 result.Errors.AddRange(restoreErrors);
@@ -325,6 +342,40 @@ public sealed class UpdateApplier
     {
         if (!Directory.Exists(_layout.StateDir)) return;
         foreach (var d in Directory.EnumerateDirectories(_layout.StateDir, "previous.stale-*")) TryDelete(d);
+    }
+
+    /// <summary>
+    /// 組出套用本更新包之後的覆蓋清單(不寫檔):現有清單先對齊 installed.json 與目前的發行清單(<see cref="InstalledFiles.Reconcile"/>:
+    /// 重新安裝過發行版 → 以新清單為準;舊安裝或清單遺失 → 先前的更新包列為未記錄;對不上 → 列為未記錄;
+    /// 在目前發行版建置之前套用的更新包已被安裝覆蓋,不列入),再記入本更新包寫入與刪除的路徑。
+    /// </summary>
+    private InstalledFiles BuildInstalledFiles(InstalledState installed, UpdateManifest m, List<string> removePaths, UpdateApplyResult result)
+    {
+        var existing = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out var loadError);
+        if (loadError is not null) result.Warnings.Add($"覆蓋清單 state/{InstalledFiles.FileName} 無法讀取,已重新建立(先前更新包的檔案在安裝模式核對時列為無法核對):{loadError}");
+        var baseline = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths);
+        var files = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, InstalledPaths.DefaultComparison);
+        files.Record(m, removePaths, Now, InstalledPaths.DefaultComparison);
+        return files;
+    }
+
+    /// <summary>套用中途失敗:把覆蓋清單還原成套用前(previous.pending 內的複本;原本沒有就刪除)。</summary>
+    private List<string> RestoreInstalledFiles(string pendingPrev)
+    {
+        var errors = new List<string>();
+        try
+        {
+            var saved = Path.Combine(pendingPrev, InstalledFiles.FileName);
+            if (File.Exists(saved)) File.Copy(saved, _layout.InstalledFilesPath, overwrite: true);
+            else if (File.Exists(_layout.InstalledFilesPath)) File.Delete(_layout.InstalledFilesPath);
+            var tmp = _layout.InstalledFilesPath + ".tmp";
+            if (File.Exists(tmp)) File.Delete(tmp);
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"回復覆蓋清單 state/{InstalledFiles.FileName} 失敗:{ex.Message}");
+        }
+        return errors;
     }
 
     private List<string> Restore(List<string> attempted, Dictionary<string, bool> existed, string pendingPrev)
@@ -576,6 +627,18 @@ public sealed class UpdateApplier
         var undone = restored.History.FirstOrDefault(h => h.PackageId == meta.ReplacedByPackageId);
         if (undone is not null) undone.RolledBack = true;
         restored.Save(_layout.InstalledStatePath);
+        // 覆蓋清單也回到套用前(state/previous 內的複本;套用前沒有清單則回復後也沒有)。元件與 installed.json 已回復,
+        // 這一步失敗只記警告:清單與 installed.json 對不上時,安裝模式核對會把相關前綴列為「無法核對」,不會誤判
+        try
+        {
+            var prevFiles = Path.Combine(_layout.PreviousDir, InstalledFiles.FileName);
+            if (File.Exists(prevFiles)) File.Copy(prevFiles, _layout.InstalledFilesPath, overwrite: true);
+            else if (File.Exists(_layout.InstalledFilesPath)) File.Delete(_layout.InstalledFilesPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            result.Warnings.Add($"已回復,但覆蓋清單 state/{InstalledFiles.FileName} 無法還原({ex.Message});release verify --installed 會把相關路徑列為無法核對");
+        }
         PackagePaths.DeleteDirectory(discard);
         PackagePaths.DeleteDirectory(_layout.PreviousDir);
         result.Ok = true;

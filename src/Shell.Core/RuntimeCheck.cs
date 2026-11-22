@@ -39,7 +39,8 @@ public static class RuntimeCheck
         {
             return new RuntimeCheckResult(RuntimeStatus.LoaderMissing, null,
                 "外殼程式缺少 WebView2Loader.dll(發行版 app\\shell\\ 不完整)。\n" +
-                "請以 manifest.json 重新核對發行版(simosa-pkg release verify --dir <安裝根目錄>)或重新複製 app\\shell\\;" +
+                // 使用中的安裝根目錄要用安裝模式核對(--installed:執行期資料不算多出、更新包換過的檔案以覆蓋清單核對;packaging-sync.md 第 5.1 節)
+                "請核對安裝的程式檔(在安裝根目錄執行 dotnet tools\\updater\\simosa-pkg.dll release verify --dir . --installed),依其「下一步」重新安裝或重新複製 app\\shell\\;" +
                 $"說明見 {DocsReference}。\n\n錯誤:{error!.Message}");
         }
 

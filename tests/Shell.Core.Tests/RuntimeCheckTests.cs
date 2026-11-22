@@ -48,7 +48,9 @@ public class RuntimeCheckTests
         var r = RuntimeCheck.Evaluate(null, new DllNotFoundException("WebView2Loader.dll"), Root);
         Assert.Equal(RuntimeStatus.LoaderMissing, r.Status);
         Assert.Contains("WebView2Loader.dll", r.Message);
-        Assert.Contains("release verify", r.Message);
+        // 外殼在使用中的安裝根目錄執行:指令須是安裝模式核對(一般模式會把執行期資料與本機設定都列為不符)
+        Assert.Contains("release verify --dir . --installed", r.Message);
+        Assert.Contains("tools\\updater\\simosa-pkg.dll", r.Message);
     }
 
     [Fact]

@@ -6,7 +6,8 @@ namespace SimosaBRM.Packaging.Release;
 /// <summary>
 /// 發行版清單 <c>manifest.json</c>(規劃書第 5.4–5.5 節、第 12.1 節 M4 交付「安裝程式」;tools/build-release.* 產生):
 /// 記錄版本、git 版次、建置平台、各元件版本與發行目錄內每一個檔案的 SHA-256 與大小,供安裝前核對
-/// (<c>simosa-pkg release verify</c>)與日後比對船上版次。清單本身不簽章;正式派送時以 <c>simosa-pkg pack</c>
+/// (<c>simosa-pkg release verify</c>)、安裝後與使用中的完整性核對(<c>release verify --installed</c>,疊上更新包覆蓋清單
+/// state/installed-files.json)與日後比對船上版次。清單本身不簽章;正式派送時以 <c>simosa-pkg pack</c>
 /// 把 app/ 包成簽章更新包(.sbupd),簽章涵蓋每檔雜湊(docs/design/packaging-sync.md 第 3.1 節)。
 /// </summary>
 public sealed class ReleaseManifest
@@ -63,6 +64,8 @@ public sealed class ReleaseVerification
 
 /// <summary>
 /// 產生與核對發行清單:掃描目錄(不含 manifest.json 與暫存檔)、每檔 SHA-256;核對時檔案缺少、雜湊/大小不符、多出的檔案都列為錯誤。
+/// 這是「剛複製好的發行版」的核對(安裝前);使用中的安裝根目錄有執行期資料、本機設定與更新包換過的檔案,
+/// 改用 <see cref="InstalledVerifier"/>(<c>simosa-pkg release verify --installed</c>)。
 /// </summary>
 public static class ReleaseManifestBuilder
 {
@@ -74,7 +77,7 @@ public static class ReleaseManifestBuilder
     /// </summary>
     private static readonly Regex UninstallerFile = new(@"^unins\d{3}\.(exe|dat|msg)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    private static bool IsSkipped(string file)
+    internal static bool IsSkipped(string file)
     {
         var name = Path.GetFileName(file);
         return Skip.Contains(name) || UninstallerFile.IsMatch(name);

@@ -30,6 +30,18 @@ public sealed class InstalledState
     public void Save(string path) => PackageJson.SaveAtomic(path, this);
 
     public bool HasApplied(string packageId) => History.Any(h => h.PackageId == packageId);
+
+    /// <summary>
+    /// 目前仍在套用狀態的更新包(history 中未被 rollback 者,新到舊);installed.json 有現行更新包而 history 沒有時補上。
+    /// 覆蓋清單 state/installed-files.json 的一致性比對用(<see cref="InstalledFiles.Reconcile"/>)。
+    /// </summary>
+    public List<AppliedPackage> AppliedPackages()
+    {
+        var list = (History ?? new()).Where(h => h is not null && !h.RolledBack).ToList();
+        if (PackageId is { } id && list.All(h => h.PackageId != id))
+            list.Insert(0, new AppliedPackage { PackageId = id, Version = Version ?? "", Kind = Kind ?? "", AppliedUtc = AppliedUtc ?? default });
+        return list;
+    }
 }
 
 public sealed class InstalledSigner

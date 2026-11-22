@@ -25,7 +25,7 @@
 | 捷徑 | 開始功能表「Simosa BRM」與(可選)桌面:操船台(`start-ship-laptop.ps1 -Shell`,WebView2 外殼)、教官站(`start-instructor-laptop.ps1 -CheckWifi`)、停止(`stop-all.ps1`)、安裝與啟動說明、解除安裝;皆以 `powershell.exe -ExecutionPolicy Bypass -File` 啟動 |
 | 防火牆(可選,預設勾選) | 入站規則「Simosa BRM …」:TCP 8765、8766、8767、8768、8080、7300,UDP 7001、60001、10110–10112;`remoteip=192.168.77.0/24`、`profile=any`(與安裝文件第 2.2 節相同);解除安裝時移除 |
 | 執行階段 | `tools\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe` 存在且登錄檔無 Runtime 時 `/silent /install`;`tools\dotnet\dotnet-runtime-8*-win-x64.exe`、`windowsdesktop-runtime-8*-win-x64.exe` 存在且缺對應執行階段時 `/install /quiet /norestart`;仍缺者在結尾列出 |
-| 安裝後 | 可選執行 `start-ship-laptop.ps1 -CheckOnly`(列出找到的元件)與 `simosa-pkg release verify --dir .`(清單核對;解除安裝檔 `tools\uninstall\unins000.*` 會被 verify 略過) |
+| 安裝後 | 可選執行 `start-ship-laptop.ps1 -CheckOnly`(列出找到的元件)與 `simosa-pkg release verify --dir . --installed`(安裝模式核對:`manifest.json` 疊上更新包覆蓋清單 `state\installed-files.json`;`build\`、`state\`、`config\device\` 等執行期資料與解除安裝檔 `tools\uninstall\unins000.*` 不算多出,修改過的 `config\*.json` 只列提醒,程式/資料檔缺少或雜湊不符、`app\` 內多出檔案為錯誤並說明下一步;使用中隨時可再執行,短指令 `simosa-pkg verify-install`。不加 `--installed` 的一般模式只適用剛複製好的發行版) |
 | 解除安裝 | 移除安裝程式放進去的檔案與 `build\logs`、`build\tmp`、防火牆規則;**保留** `build\records`、`data\records`、`state\`、`store\`、`config\`,以及瀏覽器端資料 `build\webview2`、`build\browser` 與 `build\downloads`(結尾提示路徑) |
 | 不寫 C:\ | 解除安裝檔在 `{app}\tools\uninstall\`;登錄只寫 HKLM 的解除安裝資訊;開始功能表與桌面捷徑(`.lnk`)在 Windows 的公用位置(`C:\ProgramData\…\Start Menu`、公用桌面),屬應用程式的一部分;安裝過程的暫存檔用 Windows 的 `%TEMP%`(結束即刪) |
 

@@ -12,11 +12,13 @@ namespace SimosaBRM.Packaging.Common;
 /// &lt;root&gt;/config/packaging.json     角色、船舶 ID、直連 IP/埠、保留上限
 /// &lt;root&gt;/build/records/            練習紀錄 *.jsonl(SimCore RecordWriter 輸出)
 /// &lt;root&gt;/state/installed.json      現行各元件版次、曾套用最高版本
+/// &lt;root&gt;/state/installed-files.json 更新包覆蓋清單:更新包寫入/刪除的路徑與雜湊(安裝模式核對 release verify --installed 用;與 installed.json 同時寫入、rollback 一起還原)
 /// &lt;root&gt;/state/audit.jsonl         稽核紀錄
 /// &lt;root&gt;/state/previous/           上一版元件(rollback 用,只保留一層)
 /// &lt;root&gt;/state/outbox/*.sbrec      已簽章、待回傳的紀錄包
 /// &lt;root&gt;/state/records-ledger.json 紀錄包帳冊(打包/取回/備份/刪除)
 /// </code>
+/// 哪些位置是執行期資料(安裝模式核對時不算「清單沒有的檔案」)、哪些是程式目錄,集中定義在 <see cref="InstalledPaths"/>。
 /// </summary>
 public sealed class InstallLayout
 {
@@ -35,6 +37,8 @@ public sealed class InstallLayout
     public string ConfigPath => Path.Combine(ConfigDir, "packaging.json");
     public string StateDir => Path.Combine(Root, "state");
     public string InstalledStatePath => Path.Combine(StateDir, "installed.json");
+    /// <summary>更新包覆蓋清單(Updates.InstalledFiles;檔名同 InstalledFiles.FileName)</summary>
+    public string InstalledFilesPath => Path.Combine(StateDir, "installed-files.json");
     public string AuditPath => Path.Combine(StateDir, "audit.jsonl");
     public string StagingDir => Path.Combine(StateDir, "staging");
     public string PreviousDir => Path.Combine(StateDir, "previous");

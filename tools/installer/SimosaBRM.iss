@@ -3,7 +3,8 @@
 ; 編譯(由 tools\build-release.ps1 -Installer 呼叫;也可手動):
 ;   ISCC.exe /DAppVersion=<版本> /DSourceDir=<build\release\<版本>> /DOutputDir=<build\release\installer> tools\installer\SimosaBRM.iss
 ;   → <OutputDir>\SimosaBRM-Setup-<版本>.exe(/DDirectLinkSubnet=192.168.77.0/24 可改防火牆允許的直連網段)
-; 安裝內容 = 發行版目錄(含 manifest.json;tools\build-release.* 產生並 release verify 通過者)原樣複製到安裝根目錄:
+; 安裝內容 = 發行版目錄(含 manifest.json;tools\build-release.* 產生並 release verify 通過者)原樣複製到安裝根目錄
+; (安裝後與使用中的核對用 simosa-pkg release verify --dir . --installed:執行期資料不算多出、本機修改的 config\ 只列提醒):
 ;   預設 D:\Simosa BRM,沒有 D: 時 G:\Simosa BRM(可改;不接受使用者資料夾 C:\Users\… 與 Program Files 之下:程式與紀錄、log、設定全部留在安裝根目錄內,不寫 C:\ 使用者資料)。
 ;   裝在系統磁碟(通常 C:)須明確確認(須經訓練負責人同意;靜默安裝加 /ALLOWSYSTEMDRIVE=1):守則為本機資料放 D: 或 G:。
 ; 另做:開始功能表/桌面捷徑(操船台外殼、教官站、停止)、Windows 防火牆入站規則(僅直連私有網段;全部設定檔,因直連無 DHCP 會被判為公用網路)、
@@ -55,7 +56,7 @@ OutputBaseFilename=SimosaBRM-Setup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; 解除安裝檔放安裝根目錄的 tools\uninstall\(不寫 C:\);simosa-pkg release verify 會略過 unins*.exe/.dat
+; 解除安裝檔放安裝根目錄的 tools\uninstall\(不寫 C:\);simosa-pkg release verify(一般與 --installed 模式)會略過 unins*.exe/.dat
 UninstallFilesDir={app}\tools\uninstall
 UninstallDisplayName={#AppName} {#AppVersion}
 UninstallDisplayIcon={sys}\WindowsPowerShell\v1.0\powershell.exe
@@ -116,7 +117,7 @@ Name: "{autodesktop}\停止 Simosa BRM"; Filename: "{sys}\WindowsPowerShell\v1.0
 Filename: "{app}\{#WebView2Installer}"; Parameters: "/silent /install"; StatusMsg: "安裝 WebView2 Runtime(離線)…"; Tasks: webview2; Check: not WebView2RuntimeInstalled; Flags: waituntilterminated
 #endif
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoExit -ExecutionPolicy Bypass -File ""{app}\app\launch\start-ship-laptop.ps1"" -CheckOnly"; WorkingDir: "{app}"; Description: "檢查找到的元件(start-ship-laptop.ps1 -CheckOnly;不啟動)"; Flags: postinstall nowait skipifsilent unchecked
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoExit -ExecutionPolicy Bypass -Command ""Set-Location -LiteralPath '{app}'; dotnet tools\updater\simosa-pkg.dll release verify --dir ."""; WorkingDir: "{app}"; Description: "核對發行清單(simosa-pkg release verify;第 2.4 節)"; Flags: postinstall nowait skipifsilent unchecked
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoExit -ExecutionPolicy Bypass -Command ""Set-Location -LiteralPath '{app}'; dotnet tools\updater\simosa-pkg.dll release verify --dir . --installed"""; WorkingDir: "{app}"; Description: "核對安裝的程式檔(simosa-pkg release verify --installed;第 2.4 節)"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]
 ; 只清 log 與暫存;練習紀錄(build\records、data\records)、state\、store\、config\ 保留(解除安裝後提示路徑)。

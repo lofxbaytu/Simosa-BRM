@@ -5,19 +5,21 @@
   容器(Linux)無法驗證的 Windows 行為,在這裡以內建的 Windows PowerShell 5.1 實際執行:
     build     :tools\build-release.ps1 -Installer -SkipGodot(完整發行組裝 + Inno Setup 編譯安裝程式)
     install   :靜默安裝 — (a) 指定系統磁碟而未帶 /ALLOWSYSTEMDRIVE=1 時必須不安裝(也不可卡住);(b) 不指定位置時裝到預設位置(D: → G: → 系統磁碟);
-               安裝後核對檔案、開始功能表捷徑、防火牆規則、start-ship-laptop.ps1 -CheckOnly、simosa-pkg release verify
+               安裝後核對檔案、開始功能表捷徑、防火牆規則、start-ship-laptop.ps1 -CheckOnly、simosa-pkg release verify(一般與 --installed)
     launch    :從安裝位置啟動 — (a) -Duration 短跑(核心 50 Hz、紀錄 footer);(b) -NoWait + 專屬 Edge 設定檔(各埠、網頁 200、Edge 設定檔與下載位置)
                → stop-all.ps1(核心經停止檔寫完 footer、Edge 視窗關閉)→ check-local-data.ps1(安裝版模式)
     shell     :-Shell(WebView2 外殼)啟動 → 使用者資料夾在 build\webview2 → stop-all.ps1 關閉
     packaging :simosa-pkg(安裝位置):信任金鑰、裝置金鑰(Windows 以 DPAPI 保護)、status、更新包 verify / apply / rollback(app\ 的檔案替換)、
                紀錄包 records pack / inspect、教官端 store import、直連同步 serve + sync(本機回送)
     instructor:start-instructor-laptop.ps1 -Standalone(本機核心 + 雷達 + 網頁 + 專屬 Edge 設定檔)→ stop-all.ps1
+    reinstall :在使用中的安裝位置上以同一個安裝程式重新安裝(升級 / 修復的情境):程式目錄內殘留的舊檔被清除、
+               設定 / 紀錄 / 金鑰 / 帳冊保留、安裝模式核對由失敗變通過
     uninstall :靜默解除安裝 → app\ 移除、紀錄 / 設定 / 瀏覽器端資料保留、捷徑與防火牆規則移除
     summary   :把各階段的結果(build\tmp\windows-e2e\results-*.json)印成一張總表(CI log 的最後一段)
   每個檢查獨立記錄 PASS / FAIL / WARN / INFO,不在第一個失敗就中止(一次 CI 執行取得最多資訊);最後有 FAIL 即結束碼 1。
   WARN:尚未確定 Windows 實際行為的項目(先觀察,不讓工作失敗)。所有暫存與輸出在 <專案>\build\tmp\windows-e2e\。
 .PARAMETER Stage
-  要執行的階段,逗號分隔(build,install,launch,shell,packaging,instructor,uninstall,summary);all = 全部依序。
+  要執行的階段,逗號分隔(build,install,launch,shell,packaging,instructor,reinstall,uninstall,summary);all = 全部依序。
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage build,install,launch,shell,uninstall
 #>
@@ -28,7 +30,7 @@ param(
 )
 # -File 呼叫時「build,install」是單一字串(不會被解析成陣列),所以自行以逗號 / 空白切開
 $Stage = @("$Stage" -split '[,;\s]+' | Where-Object { $_ })
-$validStages = @('build', 'install', 'launch', 'shell', 'packaging', 'instructor', 'uninstall', 'summary', 'all')
+$validStages = @('build', 'install', 'launch', 'shell', 'packaging', 'instructor', 'reinstall', 'uninstall', 'summary', 'all')
 foreach ($s in $Stage) { if ($validStages -notcontains $s) { throw "未知的階段 $s(可用:$($validStages -join '、'))" } }
 $ErrorActionPreference = 'Continue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -38,7 +40,7 @@ $work = Join-Path $root 'build\tmp\windows-e2e'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $stateFile = Join-Path $work 'state.json'
 $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-if ($Stage -contains 'all') { $Stage = @('build', 'install', 'launch', 'shell', 'packaging', 'instructor', 'uninstall', 'summary') }
+if ($Stage -contains 'all') { $Stage = @('build', 'install', 'launch', 'shell', 'packaging', 'instructor', 'reinstall', 'uninstall', 'summary') }
 
 $script:results = New-Object System.Collections.Generic.List[object]
 function Add-Result([string]$Level, [string]$Name, [string]$Detail = '') {
@@ -285,6 +287,9 @@ if ($Stage -contains 'install') {
             $rv = Invoke-Proc 'dotnet' @((Join-Path $expected 'tools\updater\simosa-pkg.dll'), 'release', 'verify', '--dir', $expected) 300 $expected
             Show-Tail 'simosa-pkg release verify' $rv.Output 8
             [void](Check 'simosa-pkg release verify(安裝位置)' { if ($rv.ExitCode -ne 0) { throw "結束碼 $($rv.ExitCode)" } })
+            $rvi = Invoke-Proc 'dotnet' @((Join-Path $expected 'tools\updater\simosa-pkg.dll'), 'release', 'verify', '--dir', $expected, '--installed') 300 $expected
+            Show-Tail 'simosa-pkg release verify --installed(剛安裝)' $rvi.Output 10
+            [void](Check '安裝模式核對(release verify --installed):剛安裝好' { if ($rvi.ExitCode -ne 0) { throw "結束碼 $($rvi.ExitCode)" } })
         }
     }
 }
@@ -538,8 +543,41 @@ if ($Stage -contains 'packaging') {
                 [void](Check '套用後 status 顯示版本與可回復' { if ($rs2.ExitCode -ne 0) { throw "結束碼 $($rs2.ExitCode)" }; if ($rs2.Output.IndexOf($version) -lt 0) { throw "輸出沒有版本 $version" } })
                 $rc2 = Invoke-Ps51 (Join-Path $inst 'app\launch\start-ship-laptop.ps1') @('-CheckOnly') 300 $inst
                 [void](Check '套用後 start-ship-laptop.ps1 -CheckOnly' { if ($rc2.ExitCode -ne 0) { throw "結束碼 $($rc2.ExitCode):$($rc2.Output)" } })
-                $rr = Invoke-Pkg @('release', 'verify', '--dir', $inst)
-                [void](Check '套用後 release verify(檔案雜湊與清單相符)' { if ($rr.ExitCode -ne 0) { throw "結束碼 $($rr.ExitCode)" } } -Soft)
+                # 使用中的安裝根目錄要用安裝模式核對(一般模式把執行期資料、改過的設定與更新包替換的檔案都算成不符;run 85–88 都是結束碼 1)
+                $rr = Invoke-Pkg @('release', 'verify', '--dir', $inst, '--installed') 600 14
+                [void](Check '套用更新包後 安裝模式核對通過(執行期資料、信任金鑰、裝置金鑰、更新包覆蓋清單)' {
+                    if ($rr.ExitCode -ne 0) { throw "結束碼 $($rr.ExitCode)" }
+                    if (-not (Test-Path (Join-Path $inst 'state\installed-files.json'))) { throw '套用後沒有 state\installed-files.json(更新包覆蓋清單)' }
+                })
+                $rplain = Invoke-Pkg @('release', 'verify', '--dir', $inst) 600 4
+                [void](Check '一般模式對使用中的安裝根目錄:結束碼非 0 並提示改用 --installed' {
+                    if ($rplain.ExitCode -eq 0) { throw '結束碼 0(預期非 0:目錄內有執行期資料)' }
+                    if ($rplain.Output -notmatch '--installed') { throw '輸出沒有提示 --installed' }
+                } -Soft)
+                # 損毀偵測:把更新包寫入的一個程式檔改掉一個位元組 → 必須結束碼非 0 並指出該檔;還原後恢復通過
+                $victim = Join-Path $inst 'app\launch\stop-all.ps1'
+                $orig = [System.IO.File]::ReadAllBytes($victim)
+                try {
+                    $bad = [byte[]]$orig.Clone(); $bad[$bad.Length - 1] = [byte]($bad[$bad.Length - 1] -bxor 0x20)
+                    [System.IO.File]::WriteAllBytes($victim, $bad)
+                    $rt = Invoke-Pkg @('verify-install', '--root', $inst) 600 14
+                    [void](Check '安裝模式核對抓到被改動的程式檔(app\launch\stop-all.ps1 改一個位元組)' {
+                        if ($rt.ExitCode -eq 0) { throw '結束碼 0(應為非 0)' }
+                        if ($rt.Output -notmatch 'stop-all\.ps1') { throw '輸出沒有指出 stop-all.ps1' }
+                        return "結束碼 $($rt.ExitCode)"
+                    })
+                } finally { [System.IO.File]::WriteAllBytes($victim, $orig) }
+                $stray = Join-Path $inst 'app\simcore\ci-stray.dll'
+                Set-Content -Path $stray -Value 'x' -Encoding ASCII
+                try {
+                    $rs4 = Invoke-Pkg @('verify-install', '--root', $inst) 600 10
+                    [void](Check '安裝模式核對抓到程式目錄內多出的檔案(app\simcore\ci-stray.dll)' {
+                        if ($rs4.ExitCode -eq 0) { throw '結束碼 0(應為非 0)' }
+                        if ($rs4.Output -notmatch 'ci-stray\.dll') { throw '輸出沒有指出 ci-stray.dll' }
+                    })
+                } finally { Remove-Item -LiteralPath $stray -Force -ErrorAction SilentlyContinue }
+                $rok = Invoke-Pkg @('verify-install', '--root', $inst) 600 6
+                [void](Check '還原後 安裝模式核對恢復通過' { if ($rok.ExitCode -ne 0) { throw "結束碼 $($rok.ExitCode)" } })
                 # 第二次套用同一版本應被拒絕(版本須遞增)
                 $ra2 = Invoke-Pkg @('apply', $relPkg, '--root', $inst, '--operator', 'CI') 600 6
                 [void](Check '同一版本再次套用被拒絕(版本須遞增)' { if ($ra2.ExitCode -eq 0) { throw '結束碼 0(應拒絕)' }; return "結束碼 $($ra2.ExitCode)" } -Soft)
@@ -550,6 +588,11 @@ if ($Stage -contains 'packaging') {
                 })
                 $rc3 = Invoke-Ps51 (Join-Path $inst 'app\launch\start-ship-laptop.ps1') @('-CheckOnly') 300 $inst
                 [void](Check '回復後 start-ship-laptop.ps1 -CheckOnly' { if ($rc3.ExitCode -ne 0) { throw "結束碼 $($rc3.ExitCode)" } })
+                $rrb = Invoke-Pkg @('release', 'verify', '--dir', $inst, '--installed') 600 10
+                [void](Check '回復(rollback)後 安裝模式核對通過(覆蓋清單一併回復)' {
+                    if ($rrb.ExitCode -ne 0) { throw "結束碼 $($rrb.ExitCode)" }
+                    if (Test-Path (Join-Path $inst 'state\installed-files.json')) { throw '回復到初始安裝後 state\installed-files.json 仍在' }
+                })
             }
         }
         # 4) 紀錄包:打包(裝置金鑰簽章)→ 檢視 → 教官端匯入
@@ -589,6 +632,8 @@ if ($Stage -contains 'packaging') {
         }
         $rs3 = Invoke-Pkg @('status', '--root', $inst) 300 14
         [void](Check '最後 status' { if ($rs3.ExitCode -ne 0) { throw "結束碼 $($rs3.ExitCode)" } })
+        $rfin = Invoke-Pkg @('verify-install', '--root', $inst) 600 12
+        [void](Check '最後 安裝模式核對(啟動過、外殼跑過、打包與同步過紀錄之後)' { if ($rfin.ExitCode -ne 0) { throw "結束碼 $($rfin.ExitCode)" } })
     }
 }
 
@@ -626,6 +671,56 @@ if ($Stage -contains 'instructor') {
         })
         foreach ($e in @(Get-ProcByCommandLine 'msedge.exe' $profileDir | Where-Object { $_.CommandLine -notmatch '--type=' })) { & taskkill.exe /PID $e.ProcessId /T /F 2>&1 | Out-Null }
         Save-InstalledLogs $inst 'instructor'
+    }
+}
+
+# ======================================================================================================================
+if ($Stage -contains 'reinstall') {
+    Write-Host ''; Write-Host '==== reinstall:在使用中的安裝位置上重新安裝(升級 / 修復)===='
+    $inst = Get-InstallDir
+    $setup = Join-Path $root "build\release\installer\SimosaBRM-Setup-$version.exe"
+    if (-not $inst) { Add-Result 'FAIL' '安裝位置' '找不到(先執行 install 階段)' }
+    elseif (-not (Test-Path $setup)) { Add-Result 'FAIL' '安裝程式存在' "沒有 $setup(先執行 build 階段)" }
+    else {
+        $pkgDll = Join-Path $inst 'tools\updater\simosa-pkg.dll'
+        # 模擬舊版留下的程式檔(Vite 每次建置的資產檔名雜湊都不同;舊更新包新增的檔案)與使用者資料
+        $stale = @('app\web\assets\ci-stale-0000.js', 'app\simcore\ci-stale.dll', 'tools\updater\ci-stale.dll')
+        foreach ($rel in $stale) { Set-Content -Path (Join-Path $inst $rel) -Value 'stale' -Encoding ASCII }
+        $keep = @('build\records\ci-keep.txt', 'data\records\ci-keep.txt', 'state\ci-keep.txt', 'store\ci-keep.txt', 'config\trusted-keys\ci-keep.txt', 'config\device\ci-keep.txt')
+        foreach ($rel in $keep) { $f = Join-Path $inst $rel; New-Item -ItemType Directory -Force -Path (Split-Path $f) | Out-Null; Set-Content -Path $f -Value 'keep' -Encoding ASCII }
+        $cfg = Join-Path $inst 'config\ship-laptop.json'
+        $cfgHash = if (Test-Path $cfg) { (Get-FileHash -Algorithm SHA256 -LiteralPath $cfg).Hash } else { '' }
+        $r0 = Invoke-Proc 'dotnet' @($pkgDll, 'verify-install', '--root', $inst) 600 $inst
+        Show-Tail 'verify-install(重新安裝前,有殘留檔)' $r0.Output 12
+        [void](Check '重新安裝前:安裝模式核對指出程式目錄內多出的檔案' {
+            if ($r0.ExitCode -eq 0) { throw '結束碼 0(應為非 0)' }
+            foreach ($n in @('ci-stale-0000.js', 'ci-stale.dll')) { if ($r0.Output.IndexOf($n) -lt 0) { throw "輸出沒有 $n" } }
+        })
+        $logR = Join-Path $work 'reinstall.log'
+        $rr = Invoke-Proc $setup @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$inst", "/LOG=$logR") 900
+        $ok = Check '重新安裝(同一位置,靜默)結束碼 0' { if ($rr.TimedOut) { throw '逾時' }; if ($rr.ExitCode -ne 0) { throw "結束碼 $($rr.ExitCode)" } }
+        if (-not $ok -and (Test-Path $logR)) { Show-File $logR 40 }
+        [void](Check '重新安裝:程式目錄內殘留的舊檔已清除(安裝程式 [InstallDelete])' {
+            $left = @($stale | Where-Object { Test-Path (Join-Path $inst $_) })
+            if ($left) { throw "仍在:$($left -join '、')" }
+        })
+        [void](Check '重新安裝:程式檔齊全' {
+            foreach ($rel in @('app\simcore\SimosaBRM.SimCore.Host.dll', 'app\launch\start-ship-laptop.ps1', 'app\web\index.html', 'tools\updater\simosa-pkg.dll', 'manifest.json')) {
+                if (-not (Test-Path (Join-Path $inst $rel))) { throw "缺 $rel" }
+            }
+        })
+        [void](Check '重新安裝:設定、紀錄、金鑰、帳冊保留' {
+            $lost = @($keep | Where-Object { -not (Test-Path (Join-Path $inst $_)) })
+            if ($lost) { throw "不見了:$($lost -join '、')" }
+            if ($cfgHash -and (Get-FileHash -Algorithm SHA256 -LiteralPath $cfg).Hash -ne $cfgHash) { throw 'config\ship-laptop.json 被覆寫' }
+            foreach ($rel in @('config\device\device.json', 'config\packaging.json')) { if (-not (Test-Path (Join-Path $inst $rel))) { throw "不見了:$rel" } }
+        })
+        $r1 = Invoke-Proc 'dotnet' @($pkgDll, 'verify-install', '--root', $inst) 600 $inst
+        Show-Tail 'verify-install(重新安裝後)' $r1.Output 12
+        [void](Check '重新安裝後:安裝模式核對通過' { if ($r1.ExitCode -ne 0) { throw "結束碼 $($r1.ExitCode)" } })
+        $rc = Invoke-Ps51 (Join-Path $inst 'app\launch\start-ship-laptop.ps1') @('-CheckOnly') 300 $inst
+        [void](Check '重新安裝後 start-ship-laptop.ps1 -CheckOnly' { if ($rc.ExitCode -ne 0) { throw "結束碼 $($rc.ExitCode):$($rc.Output)" } })
+        foreach ($rel in $keep) { Remove-Item -LiteralPath (Join-Path $inst $rel) -Force -ErrorAction SilentlyContinue }
     }
 }
 
