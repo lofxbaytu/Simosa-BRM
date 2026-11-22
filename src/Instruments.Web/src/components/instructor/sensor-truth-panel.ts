@@ -40,6 +40,12 @@ export class SensorTruthPanel extends LitElement {
       td:first-child {
         text-align: left;
       }
+      /* 項目名稱可換行(至少 5em):數值欄不換行,位置的長座標(例:E05 的「-3583, -3852 m」)讓 1366×768 完整教官站兩欄排法的
+         面板(約 366 px)放不下時由名稱欄讓出寬度,不水平溢出(第二十九輪 L4:只在核心是 E05 時重現) */
+      td:first-child {
+        white-space: normal;
+        min-width: 5em;
+      }
       tr.faulty td {
         color: var(--ob-alarm);
         font-weight: 700;

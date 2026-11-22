@@ -4,6 +4,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { VhfClient, type PlayerLike, type RecorderLike } from '../src/lib/vhf-client.js';
 import type { VhfPanel } from '../src/components/vhf-panel.js';
+import { PTT_NO_MIC_LABEL, PTT_NO_MIC_NO_AUDIO_LABEL, isScrolledToBottom } from '../src/components/vhf-panel.js';
 
 type Updatable = HTMLElement & { updateComplete: Promise<unknown> };
 
@@ -69,7 +70,8 @@ class FakePlayer implements PlayerLike {
   setVolume(): void {}
 }
 
-function makeClient(mic: 'ok' | 'deny' = 'ok', watch: string[] = []): { client: VhfClient; ws: () => FakeWebSocket } {
+/** mic:'ok' 授權、'deny' 按 PTT 時被拒、'none' 沒有麥克風 API(happy-dom 的 navigator 沒有 mediaDevices → unavailable) */
+function makeClient(mic: 'ok' | 'deny' | 'none' = 'ok', watch: string[] = [], playback: 'mse' | 'none' = 'mse'): { client: VhfClient; ws: () => FakeWebSocket } {
   const stream = { getTracks: () => [] } as unknown as MediaStream;
   const client = new VhfClient({
     url: 'ws://test:8767/',
@@ -77,10 +79,10 @@ function makeClient(mic: 'ok' | 'deny' = 'ok', watch: string[] = []): { client: 
     channel: '16',
     watch,
     webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
-    getUserMedia: () => (mic === 'deny' ? Promise.reject(new Error('denied')) : Promise.resolve(stream)),
+    ...(mic === 'none' ? {} : { getUserMedia: () => (mic === 'deny' ? Promise.reject(new Error('denied')) : Promise.resolve(stream)) }),
     recorderFactory: () => new FakeRecorder(),
     playerFactory: () => new FakePlayer(),
-    detectPlayback: () => 'mse',
+    detectPlayback: () => playback,
   });
   return { client, ws: () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1]! };
 }
@@ -335,6 +337,117 @@ describe('<brm-vhf>', () => {
     await settle(el);
     expect(q<HTMLElement>(el, '.hint.mic').classList.contains('warn')).toBe(true);
     el.remove();
+  });
+
+  it('無麥克風(被拒):PTT 停用、鈕上寫「無麥克風 · 只能用文字 / DSC」,完整說明與錯誤在 title;警示列標 on-ptt(壓縮時可隱藏)(第二十九輪 L4)', async () => {
+    const { client, ws } = makeClient('deny');
+    const el = await mount({ client });
+    await joined(el, ws());
+    const ptt = q<HTMLButtonElement>(el, 'button.ptt');
+    expect(ptt.textContent?.trim()).toBe('PTT CH16');
+    expect(ptt.classList.contains('no-mic')).toBe(false);
+    ptt.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    await settle(el);
+    await settle(el);
+    expect(client.mic).toBe('denied');
+    expect(ptt.disabled).toBe(true);
+    expect(ptt.classList.contains('no-mic')).toBe(true);
+    expect(ptt.textContent?.trim()).toBe(PTT_NO_MIC_LABEL);
+    expect(ptt.title).toContain('無麥克風權限:只能以文字通訊');
+    expect(ptt.title).toContain('(Error: denied)');
+    // 警示列:完整文字照常產生(非壓縮時顯示);on-ptt 表示 PTT 鈕上已有短句,壓縮時(--brm-vhf-mic-hint-display: none)不另佔一列
+    const hint = q<HTMLElement>(el, '.hint.mic');
+    expect(hint.classList.contains('warn')).toBe(true);
+    expect(hint.classList.contains('on-ptt')).toBe(true);
+    expect(hint.textContent).toContain('無麥克風權限:只能以文字通訊');
+    // 文字與 DSC 仍可用
+    expect(q<HTMLButtonElement>(el, 'button.distress').disabled).toBe(false);
+    expect(q<HTMLButtonElement>(el, 'button.urgency').disabled).toBe(false);
+    el.remove();
+  });
+
+  it('沒有麥克風 API(unavailable):一開始就停用 PTT 並寫短句;同時無法播放音訊時寫「無麥克風 / 無音訊」', async () => {
+    const { client, ws } = makeClient('none', [], 'none');
+    const el = await mount({ client });
+    expect(client.mic).toBe('unavailable');
+    const ptt = q<HTMLButtonElement>(el, 'button.ptt');
+    // 尚未連線:鈕上仍寫無麥克風,title 註明未連線
+    expect(ptt.textContent?.trim()).toBe(PTT_NO_MIC_NO_AUDIO_LABEL);
+    expect(ptt.title).toMatch(/^未連線;此環境沒有麥克風 API/);
+    await joined(el, ws());
+    expect(ptt.disabled).toBe(true);
+    expect(ptt.textContent?.trim()).toBe(PTT_NO_MIC_NO_AUDIO_LABEL);
+    expect(ptt.title).toContain('此環境沒有麥克風 API');
+    expect(ptt.title).toContain('此環境無法播放音訊,只收文字');
+    expect(q<HTMLElement>(el, '.hint.mic').className).toMatch(/warn.*on-ptt/);
+    el.remove();
+  });
+
+  it('只有無法播放音訊(麥克風尚未授權):警示列不標 on-ptt(壓縮時照常顯示),PTT 可用', async () => {
+    const { client, ws } = makeClient('ok', [], 'none');
+    const el = await mount({ client });
+    await joined(el, ws());
+    const hint = q<HTMLElement>(el, '.hint.mic');
+    expect(hint.classList.contains('warn')).toBe(true);
+    expect(hint.classList.contains('on-ptt')).toBe(false);
+    expect(hint.textContent).toContain('此環境無法播放音訊');
+    expect(q<HTMLButtonElement>(el, 'button.ptt').disabled).toBe(false);
+    expect(q<HTMLButtonElement>(el, 'button.ptt').textContent?.trim()).toBe('PTT CH16');
+    el.remove();
+  });
+
+  it('訊息紀錄列貼底:收到新訊息時捲到最新一則(含第一次);使用者往上捲時不拉回,捲回底部後恢復(第二十九輪 L4)', async () => {
+    const { client, ws } = makeClient();
+    const el = await mount({ client });
+    const log = q<HTMLElement>(el, '.log');
+    // happy-dom 沒有版面:以每則 20 px、可見高度 35 px(壓縮時約兩則)模擬 scrollHeight / clientHeight
+    const ITEM = 20;
+    const VISIBLE = 35;
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, get: () => log.querySelectorAll('.item').length * ITEM });
+    Object.defineProperty(log, 'clientHeight', { configurable: true, get: () => VISIBLE });
+    const bottom = (): number => log.scrollHeight;
+    // 第一次(連線訊息)就捲到底
+    await joined(el, ws());
+    expect(log.querySelectorAll('.item').length).toBe(1);
+    expect(log.scrollTop).toBe(bottom());
+    const rx = async (text: string): Promise<void> => {
+      ws().json({ type: 'vhf', kind: 'text', id: 's2', station: 'VTS', channel: '16', text });
+      await settle(el);
+    };
+    for (let i = 1; i <= 3; i++) await rx(`VTS 呼叫 第 ${i} 則`);
+    expect(log.querySelectorAll('.item').length).toBe(4);
+    expect(log.scrollTop).toBe(bottom());
+    expect(isScrolledToBottom(log)).toBe(true);
+    // 使用者往上捲(看舊訊息):新訊息不把畫面拉回底部
+    log.scrollTop = 0;
+    log.dispatchEvent(new Event('scroll'));
+    await rx('VTS 呼叫 第 4 則');
+    expect(log.scrollTop).toBe(0);
+    // DSC 也一樣不拉回
+    ws().json({ type: 'vhf', kind: 'dsc', id: 's9', station: 'tug', channel: '70', category: 'urgency', text: '' });
+    await settle(el);
+    expect(log.scrollTop).toBe(0);
+    // 捲回底部(容差 4 px 內)後恢復貼底
+    log.scrollTop = bottom() - VISIBLE - 3;
+    log.dispatchEvent(new Event('scroll'));
+    await rx('VTS 呼叫 第 5 則');
+    expect(log.scrollTop).toBe(bottom());
+    // 與紀錄無關的更新(音量)不捲動
+    log.scrollTop = 0;
+    log.dispatchEvent(new Event('scroll'));
+    const vol = q<HTMLInputElement>(el, '.volume input');
+    vol.value = '50';
+    vol.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle(el);
+    expect(log.scrollTop).toBe(0);
+    el.remove();
+  });
+
+  it('isScrolledToBottom:scrollTop + clientHeight ≥ scrollHeight − 4 px', () => {
+    expect(isScrolledToBottom({ scrollTop: 65, clientHeight: 35, scrollHeight: 100 })).toBe(true);
+    expect(isScrolledToBottom({ scrollTop: 61, clientHeight: 35, scrollHeight: 100 })).toBe(true);
+    expect(isScrolledToBottom({ scrollTop: 60, clientHeight: 35, scrollHeight: 100 })).toBe(false);
+    expect(isScrolledToBottom({ scrollTop: 0, clientHeight: 35, scrollHeight: 20 })).toBe(true);
   });
 
   it('未注入 client 時依 url/station 自行建立並連線;移除元件時停止', async () => {

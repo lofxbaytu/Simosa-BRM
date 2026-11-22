@@ -280,7 +280,8 @@ test('完整教官站 1280×720 與 1366×768 選了最長 id 的情境:「載�
         await expect(load).toHaveText(`載入 ${id}`);
         const report = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
         expect(layoutFailures(report), `完整教官站 ${size.width}×${size.height} 選 ${id} 的版面問題`).toEqual([]);
-        // 鈕與詳細區都在情境面板內、不水平溢出;詳細區至少約 96 px(面板矮於 300 px 時的下限;1366×768 為 120 px)
+        // 鈕與詳細區都在情境面板內、不水平溢出;詳細區至少 120 px(1366×768:面板 300 px),面板矮於 300 px 時(1280×720 為 260 px)96 px
+        // (第二十九輪 L4:原本的容器查詢含等於 300,1366×768 / 1536×864 其實都只有 96–104 px)
         const geo = await page.locator('brm-scenario-panel').evaluate((host) => {
           const root = host.shadowRoot!;
           const btn = root.querySelector('button.load')!.getBoundingClientRect();
@@ -292,7 +293,7 @@ test('完整教官站 1280×720 與 1366×768 選了最長 id 的情境:「載�
         expect(geo.btnRight, '「載入」鈕右緣不超出鈕列').toBeLessThanOrEqual(geo.rowRight + 1);
         expect(geo.listOverflowX, '情境清單不水平溢出').toBeLessThanOrEqual(1);
         expect(geo.detailOverflowX, '詳細區不水平溢出').toBeLessThanOrEqual(1);
-        expect(geo.detailHeight, '詳細區高度(px)').toBeGreaterThanOrEqual(95);
+        expect(geo.detailHeight, '詳細區高度(px)').toBeGreaterThanOrEqual(size.height >= 768 ? 119 : 95);
         await load.click({ trial: true });
       });
     }
@@ -303,6 +304,8 @@ test('完整教官站 1280×720 與 1366×768 選了最長 id 的情境:「載�
 test('重播檢視載入紀錄後(1366×768):事件串流篩選鈕不被蓋住、事件串流有足夠高度,講評摘要在自己的面板內捲動', async ({ page, env }) => {
   // 第二十九輪 L3:講評摘要原本先取 40vh,事件串流只剩 38 px,六個篩選鈕被下一個面板蓋住(Playwright 點擊被 div.panel 攔截);
   // 講評摘要的長指標名稱把表格撐到約 1140 px 寬。現在右欄四個面板各有下限,講評摘要在面板內捲動、名稱換行。
+  // 第二十九輪 L4:L3 讓名稱任意處換行後,名稱欄被擠到約 25 px(一字一行),表格仍有 1012 px 寬(時間欄不換行)、要水平捲動;
+  // 現在名稱欄至少 6em、時間欄在「 · 」「 → 」之後換行,摘要不必水平捲動。
   const errors = new PageErrors(page);
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto(instructorUrl(env, { mode: 'replay' }));
@@ -312,6 +315,14 @@ test('重播檢視載入紀錄後(1366×768):事件串流篩選鈕不被蓋住�
   await expect(page.locator('brm-replay-view brm-event-stream .list .item').first()).toBeVisible();
   const report = await page.evaluate(probeLayout, REPLAY_LAYOUT);
   expect(layoutFailures(report), '重播檢視 1366×768 的版面問題').toEqual([]);
+  // 講評摘要:不水平捲動;指標名稱欄不被擠成一字一行(至少約 6em = 78 px)
+  const summary = await page.locator('brm-replay-view brm-debrief-summary').evaluate((host) => ({
+    overflowX: host.scrollWidth - host.clientWidth,
+    thWidths: [...host.shadowRoot!.querySelectorAll('th')].map((th) => Math.round(th.getBoundingClientRect().width)),
+  }));
+  expect(summary.overflowX, '講評摘要的水平溢出(px)').toBeLessThanOrEqual(1);
+  expect(summary.thWidths.length, '講評摘要的列數').toBeGreaterThanOrEqual(10);
+  expect(Math.min(...summary.thWidths), '指標名稱欄最窄的寬度(px)').toBeGreaterThanOrEqual(70);
   // 真實點擊:篩選鈕(時間表)切換顯示 / 隱藏、播放 / 暫停
   const filter = page.locator('brm-replay-view brm-event-stream .filters button.src-timeline');
   await expect(filter).toHaveClass(/active/);

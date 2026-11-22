@@ -27,6 +27,24 @@ function secs(v: number | undefined): string {
   return v === undefined ? '--' : shortTime(v);
 }
 
+/** 指標名稱:英文識別字在 . ( _ / 之後(接英文字母時;「0.5 m」的小數點不算)可斷行(<wbr>;文字內容不變) */
+export function breakableName(label: string): Array<string | ReturnType<typeof html>> {
+  const parts = label.split(/(?<=[._(/])(?=[A-Za-z])/);
+  return parts.map((p, i) => (i === 0 ? p : html`<wbr />${p}`));
+}
+
+/**
+ * 數值欄與時間 / 補充欄:以「 · 」「 → 」分段,只在分隔符號之後斷行(符號前是不換行空白,符號不會跑到下一行開頭;
+ * 例:舵角分布「0-5° 01:00 · 5-10° 00:00 · …」、階段「approach 00:00–05:00 → berthing …」)。文字內容不變(空白改為不換行空白)。
+ */
+export function segmented(text: string): Array<ReturnType<typeof html>> {
+  if (!text) return [];
+  const parts = text.split(/ ([·→]) /);
+  const out: Array<ReturnType<typeof html>> = [];
+  for (let i = 0; i < parts.length; i += 2) out.push(html`${i === 0 ? '' : `\u00a0${parts[i - 1]} `}<span class="seg">${parts[i]}</span>`);
+  return out;
+}
+
 function sourceText(x: { source?: string; revision?: string; clause?: string; paramKey?: string }): string {
   if (!x.source && !x.paramKey) return '';
   const parts: string[] = [];
@@ -80,10 +98,16 @@ export class DebriefSummaryView extends LitElement {
         text-align: left;
         vertical-align: top;
       }
-      /* 指標名稱(例:speed(manoeuvring.timeOverSpeedLimit_s))在窄面板內換行,不撐寬表格(重播檢視右欄約 340 px;第二十九輪 L3) */
+      /* 窄面板(重播檢視右欄約 320–340 px)不必水平捲動就看得到名稱、數值與時間(第二十九輪 L4):
+         - 指標名稱與時間 / 補充欄各至少 6em 寬(不逐字換行,也不被來源欄擠窄);長的英文識別字(例:speed(manoeuvring.timeOverSpeedLimit_s))優先在 . ( _ / 之後斷行(<wbr>),
+           仍放不下時才任意處斷行;
+         - 數值欄(td.num)與時間 / 補充欄(td.at)在「 · 」「 → 」之後斷行(segmented();數值欄的各段不換行,
+           時間欄的各段是 inline-block,段內放得下時不拆開,單段比欄寬時(例:requiredEventPending 2)才在段內斷行);
+         - 來源欄(td.src)任意處換行 */
       th {
         color: var(--ob-text-secondary);
         font-weight: 500;
+        min-width: 6em;
         overflow-wrap: anywhere;
       }
       td.src {
@@ -93,12 +117,20 @@ export class DebriefSummaryView extends LitElement {
         text-align: right;
         font-variant-numeric: tabular-nums;
         font-weight: 600;
+      }
+      /* 數值與單位不拆開(各段不換行);段與段之間可換行 */
+      td.num .seg {
         white-space: nowrap;
       }
       td.at {
         color: var(--ob-text-muted);
         font-variant-numeric: tabular-nums;
-        white-space: nowrap;
+        min-width: 6em;
+        overflow-wrap: anywhere;
+      }
+      td.at .seg {
+        display: inline-block;
+        max-width: 100%;
       }
       td.src {
         color: var(--ob-text-muted);
@@ -206,9 +238,9 @@ export class DebriefSummaryView extends LitElement {
 
   private row(label: string, value: string, time = '', cls = '', src = '') {
     return html`<tr class=${cls}>
-      <th>${label}</th>
-      <td class="num">${value}</td>
-      <td class="at">${time}</td>
+      <th>${breakableName(label)}</th>
+      <td class="num">${segmented(value)}</td>
+      <td class="at">${segmented(time)}</td>
       ${src ? html`<td class="src">${src}</td>` : html`<td class="src"></td>`}
     </tr>`;
   }
@@ -293,7 +325,7 @@ export class DebriefSummaryView extends LitElement {
           ${this.row('車鐘變更次數', `${m.telegraphChanges ?? '--'}`, m.telegraphOrders.map((o) => `${o.order} ${shortTime(o.duration_s ?? 0)}`).join(' · '), '', `轉速令 ${m.rpmOrders ?? 0} · 側推 ${m.thrusterOrders ?? 0}`)}
           ${this.row('超過速限的時間', secs(m.timeOverSpeedLimit_s), m.maxOverSpeed_kn !== undefined && m.maxOverSpeed_kn > 0 ? `最多超 ${fix(m.maxOverSpeed_kn, 1, 'kn')}` : '', (m.timeOverSpeedLimit_s ?? 0) > 0 ? 'over' : '', m.speedLimitSource ?? '')}
           ${m.autopilotTime_s !== undefined ? this.row('自動舵時間', secs(m.autopilotTime_s), `切換 ${m.autopilotSwitches ?? 0} 次`) : nothing}
-          ${c.phases.length > 1 ? this.row('階段', c.phases.map((p) => `${p.phase} ${shortTime(p.from_s)}–${shortTime(p.to_s)}`).join(' → ')) : nothing}
+          ${c.phases.length > 1 ? this.row('階段', `${c.phases.length} 段`, c.phases.map((p) => `${p.phase} ${shortTime(p.from_s)}–${shortTime(p.to_s)}`).join(' → ')) : nothing}
           ${c.events.total !== undefined ? this.row('事件', `${c.events.total}`, Object.entries(c.events.byKind).map(([k, v]) => `${k} ${v}`).join(' · ')) : nothing}
         </tbody>
       </table>

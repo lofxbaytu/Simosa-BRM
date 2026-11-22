@@ -37,6 +37,19 @@ public sealed class InstalledFiles
     /// (安裝程式先清空程式目錄,再覆寫清單所列的每個檔案),見 <see cref="Rebase"/>。
     /// </summary>
     public InstalledBaseline? Baseline { get; set; }
+    /// <summary>
+    /// 套用時 manifest.json 存在、卻讀不到(損毀或 IO 錯誤),所以 <see cref="Baseline"/> 是 null(與「當時沒有 manifest.json」分開記錄)。
+    /// 之後讀得到時不能直接當成重新安裝過:<see cref="Reconcile"/> 改依時間判斷(發行版建置於本清單最後一次寫入之後才算)。
+    /// 舊檔沒有這個欄位(false)。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool BaselineUnreadable { get; set; }
+    /// <summary>
+    /// 降版的證據(審查第二十九輪 P4;<see cref="DowngradeRecord"/>):重新安裝之後目前的發行版比重新安裝之前的狀態舊時由 <see cref="Reconcile"/> 記下,
+    /// 之後套用非軟體更新包時原樣保留,直到套用新的軟體更新包(<see cref="Record"/>)或以夠新的發行版重新安裝(<see cref="Reconcile"/>)才清除。
+    /// 降版提醒(安裝模式核對與 <c>simosa-pkg status</c>)只依這份紀錄判斷,不再依「這一次看不看得到重新安裝」推斷。舊檔沒有這個欄位(null)。
+    /// </summary>
+    public DowngradeRecord? Downgrade { get; set; }
     /// <summary>已納入本清單的更新包(新到舊,最多 <see cref="MaxPackages"/> 筆)</summary>
     public List<TrackedPackage> Packages { get; set; } = new();
     /// <summary>已套用、但內容沒有記進本清單的更新包(本清單建立之前套用,或與 installed.json 對不上):其前綴之下沒有紀錄的路徑無法核對</summary>
@@ -123,7 +136,8 @@ public sealed class InstalledFiles
     /// 把現有的覆蓋清單(可為 null)對齊到目前的 installed.json 與發行清單,回傳「記錄下一個更新包之前」應有的內容(不修改傳入的物件)。依序:
     /// <list type="number">
     /// <item>發行清單換過(覆蓋清單最後一次寫入之後重新安裝了發行版;<see cref="InstalledBaseline.SameRelease"/> 為否,
-    ///   覆蓋清單沒有記錄身分而目前讀得到 manifest.json 也算):<see cref="Rebase"/>。先做,因為它只能作廢「清單最後一次寫入之前」的紀錄,
+    ///   覆蓋清單沒有記錄身分而目前讀得到 manifest.json 也算 — 例外:當時 manifest.json 在、只是讀不到(<see cref="BaselineUnreadable"/>),
+    ///   而目前的發行版建置於清單最後一次寫入之前,視為同一個發行版,見 <see cref="ReconcileInfo.BaselineAdopted"/>):<see cref="Rebase"/>。先做,因為它只能作廢「清單最後一次寫入之前」的紀錄,
     ///   不能作廢下一項才發現的更新包。同一個發行版、只是記錄的原始 SHA-256 不同(只改編碼)時,改記目前的身分。</item>
     /// <item>沒有覆蓋清單、installed.json 卻有套用中的更新包(舊版 simosa-pkg 套用,或清單遺失/損毀):這些更新包列入 <see cref="Untracked"/>
     ///   (<see cref="UntrackedReasons.NotRecorded"/>)。</item>
@@ -148,13 +162,26 @@ public sealed class InstalledFiles
     /// 清單的現行更新包就不會還是它)。因此不列入 <see cref="Untracked"/>、不丟棄紀錄,接著的 <see cref="Record"/> 以相同內容覆寫
     /// (<see cref="ReconcileInfo.Retried"/>)。回復時清單還原失敗的情況不同:installed.json 有該包標為 rolledBack 的紀錄,照第 3 項處理。
     /// </para>
+    /// <para>
+    /// <b>覆蓋清單遺失或損毀</b>(<paramref name="existing"/> 為 null)而 <paramref name="lastApply"/>(state/previous/previous.json,
+    /// rollback 判斷用的同一份)記錄的發行清單身分顯示「最近一次套用之後重新安裝過」(<see cref="PreviousMeta.ReleaseChangedSince"/>):
+    /// 套用中的更新包都在那次重新安裝之前,全部列入 <see cref="ReconcileInfo.SupersededPackages"/>(不依時間規則)。
+    /// </para>
+    /// <para>
+    /// <b>降版的證據</b>(<see cref="Downgrade"/>):這一次看得到重新安裝(第 1 項,或 <see cref="ReconcileInfo.SupersededPackages"/> 非空)時,
+    /// 以重新安裝之前的狀態(先前的發行版、installed.json 的 software 元件、仍在套用狀態的更新包最高版本)比較目前的發行版,
+    /// 比較舊就記下(已有紀錄時合併);沒有重新安裝時原樣保留。紀錄的各項都不比目前的發行版新(以夠新的發行版重新安裝過)時清除。
+    /// 套用時寫回檔案,所以之後再套用圖資、情境、參數更新包(覆蓋清單已對齊到目前的發行版,看不到重新安裝)提醒仍在。
+    /// </para>
     /// </summary>
     /// <param name="baseline">目前 manifest.json 的身分(沒有或讀不到時 null:不做第 1 項與上述例外)</param>
     /// <param name="manifestPaths">目前發行清單所列的路徑(第 1 項用)</param>
     /// <param name="applyingPackageId">正在套用的更新包(UpdateApplier 傳入;核對時為 null)</param>
+    /// <param name="lastApply">state/previous/previous.json(沒有或讀不到時 null);只在沒有覆蓋清單時使用</param>
+    /// <param name="nowUtc">降版紀錄的記錄時間(UpdateApplier 傳入套用時刻;核對與 status 不寫檔,可省略)</param>
     public static InstalledFiles Reconcile(InstalledFiles? existing, InstalledState installed, InstalledBaseline? baseline,
                                            IReadOnlyCollection<string>? manifestPaths, StringComparison comparison, ReconcileInfo? info = null,
-                                           string? applyingPackageId = null)
+                                           string? applyingPackageId = null, PreviousMeta? lastApply = null, DateTime? nowUtc = null)
     {
         info ??= new ReconcileInfo();
         // installed.json 是否有這個更新包的任何紀錄(現行,或 history 中的任一筆,含已 rollback 者)
@@ -166,6 +193,13 @@ public sealed class InstalledFiles
         {
             f = new InstalledFiles { PackageId = installed.PackageId, Version = installed.Version, Baseline = baseline };
             candidates.AddRange(applied.Select(a => TrackedPackage.OfKind(a.PackageId, a.Version, a.Kind, a.AppliedUtc, UntrackedReasons.NotRecorded)));
+            // 覆蓋清單遺失或損毀:previous.json(屬於現行更新包者)記錄的發行清單身分與目前不同 → 最近一次套用之後重新安裝過
+            if (baseline is not null && installed.PackageId is { } current && lastApply?.ReplacedByPackageId == current
+                && lastApply.ReleaseChangedSince(baseline) == true)
+            {
+                info.ReinstalledSinceLastApply = true;
+                info.LastApplyRelease = lastApply.Release;
+            }
         }
         else
         {
@@ -175,13 +209,24 @@ public sealed class InstalledFiles
             {
                 if (!InstalledBaseline.SameRelease(f.Baseline, baseline))
                 {
-                    info.Rebased = true;
-                    info.PreviousBaseline = f.Baseline;
-                    (info.SupersededFiles, info.DroppedProgramFiles) = f.Rebase(manifestPaths, baseline, comparison);
+                    if (f.Baseline is null && f.BaselineUnreadable && !InstalledBaseline.BuiltAfter(baseline, f.UpdatedUtc))
+                    {
+                        // 套用時 manifest.json 讀不到(不是不在):目前的發行版建置於那次套用之前,沒有重新安裝的跡象 —
+                        // 視為同一個發行版,改記目前的身分(不 Rebase;否則更新包寫入的檔案會被當成「被安裝覆蓋」、誤報降版)
+                        info.BaselineAdopted = true;
+                        f.Baseline = baseline;
+                    }
+                    else
+                    {
+                        info.Rebased = true;
+                        info.PreviousBaseline = f.Baseline;
+                        (info.SupersededFiles, info.DroppedProgramFiles) = f.Rebase(manifestPaths, baseline, comparison);
+                    }
                 }
                 // 同一個發行版、但紀錄的原始 SHA-256 不同(manifest.json 只改了編碼)或是沒有內容身分的舊紀錄:換成目前的身分
                 // (下一次套用時寫回,之後即以內容身分比較)
                 else if (!Sha256Hex.Equal(f.Baseline!.Sha256, baseline.Sha256) || f.Baseline.ContentSha256 is null) f.Baseline = baseline;
+                f.BaselineUnreadable = false;
             }
             if (applyingPackageId is not null && f.PackageId == applyingPackageId && !Known(applyingPackageId))
             {
@@ -213,12 +258,15 @@ public sealed class InstalledFiles
         var untracked = new List<TrackedPackage>();
         foreach (var c in candidates)
         {
-            if (baseline?.BuiltUtc is { } built && c.AppliedUtc is { } at && at < built) info.SupersededPackages.Add(c);
+            if (info.ReinstalledSinceLastApply || (baseline?.BuiltUtc is { } built && c.AppliedUtc is { } at && at < built)) info.SupersededPackages.Add(c);
             else untracked.Add(c);
         }
         f.MarkUntracked(untracked, comparison);
         info.NewlyUntracked.AddRange(untracked);
         info.Missing = existing is null && untracked.Count > 0;
+        var reinstalled = info.Rebased || info.SupersededPackages.Count > 0;
+        var previousRelease = info.Rebased ? info.PreviousBaseline?.Version : info.LastApplyRelease?.Version;
+        f.Downgrade = DowngradeRecord.Observe(f.Downgrade, reinstalled, baseline?.Version, previousRelease, installed, nowUtc ?? DateTime.UtcNow);
         return f;
     }
 
@@ -293,8 +341,101 @@ public sealed class InstalledFiles
         PackageId = manifest.PackageId;
         Version = manifest.Version;
         UpdatedUtc = appliedUtc;
+        // 新的軟體更新包(或含 app/ 的 mixed 包):installed.json 的 software 元件改指它,降版的紀錄到此為止
+        // (status 顯示的軟體版次又是更新包寫入的程式;rollback 這個包時,套用前的清單連同紀錄一起還原)
+        if (UpdateApplier.ComponentKinds(manifest).Contains(UpdateKinds.Software)) Downgrade = null;
     }
 }
+
+/// <summary>
+/// 降版的證據(覆蓋清單的 <see cref="InstalledFiles.Downgrade"/>;審查第二十九輪 P4):重新安裝(<see cref="InstalledFiles.Rebase"/>,
+/// 或沒有覆蓋清單時 <see cref="ReconcileInfo.SupersededPackages"/> 非空)當下,重新安裝之前的狀態。
+/// 降版提醒(安裝模式核對的「狀態」提醒、<c>simosa-pkg status</c> 的警告與 releaseDowngrade)一律以 <see cref="Evaluate"/> 判斷(單一出處)。
+/// <para>
+/// 為什麼要保存而不是每次推斷:降版之後再套用任一非軟體更新包,套用就把覆蓋清單對齊到目前的發行版(<see cref="InstalledFiles.Rebase"/>),
+/// 之後的核對看不到重新安裝;但 installed.json 的 software 元件仍是重新安裝之前的軟體更新包 — status 顯示的軟體版次不是實際執行的程式。
+/// </para>
+/// 清除的條件:套用新的軟體更新包(<see cref="InstalledFiles.Record"/>),或以版本不低於 <see cref="BasisVersion"/> 的發行版重新安裝(<see cref="Observe"/>)。
+/// </summary>
+public sealed class DowngradeRecord
+{
+    /// <summary>記錄時(重新安裝之後)的發行版版本</summary>
+    public string? ReleaseVersion { get; set; }
+    /// <summary>重新安裝之前的發行版(覆蓋清單的 baseline,或 previous.json 的 release;重新安裝不只一次時取最大者)</summary>
+    public string? PreviousReleaseVersion { get; set; }
+    /// <summary>當時 installed.json 的 software 元件(被重新安裝取代、status 仍顯示的軟體更新包)</summary>
+    public string? SoftwarePackageId { get; set; }
+    public string? SoftwareVersion { get; set; }
+    /// <summary>
+    /// 重新安裝之前仍在套用狀態(未 rollback;<see cref="InstalledState.AppliedPackages"/>)的更新包中的最高版本。
+    /// 不用 installed.json 的 highestVersion:rollback 不會降低它,已回復的版本不該算進來(升級 → 套用 → rollback 會誤報降版);
+    /// 只在沒有任何套用中的更新包時才以 highestVersion 補位(沒有其他依據)。
+    /// </summary>
+    public string? HighestAppliedVersion { get; set; }
+    public DateTime RecordedUtc { get; set; }
+
+    /// <summary>比較基準:三者(先前的發行版、軟體元件版次、套用中的更新包最高版本)中的最大者 — 「版本不低於它的安裝程式」才回到降版之前。</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? BasisVersion => Max(Max(PreviousReleaseVersion, SoftwareVersion), HighestAppliedVersion);
+
+    /// <summary>
+    /// 以目前的發行版 <paramref name="releaseVersion"/> 與 installed.json 評估這份紀錄(降版提醒的唯一判斷):回傳比目前的發行版新的各項;
+    /// 都不比它新時回傳 null。軟體元件那一項只在 installed.json 的 software 元件仍是記錄的那個更新包時才算(之後換過軟體更新包就不是「過時」)。
+    /// </summary>
+    public DowngradeEvaluation? Evaluate(string? releaseVersion, InstalledState installed)
+    {
+        if (releaseVersion is null || !PackageVersion.TryParse(releaseVersion, out _)) return null;
+        bool Newer(string? v) => v is not null && PackageVersion.TryParse(v, out _) && PackageVersion.Compare(v, releaseVersion) > 0;
+        var current = installed.Components?.GetValueOrDefault(UpdateKinds.Software);
+        var softwareStillShown = current is not null && SoftwareVersion is not null
+                                 && (SoftwarePackageId is { Length: > 0 } id ? current.PackageId == id : current.Version == SoftwareVersion);
+        var previous = Newer(PreviousReleaseVersion) ? PreviousReleaseVersion : null;
+        var software = softwareStillShown && Newer(SoftwareVersion) ? SoftwareVersion : null;
+        var highest = Newer(HighestAppliedVersion) ? HighestAppliedVersion : null;
+        if (previous is null && software is null && highest is null) return null;
+        return new DowngradeEvaluation(releaseVersion, previous, software, highest, Max(Max(previous, software), highest)!);
+    }
+
+    /// <summary>
+    /// <see cref="InstalledFiles.Reconcile"/> 用:這一次看得到重新安裝(<paramref name="reinstalled"/>)時,以重新安裝之前的狀態更新紀錄
+    /// (已有紀錄時,先前的發行版與最高版本取較大者、記錄時間沿用);之後以目前的發行版評估,不再是降版就清除(回傳 null)。
+    /// 讀不到發行清單(<paramref name="releaseVersion"/> 為 null)時無從判斷,原樣保留。
+    /// </summary>
+    public static DowngradeRecord? Observe(DowngradeRecord? kept, bool reinstalled, string? releaseVersion, string? previousReleaseVersion,
+                                           InstalledState installed, DateTime nowUtc)
+    {
+        if (releaseVersion is null || !PackageVersion.TryParse(releaseVersion, out _)) return kept;
+        var record = kept;
+        if (reinstalled)
+        {
+            var software = installed.Components?.GetValueOrDefault(UpdateKinds.Software);
+            var applied = installed.AppliedPackages().Select(a => a.Version).Aggregate((string?)null, Max);
+            record = new DowngradeRecord
+            {
+                ReleaseVersion = releaseVersion,
+                PreviousReleaseVersion = Max(kept?.PreviousReleaseVersion, previousReleaseVersion),
+                SoftwarePackageId = software?.PackageId,
+                SoftwareVersion = software?.Version,
+                HighestAppliedVersion = Max(kept?.HighestAppliedVersion, applied ?? installed.HighestVersion),
+                RecordedUtc = kept?.RecordedUtc ?? nowUtc,
+            };
+        }
+        return record?.Evaluate(releaseVersion, installed) is null ? null : record;
+    }
+
+    /// <summary>兩個版本取較大者(其中一個為 null 或格式不合法時取另一個)。</summary>
+    public static string? Max(string? a, string? b)
+    {
+        var okA = a is not null && PackageVersion.TryParse(a, out _);
+        var okB = b is not null && PackageVersion.TryParse(b, out _);
+        if (!okA) return okB ? b : null;
+        if (!okB) return a;
+        return PackageVersion.Compare(a!, b!) >= 0 ? a : b;
+    }
+}
+
+/// <summary><see cref="DowngradeRecord.Evaluate"/> 的結果:比目前的發行版新的各項(不比它新的為 null)與比較基準(其中的最大者)。</summary>
+public sealed record DowngradeEvaluation(string ReleaseVersion, string? PreviousReleaseVersion, string? SoftwareVersion, string? HighestAppliedVersion, string BasisVersion);
 
 /// <summary><see cref="InstalledFiles.Reconcile"/> 做了哪些調整(核對時據以顯示提醒)。</summary>
 public sealed class ReconcileInfo
@@ -319,8 +460,20 @@ public sealed class ReconcileInfo
     public TrackedPackage? InterruptedPackage { get; set; }
     /// <summary>這一次對齊才列入 <see cref="InstalledFiles.Untracked"/> 的更新包(與檔案內原有的紀錄區分:原有的是「先前曾經」對不上)</summary>
     public List<TrackedPackage> NewlyUntracked { get; set; } = new();
-    /// <summary>沒有覆蓋清單,且在目前發行版建置之前套用的更新包(已被這次安裝覆蓋,不列為未記錄)</summary>
+    /// <summary>
+    /// 沒有覆蓋清單,且已被目前的發行版安裝覆蓋的更新包(不列為未記錄):在目前發行版建置之前套用的,
+    /// 或 previous.json 顯示最近一次套用之後重新安裝過(<see cref="ReinstalledSinceLastApply"/>;這時是全部套用中的更新包)
+    /// </summary>
     public List<TrackedPackage> SupersededPackages { get; set; } = new();
+    /// <summary>沒有(或讀不到)覆蓋清單,而 state/previous/previous.json 記錄的發行清單身分顯示最近一次套用之後重新安裝過</summary>
+    public bool ReinstalledSinceLastApply { get; set; }
+    /// <summary><see cref="ReinstalledSinceLastApply"/> 時,previous.json 記錄的套用當時的發行清單(當時沒有或讀不到時 null)</summary>
+    public InstalledBaseline? LastApplyRelease { get; set; }
+    /// <summary>
+    /// 覆蓋清單寫入時 manifest.json 讀不到(<see cref="InstalledFiles.BaselineUnreadable"/>),而目前的發行版建置於那次寫入之前:
+    /// 視為同一個發行版,改記目前的身分(沒有 Rebase)
+    /// </summary>
+    public bool BaselineAdopted { get; set; }
 }
 
 /// <summary>
@@ -373,6 +526,14 @@ public sealed class InstalledBaseline
         return recorded.Version is not null && recorded.Version == current.Version
                && recorded.BuiltUtc is { } rb && current.BuiltUtc is { } cb && ToUtc(rb) == ToUtc(cb);
     }
+
+    /// <summary>
+    /// 發行版 <paramref name="current"/> 是否建置於 <paramref name="atUtc"/>(船上的套用時間)之後 — 是的話,它一定是在那之後才安裝的。
+    /// 套用時 manifest.json 讀不到、沒有身分可比時的依據(覆蓋清單的 <see cref="InstalledFiles.BaselineUnreadable"/>、previous.json 的
+    /// <see cref="PreviousMeta.ReleaseUnreadable"/>)。沒有建置時間時回答「是」(無從判斷,照重新安裝處理)。時鐘偏差的方向見 <see cref="InstalledFiles.Reconcile"/>。
+    /// </summary>
+    public static bool BuiltAfter(InstalledBaseline current, DateTime atUtc)
+        => current.BuiltUtc is not { } built || ToUtc(built) > ToUtc(atUtc);
 
     private static DateTime ToUtc(DateTime t) => t.Kind switch
     {

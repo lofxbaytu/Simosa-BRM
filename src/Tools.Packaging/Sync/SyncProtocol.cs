@@ -242,7 +242,8 @@ public sealed record ShipStatus
     /// <summary>安裝根目錄 manifest.json 的發行版本(沒有或讀不到時 null;舊版船端沒有此欄位)。</summary>
     public string? ReleaseVersion { get; init; }
     /// <summary>
-    /// 降版(套用更新包之後以較舊的安裝程式重新安裝過;判斷與安裝模式核對相同,<see cref="Release.InstalledVerifier.DetectDowngrade(string, out string?)"/>):
+    /// 降版(套用更新包之後以較舊的安裝程式重新安裝過;判斷與安裝模式核對相同,<see cref="Release.InstalledVerifier.DetectDowngrade(string, out string?)"/>,
+    /// 依覆蓋清單保存的證據 — 之後套用圖資、情境、參數更新包也保留,直到套用新的軟體更新包或以夠新的安裝程式重新安裝):
     /// 這時 <see cref="Components"/> 的 software 版次不是實際執行的程式。沒有時 null(舊版船端沒有此欄位)。
     /// </summary>
     public Release.ReleaseDowngrade? ReleaseDowngrade { get; init; }

@@ -37,7 +37,8 @@ export class TelegraphControl extends LitElement {
         min-height: 0;
         font-size: 12px;
         line-height: 1;
-        /* 窄格(1280–1366 寬的操船台約 155–175 px)也不換行;鈕很矮時(720 高每鈕約 13 px)文字不溢出到相鄰的鈕上 */
+        /* 窄格(1093–1366 寬的操船台約 156–175 px)也不換行;鈕很矮時(720 高每鈕約 13 px)文字不溢出到相鄰的鈕上。
+           文字比鈕寬時會被切掉 — 版面判定(tests/e2e/support/layout.ts 第 6 項)檢查 scrollWidth ≤ clientWidth */
         white-space: nowrap;
         overflow: hidden;
         gap: 4px;
@@ -61,7 +62,8 @@ export class TelegraphControl extends LitElement {
         font-size: 11px;
         opacity: 0.85;
       }
-      /* 窄格(內容寬 < 150 px):縮小左右內距,最長的「EFAS 緊急全速倒車 −150」留在一行內 */
+      /* 窄格(內容寬 < 150 px):縮小左右內距,最長的「EFAS 緊急全速倒車 −150」留在一行內(約 135 px;
+         鈕很矮,不能換成兩行 — 操船台的車鐘格因此有 156 px 下限,app.ts 的 .controls;第二十九輪 L4) */
       @container (max-width: 150px) {
         .list button {
           padding: 0 4px;

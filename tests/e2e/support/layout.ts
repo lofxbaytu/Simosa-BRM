@@ -9,9 +9,12 @@
 //  2. 關鍵控制(LayoutSpec.keys)不必捲動就整個看得到(中心點與四邊中點都點得到);關鍵清單(LayoutSpec.lists)的可見高度
 //     足夠,且前幾列完整落在清單的可見範圍內。
 //  3. 面板(brm-* 元件)內容不溢出(scrollHeight ≤ clientHeight,或自己會捲動)、面板之間的可見外框不相交、
-//     不在視窗內的面板必須位於可捲動的容器內。
+//     不在視窗內的面板必須位於可捲動的容器內;浮貼的面板(position: absolute,例:航跡圖左上角的外力讀數)
+//     可見外框不超出它的定位容器(第二十九輪 L4:pointer-events: none 的浮貼讀數溢出航跡圖、蓋住 BNWAS,點擊判定抓不到)。
 //  4. conning 條各方塊內的元素沒有水平裁切(scrollWidth ≤ clientWidth + 1)。
 //  5. 整頁沒有捲軸(html 的 scrollWidth / scrollHeight 不超過視窗)。
+//  6. 按鈕內的文字沒有被自己的 overflow 切掉、也沒有溢出鈕外(button 的 scrollWidth ≤ clientWidth + 1;第二十九輪 L4:
+//     1093×614 的車鐘鈕「EFAS 緊急全速倒車 −150」數值被 overflow: hidden 切掉、艏側推快速鈕的「100」溢出鈕外)。
 
 /** 關鍵控制:host 是 brm-* 元件的選擇器,inner 是其 shadow root 內的選擇器;至少要有 min 個(預設 1),每一個都必須不捲動就整個點得到 */
 export interface LayoutKeyControl {
@@ -59,6 +62,8 @@ export interface LayoutReport {
   key: string[];
   /** conning 條方塊內水平裁切 */
   conning: string[];
+  /** 按鈕內的文字被自己的 overflow 切掉或溢出鈕外(scrollWidth > clientWidth + 1) */
+  text: string[];
   /** 整頁捲動 */
   page: string[];
   /** overflow: hidden / clip 的面板內容被裁掉的高度(資訊;控制項被裁掉者已列在 clipped) */
@@ -73,6 +78,8 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
   const EDGE_TOLERANCE_PX = 1;
   /** conning 條方塊內元素 scrollWidth 超過 clientWidth 多少算裁切 */
   const CONNING_TOLERANCE_PX = 1;
+  /** 按鈕內文字 scrollWidth 超過 clientWidth 多少算被切掉 / 溢出(次像素進位) */
+  const TEXT_TOLERANCE_PX = 1;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
@@ -202,6 +209,7 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
     offscreen: [],
     key: [],
     conning: [],
+    text: [],
     page: [],
     hiddenClip: [],
   };
@@ -210,6 +218,10 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
   for (const el of controls) {
     if (!rendered(el)) continue;
     report.controls.total++;
+    // 6) 按鈕內的文字(overflow: hidden 時被切掉;visible 時溢出鈕外,疊到鄰居上)
+    if (el instanceof HTMLButtonElement && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + TEXT_TOLERANCE_PX) {
+      report.text.push(`${describe(el)} 文字寬 ${el.scrollWidth} > 鈕內寬 ${el.clientWidth}(overflow ${getComputedStyle(el).overflowX})`);
+    }
     if (hitCenter(el).ok) {
       report.controls.direct++;
       continue;
@@ -306,7 +318,22 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
       const idh = inner.scrollHeight - inner.clientHeight;
       if (idh > OVERFLOW_TOLERANCE_PX && (ics.overflowY === 'hidden' || ics.overflowY === 'clip')) report.hiddenClip.push(`${name} ${inner.tagName.toLowerCase()}${classesOf(inner)} 內容高 ${inner.scrollHeight} > 外框 ${inner.clientHeight}(overflow ${ics.overflowY})`);
     }
-    if (cs.position === 'absolute' || cs.position === 'fixed') continue; // 浮貼讀數(航跡圖左上角)本來就疊在別的面板上
+    if (cs.position === 'absolute') {
+      // 浮貼的面板(航跡圖左上角的讀數)本來就疊在定位容器內的面板上,不算重疊;但可見外框不可超出定位容器
+      // (最近的 position 不是 static 的祖先,穿過 shadow DOM),否則會蓋住旁邊的面板(pointer-events: none 時點擊判定看不出來)
+      let cb: Element | null = null;
+      for (let n = parentOf(p); n && !cb; n = parentOf(n)) if (n instanceof Element && getComputedStyle(n).position !== 'static') cb = n;
+      if (cb) {
+        const a = cb.getBoundingClientRect();
+        const r = visibleRect(p);
+        const out = Math.max(a.left - r.left, a.top - r.top, r.right - a.right, r.bottom - a.bottom);
+        if (r.right > r.left && r.bottom > r.top && out > EDGE_TOLERANCE_PX) {
+          report.overflow.push(`${name}(浮貼)可見外框 x ${Math.round(r.left)}–${Math.round(r.right)}、y ${Math.round(r.top)}–${Math.round(r.bottom)} 超出定位容器 ${describeBox(cb)}(x ${Math.round(a.left)}–${Math.round(a.right)}、y ${Math.round(a.top)}–${Math.round(a.bottom)})`);
+        }
+      }
+      continue;
+    }
+    if (cs.position === 'fixed') continue;
     // 部分在視窗外:必須有使用者捲得動的祖先
     if (b.top < -EDGE_TOLERANCE_PX || b.left < -EDGE_TOLERANCE_PX || b.bottom > vh + EDGE_TOLERANCE_PX || b.right > vw + EDGE_TOLERANCE_PX) {
       let scroller = false;
@@ -359,6 +386,7 @@ export function layoutFailures(report: LayoutReport): string[] {
     ...report.overlap.map((s) => `重疊:${s}`),
     ...report.offscreen.map((s) => `視窗外:${s}`),
     ...report.conning.map((s) => `conning 裁切:${s}`),
+    ...report.text.map((s) => `鈕內文字:${s}`),
     ...report.page.map((s) => `整頁捲動:${s}`),
   ];
 }

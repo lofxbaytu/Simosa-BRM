@@ -95,7 +95,9 @@ export class ThrusterLever extends LitElement {
         text-align: center;
         width: 44px;
       }
-      /* 窄格(內容寬 < 200 px):端點標示與推桿略窄,把寬度留給「P 100 / S 100」等快速鈕(兩欄,每鈕至少約 38 px) */
+      /* 窄格(內容寬 < 200 px):端點標示與推桿略窄,把寬度留給「P 100 / S 100」等快速鈕(兩欄;每鈕 35–43 px 時一行,
+         1093 寬的視窗約 26 px 時折成「P / 100」兩行。操船台的艏側推格有 142 px 下限(app.ts 的 .controls),
+         「100」不會溢出鈕外;第二十九輪 L4) */
       @container (max-width: 200px) {
         .body {
           gap: 5px;

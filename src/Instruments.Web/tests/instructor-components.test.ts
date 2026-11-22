@@ -10,6 +10,7 @@ import type { SimCommand } from '../src/types/command.js';
 import type { OwnShipState } from '../src/types/state.js';
 import { parseAssessmentSummary } from '../src/lib/assessment.js';
 import type { DebriefSummaryView } from '../src/components/instructor/debrief-summary.js';
+import { breakableName, segmented } from '../src/components/instructor/debrief-summary.js';
 import { COMMAND_EVENT } from '../src/components/shared.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import { parseScenario } from '../src/lib/scenario.js';
@@ -542,6 +543,40 @@ describe('紀錄清單與講評摘要', () => {
     await el.updateComplete;
     expect(shadowText(el)).toContain('硬性失敗');
     expect(shadowText(el)).toContain('grounding 擱淺 20:00');
+  });
+
+  it('講評摘要在窄面板內可讀(第二十九輪 L4):英文識別字只在 . ( _ 之後斷行、「 · 」「 → 」之後斷行,文字內容不變', async () => {
+    const coreSummary = parseAssessmentSummary({
+      version: 1,
+      final: true,
+      assessment: { score: 90, passMark: 70, passed: true, hardFailed: false, hardFails: [], required: [], parameters: [], bands: [{ id: 'speed', metric: 'manoeuvring.timeOverSpeedLimit_s', value: 0, warn: 0, fail: 60, state: 'ok' }] },
+      manoeuvring: { rudderOrders: 4, rudderDistribution_s: { '0-5': 60, '5-10': 0, '10-20': 30 } },
+      phases: [
+        { phase: 'normal', from_s: 0, to_s: 30 },
+        { phase: 'waiting', from_s: 30, to_s: 60 },
+        { phase: 'berthing', from_s: 60, to_s: 600 },
+      ],
+    })!;
+    const el = await mount<DebriefSummaryView>('brm-debrief-summary', { coreSummary });
+    const rows = [...el.shadowRoot!.querySelectorAll('tr')];
+    const row = (label: string): HTMLTableRowElement => rows.find((r) => r.querySelector('th')?.textContent === label)! as HTMLTableRowElement;
+    // 指標名稱:<wbr> 在 ( . _ 之後(接英文字母),文字內容不變
+    const band = row('speed(manoeuvring.timeOverSpeedLimit_s)');
+    expect(band).toBeTruthy();
+    expect(band.querySelectorAll('th wbr').length).toBe(3);
+    // 「0.5 m」這類數字的小數點不加斷行點
+    expect(breakableName('UKC 低於 0.5 m 的時間')).toEqual(['UKC 低於 0.5 m 的時間']);
+    // 舵角分布:時間欄分成 3 段(各段是 inline-block),分隔符號前是不換行空白
+    const rudder = row('舵令次數');
+    const segs = [...rudder.querySelectorAll('td.at .seg')].map((e) => e.textContent);
+    expect(segs).toEqual(['0-5° 01:00', '5-10° 00:00', '10-20° 00:30']);
+    expect(rudder.querySelector('td.at')!.textContent).toBe('0-5° 01:00\u00a0· 5-10° 00:00\u00a0· 10-20° 00:30');
+    // 階段:數值欄是段數,各階段在時間欄以 → 分段(原本整串放在不換行的數值欄,把表格撐到約 540 px 寬)
+    const phases = row('階段');
+    expect(phases.querySelector('td.num')!.textContent).toBe('3 段');
+    expect([...phases.querySelectorAll('td.at .seg')].map((e) => e.textContent)).toEqual(['normal 00:00–00:30', 'waiting 00:30–01:00', 'berthing 01:00–10:00']);
+    expect(shadowText(el)).toContain('normal 00:00–00:30 → waiting 00:30–01:00 → berthing 01:00–10:00');
+    expect(segmented('')).toEqual([]);
   });
 });
 

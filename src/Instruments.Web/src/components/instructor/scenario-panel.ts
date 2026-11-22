@@ -154,9 +154,11 @@ export class ScenarioPanel extends LitElement {
       .rejected .muted {
         color: var(--ob-text-muted);
       }
-      /* 面板矮(≤ 300 px;1280×720 的完整教官站左欄、header 兩行時約 260 px):清單至少 64 px、詳細區至少 96 px,
-         兩行的「載入 <長 id>」鈕仍在面板內(放在最後:蓋過上面 .list / .detail 的下限) */
-      @container scenario (max-height: 300px) {
+      /* 面板矮於 300 px(1280×720 與 1093×614 的完整教官站都是下限 260 px):清單至少 64 px、詳細區至少 96 px,
+         兩行的「載入 <長 id>」鈕仍在面板內(放在最後:蓋過上面 .list / .detail 的下限)。
+         剛好 300 px(1366×768、1536×864:教官站把面板下限定為 300 px)不算矮,用一般的 80 / 120 px
+         (第二十九輪 L4:原本寫 max-height: 300px 含等於,這兩個主要尺寸其實都套用 96 px) */
+      @container scenario (height < 300px) {
         .list {
           min-height: 64px;
         }

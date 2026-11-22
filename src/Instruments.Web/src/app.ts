@@ -109,19 +109,31 @@ export class BrmApp extends LitElement {
       .middle {
         display: contents;
       }
-      /* 航跡圖左上角浮貼錨/拖船/靠泊讀數(不佔警報欄高度,中央警報面板維持原大小) */
+      /* 航跡圖左上角浮貼錨/拖船/靠泊讀數(不佔警報欄高度,中央警報面板維持原大小)。
+         讀數不超出航跡圖(第二十九輪 L4:1093×614 的航跡圖只剩約 100 px,約 120 px 高的讀數溢出到下方,蓋住 BNWAS 的標題與階段):
+         最高到航跡圖下緣,放不下時在讀數內捲動。平時不攔滑鼠(拖曳 / 滾輪照常作用在航跡圖);航跡圖矮於 200 px
+         (讀數可能放不下)時才接收滑鼠,讓使用者捲得動。航跡圖格是尺寸容器(container: plot) */
       .plot-wrap {
         grid-area: plot;
         position: relative;
         min-height: 0;
         min-width: 0;
+        container: plot / size;
       }
       .plot-wrap brm-external-readout {
         position: absolute;
         left: 8px;
         top: 24px;
         max-width: min(380px, 60%);
+        max-height: calc(100% - 28px);
+        overflow-y: auto;
+        scrollbar-width: thin;
         pointer-events: none;
+      }
+      @container plot (max-height: 200px) {
+        .plot-wrap brm-external-readout {
+          pointer-events: auto;
+        }
       }
       /* 右欄:中央警報面板、內建 VHF 角色扮演面板(docs/design/vhf-roleplay.md;?vhf=0 不顯示);BNWAS 在它上方的格子(或高度 ≤ 800 px 時在航跡圖下方)。
          VHF 取自然高度(不縮);警報面板吃剩餘高度,至少放得下標題列與 2 筆警報(含「轉移」選單,每筆約 59 px);
@@ -308,7 +320,11 @@ export class BrmApp extends LitElement {
           grid-template-columns: minmax(0, 2fr) minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 1.45fr) minmax(0, 0.65fr);
         }
       }
-      /* 1366×768 等較小螢幕:下排操船台略縮、間距縮小、右欄 344 px(操船台約 1010 px 寬) */
+      /* 1366×768 等較小螢幕:下排操船台略縮、間距縮小、右欄 344 px(操船台約 1010 px 寬)。
+         車鐘與艏側推有最小寬度(第二十九輪 L4;只在 1093 寬等更窄的視窗才起作用,1280 寬以上依比例就比下限寬):
+         車鐘最長的一列「EFAS 緊急全速倒車 −150」(12 / 11 / 10 px 字級、鈕內距 4 px)一行約 135 px,加面板內距 → 156 px;
+         艏側推快速鈕(「P / 100」兩行)每個至少約 26 px → 142 px。原本 1093 寬時車鐘只有 125 px,鈕內文字被 overflow: hidden 切掉、
+         快速鈕的「100」溢出鈕外;不縮字級與觸控目標,寬度由右欄讓出(寬度 ≤ 1150 px 時右欄 300 px,見下;操舵 / 自動舵 / 教官小面板維持原寬) */
       @media (max-width: 1500px) {
         :host {
           --brm-controls-row: minmax(200px, 27vh);
@@ -320,8 +336,16 @@ export class BrmApp extends LitElement {
           gap: 4px;
         }
         .controls {
-          grid-template-columns: minmax(0, 2fr) minmax(0, 1.08fr) minmax(0, 1.1fr) minmax(0, 1.42fr) minmax(0, 0.64fr);
+          grid-template-columns: minmax(0, 2fr) minmax(156px, 1.08fr) minmax(142px, 1.1fr) minmax(0, 1.42fr) minmax(0, 0.64fr);
           gap: 4px;
+        }
+      }
+      /* 寬度 ≤ 1150 px(1093×614 = 1366×768 在 125 % 縮放):右欄 344 → 300 px,讓出的寬度給操船台
+         (車鐘與艏側推的下限各多要約 30 / 15 px;不讓出時操舵的舵令預設鈕把「35°」折成三行、自動舵的「°/min」被切掉)。
+         右欄在這個尺寸本來就要捲動(VHF 文字欄 / DSC,第 6 節),300 px 仍放得下警報面板的按鈕列與 VHF 兩列頻道鈕 */
+      @media (max-width: 1150px) {
+        :host {
+          grid-template-columns: minmax(0, 1fr) 300px;
         }
       }
       /* 高度 ≤ 800 px(1366×768、1280×720 的筆電):BNWAS 改到航跡圖下方(一列的橫條,約 40 px),右欄整欄給警報面板與 VHF。
@@ -340,13 +364,16 @@ export class BrmApp extends LitElement {
         }
       }
       /* 右欄的實際高度不足(警報 164 + VHF 原尺寸約 292 = 460 px 放不下;例:1536×864 約 460 px、header 折成兩行時 430 px,
-         1366×768 約 470 / 434 px,1280×720 約 438 / 402 px):VHF 的訊息紀錄列固定約兩行高(在列內捲動),
-         DSC 說明與「麥克風:按 PTT 時要求授權」整句移到 title(不截斷成半句;無麥克風權限等警示照常顯示)。
-         頻道鈕、PTT、文字欄、DSC 鈕的字級與大小不變 */
+         1366×768 約 470 / 434 px,1280×720 約 438 / 402 px):VHF 的訊息紀錄列固定為兩則單行訊息的高度
+         (lh 是紀錄列的行高;每則 = 行高 + 上下內距 2 px,兩則之間 1 px,另留 1 px 餘裕;約 35 px),紀錄列貼底、看得到的是最新兩則
+         (vhf-panel.ts 收到新訊息時捲到最新一則);列間距 5 → 4 px;DSC 說明與「麥克風:按 PTT 時要求授權」整句移到 title
+         (不截斷成半句);無麥克風權限 / 沒有麥克風 API 時 PTT 鈕上寫「無麥克風 · 只能用文字 / DSC」,完整說明在鈕的 title,不另佔一列。
+         頻道鈕、PTT、文字欄、DSC 鈕的字級與大小不變(第二十九輪 L4:原本固定 30 px 只看得到最舊的一則) */
       @container side (max-height: 480px) {
         brm-vhf {
-          --brm-vhf-log-min: 30px;
-          --brm-vhf-log-max: 30px;
+          --brm-vhf-log-min: calc(2lh + 6px);
+          --brm-vhf-log-max: calc(2lh + 6px);
+          --brm-vhf-gap: 4px;
           --brm-vhf-hint-display: none;
           --brm-vhf-mic-hint-display: none;
         }

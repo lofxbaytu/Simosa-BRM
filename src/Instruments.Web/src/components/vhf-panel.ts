@@ -21,6 +21,17 @@ const MIC_LABEL = {
 const DSC_ARM_MS = 6000;
 /** DSC 列的說明(空間不足時只在 title) */
 const DSC_HINT = '簡化 DSC:文字警示送所有站(非真實 DSC 編碼)';
+/** 無麥克風(被拒 / 沒有麥克風 API)時 PTT 鈕上的短句(完整說明與錯誤在鈕的 title 與警示列;第二十九輪 L4) */
+export const PTT_NO_MIC_LABEL = '無麥克風 · 只能用文字 / DSC';
+/** 同上,且此環境無法播放音訊(只收文字) */
+export const PTT_NO_MIC_NO_AUDIO_LABEL = '無麥克風 / 無音訊 · 只能用文字 / DSC';
+/** 訊息紀錄列「在底部」的容差(px):scrollTop + clientHeight ≥ scrollHeight − 此值 */
+const LOG_BOTTOM_SLACK_PX = 4;
+
+/** 捲動區是否捲在底部(貼底判定;第二十九輪 L4) */
+export function isScrolledToBottom(el: { scrollTop: number; clientHeight: number; scrollHeight: number }): boolean {
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - LOG_BOTTOM_SLACK_PX;
+}
 
 function clock(ms: number): string {
   const d = new Date(ms);
@@ -50,10 +61,10 @@ export class VhfPanel extends LitElement {
       :host {
         display: block;
       }
-      /* 駕駛台右欄高度不足時以 --brm-vhf-*(app.ts 的 @container side)只縮訊息紀錄列、DSC 說明整句移到 title;
-         字級、頻道鈕 / PTT / 文字欄 / DSC 鈕的大小不縮。未設定時為原尺寸 */
+      /* 駕駛台右欄高度不足時以 --brm-vhf-*(app.ts 的 @container side)只縮訊息紀錄列(約兩則高)與列間距、DSC 說明整句移到 title、
+         麥克風說明只留在 PTT 鈕上;字級、頻道鈕 / PTT / 文字欄 / DSC 鈕的大小不縮。未設定時為原尺寸 */
       .tile {
-        gap: 5px;
+        gap: var(--brm-vhf-gap, 5px);
         /* 外層給的高度比內容矮時在面板內捲動,不以 overflow: hidden 裁掉頻道鈕 / PTT / 音量(各頁面都讓 VHF 取自然高度) */
         overflow-y: auto;
       }
@@ -153,6 +164,15 @@ export class VhfPanel extends LitElement {
         background: var(--ob-warning);
         color: var(--ob-text-on-accent);
       }
+      /* 無麥克風(被拒 / 沒有麥克風 API):PTT 停用,鈕上直接寫短句(「無麥克風 · 只能用文字 / DSC」;完整說明在 title)。
+         以警示色、虛線框顯示,不用停用時的淡色(要看得清楚);字級不縮,放不下時在鈕內換行 */
+      .ptt.no-mic:disabled {
+        opacity: 1;
+        color: var(--ob-warning);
+        border-color: var(--ob-warning);
+        border-style: dashed;
+        letter-spacing: 0;
+      }
       .volume {
         display: flex;
         flex-direction: column;
@@ -165,12 +185,15 @@ export class VhfPanel extends LitElement {
         min-height: 0;
         padding: 0;
       }
+      /* 訊息紀錄列由舊到新排列,收到新訊息時捲到最新一則(貼底;使用者往上捲時不拉回,見 updated())。
+         行高固定(1.3),外層可用 lh 單位依行高指定高度(app.ts 壓縮時為兩則單行訊息:2 × (行高 + 上下內距 2 px) + 間距 1 px) */
       .log {
         flex: 1 1 auto;
         min-height: var(--brm-vhf-log-min, 54px);
         max-height: var(--brm-vhf-log-max, 150px);
         overflow-y: auto;
         font-size: 11px;
+        line-height: 1.3;
         display: flex;
         flex-direction: column;
         gap: 1px;
@@ -263,8 +286,12 @@ export class VhfPanel extends LitElement {
       .hint.warn {
         color: var(--ob-warning);
       }
-      /* 麥克風說明(尚未授權、等待授權):空間不足時(--brm-vhf-mic-hint-display: none)只在 PTT 的 title;無權限 / 無麥克風 API 的警示一律顯示 */
-      .hint.mic:not(.warn) {
+      /* 麥克風說明:空間不足時(--brm-vhf-mic-hint-display: none)不另佔一列 —
+         尚未授權 / 等待授權的說明只在 PTT 的 title;無權限 / 無麥克風 API(.on-ptt)時 PTT 鈕上已寫「無麥克風 · 只能用文字 / DSC」,
+         完整說明與錯誤在鈕的 title(第二十九輪 L4:這一列在 1280×720 失電後把 DISTRESS / URGENCY 擠到視窗外)。
+         其他警示(只有「無法播放音訊」)照常顯示 */
+      .hint.mic:not(.warn),
+      .hint.mic.on-ptt {
         display: var(--brm-vhf-mic-hint-display, block);
       }
     `,
@@ -295,6 +322,15 @@ export class VhfPanel extends LitElement {
   private ownClient = false;
   private armTimer: ReturnType<typeof setTimeout> | null = null;
   private keyDown = false;
+  // 訊息紀錄列貼底(第二十九輪 L4):壓縮時紀錄列只有約兩則高,由舊到新排列;不捲到最新的話只看得到最舊的「VHF 已連線」
+  /** 這次更新前紀錄列是否捲在底部(willUpdate 量;使用者往上捲時為 false,不強制拉回) */
+  private logWasAtBottom = true;
+  /** 紀錄列目前是否貼底(捲動事件與程式捲動時更新;紀錄列變矮時依此決定是否重新捲到底) */
+  private logStuck = true;
+  /** 上次畫面上最新一則的 seq 與所屬的 client(換 client 時視為第一次) */
+  private lastLogSeq = 0;
+  private lastLogClient: VhfClient | null = null;
+  private logResize: ResizeObserver | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -321,10 +357,51 @@ export class VhfPanel extends LitElement {
       this.ownClient = false;
     }
     if (this.armTimer) clearTimeout(this.armTimer);
+    this.logResize?.disconnect();
+    this.logResize = null;
   }
 
   override willUpdate(changed: Map<PropertyKey, unknown>): void {
     if (changed.has('client') && this.client && !this.unsubscribe) this.attach();
+    // 量「更新前」是否在底部:到 updated() 時新訊息已經畫上去,一定看起來像往上捲了
+    const log = this.logElement;
+    this.logWasAtBottom = !log || isScrolledToBottom(log);
+  }
+
+  override updated(): void {
+    const log = this.logElement;
+    if (!log) return;
+    this.observeLogSize(log);
+    const items = this.client?.machine.log ?? [];
+    const seq = items.length > 0 ? items[items.length - 1]!.seq : 0;
+    const fresh = this.client !== this.lastLogClient;
+    const grew = fresh ? seq > 0 : seq > this.lastLogSeq;
+    this.lastLogClient = this.client;
+    this.lastLogSeq = seq;
+    // 紀錄變多且原本在底部(含第一次、換 client)→ 捲到最新一則;使用者往上捲在看舊訊息時不拉回
+    if (grew && (fresh || this.logWasAtBottom)) this.scrollLogToBottom(log);
+  }
+
+  private get logElement(): HTMLElement | null {
+    return this.shadowRoot?.querySelector<HTMLElement>('.log') ?? null;
+  }
+
+  private scrollLogToBottom(log: HTMLElement): void {
+    log.scrollTop = log.scrollHeight;
+    this.logStuck = true;
+  }
+
+  private readonly onLogScroll = (ev: Event): void => {
+    this.logStuck = isScrolledToBottom(ev.currentTarget as HTMLElement);
+  };
+
+  /** 紀錄列變矮(右欄高度改變使壓縮生效、視窗縮小)時,原本貼底就重新捲到底,最新一則不會被擠到可見範圍外 */
+  private observeLogSize(log: HTMLElement): void {
+    if (this.logResize || typeof ResizeObserver === 'undefined') return;
+    this.logResize = new ResizeObserver(() => {
+      if (this.logStuck) this.scrollLogToBottom(log);
+    });
+    this.logResize.observe(log);
   }
 
   private attach(): void {
@@ -421,6 +498,28 @@ export class VhfPanel extends LitElement {
     const rx = m?.receivingFrom;
     const busy = m?.busyBy;
     const canPtt = !!c && c.machine.joined && c.mic !== 'unavailable' && c.mic !== 'denied';
+    // 無麥克風(被拒 / 沒有麥克風 API):PTT 鈕上寫短句,完整說明(含錯誤與無法播放音訊)在鈕的 title 與警示列
+    const micBlocked = c !== null && (c.mic === 'denied' || c.mic === 'unavailable');
+    const micText = c && c.mic !== 'granted' ? `${MIC_LABEL[c.mic]}${c.micError ? `(${c.micError})` : ''}${c.playback === 'none' ? ';此環境無法播放音訊,只收文字' : ''}` : '';
+    const pttTitle = canPtt
+      ? `按住說話(滑鼠/觸控/空白鍵)${c && c.mic !== 'granted' ? `;${MIC_LABEL[c.mic]}` : ''}`
+      : !c
+        ? '未連線'
+        : micBlocked
+          ? `${c.machine.joined ? '' : '未連線;'}${micText}`
+          : c.machine.joined
+            ? MIC_LABEL[c.mic]
+            : '未連線';
+    const pttLabel =
+      state === 'transmitting'
+        ? `TX CH${m?.channel}`
+        : micBlocked
+          ? c.playback === 'none'
+            ? PTT_NO_MIC_NO_AUDIO_LABEL
+            : PTT_NO_MIC_LABEL
+          : state === 'busy'
+            ? '頻道佔用'
+            : `PTT CH${m?.channel ?? ''}`;
     void this.tick;
     return html`
       <div class="tile">
@@ -447,23 +546,23 @@ export class VhfPanel extends LitElement {
         </div>
         <div class="controls">
           <button
-            class="ptt ${state}"
+            class="ptt ${state} ${micBlocked ? 'no-mic' : ''}"
             ?disabled=${!canPtt}
-            title=${canPtt ? `按住說話(滑鼠/觸控/空白鍵)${c && c.mic !== 'granted' ? `;${MIC_LABEL[c.mic]}` : ''}` : (c ? MIC_LABEL[c.mic] : '未連線')}
+            title=${pttTitle}
             @pointerdown=${this.pttDown}
             @pointerup=${this.pttUp}
             @pointercancel=${this.pttUp}
             @pointerleave=${(e: PointerEvent) => (state === 'transmitting' ? this.pttUp(e) : undefined)}
             @contextmenu=${(e: Event) => e.preventDefault()}
           >
-            ${state === 'transmitting' ? `TX CH${m?.channel}` : state === 'busy' ? '頻道佔用' : `PTT CH${m?.channel ?? ''}`}
+            ${pttLabel}
           </button>
           <label class="volume">音量 ${Math.round(this.volume * 100)}
             <input type="range" min="0" max="100" .value=${String(Math.round(this.volume * 100))} @input=${this.setVolume} />
           </label>
         </div>
-        ${c && c.mic !== 'granted' ? html`<div class="hint mic ${c.mic === 'denied' || c.mic === 'unavailable' || c.playback === 'none' ? 'warn' : ''}">${MIC_LABEL[c.mic]}${c.micError ? `(${c.micError})` : ''}${c.playback === 'none' ? ';此環境無法播放音訊,只收文字' : ''}</div>` : nothing}
-        <div class="log" aria-label="VHF 訊息">
+        ${c && c.mic !== 'granted' ? html`<div class="hint mic ${micBlocked || c.playback === 'none' ? 'warn' : ''} ${micBlocked ? 'on-ptt' : ''}">${micText}</div>` : nothing}
+        <div class="log" aria-label="VHF 訊息" @scroll=${this.onLogScroll}>
           ${log.length === 0 ? html`<div class="hint">尚無通話;同頻道的語音會自動播放,文字訊息列於此</div>` : nothing}
           ${log.map((item) => html`<div class="item ${item.direction} ${item.severity}" data-kind=${item.kind}><span class="time">${clock(item.at)}</span><span class="ch">${item.kind === 'system' ? '' : `CH${item.channel}`}</span><span class="text">${vhfLogText(item)}</span></div>`)}
         </div>

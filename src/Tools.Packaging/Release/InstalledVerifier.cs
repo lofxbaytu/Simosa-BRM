@@ -71,22 +71,26 @@ public sealed class InstallFinding
 
 /// <summary>
 /// 降版(安裝模式核對 --json 的 <c>downgrade</c>、<c>simosa-pkg status --json</c> 的 <c>releaseDowngrade</c>):套用更新包之後重新安裝過,
-/// 而目前的發行版比先前安裝的發行版、曾套用的軟體更新包或曾套用過的最高版本舊(<c>InstalledVerifier.DetectDowngrade</c>)。
+/// 而目前的發行版比先前安裝的發行版、曾套用的軟體更新包或仍在套用狀態的更新包最高版本舊(<c>InstalledVerifier.DetectDowngrade</c>,
+/// 依覆蓋清單保存的證據 <see cref="DowngradeRecord"/>;之後套用非軟體更新包也保留,直到套用新的軟體更新包或以夠新的安裝程式重新安裝)。
 /// 不是錯誤:以較舊版本的安裝程式回到舊版是 rollback 拒絕訊息建議的正規作法;只是 status 的版次與實際執行的程式不符,一定要明說。
 /// </summary>
 public sealed class ReleaseDowngrade
 {
     /// <summary>目前 manifest.json 的版本</summary>
     public string ReleaseVersion { get; set; } = "";
-    /// <summary>比較基準:下列三者中的最大者(「版本不低於它的安裝程式」才回到降版之前)</summary>
+    /// <summary>比較基準:下列三者中比目前發行版新者的最大者(「版本不低於它的安裝程式」才回到降版之前)</summary>
     public string BasisVersion { get; set; } = "";
-    /// <summary>覆蓋清單記錄的先前發行版(沒有時 null)</summary>
+    /// <summary>重新安裝之前的發行版(覆蓋清單的 baseline 或 previous.json 的 release;沒有時 null)</summary>
     public string? PreviousReleaseVersion { get; set; }
-    /// <summary>installed.json 的 software 元件版次(status 顯示的軟體版次;沒有時 null)</summary>
+    /// <summary>重新安裝當時 installed.json 的 software 元件版次(status 顯示的軟體版次;沒有時 null)</summary>
     public string? SoftwareVersion { get; set; }
-    /// <summary>installed.json 的 highestVersion</summary>
+    /// <summary>
+    /// 重新安裝之前仍在套用狀態(未 rollback)的更新包中的最高版本(<see cref="DowngradeRecord.HighestAppliedVersion"/>;
+    /// 沒有套用中的更新包時才以 installed.json 的 highestVersion 補位)
+    /// </summary>
     public string? HighestVersion { get; set; }
-    /// <summary>software 元件版次比目前的發行版新:status 顯示的軟體版次不是實際執行的程式</summary>
+    /// <summary>software 元件版次比目前的發行版新(而 installed.json 的 software 元件仍是那個更新包):status 顯示的軟體版次不是實際執行的程式</summary>
     public bool SoftwareStale { get; set; }
     /// <summary>給人看的說明(核對的「狀態」提醒與 status 的警告用同一段文字)</summary>
     public string Message { get; set; } = "";
@@ -184,9 +188,13 @@ public static class InstalledVerifier
     private static readonly HashSet<string> Noise = new(StringComparer.OrdinalIgnoreCase) { "desktop.ini" };
 
     /// <summary>目前安裝根目錄的發行清單身分(<see cref="InstalledBaseline.Of"/>)與所列路徑;沒有清單或讀不到時回傳 null。</summary>
-    public static InstalledBaseline? ReadBaseline(string root, out List<string>? manifestPaths)
+    public static InstalledBaseline? ReadBaseline(string root, out List<string>? manifestPaths) => ReadBaseline(root, out manifestPaths, out _);
+
+    /// <summary>同上;<paramref name="unreadable"/> 區分「manifest.json 不在」(false)與「在、但讀不到或格式錯」(true)。</summary>
+    public static InstalledBaseline? ReadBaseline(string root, out List<string>? manifestPaths, out bool unreadable)
     {
         manifestPaths = null;
+        unreadable = false;
         var path = Path.Combine(root, ReleaseManifest.FileName);
         try
         {
@@ -204,6 +212,7 @@ public static class InstalledVerifier
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
+            unreadable = true;
             return null;
         }
     }
@@ -299,7 +308,9 @@ public static class InstalledVerifier
         else
         {
             var baseline = InstalledBaseline.Of(m, manifestSha);
-            overlay = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, cmp, info);
+            // 覆蓋清單不在或讀不到時,previous.json(rollback 判斷用的同一份)的發行清單身分也是「之後重新安裝過」的依據
+            var lastApply = PreviousMeta.TryLoad(Path.Combine(root, "state", "previous", "previous.json"));
+            overlay = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, cmp, info, lastApply: lastApply);
             if (overlayError is not null && installed.AppliedPackages().Count == 0)
                 overlay.Untracked.Add(new TrackedPackage { Prefixes = InstalledPaths.UpdatePrefixes.ToList(), Reason = UntrackedReasons.NotRecorded });
         }
@@ -311,8 +322,9 @@ public static class InstalledVerifier
             Consistent = installed is not null && overlayError is null && !info.Diverged && !info.Missing,
             InterruptedPackageId = info.InterruptedPackage?.PackageId, InterruptedVersion = info.InterruptedPackage?.Version,
         };
-        // 降版(以較舊的安裝程式重新安裝):不是錯誤(rollback 拒絕訊息建議的正規作法就是以舊版安裝程式回到舊版),但一定要明說
-        if (installed is not null && DetectDowngrade(m.Version, info, installed) is { } downgrade)
+        // 降版(以較舊的安裝程式重新安裝):不是錯誤(rollback 拒絕訊息建議的正規作法就是以舊版安裝程式回到舊版),但一定要明說。
+        // 依覆蓋清單保存的證據判斷(Reconcile 在看得到重新安裝時記下,之後套用非軟體更新包也保留),與 status 同一個判斷
+        if (installed is not null && DetectDowngrade(m.Version, overlay, installed) is { } downgrade)
         {
             rep.Downgrade = downgrade;
             Notice(InstallFindingCategories.State, ReleaseManifest.FileName, downgrade.Message);
@@ -321,11 +333,22 @@ public static class InstalledVerifier
         var rollbackNote = info.Rebased || info.SupersededPackages.Count > 0 ? RollbackNote(root) : "";
         if (info.SupersededPackages.Count > 0)
         {
-            // 舊版 simosa-pkg 套用過更新包、之後才安裝了目前的發行版(會寫覆蓋清單的 simosa-pkg 隨這次安裝而來):不是「無法核對」
+            var packages = string.Join("、", info.SupersededPackages.Select(p => $"{p.Version}({p.Kind ?? "?"})").Distinct());
+            const string superseded = "清單所列檔案以發行清單核對(這些更新包的變更已被安裝覆蓋,simosa-pkg status 顯示的版次或參數集可能與實際檔案不符,請訪船船長確認)";
             Notice(InstallFindingCategories.State, "state/installed.json",
-                $"更新包 {string.Join("、", info.SupersededPackages.Select(p => $"{p.Version}({p.Kind ?? "?"})").Distinct())} 是在目前的發行版(建置於 {m.BuiltUtc:yyyy-MM-dd HH:mm}Z)之前套用的,"
-                + "之後才安裝了這個發行版:清單所列檔案以發行清單核對(這些更新包的變更已被安裝覆蓋,simosa-pkg status 顯示的版次或參數集可能與實際檔案不符,請訪船船長確認)"
-                + (info.Rebased ? "" : rollbackNote));
+                info.ReinstalledSinceLastApply
+                    // 覆蓋清單不在或讀不到,但 previous.json 記錄的套用當時發行清單與目前不同:套用之後重新安裝過
+                    ? $"更新包 {packages} 套用之後重新安裝過發行版(state/previous/previous.json 記錄套用時的發行版 {info.LastApplyRelease?.Version ?? "(當時沒有或讀不到發行清單)"},"
+                      + $"目前 {m.Version};覆蓋清單 state/{InstalledFiles.FileName} 不在或讀不到):{superseded}{rollbackNote}"
+                    // 舊版 simosa-pkg 套用過更新包、之後才安裝了目前的發行版(會寫覆蓋清單的 simosa-pkg 隨這次安裝而來):不是「無法核對」
+                    : $"更新包 {packages} 是在目前的發行版(建置於 {m.BuiltUtc:yyyy-MM-dd HH:mm}Z)之前套用的,之後才安裝了這個發行版:{superseded}"
+                      + (info.Rebased ? "" : rollbackNote));
+        }
+        if (info.BaselineAdopted)
+        {
+            Notice(InstallFindingCategories.State, ReleaseManifest.FileName,
+                $"覆蓋清單最後一次寫入(套用更新包 {overlay.Version ?? "?"})時發行清單 manifest.json 讀不到,沒有記錄當時的發行版;目前的發行版 {m.Version} 建置於那次套用之前,"
+                + "視為同一個發行版(沒有重新安裝),更新包換過的檔案照覆蓋清單核對。下一次套用更新包時會記下目前的發行清單");
         }
         if (info.Rebased)
         {
@@ -517,38 +540,35 @@ public static class InstalledVerifier
     }
 
     /// <summary>
-    /// 降版判斷(核對與 <c>simosa-pkg status</c> 共用):套用更新包之後重新安裝過(<see cref="ReconcileInfo.Rebased"/>,或沒有覆蓋清單時
-    /// <see cref="ReconcileInfo.SupersededPackages"/> 非空),而目前的發行版 <paramref name="releaseVersion"/> 比
-    /// 先前安裝的發行版(覆蓋清單記錄的 <see cref="ReconcileInfo.PreviousBaseline"/>)、installed.json 的 software 元件版次、
-    /// 曾套用過的最高版本(highestVersion)三者的最大者舊。沒有重新安裝的跡象時一律不算(在 2026.11.1 上套用 2026.11.2 的軟體更新包是正常狀態)。
+    /// 降版判斷(核對與 <c>simosa-pkg status</c> 共用;唯一的判斷在 <see cref="DowngradeRecord.Evaluate"/>):讀
+    /// <see cref="InstalledFiles.Reconcile"/> 對齊後的覆蓋清單所帶的降版證據 <see cref="InstalledFiles.Downgrade"/> —
+    /// 重新安裝當下記下(先前安裝的發行版、installed.json 的 software 元件、仍在套用狀態的更新包最高版本),之後套用非軟體更新包也保留,
+    /// 直到套用新的軟體更新包或以版本不低於比較基準的安裝程式重新安裝為止。目前的發行版 <paramref name="releaseVersion"/> 比其中任一項舊即為降版。
+    /// 沒有重新安裝的跡象時一律不算(在 2026.11.1 上套用 2026.11.2 的軟體更新包是正常狀態)。
     /// </summary>
-    public static ReleaseDowngrade? DetectDowngrade(string? releaseVersion, ReconcileInfo info, InstalledState installed)
+    public static ReleaseDowngrade? DetectDowngrade(string? releaseVersion, InstalledFiles reconciled, InstalledState installed)
     {
-        if (!info.Rebased && info.SupersededPackages.Count == 0) return null;
-        if (releaseVersion is null || !PackageVersion.TryParse(releaseVersion, out _)) return null;
-        bool Newer(string? v) => v is not null && PackageVersion.TryParse(v, out _) && PackageVersion.Compare(v, releaseVersion) > 0;
-        var previous = info.PreviousBaseline?.Version;
-        var software = installed.Components?.GetValueOrDefault(UpdateKinds.Software)?.Version;
-        var highest = installed.HighestVersion;
+        if (reconciled.Downgrade is not { } record || record.Evaluate(releaseVersion, installed) is not { } d) return null;
         var parts = new List<string>();
-        if (Newer(previous)) parts.Add($"先前安裝的發行版 {previous}");
-        if (Newer(software)) parts.Add($"曾套用的軟體更新包 {software}");
-        if (Newer(highest) && highest != software && highest != previous) parts.Add($"曾套用過的更新包最高版本 {highest}");
-        if (parts.Count == 0) return null;
-        var basis = MaxVersion(MaxVersion(Newer(previous) ? previous : null, Newer(software) ? software : null), Newer(highest) ? highest : null)!;
-        var stale = Newer(software);
+        if (d.PreviousReleaseVersion is { } previous) parts.Add($"先前安裝的發行版 {previous}");
+        if (d.SoftwareVersion is { } software) parts.Add($"曾套用的軟體更新包 {software}");
+        if (d.HighestAppliedVersion is { } highest && highest != d.SoftwareVersion && highest != d.PreviousReleaseVersion) parts.Add($"曾套用過的更新包最高版本 {highest}");
+        var stale = d.SoftwareVersion is not null;
         return new ReleaseDowngrade
         {
-            ReleaseVersion = releaseVersion, BasisVersion = basis, PreviousReleaseVersion = previous, SoftwareVersion = software, HighestVersion = highest, SoftwareStale = stale,
-            Message = $"降版:目前的發行版 {releaseVersion} 比{string.Join("、", parts)} 舊 — 套用更新包之後以較舊的安裝程式(或較舊的發行版)重新安裝過。"
-                      + (stale ? $"simosa-pkg status 顯示的軟體版次 {software} 不是實際執行的程式(實際執行的是發行版 {releaseVersion} 的程式)。" : "")
-                      + $"這不算錯誤(以較舊版本的安裝程式回到舊版是允許的作法),請訪船船長確認;若不是刻意回到舊版,請以版本不低於 {basis} 的安裝程式重新安裝,"
-                      + "或請岸上派送版本更高的軟體更新包",
+            ReleaseVersion = d.ReleaseVersion, BasisVersion = d.BasisVersion, PreviousReleaseVersion = record.PreviousReleaseVersion,
+            SoftwareVersion = record.SoftwareVersion, HighestVersion = record.HighestAppliedVersion, SoftwareStale = stale,
+            Message = $"降版:目前的發行版 {d.ReleaseVersion} 比{string.Join("、", parts)} 舊 — 套用更新包之後以較舊的安裝程式(或較舊的發行版)重新安裝過。"
+                      + (stale ? $"simosa-pkg status 顯示的軟體版次 {d.SoftwareVersion} 不是實際執行的程式(實際執行的是發行版 {d.ReleaseVersion} 的程式)。" : "")
+                      + $"這不算錯誤(以較舊版本的安裝程式回到舊版是允許的作法),請訪船船長確認;若不是刻意回到舊版,請以版本不低於 {d.BasisVersion} 的安裝程式重新安裝,"
+                      + "或請岸上派送版本更高的軟體更新包。這則提醒會一直保留(之後套用圖資、情境或參數更新包也一樣),"
+                      + $"直到套用新的軟體更新包、或以版本不低於 {d.BasisVersion} 的安裝程式重新安裝為止",
         };
     }
 
     /// <summary>
-    /// <c>simosa-pkg status</c> 用:讀取安裝根目錄的 manifest.json、state/installed.json 與覆蓋清單,以與核對相同的規則(<see cref="InstalledFiles.Reconcile"/>)
+    /// <c>simosa-pkg status</c> 用:讀取安裝根目錄的 manifest.json、state/installed.json、覆蓋清單與 state/previous/previous.json,
+    /// 以與核對相同的規則(<see cref="InstalledFiles.Reconcile"/> → <see cref="DetectDowngrade(string?, InstalledFiles, InstalledState)"/>)
     /// 判斷降版(只讀;不做逐檔雜湊)。<paramref name="releaseVersion"/> 為目前 manifest.json 的版本(沒有或讀不到時 null);讀不到狀態時回傳 null。
     /// </summary>
     public static ReleaseDowngrade? DetectDowngrade(string root, out string? releaseVersion)
@@ -562,9 +582,9 @@ public static class InstalledVerifier
             var installed = InstalledState.LoadOrNew(Path.Combine(root, "state", "installed.json"));
             installed.History = (installed.History ?? new()).Where(h => h is not null).ToList();
             var existing = InstalledFiles.TryLoad(Path.Combine(root, "state", InstalledFiles.FileName), out _);
-            var info = new ReconcileInfo();
-            InstalledFiles.Reconcile(existing, installed, current, paths, InstalledPaths.DefaultComparison, info);
-            return DetectDowngrade(current.Version, info, installed);
+            var lastApply = PreviousMeta.TryLoad(Path.Combine(root, "state", "previous", "previous.json"));
+            var reconciled = InstalledFiles.Reconcile(existing, installed, current, paths, InstalledPaths.DefaultComparison, lastApply: lastApply);
+            return DetectDowngrade(current.Version, reconciled, installed);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
@@ -662,6 +682,7 @@ public static class InstalledVerifier
     /// 「以更新包修復」那一句要說明須包含受損的檔案,位於其他位置(tools/、docs/…)的檔案只能以安裝程式修復。
     /// 更新包新增、發行版沒有、又不在程式目錄的檔案(<see cref="InstallFinding.RepairableBy"/> = package)另寫一項:安裝程式修不好
     /// (重新安裝後仍會列出,要求的安裝程式版本只會一直往上推),只能以含這些檔案的更新包修復;「重新安裝後仍有錯誤 → 換磁碟」不套用在這類檔案。
+    /// 順序:重新安裝那一項、緊接著更新包新增檔案那一項、多出的檔案,「換磁碟」那一句放在最後;互相參照寫明「見下一步(N)」。
     /// </summary>
     private static void Finish(InstallCheckReport rep, InstalledState? installed, StringComparison cmp = StringComparison.Ordinal, bool packagesOnRelease = false)
     {
@@ -691,12 +712,17 @@ public static class InstalledVerifier
         // 更新包新增、發行版沒有的檔案(data\ 等程式目錄以外):安裝程式修不好,另寫一段下一步,也不套用「重新安裝後仍有錯誤 → 換磁碟」
         var packageOnly = damagedAll.Where(e => e.RepairableBy == InstallFinding.RepairByPackage).ToList();
         var damaged = damagedAll.Except(packageOnly).ToList();
+        // 順序:重新安裝那一項 → 緊接著更新包新增檔案那一項 → …(多出的檔案)→ 最後才是「仍有錯誤 → 換磁碟」;互相參照一律寫明「見下一步(N)」
+        // (文字輸出有兩項以上時才編號,這裡一定有三項以上)
+        var packageOnlyNo = rep.NextSteps.Count + (damaged.Count > 0 ? 2 : 1);
+        var seePackageOnly = packageOnly.Count > 0 ? $"(標示為更新包新增的檔案見下一步({packageOnlyNo}))" : "";
+        string? diskStep = null;
         if (damaged.Count > 0)
         {
             if (installer is null)
             {
                 rep.NextSteps.Add("程式或資料檔損壞或不完整,請先不要用於訓練。以原安裝程式(SimosaBRM-Setup-<版本>.exe)或專用隨身碟上的發行版重新安裝到同一位置,再執行本核對"
-                                  + $"({installerClears})。{kept}");
+                                  + $"({installerClears}){seePackageOnly}。{kept}");
             }
             else
             {
@@ -719,12 +745,13 @@ public static class InstalledVerifier
                 rep.NextSteps.Add("程式或資料檔損壞或不完整,請先不要用於訓練,並通知訪船船長。"
                                   + $"這台筆電的發行版是 {rep.Release?.Version ?? "?"}、現行更新包是 {current}:請取得「{installer}」重新安裝到同一位置({installerClears})"
                                   + byPackage
-                                  + (packageOnly.Count > 0 ? "(標示為更新包新增的檔案另見下一項)" : "")
+                                  + seePackageOnly
                                   // 以較舊的安裝程式重新安裝 = 整個發行版降版:核對只列「降版」的狀態提醒,不是錯誤(以舊版安裝程式回到舊版是允許的作法),所以不能指望核對擋下
-                                  + $"。已套用過的更新包不能重複套用(版本須遞增);不要用較舊的安裝程式:那會把整個發行版降版(核對只以「狀態」提醒指出「降版」,不列為錯誤)。{kept}");
+                                  + "。已套用過的更新包不能重複套用(版本須遞增);不要用較舊的安裝程式:那會把整個發行版降版"
+                                  + $"(核對只以「狀態」提醒指出「降版」,不列為錯誤;提醒保留到套用新的軟體更新包或以夠新的安裝程式重新安裝為止)。{kept}");
             }
-            rep.NextSteps.Add("重新安裝(或套用更新包)後仍有錯誤時,磁碟(隨身碟)可能故障,請更換後再安裝"
-                              + (packageOnly.Count > 0 ? "(標示為更新包新增的檔案除外:重新安裝修不好它們,見下一項)。" : "。"));
+            diskStep = "重新安裝(或套用更新包)後仍有錯誤時,磁碟(隨身碟)可能故障,請更換後再安裝"
+                       + (packageOnly.Count > 0 ? $"(標示為更新包新增的檔案除外:重新安裝修不好它們,見下一步({packageOnlyNo}))。" : "。");
         }
         else if (broken.Count > packageOnly.Count)
         {
@@ -751,6 +778,7 @@ public static class InstalledVerifier
                               + (installer is null ? "" : $";須用{installer},較舊的會把整個發行版降版")
                               + ";有目錄連結時請先手動移除連結再安裝);以壓縮檔或手動複製覆蓋發行版不會清除舊檔。");
         }
+        if (diskStep is not null) rep.NextSteps.Add(diskStep);
     }
 
     /// <summary>

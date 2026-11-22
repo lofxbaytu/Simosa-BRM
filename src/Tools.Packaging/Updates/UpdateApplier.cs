@@ -57,10 +57,44 @@ public sealed class PreviousMeta
     /// </summary>
     public InstalledBaseline? Release { get; set; }
     /// <summary>
-    /// 寫入者是否記錄了 <see cref="Release"/>(本版起一律 true;<see cref="Release"/> 為 null 即「套用時沒有可讀的發行清單」)。
+    /// 寫入者是否記錄了 <see cref="Release"/>(本版起一律 true;<see cref="Release"/> 為 null 即「套用時沒有可讀的發行清單」,
+    /// 再以 <see cref="ReleaseUnreadable"/> 區分「檔案不在」與「在但讀不到」)。
     /// 舊版 simosa-pkg 寫的 previous.json 沒有這兩個欄位(false):改以覆蓋清單判斷,沒有覆蓋清單時以 Reconcile 的時間規則判斷。
     /// </summary>
     public bool ReleaseRecorded { get; set; }
+    /// <summary>
+    /// 套用時 manifest.json 存在、卻讀不到(損毀或 IO 錯誤;<see cref="Release"/> 因此為 null)。false 而 <see cref="Release"/> 為 null 即當時沒有 manifest.json。
+    /// 這時沒有身分可比,「之後是否重新安裝過」改依發行版建置時間判斷(<see cref="ReleaseChangedSince"/>)。舊檔沒有這個欄位(false)。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ReleaseUnreadable { get; set; }
+
+    /// <summary>
+    /// 套用之後是否重新安裝過發行版(目前的發行清單身分 <paramref name="now"/> 與套用當時記錄的不同)— rollback 的「重新安裝過」判斷
+    /// (<see cref="UpdateApplier.CheckRollback"/>)與沒有覆蓋清單時的核對、降版判斷(<see cref="InstalledFiles.Reconcile"/>)共用:
+    /// 有記錄身分 → <see cref="InstalledBaseline.SameRelease"/>;當時讀不到 → 目前的發行版建置於套用之後才算(<see cref="InstalledBaseline.BuiltAfter"/>);
+    /// 當時沒有 manifest.json、現在有 → 是;舊格式(沒有記錄)→ null(無從判斷,呼叫端改用其他依據)。
+    /// </summary>
+    public bool? ReleaseChangedSince(InstalledBaseline now)
+    {
+        if (!ReleaseRecorded) return null;
+        if (Release is not null) return !InstalledBaseline.SameRelease(Release, now);
+        if (ReleaseUnreadable) return InstalledBaseline.BuiltAfter(now, CreatedUtc);
+        return true;
+    }
+
+    /// <summary>讀取 state/previous/previous.json;不在、讀不到或格式不符時回傳 null(核對與 status 用:唯讀、不中止)。</summary>
+    public static PreviousMeta? TryLoad(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? PackageJson.Load<PreviousMeta>(path, "previous.json") : null;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary><see cref="UpdateApplier.CheckRollback"/> 的結果(rollback、status 的 rollbackAvailable 與安裝模式核對的提醒共用)。</summary>
@@ -71,6 +105,8 @@ public sealed class RollbackCheck
     public string? Reason { get; init; }
     /// <summary>因為「套用現行更新包之後重新安裝過」而拒絕(核對的「狀態」提醒據以註明「請不要執行 rollback」)</summary>
     public bool ReinstalledSinceApply { get; init; }
+    /// <summary>可回復、但判斷依據較弱時的說明(例如套用時發行清單讀不到、改依建置時間判斷);rollback 執行時列為警告</summary>
+    public string? Note { get; init; }
 }
 
 /// <summary>
@@ -212,7 +248,7 @@ public sealed class UpdateApplier
             }
 
             // 3b. 覆蓋清單的新內容(state/installed-files.json;此時只在記憶體內組好,尚未變更安裝目錄 — 失敗走「未變更」)
-            var installedFiles = BuildInstalledFiles(installed, m, removePaths, result, out var release);
+            var installedFiles = BuildInstalledFiles(installed, m, removePaths, result, out var release, out var releaseUnreadable);
 
             // 4. 原子替換(目錄改名);失敗時逐一回復
             Directory.CreateDirectory(pendingPrev);
@@ -232,7 +268,7 @@ public sealed class UpdateApplier
                 PackageJson.SaveAtomic(Path.Combine(pendingPrev, "previous.json"), new PreviousMeta
                 {
                     ReplacedByPackageId = m.PackageId, ReplacedByVersion = m.Version, ReplacedByKind = m.Kind, CreatedUtc = Now, Components = existed,
-                    Release = release, ReleaseRecorded = true,
+                    Release = release, ReleaseRecorded = true, ReleaseUnreadable = releaseUnreadable,
                 });
                 if (File.Exists(_layout.InstalledStatePath)) File.Copy(_layout.InstalledStatePath, Path.Combine(pendingPrev, "installed.json"), overwrite: true);
                 // 覆蓋清單與 installed.json 同在提交點之前寫入(先覆蓋清單、後 installed.json):任何一個寫不進去都整體回復,
@@ -372,14 +408,26 @@ public sealed class UpdateApplier
     /// 在目前發行版建置之前套用的更新包已被安裝覆蓋,不列入),再記入本更新包寫入與刪除的路徑。
     /// 傳入本更新包的 packageId:上一次套用同一個更新包時若在「覆蓋清單已寫、installed.json 未寫」之間中斷(斷電),
     /// 這次是原包重試 — 覆蓋清單原樣沿用,不把它列為未記錄(否則 app/ 會長期停在「無法核對」)。
+    /// 覆蓋清單遺失或損毀時,以 state/previous/previous.json(rollback 判斷用的同一份)判斷最近一次套用之後是否重新安裝過;
+    /// 降版的證據(<see cref="InstalledFiles.Downgrade"/>)由 Reconcile 記下、隨本次套用寫回。
+    /// manifest.json 存在卻讀不到(<paramref name="releaseUnreadable"/>):照常套用(不拒絕),但加一則警告,並在覆蓋清單與 previous.json
+    /// 記下「讀不到」(與「不在」分開),之後讀得到時改依建置時間判斷是否重新安裝過,不直接當成重新安裝。
     /// </summary>
-    private InstalledFiles BuildInstalledFiles(InstalledState installed, UpdateManifest m, List<string> removePaths, UpdateApplyResult result, out InstalledBaseline? baseline)
+    private InstalledFiles BuildInstalledFiles(InstalledState installed, UpdateManifest m, List<string> removePaths, UpdateApplyResult result,
+                                               out InstalledBaseline? baseline, out bool releaseUnreadable)
     {
         var existing = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out var loadError);
-        if (loadError is not null) result.Warnings.Add($"覆蓋清單 state/{InstalledFiles.FileName} 無法讀取,已重新建立(先前更新包的檔案在安裝模式核對時列為無法核對):{loadError}");
-        baseline = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths);
-        var files = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, InstalledPaths.DefaultComparison, applyingPackageId: m.PackageId);
+        if (loadError is not null) result.Warnings.Add($"覆蓋清單 state/{InstalledFiles.FileName} 無法讀取,已重新建立(先前更新包的檔案在安裝模式核對時列為無法核對;已被重新安裝覆蓋者除外):{loadError}");
+        baseline = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths, out releaseUnreadable);
+        if (releaseUnreadable)
+            result.Warnings.Add("發行清單 manifest.json 在、但讀不到(損毀或無法讀取):更新包已照常套用,但這次沒有記錄發行清單的身分。"
+                                + "請先執行 simosa-pkg verify-install 確認;發行清單有問題時以安裝程式重新安裝到同一位置。"
+                                + "之後 rollback 改依發行版的建置時間判斷是否重新安裝過(目前的發行版建置於這次套用之後時會被拒絕)");
+        var lastApply = PreviousMeta.TryLoad(Path.Combine(_layout.PreviousDir, "previous.json"));
+        var files = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, InstalledPaths.DefaultComparison,
+                                             applyingPackageId: m.PackageId, lastApply: lastApply, nowUtc: Now);
         files.Record(m, removePaths, Now, InstalledPaths.DefaultComparison);
+        if (releaseUnreadable && files.Baseline is null) files.BaselineUnreadable = true;
         return files;
     }
 
@@ -596,9 +644,9 @@ public sealed class UpdateApplier
         var kind = meta.ReplacedByKind ?? current.History.FirstOrDefault(h => h.PackageId == replacedId)?.Kind;
         if (kind == UpdateKinds.Trust || (meta.Components ?? new()).ContainsKey("config"))
             return new RollbackCheck { Reason = "上一個套用的是信任清單變更(trust),不可 rollback(會讓被撤銷的金鑰重新受信任);要撤回請由備援金鑰簽章新的 trust 更新包" };
-        if (ReinstalledSinceLastApply(meta, current) is { } reinstalled)
+        if (ReinstalledSinceLastApply(meta, current, out var note) is { } reinstalled)
             return new RollbackCheck { Reason = reinstalled, ReinstalledSinceApply = true };
-        return new RollbackCheck { Allowed = true };
+        return new RollbackCheck { Allowed = true, Note = note };
     }
 
     /// <summary>
@@ -607,31 +655,50 @@ public sealed class UpdateApplier
     /// (docs/design/packaging-sync.md 第 5.1、10 節)。是否為同一個發行版一律以 <see cref="InstalledBaseline.SameRelease"/> 比較(只改編碼不算)。依序:
     /// <list type="number">
     /// <item>目前沒有可讀的 manifest.json:無從判斷,不擋(核對另會報發行清單的錯誤)。</item>
-    /// <item>previous.json 記錄了套用當時的發行清單身分(本版起,<see cref="PreviousMeta.ReleaseRecorded"/>):與目前不同 → 拒絕;
-    ///   當時沒有可讀的發行清單、現在卻有 → 之後由安裝程式或手動複製放進來的 → 拒絕。</item>
-    /// <item>舊版 previous.json、有覆蓋清單:覆蓋清單的 baseline 與目前不同 → 拒絕;baseline 為 null(套用時讀不到 manifest.json)而現在讀得到 → 拒絕。</item>
+    /// <item>previous.json 記錄了套用當時的發行清單身分(本版起,<see cref="PreviousMeta.ReleaseRecorded"/>;判斷在 <see cref="PreviousMeta.ReleaseChangedSince"/>):
+    ///   與目前不同 → 拒絕;當時沒有 manifest.json、現在卻有 → 之後由安裝程式或手動複製放進來的 → 拒絕。
+    ///   當時 manifest.json 在、只是讀不到(<see cref="PreviousMeta.ReleaseUnreadable"/>)→ 沒有身分可比,不能據以認定重新安裝過:
+    ///   目前的發行版建置於套用之後 → 拒絕(一定是之後才安裝的);否則放行,並在 <paramref name="note"/> 說明依據較弱(rollback 時列為警告)。</item>
+    /// <item>舊版 previous.json、有覆蓋清單:覆蓋清單的 baseline 與目前不同 → 拒絕;baseline 為 null(套用時沒有 manifest.json)而現在讀得到 → 拒絕
+    ///   (覆蓋清單記為「讀不到」時同上一項,依建置時間判斷)。</item>
     /// <item>舊版 previous.json、沒有覆蓋清單(舊版 simosa-pkg 套用,或清單遺失):與核對相同的 <see cref="InstalledFiles.Reconcile"/> 判斷 —
     ///   有更新包的套用時間早於目前發行版的建置時間(<see cref="ReconcileInfo.SupersededPackages"/>)即表示發行版是在套用之後才安裝的 → 拒絕。
     ///   這一項依賴時鐘(套用時間是船上筆電的時鐘、建置時間是岸上建置機的時鐘):船上時鐘落後會誤擋(較安全),超前則可能漏擋;
     ///   發行版在套用之前就已建置、之後才安裝(例如以較舊的安裝程式重新安裝)時也看不出來。</item>
     /// </list>
     /// </summary>
-    private string? ReinstalledSinceLastApply(PreviousMeta meta, InstalledState current)
+    private string? ReinstalledSinceLastApply(PreviousMeta meta, InstalledState current, out string? note)
     {
+        note = null;
         var now = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths);
         if (now is null) return null;
         string Refuse(string from) => $"套用現行更新包之後曾重新安裝(發行版 {from} → {now.Version ?? "?"}):state/previous 是重新安裝之前的元件,"
             + "回復會把舊版的檔案放回新的發行版上,拒絕 rollback。要回到較舊的版本,請以該版本的安裝程式重新安裝;要撤回某個更新包的變更,請派送版本更高的更新包";
-        const string noManifestThen = "(套用時安裝根目錄沒有可讀的發行清單)";
-        if (meta.ReleaseRecorded)
+        const string noManifestThen = "(套用時安裝根目錄沒有發行清單)";
+        string unreadableThen = $"(套用時發行清單讀不到;目前的發行版建置於 {now.BuiltUtc:yyyy-MM-dd HH:mm}Z,晚於套用時間)";
+        string unreadableNote = $"套用現行更新包時發行清單 manifest.json 讀不到,沒有記錄當時的發行版:依建置時間判斷(目前的發行版 {now.Version ?? "?"} 建置於套用之前)"
+            + "視為之後沒有重新安裝而放行。若其間曾以較舊的安裝程式重新安裝過,回復會把舊版的檔案放回 — 請以 simosa-pkg verify-install 確認結果"
+            + "(船上時鐘若比實際超前也會這樣判斷)";
+        if (meta.ReleaseChangedSince(now) is { } changed)
         {
-            if (meta.Release is null) return Refuse(noManifestThen);
-            return InstalledBaseline.SameRelease(meta.Release, now) ? null : Refuse(meta.Release.Version ?? "?");
+            if (meta.Release is null && meta.ReleaseUnreadable)
+            {
+                if (changed) return Refuse(unreadableThen);
+                note = unreadableNote;
+                return null;
+            }
+            return changed ? Refuse(meta.Release is { } then ? then.Version ?? "?" : noManifestThen) : null;
         }
         var files = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out _);
         if (files is not null)
         {
-            if (files.Baseline is null) return Refuse(noManifestThen);
+            if (files.Baseline is null)
+            {
+                if (!files.BaselineUnreadable) return Refuse(noManifestThen);
+                if (InstalledBaseline.BuiltAfter(now, files.UpdatedUtc)) return Refuse(unreadableThen);
+                note = unreadableNote;
+                return null;
+            }
             return InstalledBaseline.SameRelease(files.Baseline, now) ? null : Refuse(files.Baseline.Version ?? "?");
         }
         var info = new ReconcileInfo();
@@ -659,6 +726,7 @@ public sealed class UpdateApplier
             return result;
         }
         var meta = metaOrNull!;
+        if (check.Note is { } note) result.Warnings.Add(note);
         var discard = Path.Combine(_layout.StateDir, "discard");
         PackagePaths.DeleteDirectory(discard);
         Directory.CreateDirectory(discard);
