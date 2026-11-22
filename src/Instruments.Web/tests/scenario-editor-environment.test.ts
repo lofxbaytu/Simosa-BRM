@@ -591,14 +591,22 @@ describe('升沉/縱搖 ship.seakeeping(浪一階運動契約)', () => {
     expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: 0 } }))).toBe(true);
     expect(skWarned(withSetEnvironment(on, { waves: { direction_deg: 180 } }))).toBe(true);
     expect(skWarned(withSetEnvironment(on, { wind: { trueSpeed: 30 } }))).toBe(true);
+    // 情境本身沒有 environment.waves 時,時間表只給 Hs(缺 Tp 或來向)無法建立浪:核心以 invalidWaves 拒絕(ParseWavesArg)→ 仍要提醒
+    expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: 2.5 } }))).toBe(true);
+    expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: 2.5, peakPeriod_s: 8 } }))).toBe(true);
+    expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: 2.5, direction_deg: 45 } }))).toBe(true);
+    expect(skWarned(withSetEnvironment(on, { waves: { significantHeight_m: 2.5, peakPeriod_s: '${params:env.tp}', direction_deg: 45 } }))).toBe(false);
     // 起始 Hs = 0、由時間表加浪 → 不提醒
     expect(skWarned(withSetEnvironment({ ...on, waves: { ...WAVES, significantHeight_m: 0 } }, { waves: { significantHeight_m: 1.2 } }))).toBe(false);
-    // E17b:拿掉 environment.waves 後時間表仍有 setEnvironment waves(Hs 0.8 / 1.2)→ 不提醒;再把時間表清空 → 提醒
+    // E17b:原檔有 environment.waves(湧浪 0.5 m)→ 不提醒。拿掉 environment.waves 後,時間表的 setEnvironment waves 只給 Hs(0.8 / 1.2,
+    // 沿用原本的 Tp 與來向)—— 核心在無浪狀態下會拒絕這兩個動作,練習中其實沒有浪 → 要提醒;時間表清空也提醒
     const e17b = fromYaml(read('E17b_typhoon_seakeeping.yaml'), 'E17b');
+    expect(scenarioHasWaves(e17b)).toBe(true);
+    expect(skWarned(e17b)).toBe(false);
     const noStatic = setWavesEnabled(e17b, false);
     expect(noStatic.waves).toBeNull();
-    expect(scenarioHasWaves(noStatic)).toBe(true);
-    expect(skWarned(noStatic)).toBe(false);
+    expect(scenarioHasWaves(noStatic)).toBe(false);
+    expect(skWarned(noStatic)).toBe(true);
     expect(skWarned({ ...noStatic, timeline: [] })).toBe(true);
     // 提醒不阻止載入:issues 為空
     expect(validateEnvironmentExtras({ ...noStatic, timeline: [] }).issues).toEqual([]);

@@ -168,6 +168,11 @@ export class ScenarioEditor extends LitElement {
         width: 100%;
         min-width: 0;
       }
+      /* 勾選列(橫搖 / 升沉縱搖 / 船間交互作用 / 浪的「啟用」)沿用 .pair 時勾選框不可被拉成整列寬 */
+      .pair input[type='checkbox'] {
+        width: auto;
+        flex: 0 0 auto;
+      }
       .pair span {
         color: var(--ob-text-muted);
         white-space: nowrap;

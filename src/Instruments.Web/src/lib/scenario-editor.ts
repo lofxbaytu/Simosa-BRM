@@ -2231,14 +2231,19 @@ export function seakeepingPeriodEstimate(draft: ScenarioDraft): SeakeepingEstima
 /**
  * 情境是否會有浪(升沉/縱搖要有浪才有輸出):environment.waves 存在且 Hs 不是 0,或時間表有 setEnvironment waves 且其 Hs > 0(或為參數引用)。
  * Hs = 0 與 waves: null 皆為關閉;時間表的部分更新(未給 Hs)沿用當下 Hs,無法從無浪建立浪(physics-waves.md 第 6.1 節)。
+ * 情境本身沒有 environment.waves 時,時間表的動作還必須同時給 peakPeriod_s 與 direction_deg 才能建立浪:核心在無浪狀態下
+ * 對缺 Tp 或來向的 setEnvironment waves 以 invalidWaves 拒絕(SimulationEngine.ParseWavesArg;同節「無浪時 peakPeriod_s 與 direction_deg 必填」)—
+ * 只給 Hs 的動作不算有浪。environment.waves 存在(即使 Hs = 0)時,只給 Hs 的更新是合法的(沿用既有的 Tp 與來向)。
  * environment.waves 的 Hs 缺漏或不合法時另有錯誤訊息,這裡視為有浪(不重複提醒)。
  */
 export function scenarioHasWaves(draft: ScenarioDraft): boolean {
   if (draft.waves && draft.waves['significantHeight_m'] !== 0) return true;
+  const established = draft.waves !== null;
   const raises = (w: unknown): boolean => {
     if (!isRecord(w)) return false;
     const hs = numericOf(w['significantHeight_m']);
-    return hs === 'ref' || (typeof hs === 'number' && hs > 0);
+    if (!(hs === 'ref' || (typeof hs === 'number' && hs > 0))) return false;
+    return established || (numericOf(w['peakPeriod_s']) !== undefined && numericOf(w['direction_deg']) !== undefined);
   };
   return draft.timeline.some((item) => {
     const actions = item['actions'];
