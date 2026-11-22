@@ -112,6 +112,18 @@ function Show-Tail([string]$Title, [string]$Text, [int]$Lines = 40) {
 function Show-File([string]$Path, [int]$Lines = 40) {
     if (Test-Path $Path) { Show-Tail $Path (Get-Content -Raw -Encoding UTF8 $Path) $Lines } else { Write-Host "---- ${Path}:不存在" }
 }
+# 核心 log 的收尾段:略過每秒一行的狀態列(t= …),只留事件與關閉訊息(每行最多 200 字);simcore.err.log 有內容時一併印出
+function Show-CoreLog([string]$LogDir, [int]$Lines = 24) {
+    $log = Join-Path $LogDir 'simcore.log'
+    if (-not (Test-Path $log)) { Write-Host "---- ${log}:不存在"; return }
+    Write-Host "---- simcore.log(不含每秒狀態列,最後 $Lines 行)----"
+    @(Get-Content -Encoding UTF8 $log | Where-Object { $_ -and $_ -notmatch '^t=\s' }) | Select-Object -Last $Lines | ForEach-Object {
+        $s = "$_"; if ($s.Length -gt 200) { $s = $s.Substring(0, 200) + '…' }
+        Write-Host "    $s"
+    }
+    $err = Join-Path $LogDir 'simcore.err.log'
+    if ((Test-Path $err) -and (Get-Item $err).Length -gt 0) { Show-File $err 12 }
+}
 function Test-Tcp([string]$HostName, [int]$Port, [int]$TimeoutMs = 1000) {
     $c = New-Object System.Net.Sockets.TcpClient
     try { $t = $c.ConnectAsync($HostName, $Port); return ($t.Wait($TimeoutMs) -and $c.Connected) } catch { return $false } finally { $c.Close() }
@@ -587,6 +599,7 @@ if ($Stage -contains 'instructor') {
         Start-Sleep -Seconds 5
         $rs = Invoke-Ps51 (Join-Path $launch 'stop-all.ps1') @() 120 $inst
         Show-Tail 'stop-all.ps1' $rs.Output 14
+        Show-CoreLog $logs
         [void](Check 'stop-all.ps1(教官筆電)結束碼 0、未強制結束核心' { if ($rs.ExitCode -ne 0) { throw "結束碼 $($rs.ExitCode)" }; if ($rs.Output -match '強制結束') { throw '輸出含「強制結束」' } })
         [void](Check 'stop-all(教官筆電):各埠已關閉、Edge 已關閉' {
             if (-not (Wait-Until { -not ((Test-Tcp '127.0.0.1' 8765 300) -or (Test-Tcp '127.0.0.1' 8766 300) -or (Test-Tcp '127.0.0.1' 8080 300)) } 15)) { throw '15 秒後仍有埠開著' }
@@ -650,8 +663,12 @@ if ($Stage -contains 'summary') {
     foreach ($f in @(Get-ChildItem -LiteralPath $work -Filter 'results-*.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)) {
         if ($f.Name -eq 'results-summary.json') { continue }
         Write-Host "-- $($f.BaseName -replace '^results-', '')"
-        foreach ($r in @(Get-Content -Raw -Encoding UTF8 $f.FullName | ConvertFrom-Json)) {
-            $total[$r.level]++
+        # Windows PowerShell 5.1 的 ConvertFrom-Json 把整個 JSON 陣列當成「一個物件」送進管線:先存變數再用 ForEach-Object 展開
+        $parsed = Get-Content -Raw -Encoding UTF8 $f.FullName | ConvertFrom-Json
+        foreach ($r in @($parsed | ForEach-Object { $_ })) {
+            if ($null -eq $r) { continue }
+            $lvl = "$($r.level)"
+            if ($total.ContainsKey($lvl)) { $total[$lvl] = $total[$lvl] + 1 }
             $d = "$($r.detail)"
             if ($d.Length -gt 150) { $d = $d.Substring(0, 150) + '…' }
             if ($d) { Write-Host "   [$($r.level)] $($r.name) — $d" } else { Write-Host "   [$($r.level)] $($r.name)" }

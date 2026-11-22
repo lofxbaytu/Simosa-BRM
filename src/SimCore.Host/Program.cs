@@ -480,9 +480,12 @@ static async Task CloseBoundedAsync(string name, IAsyncDisposable? server)
     if (!done || sw.ElapsedMilliseconds >= 500)
         Console.WriteLine($"  {name} {(done ? "已關閉" : "關閉逾時(4 s),不再等待")}({sw.ElapsedMilliseconds} ms)");
 }
-await CloseBoundedAsync("錄影上傳端", media);
-await CloseBoundedAsync("VHF 頻道", vhf);
-await CloseBoundedAsync("狀態 WebSocket", ws);
+// 三個網路端同時關閉(彼此獨立;都在下面關閉紀錄之前完成或逾時):最壞情況由 3 × 4 s 降為 4 s,加上停止檔輪詢(≤ 1 s)與
+// 引擎執行緒 Join(≤ 2 s)仍低於 stop-all 腳本的等待上限(10 s)— 逐一關閉時三個都逾時會超過上限,核心被強制結束、紀錄沒有 footer
+await Task.WhenAll(
+    CloseBoundedAsync("錄影上傳端", media),
+    CloseBoundedAsync("VHF 頻道", vhf),
+    CloseBoundedAsync("狀態 WebSocket", ws));
 if (router.Recorder is { } recorder)
 {
     var footer = recorder.Closed ? recorder.Footer! : recorder.Close();
