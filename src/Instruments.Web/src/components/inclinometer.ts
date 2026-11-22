@@ -81,10 +81,23 @@ export class Inclinometer extends LitElement {
         font-size: 11px;
       }
       .readouts .value {
-        font-size: clamp(12px, 0.9vw, 16px);
+        font-size: clamp(11px, min(0.9vw, 9cqi), 16px);
       }
       .readouts .value.main {
-        font-size: clamp(14px, 1.1vw, 20px);
+        font-size: clamp(12px, min(1.1vw, 11cqi), 20px);
+      }
+      /* 窄方塊(conning 條單列 12–13 格,1920 寬約 140–160 px):數值改成單欄,每項一行(兩欄時「靜傾」與「T / 速率」會被方塊右緣裁切) */
+      @container (max-width: 200px) {
+        .readouts {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .readouts > span {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 0 4px;
+        }
       }
       .value.warn {
         color: var(--ob-warning);

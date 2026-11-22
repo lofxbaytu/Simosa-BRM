@@ -38,6 +38,11 @@ export class ConningBar extends LitElement {
       grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.5fr;
       gap: 6px;
     }
+    /* 每個方塊是尺寸容器:方塊內的字級與排法可依「方塊自己的寬度」調整(@container / cqi),
+       單列 12–13 格時(1920 寬每格約 140–180 px)數值縮小或換排法,不被方塊邊界裁切;寬的方塊維持原本的字級 */
+    .bar > * {
+      container-type: inline-size;
+    }
     .bar.with-route {
       /* 單列 11 格(教官站 1920 寬):風/流/時間格加寬,避免「真風 040° 12.0 kn」「流向 SET 200°」「23°48.004'N」被截斷 */
       grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.5fr 1.1fr;
@@ -63,7 +68,9 @@ export class ConningBar extends LitElement {
       /* 單列 13 格(1920 寬每格約 140 px) */
       grid-template-columns: 1.3fr 1fr 1fr 1.3fr 1.2fr 1fr 1.1fr 1.4fr 1.4fr 1.4fr 1.2fr 1.3fr 1fr;
     }
-    @media (max-width: 1500px) {
+    /* 寬度 ≤ 1900 px 折成兩列:單列 10–12 格時每格至少要約 127 px 才放得下數值(SPEED 的「COG 航跡向 287°」),
+       1900 px 以下不夠或太勉強 — 包含 1920×1080 筆電在 Windows 125% 縮放下的 1536 px。app.ts / instructor-app.ts 同一門檻加高該列 */
+    @media (max-width: 1900px) {
       .bar,
       .bar.with-route,
       .bar.with-sea,

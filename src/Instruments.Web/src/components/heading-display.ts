@@ -25,6 +25,10 @@ export class HeadingDisplay extends LitElement {
         justify-content: center;
         gap: 8px;
       }
+      /* 窄方塊(conning 條單列 13 格,1920 寬約 150 px):大字級不超過方塊寬度的 33%,「000 359.9°」不被方塊右緣裁切 */
+      .hdg .value.big {
+        font-size: clamp(28px, min(3.2vw, 33cqi), 56px);
+      }
       .tape {
         flex: 1;
         min-height: 36px;

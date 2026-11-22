@@ -276,16 +276,14 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { _cts.Cancel(); } catch (Exception) { }
         var listener = _listener;
-        if (listener is not null) { try { listener.Stop(); } catch (Exception) { } }
+        // 先中止各客戶端,再在背景中止監聽(不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow);等待有上限
         foreach (var c in _clients.Values)
         {
             try { c.Socket.Abort(); } catch (Exception) { }
         }
-        if (_acceptLoop is not null)
-        {
-            try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { }
-        }
-        HttpListenerStarter.Discard(listener);
+        var wait = TimeSpan.FromSeconds(1.5);
+        await HttpListenerStarter.ShutdownAsync(listener, wait).ConfigureAwait(false);
+        await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, wait).ConfigureAwait(false);
         _listener = null;
         _cts.Dispose();
     }

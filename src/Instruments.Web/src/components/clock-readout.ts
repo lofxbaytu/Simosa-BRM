@@ -20,6 +20,10 @@ export class ClockReadout extends LitElement {
       .pos {
         font-size: 12px;
       }
+      /* 經緯度(最長 12 個字元,例如 120°20.274'E):字級不超過方塊寬度的 10%,窄方塊不被裁切(conning 條內方塊是尺寸容器) */
+      .pos .value.small {
+        font-size: clamp(11px, min(1.1vw, 10cqi), 20px);
+      }
     `,
   ];
 

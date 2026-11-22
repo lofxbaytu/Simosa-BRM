@@ -63,7 +63,7 @@ export class SeaReadout extends LitElement {
         min-width: 0;
       }
       .rows .value {
-        font-size: clamp(13px, 0.95vw, 18px);
+        font-size: clamp(11px, min(0.95vw, 8cqi), 18px);
       }
       .ring {
         fill: none;
@@ -89,7 +89,45 @@ export class SeaReadout extends LitElement {
       }
       .interaction .value,
       .motion .value {
-        font-size: clamp(12px, 0.85vw, 16px);
+        font-size: clamp(11px, min(0.85vw, 7.5cqi), 16px);
+      }
+      /* 窄方塊(conning 條單列 12–13 格,1920 寬每格約 140–180 px):浪向玫瑰縮小並只佔第一列(Hs / Tp)的左側,
+         其餘各列(來向 / 相對、縱搖 / 升沉)用整個方塊寬度;交互作用列的標籤與數值放不下時折成兩行 */
+      @container (max-width: 215px) {
+        .body {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          column-gap: 6px;
+          row-gap: 2px;
+          align-content: center;
+          align-items: center;
+        }
+        .rows {
+          display: contents;
+        }
+        .rose {
+          width: 28px;
+          height: 28px;
+          grid-column: 1;
+          grid-row: 1;
+        }
+        .rows > :first-child {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .rows > :not(:first-child) {
+          grid-column: 1 / -1;
+        }
+        .interaction .row {
+          flex-wrap: wrap;
+          row-gap: 1px;
+        }
+      }
+      /* 更窄(單列 13 格,約 150 px):不顯示浪向玫瑰,相對來向仍有數值 */
+      @container (max-width: 165px) {
+        .rose {
+          display: none;
+        }
       }
       /* 縱搖/升沉:兩組「標籤 + 值」;方塊夠寬時同一行,不夠寬時(1920 單列版面每格約 165–190 px)自動折成兩行,不被方塊裁切 */
       .motion {

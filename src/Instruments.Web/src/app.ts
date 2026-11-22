@@ -250,7 +250,13 @@ export class BrmApp extends LitElement {
         background: var(--ob-warning);
         color: #1a1000;
       }
-      /* 1366×768 等較小螢幕:conning 條折成兩列,需要較高的列;下排操船台略縮 */
+      /* 寬度 ≤ 1900 px(含 1920×1080 筆電在 125% 縮放下的 1536 px):conning 條折成兩列(conning-bar.ts 同一門檻),需要較高的列 */
+      @media (max-width: 1900px) {
+        :host {
+          grid-template-rows: auto minmax(220px, 32vh) minmax(0, 1fr) minmax(210px, 27vh);
+        }
+      }
+      /* 1366×768 等較小螢幕:下排操船台略縮、間距縮小 */
       @media (max-width: 1500px) {
         :host {
           grid-template-rows: auto minmax(220px, 32vh) minmax(0, 1fr) minmax(200px, 27vh);

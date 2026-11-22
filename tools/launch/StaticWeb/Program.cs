@@ -5,6 +5,10 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
+// 主控台與重導向輸出一律 UTF-8:Windows 預設 OEM 字碼頁會把中文日誌印成「?」(英文系統)或 Big5(繁體中文系統),
+// 啟動腳本收下來的 log 檔與其他程式讀取時都以 UTF-8 為準(與 SimCore.Host 相同)
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
+catch (Exception) { /* 無主控台或不支援時維持預設 */ }
 var root = Directory.GetCurrentDirectory();
 var port = 8080;
 var bind = IPAddress.Any;

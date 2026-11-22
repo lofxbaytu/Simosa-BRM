@@ -23,8 +23,16 @@ export class CurrentReadout extends LitElement {
         height: 40px;
         flex: none;
       }
+      /* min(…vw, …cqi):在 conning 條內(方塊是尺寸容器)字級不超過方塊寬度的 8%,窄方塊的數值不被裁切;
+         不在尺寸容器內時 cqi 以視窗寬度計,min() 取到的仍是原本的 vw 值 */
       .rows .value {
-        font-size: clamp(13px, 0.95vw, 18px);
+        font-size: clamp(11px, min(0.95vw, 8cqi), 18px);
+      }
+      @container (max-width: 165px) {
+        .rose {
+          width: 28px;
+          height: 28px;
+        }
       }
       .rows {
         flex: 1;

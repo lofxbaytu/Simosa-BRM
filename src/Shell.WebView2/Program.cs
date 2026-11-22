@@ -8,6 +8,9 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // 重導向的標準輸出 / 錯誤(啟動腳本收成 shell-*.log / .err.log)以 UTF-8 寫出,不用系統的 OEM 字碼頁
+        try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
+        catch (Exception) { /* 沒有主控台(一般啟動方式)時維持預設 */ }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);

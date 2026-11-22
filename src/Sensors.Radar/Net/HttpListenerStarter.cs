@@ -71,4 +71,35 @@ internal static class HttpListenerStarter
         try { listener.Close(); }
         catch (Exception) { /* HttpListenerException(98)/ObjectDisposedException:見類別註解 */ }
     }
+
+    /// <summary>
+    /// 關機時立即停止監聽。<b>不要用 <c>Stop()</c></b>:Windows(http.sys)上仍有連線(尚未關閉的 WebSocket 客戶端,例如瀏覽器分頁、
+    /// 教官筆電、視景)時,Stop() 會等那些連線結束才返回 — 核心卡在關機流程,被 stop-all 逾時強制結束,紀錄沒有 footer
+    /// (2026-11-22 Windows CI 實測:Edge 分頁連著時 10 秒內關不掉;Linux 的受控實作沒有這個行為,所以容器內測不到)。
+    /// Abort() 立即丟棄佇列中的請求並關閉;呼叫前先 Abort 各客戶端的 WebSocket。可重複呼叫,不拋例外。
+    /// </summary>
+    public static void AbortNow(HttpListener? listener)
+    {
+        if (listener is null) return;
+        try { listener.Abort(); }
+        catch (Exception) { /* 已釋放或 Start 失敗的 listener */ }
+    }
+
+    /// <summary>等背景迴圈結束,但不超過 <paramref name="timeout"/>(關機流程不可被卡住:之後還要寫紀錄 footer);逾時回傳 false。</summary>
+    public static async Task<bool> WaitBoundedAsync(Task? task, TimeSpan timeout)
+    {
+        if (task is null) return true;
+        try { await task.WaitAsync(timeout).ConfigureAwait(false); return true; }
+        catch (TimeoutException) { return false; }
+        catch (Exception) { return true; }
+    }
+
+    /// <summary>
+    /// 在背景中止並關閉 listener,最多等 <paramref name="timeout"/>;逾時回傳 false(該背景工作不阻止程序結束)。
+    /// 連 Abort() / Close() 本身也放在背景:關機流程的任何一步都不可無限期阻塞(之後還要寫紀錄 footer)。
+    /// </summary>
+    public static Task<bool> ShutdownAsync(HttpListener? listener, TimeSpan timeout)
+        => listener is null
+            ? Task.FromResult(true)
+            : WaitBoundedAsync(Task.Run(() => { AbortNow(listener); Discard(listener); }), timeout);
 }

@@ -291,6 +291,12 @@ export class InstructorApp extends LitElement {
       .col.right brm-marker-bar {
         max-height: 30vh;
       }
+      /* 寬度 ≤ 1900 px:conning 條折成兩列(conning-bar.ts 同一門檻),需要較高的列 */
+      @media (max-width: 1900px) {
+        .full {
+          grid-template-rows: minmax(220px, 30vh) minmax(0, 1fr);
+        }
+      }
       @media (max-width: 1500px) {
         .full {
           grid-template-rows: minmax(220px, 30vh) minmax(0, 1fr);

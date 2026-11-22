@@ -541,14 +541,15 @@ public sealed class VhfRelayServer : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { _cts.Cancel(); } catch (Exception) { }
         var listener = _listener;
-        if (listener is not null) { try { listener.Stop(); } catch (Exception) { } }
+        // 先中止各站,再立即中止監聽(不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow);等待有上限
         foreach (var s in _stations.Values)
         {
             try { s.Socket.Abort(); } catch (Exception) { }
         }
-        if (_acceptLoop is not null) { try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { } }
-        if (_watchdog is not null) { try { await _watchdog.ConfigureAwait(false); } catch (Exception) { } }
-        HttpListenerStarter.Discard(listener);
+        var wait = TimeSpan.FromSeconds(1.5);
+        await HttpListenerStarter.ShutdownAsync(listener, wait).ConfigureAwait(false);
+        await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, wait).ConfigureAwait(false);
+        await HttpListenerStarter.WaitBoundedAsync(_watchdog, wait).ConfigureAwait(false);
         _listener = null;
         _cts.Dispose();
     }

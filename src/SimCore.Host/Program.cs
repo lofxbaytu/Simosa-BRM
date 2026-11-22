@@ -466,10 +466,23 @@ if (joined && shutdown.EndExerciseRequested && !engine.Ended)
 }
 nmea?.Dispose();
 bus?.Dispose();
-// 錄影上傳端先停:尚未 stop 的錄影在紀錄關閉前定稿(stopReason = hostShutdown),不留 .part
-if (media is not null) await media.DisposeAsync();
-if (vhf is not null) await vhf.DisposeAsync();
-if (ws is not null) await ws.DisposeAsync();
+// 錄影上傳端先停:尚未 stop 的錄影在紀錄關閉前定稿(stopReason = hostShutdown),不留 .part。
+// 各網路端的關閉都有上限並記錄耗時:任何一步卡住都不可擋住下面的「寫紀錄 footer」
+//(Windows 上曾因 HttpListener.Stop() 在仍有 WebSocket 客戶端時不返回,核心被 stop-all 逾時強制結束、紀錄沒有 footer)
+static async Task CloseBoundedAsync(string name, IAsyncDisposable? server)
+{
+    if (server is null) return;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var done = true;
+    try { await server.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(4)); }
+    catch (TimeoutException) { done = false; }
+    catch (Exception ex) { Console.WriteLine($"  {name} 關閉時發生例外:{ex.Message}"); }
+    if (!done || sw.ElapsedMilliseconds >= 500)
+        Console.WriteLine($"  {name} {(done ? "已關閉" : "關閉逾時(4 s),不再等待")}({sw.ElapsedMilliseconds} ms)");
+}
+await CloseBoundedAsync("錄影上傳端", media);
+await CloseBoundedAsync("VHF 頻道", vhf);
+await CloseBoundedAsync("狀態 WebSocket", ws);
 if (router.Recorder is { } recorder)
 {
     var footer = recorder.Closed ? recorder.Footer! : recorder.Close();

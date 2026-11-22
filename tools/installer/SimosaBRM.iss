@@ -82,16 +82,17 @@ Name: "webview2"; Description: "安裝 Microsoft Edge WebView2 Runtime(離線安
 #endif
 
 [Dirs]
+; 資料資料夾標 uninsneveruninstall:解除安裝時不動(Inno Setup 預設會移除自己建立、已清空的資料夾);紀錄、設定、瀏覽器端資料一律保留
 ; 整個安裝根目錄讓一般使用者(船上帶領者/學員帳號)可寫:log、紀錄、state\、同步服務套用軟體更新包時替換 app\(docs\ops\安裝與啟動.md 第 2.1 節帳號)
 Name: "{app}"; Permissions: users-modify
 Name: "{app}\build\logs"
-Name: "{app}\build\records"
-Name: "{app}\build\webview2"
-Name: "{app}\data\records"
-Name: "{app}\state"
-Name: "{app}\store"
-Name: "{app}\config\trusted-keys"
-Name: "{app}\config\device"
+Name: "{app}\build\records"; Flags: uninsneveruninstall
+Name: "{app}\build\webview2"; Flags: uninsneveruninstall
+Name: "{app}\data\records"; Flags: uninsneveruninstall
+Name: "{app}\state"; Flags: uninsneveruninstall
+Name: "{app}\store"; Flags: uninsneveruninstall
+Name: "{app}\config\trusted-keys"; Flags: uninsneveruninstall
+Name: "{app}\config\device"; Flags: uninsneveruninstall
 
 [Files]
 ; 發行版全部內容(manifest.json、README.txt、app\、tools\、data\、contracts\、docs\、packages\);config\ 另列

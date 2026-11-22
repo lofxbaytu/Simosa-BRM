@@ -545,11 +545,13 @@ public sealed class MediaUploadServer : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { _cts.Cancel(); } catch (Exception) { }
         var listener = _listener;
-        if (listener is not null) { try { listener.Stop(); } catch (Exception) { } }
-        if (_acceptLoop is not null)
-        {
-            try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { }
-        }
+        // 立即中止監聽(不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow);等接受迴圈有上限,
+        // 之後一定執行下面的定稿(尚未 stop 的錄影在紀錄關閉前定稿)
+        var wait = TimeSpan.FromSeconds(1.5);
+        if (!await HttpListenerStarter.ShutdownAsync(listener, wait).ConfigureAwait(false))
+            Log?.Invoke("錄影上傳端的監聽未在 1.5 s 內關閉,不再等待");
+        if (!await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, wait).ConfigureAwait(false))
+            Log?.Invoke("錄影上傳端的接受迴圈未在 1.5 s 內結束,不再等待");
         foreach (var s in _active.Values.ToList())
         {
             try { Finalize(s, null, "hostShutdown"); }

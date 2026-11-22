@@ -11,6 +11,10 @@ using SimosaBRM.SimCore.Ship;
 // 雷達/ARPA 感測器主控程式(規劃書第 5.2 節 Radar、第 7.2 節 MSC.192(79)):
 // 訂閱 SimCore.Host 狀態 → X/S 兩台雷達影像與 ARPA → ws://0.0.0.0:8766/radar/{x|s} + NMEA TTM/TLL(UDP 10111/10112)。
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
+// 主控台與重導向輸出一律 UTF-8:Windows 預設 OEM 字碼頁會把中文日誌印成「?」(英文系統)或 Big5(繁體中文系統),
+// 啟動腳本收下來的 log 檔與其他程式讀取時都以 UTF-8 為準(與 SimCore.Host 相同)
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
+catch (Exception) { /* 無主控台或不支援時維持預設 */ }
 RadarHostOptions options;
 try { options = RadarHostOptions.Parse(args); }
 catch (Exception ex)

@@ -64,11 +64,12 @@ function Info([string]$Name, [string]$Detail) { Add-Result 'INFO' $Name $Detail 
 
 # 以子程序執行(輸出導到檔案,不經 PowerShell 的錯誤資料流);逾時即結束整個程序樹。回傳 ExitCode / Output / TimedOut
 $script:runSeq = 0
-function Invoke-Proc([string]$File, [string[]]$Arguments, [int]$TimeoutSec = 600, [string]$WorkDir = $root) {
+function Invoke-Proc([string]$File, [string[]]$Arguments, [int]$TimeoutSec = 600, [string]$WorkDir = $root, [string]$RawArguments = '') {
     $script:runSeq++
     $out = Join-Path $work ("run-{0:d3}.out.txt" -f $script:runSeq)
     $err = Join-Path $work ("run-{0:d3}.err.txt" -f $script:runSeq)
     $quoted = ($Arguments | ForEach-Object { if ("$_" -match '[\s"]') { '"' + ("$_" -replace '"', '\"') + '"' } else { "$_" } }) -join ' '
+    if ($RawArguments) { $quoted = $RawArguments }
     $sp = @{ FilePath = $File; WorkingDirectory = $WorkDir; PassThru = $true; RedirectStandardOutput = $out; RedirectStandardError = $err; WindowStyle = 'Hidden' }
     if ($quoted) { $sp.ArgumentList = $quoted }
     $p = Start-Process @sp
@@ -85,8 +86,20 @@ function Invoke-Proc([string]$File, [string[]]$Arguments, [int]$TimeoutSec = 600
     if (-not $timedOut) { $code = $p.ExitCode }
     return [pscustomobject]@{ ExitCode = $code; Output = "$text"; TimedOut = $timedOut }
 }
+# 以內建的 Windows PowerShell 5.1 執行腳本,方式與安裝程式的捷徑相同(powershell.exe -ExecutionPolicy Bypass -File …)。
+# 先經 cmd 把主控台字碼頁設成 65001(UTF-8):5.1 導向輸出時用主控台的輸出字碼頁,執行器預設 437,中文會變成「?」而無法比對。
 function Invoke-Ps51([string]$Script, [string[]]$Arguments = @(), [int]$TimeoutSec = 600, [string]$WorkDir = $root) {
-    return Invoke-Proc $ps51 (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $Arguments) $TimeoutSec $WorkDir
+    $inner = 'chcp 65001 >nul & "' + $ps51 + '" -NoProfile -ExecutionPolicy Bypass -File "' + $Script + '"'
+    foreach ($a in $Arguments) { if ("$a" -match '[\s"&|<>^]') { $inner += ' "' + $a + '"' } else { $inner += " $a" } }
+    return Invoke-Proc $env:ComSpec @() $TimeoutSec $WorkDir ('/d /s /c "' + $inner + '"')
+}
+# 把安裝位置的 log 複製到 artifact 目錄(各階段結束前呼叫)
+function Save-InstalledLogs([string]$InstallDir, [string]$Tag) {
+    $src = Join-Path $InstallDir 'build\logs'
+    if (-not (Test-Path $src)) { return }
+    $dst = Join-Path $work "logs-$Tag"
+    New-Item -ItemType Directory -Force -Path $dst | Out-Null
+    Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force -ErrorAction SilentlyContinue
 }
 function Show-Tail([string]$Title, [string]$Text, [int]$Lines = 40) {
     Write-Host "---- $Title(最後 $Lines 行)----"
@@ -339,10 +352,18 @@ if ($Stage -contains 'launch') {
         } -Soft)
 
         # stop-all.ps1:核心經停止檔寫完 footer;專屬設定檔的 Edge 視窗關閉
+        $swStop = [System.Diagnostics.Stopwatch]::StartNew()
         $rs = Invoke-Ps51 (Join-Path $launch 'stop-all.ps1') @() 120 $inst
         Show-Tail 'stop-all.ps1' $rs.Output 20
-        [void](Check 'stop-all.ps1 結束碼 0' { if ($rs.TimedOut) { throw '逾時' }; if ($rs.ExitCode -ne 0) { throw "結束碼 $($rs.ExitCode)" } })
-        [void](Check 'stop-all:沒有強制結束核心(停止檔機制)' { if ($rs.Output -match '強制結束') { throw '輸出含「強制結束」' } })
+        Show-File (Join-Path $logs 'simcore.log') 12
+        [void](Check 'stop-all.ps1 結束碼 0' { if ($rs.TimedOut) { throw '逾時' }; if ($rs.ExitCode -ne 0) { throw "結束碼 $($rs.ExitCode)" }; return "$([math]::Round($swStop.Elapsed.TotalSeconds, 1)) s" })
+        # 瀏覽器分頁還連著的情況下,核心必須自行結束(停止檔 → 寫完 footer),不可等到逾時被強制結束
+        [void](Check 'stop-all:沒有強制結束核心(停止檔機制;Edge 分頁仍連線中)' {
+            if ($rs.Output -match '強制結束') { throw '輸出含「強制結束」:核心未在時限內自行結束' }
+            if ($rs.Output -notmatch '寫入停止檔') { throw '輸出沒有「寫入停止檔」(輸出無法辨識?)' }
+            $text = Get-Content -Raw -Encoding UTF8 (Join-Path $logs 'simcore.log')
+            if ($text -notmatch '紀錄已關閉') { throw 'simcore.log 沒有「紀錄已關閉」' }
+        })
         [void](Check 'stop-all:各埠已關閉' { if (-not (Wait-Until { -not ((Test-Tcp '127.0.0.1' 8765 300) -or (Test-Tcp '127.0.0.1' 8766 300) -or (Test-Tcp '127.0.0.1' 8080 300)) } 15)) { throw '15 秒後仍有埠開著' } })
         [void](Check 'stop-all:紀錄有 footer(核心自行結束)' { Assert-RecordFooter (Get-NewestRecord $inst $tB) })
         if ($edgeOk) {
@@ -364,6 +385,7 @@ if ($Stage -contains 'launch') {
             $sysInstall = $inst.StartsWith($env:SystemDrive, [System.StringComparison]::OrdinalIgnoreCase)
             if ($rc.ExitCode -ne 0 -and -not ($sysInstall -and $rc.ExitCode -eq 2)) { throw "結束碼 $($rc.ExitCode)" }
         })
+        Save-InstalledLogs $inst 'launch'
         Info '安裝根目錄內的執行期資料' ((@('build\logs', 'build\records', 'build\tmp', 'build\browser', 'build\downloads', '.cache') | ForEach-Object {
                     $p = Join-Path $inst $_; if (Test-Path $p) { "$_($(@(Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction SilentlyContinue).Count) 檔)" } else { "$_(無)" } }) -join '、')
     }
@@ -412,6 +434,12 @@ if ($Stage -contains 'shell') {
             if ($rs.Output -match '強制結束') { return '注意:有程序被強制結束(見上方輸出)' }
         } -Soft)
         foreach ($p in @(Get-Process -Name 'SimosaBRM.Shell' -ErrorAction SilentlyContinue)) { & taskkill.exe /PID $p.Id /T /F 2>&1 | Out-Null }
+        [void](Check 'stop-all(外殼):核心自行結束並寫完紀錄' {
+            if ($rs.Output -match '強制結束') { throw '輸出含「強制結束」' }
+            $text = Get-Content -Raw -Encoding UTF8 (Join-Path $logs 'simcore.log')
+            if ($text -notmatch '紀錄已關閉') { throw 'simcore.log 沒有「紀錄已關閉」' }
+        })
+        Save-InstalledLogs $inst 'shell'
     }
 }
 
@@ -422,8 +450,15 @@ if ($Stage -contains 'uninstall') {
     if (-not $inst) { Add-Result 'FAIL' '安裝位置' '找不到(先執行 install 階段)' }
     else {
         $unins = Join-Path $inst 'tools\uninstall\unins000.exe'
+        # 在每個應保留的資料夾放一個哨兵檔(模擬已有紀錄 / 帳冊 / 金鑰),解除安裝後資料夾與檔案都必須還在
+        $dataDirs = @('build\records', 'data\records', 'state', 'store', 'config\trusted-keys', 'config\device', 'build\webview2', 'build\browser', 'build\downloads')
+        foreach ($rel in $dataDirs) {
+            $d = Join-Path $inst $rel
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            Set-Content -Path (Join-Path $d 'ci-sentinel.txt') -Value 'keep' -Encoding ASCII
+        }
         $had = @{}
-        foreach ($rel in @('build\records', 'build\browser', 'build\webview2', 'build\downloads', 'config\ship-laptop.json', 'state', 'store', 'data\records')) { $had[$rel] = (Test-Path (Join-Path $inst $rel)) }
+        foreach ($rel in ($dataDirs + @('config\ship-laptop.json'))) { $had[$rel] = (Test-Path (Join-Path $inst $rel)) }
         $ru = Invoke-Proc $unins @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') 300 $root
         Start-Sleep -Seconds 5   # 解除安裝程式會把自己複製到暫存再執行
         [void](Check '解除安裝結束碼 0' { if ($ru.TimedOut) { throw '逾時' }; if ($ru.ExitCode -ne 0) { throw "結束碼 $($ru.ExitCode)" } })
@@ -434,6 +469,7 @@ if ($Stage -contains 'uninstall') {
         [void](Check '解除安裝:紀錄、設定與瀏覽器端資料保留' {
             $lost = @()
             foreach ($rel in $had.Keys) { if ($had[$rel] -and -not (Test-Path (Join-Path $inst $rel))) { $lost += $rel } }
+            foreach ($rel in $dataDirs) { if (-not (Test-Path (Join-Path (Join-Path $inst $rel) 'ci-sentinel.txt'))) { $lost += "$rel\ci-sentinel.txt" } }
             if ($lost) { throw "原本存在、解除安裝後不見了:$($lost -join '、')" }
             return (($had.Keys | Where-Object { $had[$_] } | Sort-Object) -join '、')
         })

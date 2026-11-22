@@ -291,21 +291,23 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     }
 
     /// <summary>停止監聽並中止所有客戶端;可重複呼叫、啟動失敗後也可呼叫,不拋例外。</summary>
+    /// <summary>關機時等背景迴圈結束的上限(之後主控程序還要寫紀錄 footer,不可被卡住)</summary>
+    private static readonly TimeSpan ShutdownWait = TimeSpan.FromSeconds(1.5);
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { _cts.Cancel(); } catch (Exception) { }
         var listener = _listener;
-        if (listener is not null) { try { listener.Stop(); } catch (Exception) { } }
+        // 先中止各客戶端,再立即中止監聽(不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow)
         foreach (var c in _clients.Values)
         {
             try { c.Socket.Abort(); } catch (Exception) { }
         }
-        if (_acceptLoop is not null)
-        {
-            try { await _acceptLoop.ConfigureAwait(false); } catch (Exception) { }
-        }
-        HttpListenerStarter.Discard(listener);
+        if (!await HttpListenerStarter.ShutdownAsync(listener, ShutdownWait).ConfigureAwait(false))
+            Log?.Invoke($"WebSocket 監聽未在 {ShutdownWait.TotalSeconds:0.#} s 內關閉,不再等待");
+        if (!await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, ShutdownWait).ConfigureAwait(false))
+            Log?.Invoke($"WebSocket 接受迴圈未在 {ShutdownWait.TotalSeconds:0.#} s 內結束,不再等待");
         _listener = null;
         _cts.Dispose();
     }
