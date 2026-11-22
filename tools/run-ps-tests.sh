@@ -126,6 +126,13 @@ step_soak() {
   [[ $code == 0 ]] || return 1
   grep -q '^WhatIf:' "$out" && grep -q 'clients.mjs ×2' "$out" && grep -q 'report.mjs' "$out" || { echo "    -WhatIf 輸出缺少計畫內容"; return 1; }
   [[ ! -d build/soak/ps-whatif ]] || { echo "    -WhatIf 不應建立 build/soak/ps-whatif"; rm -rf build/soak/ps-whatif; return 1; }
+  # gen0 預算(與 soak-test.sh 的 --gen0-budget-mb 相同):預設 6 MB → DOTNET_GCgen0size=0x600000;0 = 執行階段預設;負數拒絕
+  grep -q 'DOTNET_GCgen0size=0x600000' "$out" || { echo "    -WhatIf 未列出預設 gen0 預算(DOTNET_GCgen0size=0x600000)"; return 1; }
+  grep -q -- '--gen0-budget-mb' tools/soak-test.sh || { echo "    soak-test.sh 缺 --gen0-budget-mb(兩支腳本參數須一致)"; return 1; }
+  "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Minutes 1 -Clients 2 -SkipBuild -Gen0BudgetMb 0 -Run ps-whatif > "$TMP/soak-test.whatif-gen0.out" 2>&1 || { sed 's/^/    /' "$TMP/soak-test.whatif-gen0.out"; return 1; }
+  grep -q 'gen0 預算:執行階段預設' "$TMP/soak-test.whatif-gen0.out" || { echo "    -Gen0BudgetMb 0 應顯示「執行階段預設」"; return 1; }
+  if "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Gen0BudgetMb -1 > "$TMP/soak-test.whatif-gen0-bad.out" 2>&1; then echo "    -Gen0BudgetMb 為負數時應失敗"; return 1; fi
+  grep -q 'Gen0BudgetMb' "$TMP/soak-test.whatif-gen0-bad.out" || return 1
   # 參數錯誤仍須以非 0 結束(情境不存在)
   if "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Scenario does-not-exist > "$TMP/soak-test.whatif-bad.out" 2>&1; then echo "    情境不存在時應失敗"; return 1; fi
   grep -q '找不到' "$TMP/soak-test.whatif-bad.out"

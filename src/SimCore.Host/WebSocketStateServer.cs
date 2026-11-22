@@ -31,6 +31,8 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         public long RepliesSent;
         /// <summary>已入列的回覆數(入列序號;同一客戶端的回覆依序送出,RepliesSent ≥ 序號即該回覆已送出)</summary>
         public long RepliesQueued;
+        /// <summary>送出迴圈的等待者集合(SendLoopAsync 開始時建立;診斷用 <see cref="SendWaitsStarted"/>)</summary>
+        public ChannelWaitSet<byte[]>? Waits;
     }
 
     /// <summary>已啟動的 listener(TryStart 成功後才有;Start 失敗的 listener 不保留,見 HttpListenerStarter)</summary>
@@ -57,6 +59,8 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     public TimeSpan ReplyGrace { get; set; } = TimeSpan.FromMilliseconds(500);
     /// <summary>逾時未能送出 ack 就執行 AfterReply 的次數(診斷用)</summary>
     public long RepliesNotSent;
+    /// <summary>目前連線中各客戶端送出迴圈已建立的 WaitToReadAsync 總數(診斷/測試用;閒置的通道不應每圈新建,見 <see cref="ChannelWaitSet{T}"/>)</summary>
+    internal long SendWaitsStarted => _clients.Values.Sum(c => c.Waits?.WaitsStarted ?? 0);
 
     public WebSocketStateServer(SimulationEngine engine, int port)
     {
@@ -180,6 +184,9 @@ public sealed class WebSocketStateServer : IAsyncDisposable
 
     private async Task SendLoopAsync(Client c)
     {
+        // 三個通道都空時等任一通道;未完成的等待留到下一圈繼續用(每個通道同時最多一個等待者)。每圈重新 WaitToReadAsync 會在 .NET 8 累積
+        // 被取代的等待者與其在 _cts 上的取消註冊(每條連線約 1.3 MB/min,不會持平;ChannelWaitSet、docs/design/testing.md 第 6.6 節)
+        var waits = c.Waits = new ChannelWaitSet<byte[]>(_cts.Token, c.Replies.Reader, c.Events.Reader, c.Outbox.Reader);
         try
         {
             while (c.Socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
@@ -201,11 +208,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
                     await c.Socket.SendAsync(frame, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
                     continue;
                 }
-                var waitReply = c.Replies.Reader.WaitToReadAsync(_cts.Token).AsTask();
-                var waitState = c.Outbox.Reader.WaitToReadAsync(_cts.Token).AsTask();
-                var waitEvent = c.Events.Reader.WaitToReadAsync(_cts.Token).AsTask();
-                var done = await Task.WhenAny(waitReply, waitState, waitEvent).ConfigureAwait(false);
-                if (!await done.ConfigureAwait(false) && c.Replies.Reader.Completion.IsCompleted && c.Outbox.Reader.Completion.IsCompleted && c.Events.Reader.Completion.IsCompleted) break;
+                if (!await waits.WaitAnyAsync().ConfigureAwait(false) && c.Replies.Reader.Completion.IsCompleted && c.Outbox.Reader.Completion.IsCompleted && c.Events.Reader.Completion.IsCompleted) break;
             }
         }
         catch (Exception) { /* 連線中斷或取消 */ }

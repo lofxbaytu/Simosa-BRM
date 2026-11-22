@@ -11,12 +11,16 @@
      客戶端與學員都已結束(時間到)後取到的那一筆不寫(客戶端斷線時核心釋放連線常有 RSS 尖峰;report.mjs 另排除 elapsed 超過設定時長或 clients.alive=false 的樣本);
      dotnet-counters(PATH 或 .cache\dotnet-tools)可用時另收 System.Runtime GC 計數器,否則略過
   5) 時間到 → stop-all.ps1(停止檔讓核心寫完紀錄 footer)→ node tests\soak\report.mjs 寫 build\soak\report-<run>.md 與 .json 並判定
+  gen0 預算:-Gen0BudgetMb <MB>(預設 6;0 = 不設、用執行階段預設)以 DOTNET_GCgen0size(十六進位位元組)傳給核心與雷達,模擬船上內顯筆電的小 L3 快取
+  (.NET 8 工作站 GC 的 gen0 預算約 L3 / 2,大快取機器可達 136–264 MB,10 分鐘內只 GC 一兩次,RSS 判定分辨不出洩漏;docs\design\testing.md 第 6.6 節);
+  設定值寫進 meta.json 的 gc 欄位與報告。與 soak-test.sh 的 --gen0-budget-mb 相同。
   全部輸出在 build\soak\(不寫 C:\);結束碼 0 合格、1 不合格(含中止)、2 前置條件錯誤。需獨佔 CPU,不要與整套測試併行。
   -WhatIf:只檢查參數與工具鏈(dotnet、node、建置輸出、埠)並印出計畫,不啟動任何程序、不寫檔(tools\run-ps-tests.sh 以此做靜態/參數檢查;
   容器沒有 Windows 實機時本腳本只經 pwsh 解析與 -WhatIf 驗證,實跑結果以 soak-test.sh 為準)。
 .EXAMPLE
   .\tools\soak-test.ps1 -Minutes 120 -Clients 3 -Note "船上內顯筆電"
   .\tools\soak-test.ps1 -Minutes 10 -Clients 3 -SkipBuild
+  .\tools\soak-test.ps1 -Minutes 120 -Clients 3 -Gen0BudgetMb 0 -Note "執行階段預設的 gen0 預算"
   .\tools\soak-test.ps1 -WhatIf -Minutes 1 -Clients 2
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -28,6 +32,7 @@ param(
     [switch]$NoRadar, [switch]$NoWeb, [switch]$SkipBuild,
     [int]$SampleSeconds = 10,
     [double]$MaxLatencyMs = 50, [double]$MaxRssSlopeMbPerMin = 1, [double]$MaxRssGrowthMb = 64, [int]$WarmupSeconds = 120,
+    [int]$Gen0BudgetMb = 6,
     [string]$Run,
     [string]$Note
 )
@@ -38,6 +43,9 @@ Set-Location $root
 . (Join-Path $root 'tools\launch\launch-common.ps1')   # Find-LaunchDll、Initialize-LaunchLogs、Start-LaunchProcess、Wait-LaunchTcp、Assert-LaunchPortsFree、Get-LaunchStopFile
 if ($Minutes * 60 -lt 10) { throw '-Minutes 太短(至少 10 s)' }
 if ($Clients -lt 1 -or $SampleSeconds -lt 1) { throw '-Clients 與 -SampleSeconds 須 ≥ 1' }
+if ($Gen0BudgetMb -lt 0) { throw '-Gen0BudgetMb 須 ≥ 0(MB;0 = 用執行階段預設)' }
+# 核心與雷達的 gen0 預算(DOTNET_GCgen0size 為十六進位位元組;runtimeconfig.json 的同名設定在 .NET 8 無效)
+$gen0Hex = if ($Gen0BudgetMb -gt 0) { '0x{0:X}' -f ([int64]$Gen0BudgetMb * 1MB) } else { $null }
 if ($Scenario -notlike '*.yaml' -and $Scenario -notmatch '[\\/]') { $Scenario = Join-Path (Join-Path 'data' 'scenarios') "$Scenario.yaml" }
 if (-not (Test-Path $Scenario)) { throw "找不到情境檔 $Scenario" }
 $scenId = [System.IO.Path]::GetFileNameWithoutExtension($Scenario)
@@ -61,17 +69,33 @@ function Find-DotnetCounters {
     return $null
 }
 $dc = Find-DotnetCounters
+$dotnetRuntimes = (@(& dotnet --list-runtimes 2>$null) | Where-Object { "$_" -like 'Microsoft.NETCore.App *' } | ForEach-Object { ("$_" -split ' ')[1] }) -join ','
+# 從外部繼承、會影響核心與雷達 GC 的環境變數(DOTNET_GC* / COMPlus_GC*,例如 GCHeapHardLimit、gcServer;-Gen0BudgetMb > 0 時 DOTNET_GCgen0size 以本腳本的值為準)
+function Get-GcInheritedEnv {
+    $h = [ordered]@{}
+    foreach ($e in @(Get-ChildItem Env: | Where-Object { $_.Name -match '^(DOTNET|COMPlus)_gc' } | Sort-Object Name)) { $h[$e.Name] = $e.Value }
+    return $h
+}
+# Start-Process 繼承本程序的環境變數:只在啟動核心與雷達時設 DOTNET_GCgen0size,之後還原(網頁、dotnet-counters、node 不受影響)
+function Invoke-WithGcEnv([scriptblock]$Block) {
+    if (-not $gen0Hex) { return (& $Block) }
+    $prev = [Environment]::GetEnvironmentVariable('DOTNET_GCgen0size')
+    [Environment]::SetEnvironmentVariable('DOTNET_GCgen0size', $gen0Hex)
+    try { return (& $Block) } finally { [Environment]::SetEnvironmentVariable('DOTNET_GCgen0size', $prev) }
+}
+$gen0Text = if ($gen0Hex) { "$Gen0BudgetMb MB(核心與雷達 DOTNET_GCgen0size=${gen0Hex},模擬船上內顯筆電;-Gen0BudgetMb 0 = 執行階段預設)" } else { "執行階段預設(-Gen0BudgetMb 0;大快取機器可達數百 MB)$(if ($env:DOTNET_GCgen0size) { ";繼承的 DOTNET_GCgen0size=$($env:DOTNET_GCgen0size)" } else { '' })" }
 $webDir = @((Join-Path $root 'build\web\instruments'), (Join-Path $root 'app\web')) | Where-Object { Test-Path (Join-Path $_ 'index.html') } | Select-Object -First 1
 
 if ($WhatIfPreference) {
     # -WhatIf:只印計畫與工具鏈檢查,不建置、不啟動、不寫檔
     Write-Host "WhatIf:Simosa BRM soak 測試 ${Run}:情境 $scenId、客戶端 $Clients、$Minutes 分鐘 → $outRel\"
-    Write-Host "  dotnet $(& dotnet --version)、node $(& node --version)、dotnet-counters $(if ($dc) { $dc } else { '無(GC 計數器略過)' })"
+    Write-Host "  dotnet $(& dotnet --version)(執行階段 ${dotnetRuntimes})、node $(& node --version)、dotnet-counters $(if ($dc) { $dc } else { '無(GC 計數器略過)' })"
+    Write-Host "  gen0 預算:${gen0Text}"
     Write-Host "  1/5 建置:$(if ($SkipBuild) { '略過(-SkipBuild)' } else { 'SimCore.Host、Sensors.Radar.Host、StaticWeb(Release)' + $(if (-not $NoWeb -and -not $webDir) { ';網頁 pnpm build' } else { '' }) })"
     Write-Host "  2/5 SimCore.Host(ws $wsPort、VHF $vhfPort、錄影 $mediaPort;紀錄 $outRel\records\)$(if ($NoRadar) { '' } else { "、雷達 x+s(ws $radarPort)" })$(if ($NoWeb) { '' } else { "、網頁(http $webPort ← $(if ($webDir) { $webDir } else { '缺 build\web\instruments' }))" })"
     Write-Host "  3/5 tests\soak\clients.mjs ×$Clients + tests\soak\student.mjs($Minutes 分鐘)"
     Write-Host "  4/5 每 $SampleSeconds s 取樣 CPU%/RSS/執行緒/steps\/s/掉拍 → stats\host.jsonl"
-    Write-Host "  5/5 stop-all.ps1 → tests\soak\report.mjs(延遲 p95 < $MaxLatencyMs ms;RSS 斜率 ≤ $MaxRssSlopeMbPerMin MB/min、增量 ≤ $MaxRssGrowthMb MB;暖機 $WarmupSeconds s)→ build\soak\report-$Run.md/.json"
+    Write-Host "  5/5 stop-all.ps1 → tests\soak\report.mjs(延遲 p95 < $MaxLatencyMs ms;RSS:有 dotnet-counters 時 GC ≥ 3 次、受控堆積 / GC 已提交量 / 非 GC 斜率 ≤ $MaxRssSlopeMbPerMin MB/min,否則 RSS 斜率;增量 ≤ $MaxRssGrowthMb MB;暖機 $WarmupSeconds s)→ build\soak\report-$Run.md/.json"
     foreach ($p in @($wsPort, $radarPort, $webPort, $vhfPort, $mediaPort)) { if (-not (Test-LaunchPortFree '127.0.0.1' $p)) { Write-Host "  注意:埠 $p 目前被占用" } }
     return
 }
@@ -122,10 +146,11 @@ function Write-Meta {
         startedUtc = $startedUtc; endedUtc = $script:endedUtc
         platform = "$([System.Runtime.InteropServices.RuntimeInformation]::OSDescription) $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
         cpuCount = [Environment]::ProcessorCount; machineNote = $(if ($Note) { $Note } else { 'Windows 開發機/船上筆電(以 -Note 註明)' })
-        dotnet = (& dotnet --version); node = (& node --version); gitRev = $gitRev
+        dotnet = (& dotnet --version); dotnetRuntimes = $dotnetRuntimes; node = (& node --version); gitRev = $gitRev
         recordPath = "$outRel\records\soak-$scenId.jsonl" -replace '\\', '/'
         hostPid = $(if ($script:hostProc) { $script:hostProc.Id } else { 0 }); hostExit = $script:hostExit; footer = $script:footer; aborted = $script:aborted
         counters = [bool]$dc
+        gc = [ordered]@{ gen0BudgetMb = $Gen0BudgetMb; env = $(if ($gen0Hex) { [ordered]@{ DOTNET_GCgen0size = $gen0Hex } } else { [ordered]@{} }); appliesTo = @('simcore', 'radar'); inherited = (Get-GcInheritedEnv) }
         thresholds = [ordered]@{ maxLatencyMs = $MaxLatencyMs; maxRssSlopeMbPerMin = $MaxRssSlopeMbPerMin; maxRssGrowthMb = $MaxRssGrowthMb; warmupS = $WarmupSeconds }
     }
     # 沒有 BOM 的 UTF-8:tests\soak\report.mjs 以 JSON.parse 讀(Windows PowerShell 5.1 的 Set-Content -Encoding UTF8 會加 BOM)
@@ -195,12 +220,13 @@ try {
     Step "啟動 SimCore.Host($scenId;紀錄 $outRel\records\、VHF $vhfPort、錄影 $mediaPort)"
     $hostArgs = @($hostDll, '--scenario', $Scenario, '--record', (Join-Path $outDir "records\soak-$scenId.jsonl"), '--port', "$wsPort", '--vhf-port', "$vhfPort", '--media-port', "$mediaPort",
                   '--media-dir', "$outRel\media", '--no-udp', '--no-nmea', '--stop-file', $stopFile)
-    $script:hostProc = Start-LaunchProcess -Name 'simcore' -Log (Join-Path (Join-Path $root $logsRel) 'simcore.log') -File 'dotnet' -Arguments $hostArgs -WorkDir $root
+    Write-Host "  gen0 預算:${gen0Text}"
+    $script:hostProc = Invoke-WithGcEnv { Start-LaunchProcess -Name 'simcore' -Log (Join-Path (Join-Path $root $logsRel) 'simcore.log') -File 'dotnet' -Arguments $hostArgs -WorkDir $root }
     Write-Meta
     if (-not (Wait-LaunchTcp '127.0.0.1' $wsPort 45 -Process $script:hostProc)) { throw "SimCore.Host 未開啟埠 $wsPort(或已結束),見 $logsRel\simcore.log" }
     if ($radarDll) {
         Step '啟動雷達服務(X+S)'
-        $script:radarProc = Start-LaunchProcess -Name 'radar' -Log (Join-Path (Join-Path $root $logsRel) 'radar.log') -File 'dotnet' -Arguments @($radarDll, '--sim', "ws://127.0.0.1:$wsPort/", '--port', "$radarPort", '--radars', 'x,s', '--areas', 'data\areas', '--no-nmea') -WorkDir $root
+        $script:radarProc = Invoke-WithGcEnv { Start-LaunchProcess -Name 'radar' -Log (Join-Path (Join-Path $root $logsRel) 'radar.log') -File 'dotnet' -Arguments @($radarDll, '--sim', "ws://127.0.0.1:$wsPort/", '--port', "$radarPort", '--radars', 'x,s', '--areas', 'data\areas', '--no-nmea') -WorkDir $root }
         if (-not (Wait-LaunchTcp '127.0.0.1' $radarPort 30 -Process $script:radarProc)) { throw "雷達服務未開啟埠 $radarPort,見 $logsRel\radar.log" }
     }
     if ($webDll) {

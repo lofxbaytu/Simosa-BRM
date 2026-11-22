@@ -1,16 +1,20 @@
 // tests/soak/report.mjs 與 lib.mjs 的單元測試(Node 內建 test runner:node --test tests/soak/;無套件相依)。
 // 以合成的執行目錄(meta.json、stats/*.jsonl)驗證判定準則:合格案例、掉拍/延遲/RSS 成長/斷線/學員未確認/主控程序未寫 footer 各自不合格;
 // 客戶端收尾後的樣本(elapsed_s 超過設定時長或 clients.alive=false)不入 RSS 擬合;直方圖分位數與延遲估計器的行為。暫存目錄在專案內 build/test-tmp/soak/(CLAUDE.md)。
+// 第三十輪(docs/design/testing.md 第 6.6 節):dotnet-counters 10.x 的計數器名稱帶單位與區間(前綴比對、MiB 換算);有 counters 時 RSS 準則的
+// 各項(GC 次數、受控堆積、GC 已提交量、RSS − 已提交量、增量)——以懷疑者的 GC 簡化模型產生合成資料(洩漏有 / 無 counters、大預算、只 1 次 GC、
+// 已提交量持續成長而受控堆積持平),以及 tests/soak/fixtures/ 的真實資料摘錄(實驗 B、e01 截取、e08)。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LatencyEstimator, MsHistogram, quantileOf } from './lib.mjs';
-import { loadRun, renderMarkdown, slope, summarise } from './report.mjs';
+import { findCounter, gen0SettingText, loadRun, readCounters, renderMarkdown, slope, summarise } from './report.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TMP = path.join(ROOT, 'build', 'test-tmp', 'soak');
+const FIXTURES = path.join(ROOT, 'tests', 'soak', 'fixtures');
 
 function writeRun(name, { minutes = 10, clients = 3, dropped = 0, rssSlopeMbPerMin = 0, latencyP95 = 12, disconnects = 0, unconfirmed = 0, rejected = 0, footer = true, hostExit = 0, tickRate = 50.0, tailSpikeMb = 0, clientsDeadFrom_s = Infinity, spikeAt_s = Infinity, spikeMb = 80 } = {}) {
   const dir = path.join(TMP, name);
@@ -130,6 +134,236 @@ test('客戶端收尾後的樣本不入 RSS 擬合:elapsed 超過設定時長的
   const s5 = summarise(loadRun(dir));
   assert.equal(s5.host.rssPostWarmup.tailExcluded, 1);
   assert.equal(s5.criteria.find((c) => c.id === 'rss').pass, true);
+});
+
+// ---- 第三十輪:dotnet-counters 與 RSS 準則 ----
+
+const MIB = 1048576;
+/** dotnet-counters 時間戳(容器 en-US、UTC);報告不解析,只為了格式像真的 */
+const ctrTs = (t) => { const d = new Date(Date.UTC(2026, 10, 22, 0, 0, t)); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`; };
+
+/** 只為 RSS 準則的執行目錄:meta.json、host.jsonl、clients / student 摘要;counters 為 csv 字串或 null */
+function writeMinimalRun(name, { minutes, host, counters, gc = undefined }) {
+  const dir = path.join(TMP, name);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(dir, 'stats'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ run: name, scenario: 'E05_pilot_traffic', clients: 2, minutes, sample_s: 10, platform: 'synth', hostExit: 0, footer: true, aborted: false, counters: !!counters, ...(gc === undefined ? {} : { gc }) }));
+  fs.writeFileSync(path.join(dir, 'stats', 'host.jsonl'), host.map((x) => JSON.stringify(x)).join('\n') + '\n');
+  fs.writeFileSync(path.join(dir, 'stats', 'clients.jsonl'), [0, 1].map((id) => JSON.stringify({ kind: 'clientSummary', id, elapsed_s: minutes * 60, stateFrames: 25 * minutes * 60, eventFrames: 0, frozenFrames: 0, stateHz: 25, tickRate: 50, disconnects: 0, errors: 0 })).join('\n') + '\n');
+  fs.writeFileSync(path.join(dir, 'stats', 'student.jsonl'), JSON.stringify({ kind: 'studentSummary', actions: 1, confirmed: 1, unconfirmed: 0, rejected: 0, disconnects: 0, errors: 0, events: {} }) + '\n');
+  if (counters) fs.writeFileSync(path.join(dir, 'stats', 'counters.csv'), counters);
+  fs.writeFileSync(path.join(dir, 'logs', 'simcore.log'), '紀錄已關閉:x.jsonl\n');
+  return dir;
+}
+const hostSample = (e, rss, alive = true) => ({ kind: 'sample', elapsed_s: e, host: { alive: true, cpu_pct: 12, rss_mb: Math.round(rss * 10) / 10, threads: 22, stepsPerS: { n: 10, mean: 50, min: 50, max: 50 }, dropped: 0 }, radar: null, web: null, clients: { alive, cpu_pct: 2, rss_mb: 68, threads: 7 } });
+
+/**
+ * 第三十輪懷疑者的 GC 簡化模型(合成 soak 執行目錄;每秒推進,每 10 s 一筆取樣與一次 counters 刷新):
+ * 配置速率 A MB/min、gen0 預算 B MB、存活物件洩漏 L MB/min(受控堆積)、原生洩漏 N MB/min(非 GC)、GC 已提交量自行成長 F MB/min(碎片;存活不變)、基準 R0 MB。
+ * 配置量累積到 B 時 GC;GC 已提交量 = 第一次 GC 前為已配置量(gen0 預算填充,counters 讀到 0),之後只在 GC 時更新為 max(前值, B + 存活 + 8 + F·t),以 commitStep 進位;
+ * RSS = R0 + 已提交量 + 原生洩漏。counters 用 dotnet-counters 10.x 的名稱(帶單位與區間),大小以 10^6 B 的 MB 或 B 寫出(報告換算回 MiB)。
+ */
+function writeGcRun(name, { minutes, A = 35, B = 136, L = 0, N = 0, F = 0, R0 = 95, counters = true, commitStep = 16, live0 = 8, gc, omit = [] }) {
+  const host = [];
+  const csv = ['Timestamp,Provider,Counter Name,Counter Type,Mean/Increment'];
+  let allocSince = 0; let committed = 0; let firstGc = false; let liveAtGc = live0; let gcInRefresh = 0;
+  for (let t = 1; t <= minutes * 60; t++) {
+    allocSince += A / 60;
+    const live = live0 + (L * t) / 60;
+    if (allocSince >= B) {
+      allocSince = 0; gcInRefresh++; firstGc = true; liveAtGc = live;
+      committed = Math.max(committed, Math.ceil((B + live + 8 + (F * t) / 60) / commitStep) * commitStep);
+    }
+    if (t % 10) continue;
+    const committedNow = firstGc ? committed : allocSince + live0;
+    host.push(hostSample(t, R0 + committedNow + (N * t) / 60));
+    const row = (n, ty, v) => { if (!omit.some((o) => n.startsWith(o))) csv.push(`${ctrTs(t)},System.Runtime,${n},${ty},${v}`); };
+    row('GC Heap Size (MB)', 'Metric', ((allocSince + liveAtGc) * MIB / 1e6).toFixed(3));
+    row('Gen 0 GC Count (Count / 10 sec)', 'Rate', gcInRefresh);
+    row('Gen 1 GC Count (Count / 10 sec)', 'Rate', 0);
+    row('Gen 2 GC Count (Count / 10 sec)', 'Rate', 0);
+    row('Gen 0 GC Budget (MB)', 'Metric', Math.floor((B * MIB) / 1e6));
+    row('Allocation Rate (B / 10 sec)', 'Rate', Math.round((A * MIB) / 6));
+    row('GC Committed Bytes (MB)', 'Metric', firstGc ? ((committed * MIB) / 1e6).toFixed(6) : 0);
+    row('Time paused by GC (ms / 10 sec)', 'Rate', gcInRefresh * 2);
+    row('Gen 0 Size (B)', 'Metric', 0);
+    row('Gen 1 Size (B)', 'Metric', firstGc ? MIB : 0);
+    row('Gen 2 Size (B)', 'Metric', firstGc ? Math.round((liveAtGc - 1) * MIB) : 0);
+    row('LOH Size (B)', 'Metric', firstGc ? 100000 : 0);
+    row('POH (Pinned Object Heap) Size (B)', 'Metric', firstGc ? 60000 : 0);
+    row('Exception Count (Count / 10 sec)', 'Rate', 0);
+    gcInRefresh = 0;
+  }
+  return writeMinimalRun(name, { minutes, host, counters: counters ? csv.join('\n') + '\n' : null, gc });
+}
+
+/** tests/soak/fixtures/*.json(fixtures/extract.mjs 擷取的真實執行)→ 執行目錄;untilS 截到前 T 秒(取樣 ≤ T、counters 刷新時刻 ≤ 最後一筆取樣 + 1 s) */
+function writeFixtureRun(file, { untilS = Infinity } = {}) {
+  const fx = JSON.parse(fs.readFileSync(path.join(FIXTURES, file), 'utf8'));
+  const rows = fx.host.rows.filter(([e]) => e <= untilS);
+  const host = rows.map(([e, rss, alive]) => hostSample(e, rss, alive === 1));
+  const lastE = rows[rows.length - 1][0];
+  const names = { gc: ['Gen 0 GC Count (Count / 10 sec)', 'Rate', 1], committedMB: ['GC Committed Bytes (MB)', 'Metric', 1], budgetMB: ['Gen 0 GC Budget (MB)', 'Metric', 1],
+    gen1KiB: ['Gen 1 Size (B)', 'Metric', 1024], gen2KiB: ['Gen 2 Size (B)', 'Metric', 1024], lohKiB: ['LOH Size (B)', 'Metric', 1024], pohKiB: ['POH (Pinned Object Heap) Size (B)', 'Metric', 1024] };
+  const csv = ['Timestamp,Provider,Counter Name,Counter Type,Mean/Increment'];
+  fx.counters.rows.forEach((r, i) => {
+    const t = (i + 1) * fx.counters.intervalS;
+    if (t > lastE + 1) return;
+    fx.counters.fields.forEach((fname, k) => { if (r[k] !== null) csv.push(`${ctrTs(t)},System.Runtime,${names[fname][0]},${names[fname][1]},${r[k] * names[fname][2]}`); });
+  });
+  const minutes = Number.isFinite(untilS) ? untilS / 60 : fx.meta.minutes;
+  return { fx, dir: writeMinimalRun(`fx-${path.basename(file, '.json')}-${Number.isFinite(untilS) ? untilS : 'all'}`, { minutes, host, counters: csv.join('\n') + '\n', gc: fx.meta.gc ?? undefined }) };
+}
+const rssOf = (s) => s.criteria.find((c) => c.id === 'rss');
+const checkOf = (s, id) => s.rssEval.checks.find((c) => c.id === id);
+
+test('dotnet-counters 10.x 的名稱帶單位與區間:前綴比對、MB(10^6 B)與 B 換算成 MiB、一次刷新跨秒也不拆開', () => {
+  const names = ['Gen 0 GC Count (Count / 10 sec)', 'Gen 0 GC Budget (MB)', 'Gen 0 Size (B)', 'GC Heap Size (MB)', 'POH (Pinned Object Heap) Size (B)'];
+  assert.equal(findCounter(names, 'Gen 0 GC Count'), 'Gen 0 GC Count (Count / 10 sec)');
+  assert.equal(findCounter(names, 'Gen 0 Size'), 'Gen 0 Size (B)');            // 不會誤配到「Gen 0 GC …」
+  assert.equal(findCounter(names, 'POH (Pinned Object Heap) Size'), 'POH (Pinned Object Heap) Size (B)');
+  assert.equal(findCounter(['Gen 0 GC Count'], 'Gen 0 GC Count'), 'Gen 0 GC Count');   // 舊版沒有單位的名稱
+  assert.equal(findCounter(names, 'Gen 1 GC Count'), null);
+  const file = path.join(TMP, 'counters-units.csv');
+  fs.mkdirSync(TMP, { recursive: true });
+  // 第 2 次刷新跨秒(16:31:16 / 16:31:17):依名稱重複分組,仍是 3 次刷新
+  fs.writeFileSync(file, ['Timestamp,Provider,Counter Name,Counter Type,Mean/Increment',
+    '11/22/2026 16:31:06,System.Runtime,Gen 0 GC Count (Count / 10 sec),Rate,0', '11/22/2026 16:31:06,System.Runtime,GC Committed Bytes (MB),Metric,0', '11/22/2026 16:31:06,System.Runtime,Gen 2 Size (B),Metric,0', '11/22/2026 16:31:06,System.Runtime,Gen 0 GC Budget (MB),Metric,136',
+    '11/22/2026 16:31:16,System.Runtime,Gen 0 GC Count (Count / 10 sec),Rate,1', '11/22/2026 16:31:17,System.Runtime,GC Committed Bytes (MB),Metric,140.75904', '11/22/2026 16:31:17,System.Runtime,Gen 2 Size (B),Metric,5242880', '11/22/2026 16:31:17,System.Runtime,Gen 0 GC Budget (MB),Metric,136',
+    '11/22/2026 16:31:26,System.Runtime,Gen 0 GC Count (Count / 10 sec),Rate,2', '11/22/2026 16:31:26,System.Runtime,GC Committed Bytes (MB),Metric,140.75904', '11/22/2026 16:31:26,System.Runtime,Gen 2 Size (B),Metric,6291456', '11/22/2026 16:31:26,System.Runtime,Gen 0 GC Budget (MB),Metric,136'].join('\n') + '\n');
+  const c = readCounters(file, 10);
+  assert.equal(c.refreshes, 3);
+  assert.deepEqual(c.missing, []);
+  assert.equal(c.gen0, 3);
+  assert.equal(c.firstGcS, 20);
+  assert.equal(c.gen0BudgetMb.max, 129.7);              // 136 × 10^6 B = 129.7 MiB
+  assert.equal(c.committedMb.first, 134.23);            // 140.75904 × 10^6 B = 134.23 MiB(第一次 GC 前的 0 不算首值)
+  assert.deepEqual(c.timeline.map((x) => x.managedMb), [0, 5, 6]);
+  assert.deepEqual(c.timeline.map((x) => x.t), [10, 20, 30]);
+  // 修正前的程式以完整名稱「Gen 0 GC Count」比對,10.x 的名稱帶區間 → 一直是 null
+  assert.notEqual(c.gen0, null);
+});
+
+test('懷疑者合成資料:2 小時每分鐘 5 MB 存活洩漏(gen0 預算 6 MB)有 counters → 不合格(受控堆積);無 counters → 不合格並註明無法分辨 gen0 預算填充', () => {
+  const s = summarise(loadRun(writeGcRun('gc-leak-2h-6mb', { minutes: 120, B: 6, L: 5 })));
+  const r = rssOf(s);
+  assert.equal(r.pass, false);
+  assert.equal(r.rule, 'gc-counters');
+  assert.equal(r.undetermined, false);
+  assert.equal(checkOf(s, 'managed').pass, false);
+  assert.ok(Math.abs(checkOf(s, 'managed').value - 5) < 0.2, `受控堆積斜率應約 5:${checkOf(s, 'managed').value}`);
+  assert.match(r.note, /存活物件累積/);
+  const n = summarise(loadRun(writeGcRun('gc-leak-2h-6mb-noctr', { minutes: 120, B: 6, L: 5, counters: false })));
+  const rn = rssOf(n);
+  assert.equal(rn.pass, false);
+  assert.equal(rn.rule, 'rss-only');
+  assert.match(rn.note, /無 dotnet-counters/);
+  assert.match(rn.note, /無法分辨 gen0 預算填充/);
+  assert.equal(n.rssEval.checks, undefined);
+});
+
+test('大 gen0 預算(264 MB,L3 504 MiB 的雲端機器):2 小時洩漏 → 不合格;10 分鐘只 GC 1 次 → 無法判定(不合格並註明),不會因暖機延長而合格', () => {
+  const long = summarise(loadRun(writeGcRun('gc-leak-2h-264mb', { minutes: 120, B: 264, L: 5 })));
+  assert.equal(rssOf(long).pass, false);
+  assert.equal(checkOf(long, 'managed').pass, false);
+  // 第三十輪實驗 B 的型態:第一次 GC 之後 RSS 與受控堆積都還沒機會上升(修正前的提案規則把這種情形判合格)
+  const short = summarise(loadRun(writeGcRun('gc-leak-10m-264mb', { minutes: 10, B: 264, L: 5 })));
+  const r = rssOf(short);
+  assert.equal(r.pass, false);
+  assert.equal(r.undetermined, true);
+  assert.equal(short.rssEval.gcCount, 1);
+  assert.match(r.note, /無法判定/);
+  assert.match(r.note, /只 GC 1 次/);
+  assert.match(r.note, /--gen0-budget-mb/);
+  assert.match(renderMarkdown(short), /無法判定\(不通過\)/);
+  // 同樣 10 分鐘、沒有洩漏也一樣無法判定(GC 次數不足就不判,不看斜率)
+  const ok = summarise(loadRun(writeGcRun('gc-noleak-10m-264mb', { minutes: 10, B: 264 })));
+  assert.equal(rssOf(ok).pass, false);
+  assert.equal(rssOf(ok).undetermined, true);
+});
+
+test('整段未發生 GC(gen0 預算未用完)→ 無法判定', () => {
+  const s = summarise(loadRun(writeGcRun('gc-nogc', { minutes: 10, B: 500 })));
+  const r = rssOf(s);
+  assert.equal(r.pass, false);
+  assert.equal(r.undetermined, true);
+  assert.equal(s.rssEval.noGc, true);
+  assert.match(r.note, /整段未發生 GC/);
+});
+
+test('GC 已提交量持續成長而受控堆積持平(碎片)→ 不合格;非 GC(原生)記憶體成長 → 不合格', () => {
+  // 懷疑者 S10:10 分鐘、gen0 預算 6 MB、已提交量每分鐘 +4 MB、存活不變 → RSS 增量約 40 MB 未超過 64 MB,只靠已提交量的斜率攔下
+  const s = summarise(loadRun(writeGcRun('gc-committed-grows', { minutes: 10, B: 6, F: 4, commitStep: 1 })));
+  const r = rssOf(s);
+  assert.equal(r.pass, false, r.measured);
+  assert.equal(r.undetermined, false);
+  assert.equal(checkOf(s, 'managed').pass, true);
+  assert.equal(checkOf(s, 'nonGc').pass, true);
+  assert.equal(checkOf(s, 'growth').pass, true);
+  assert.equal(checkOf(s, 'committed').pass, false);
+  assert.ok(checkOf(s, 'committed').value > 3, `已提交量斜率應約 4:${checkOf(s, 'committed').value}`);
+  const nat = summarise(loadRun(writeGcRun('gc-native-grows', { minutes: 10, B: 6, N: 2 })));
+  assert.equal(rssOf(nat).pass, false);
+  assert.equal(checkOf(nat, 'nonGc').pass, false);
+  assert.equal(checkOf(nat, 'managed').pass, true);
+  assert.equal(checkOf(nat, 'committed').pass, true);
+});
+
+test('沒有洩漏:小預算 10 分鐘合格;大預算 2 小時合格(暖機延到第一次 GC 之後,gen0 預算填充不算成長)', () => {
+  const small = summarise(loadRun(writeGcRun('gc-ok-10m-6mb', { minutes: 10, B: 6, gc: { gen0BudgetMb: 6, env: { DOTNET_GCgen0size: '0x600000' }, appliesTo: ['simcore', 'radar'], inherited: {} } })));
+  const r = rssOf(small);
+  assert.equal(r.pass, true, `${r.measured} / ${r.note}`);
+  assert.equal(small.host.warmup_s, 120);
+  assert.ok(small.rssEval.gcCount > 50);
+  const md = renderMarkdown(small);
+  assert.match(md, /gen0 預算設定:6 MB(simcore、radar 以 DOTNET_GCgen0size=0x600000 啟動/);
+  assert.match(md, /RSS 準則逐項/);
+  assert.match(md, /受控堆積(上次 GC 後 gen1\+gen2\+LOH\+POH)/);
+  assert.match(md, /GC 已提交量/);
+  assert.match(md, /第一次 GC:counters 開始後 \d+ s 內/);
+  const big = summarise(loadRun(writeGcRun('gc-ok-2h-264mb', { minutes: 120, B: 264 })));
+  assert.equal(rssOf(big).pass, true, rssOf(big).note);
+  assert.ok(big.host.warmup_s > 400, `暖機應延到第一次 GC(約 453 s)之後:${big.host.warmup_s}`);
+  assert.match(rssOf(big).note, /暖機延到第一次 GC/);
+  // 同一條曲線沒有 counters:第一次 GC 前的上升落在擬合段內 → 只看 RSS 的規則不合格(這就是預設要設小 gen0 預算的原因)
+  const bigNo = summarise(loadRun(writeGcRun('gc-ok-2h-264mb-noctr', { minutes: 120, B: 264, counters: false })));
+  assert.equal(rssOf(bigNo).pass, false);
+});
+
+test('counters.csv 缺必要的計數器 → 以只看 RSS 的規則判定並註明;meta.gc 的設定寫進報告', () => {
+  const s = summarise(loadRun(writeGcRun('gc-missing', { minutes: 10, B: 6, omit: ['GC Committed Bytes'] })));
+  const r = rssOf(s);
+  assert.equal(r.rule, 'rss-only');
+  assert.deepEqual(s.gc.missing, ['GC Committed Bytes']);
+  assert.match(r.note, /缺少 GC Committed Bytes/);
+  assert.equal(gen0SettingText({}), '未記錄(meta.json 無 gc 欄位:舊版 soak 腳本,執行階段預設或外部環境變數)');
+  assert.equal(gen0SettingText({ gc: { gen0BudgetMb: 0, env: {}, inherited: { DOTNET_GCHeapHardLimit: '0x6400000' } } }), '執行階段預設(--gen0-budget-mb 0);繼承的 GC 環境變數 DOTNET_GCHeapHardLimit=0x6400000');
+});
+
+test('真實資料摘錄(tests/soak/fixtures/):實驗 B 無法判定、e01 截到 12 分鐘不合格(受控堆積)、e08 25 分鐘與各截取點合格', () => {
+  // 實驗 B:修正前程式、gen0 預算 264 MB、10 分鐘 → 修正前提案的規則六項全合格;現在 GC 只 1 次 → 無法判定
+  const b = writeFixtureRun('exp-b-orig-gen0-264mb.json');
+  assert.equal(b.fx.expect, 'undetermined');
+  const sb = summarise(loadRun(b.dir));
+  assert.equal(rssOf(sb).pass, false);
+  assert.equal(rssOf(sb).undetermined, true);
+  assert.equal(sb.rssEval.gcCount, 1);
+  // e01:修正前程式、預設 gen0 預算(136 MB);10 分鐘時只 GC 2 次 → 無法判定,12 分鐘 GC 4 次 → 受控堆積 5 MB/min 不合格
+  const e01 = summarise(loadRun(writeFixtureRun('e01-orig-default-720s.json').dir));
+  assert.equal(rssOf(e01).pass, false);
+  assert.equal(rssOf(e01).undetermined, false);
+  assert.equal(checkOf(e01, 'managed').pass, false);
+  assert.ok(checkOf(e01, 'managed').value > 4, `受控堆積斜率:${checkOf(e01, 'managed').value}`);
+  const e01at600 = summarise(loadRun(writeFixtureRun('e01-orig-default-720s.json', { untilS: 600 }).dir));
+  assert.equal(rssOf(e01at600).undetermined, true);
+  // e08:修正後程式、gen0 預算 10 MB;全段與 4 / 8 / 12 分鐘截取點皆合格
+  for (const untilS of [Infinity, 240, 480, 720]) {
+    const s = summarise(loadRun(writeFixtureRun('e08-fix-hard100mb.json', { untilS }).dir));
+    const r = rssOf(s);
+    assert.equal(r.pass, true, `e08 截到 ${untilS} s:${r.measured} / ${r.note}`);
+    assert.ok(Math.abs(checkOf(s, 'managed').value) < 0.3);
+  }
 });
 
 test('客戶端斷線 → 連線準則不合格', () => {

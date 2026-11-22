@@ -4,7 +4,12 @@
 // 整場延遲直方圖)、stats/student.jsonl(學員指令確認)、選配 stats/counters.csv(dotnet-counters),寫 Markdown 與 JSON 報告並依規劃書第 14 章「效能」列判定:
 //   1) 核心 50 Hz 無掉拍:主控程序「掉拍」計數為 0,且客戶端以牆鐘量到的 tick 率在 50 ± --core-hz-tol;
 //   2) 延遲 < --max-latency-ms(預設 50):全部客戶端合併的狀態幀延遲 p95(最大值另列);
-//   3) RSS 不持續成長:暖機(--warmup-s)後最小平方斜率 ≤ --max-rss-slope-mb-per-min 且暖機後增量 ≤ --max-rss-growth-mb;
+//   3) RSS 不持續成長(docs/design/testing.md 第 6.3、6.6 節;斜率門檻 --max-rss-slope-mb-per-min、增量門檻 --max-rss-growth-mb):
+//      有 stats/counters.csv(dotnet-counters)時以 GC 計數器判定,下列全部成立才合格——(a) 擬合時段內 GC 次數 ≥ 3(不足 = 無法判定,不合格並註明);
+//      (b) 第一次 GC 之後受控堆積(上次 GC 後 gen1+gen2+LOH+POH)全段斜率;(c) 暖機後「RSS − GC 已提交量」(非 GC 記憶體)全段斜率;
+//      (d) 暖機後 GC 已提交量全段斜率,三者皆 ≤ 斜率門檻;(e) 暖機後 RSS 增量 ≤ 增量門檻。暖機為 --warmup-s(短於 10 分鐘的執行取總時長 × 20%),
+//      有 counters 時至少延到第一次 GC 之後一個取樣間隔(gen0 預算填充不算成長)。
+//      沒有 counters(或缺必要的計數器)時:暖機後 RSS 斜率 ≤ 斜率門檻且增量 ≤ 增量門檻,並註明無法分辨 gen0 預算填充;
 //      擬合排除客戶端收尾後的樣本(elapsed_s > meta.minutes×60 或 clients.alive=false:客戶端斷線時核心釋放連線常有一筆尖峰);
 //   4) 無斷線/錯誤:客戶端斷線 0、錯誤 0、網頁失敗 0;學員指令全部於時限內生效、無 commandRejected;主控程序存活到結束並寫完紀錄 footer。
 // 結束碼:0 合格、1 不合格、2 讀檔/參數錯誤。可當模組匯入(summarise / renderMarkdown;tests/soak/report.test.mjs)。
@@ -21,6 +26,8 @@ export const DEFAULT_THRESHOLDS = {
   maxRssSlopeMbPerMin: 1.0,
   maxRssGrowthMb: 64,
   warmupS: 120,
+  // 有 dotnet-counters 時 RSS 準則至少要的 GC 次數(第一次 GC 之後至少再兩次,受控堆積才有斜率;不足 → 無法判定)
+  minGcCount: 3,
 };
 
 function readJsonl(file) {
@@ -34,29 +41,108 @@ function readJsonl(file) {
   return out;
 }
 
-/** 讀 dotnet-counters 的 csv(Timestamp,Provider,Counter Name,Counter Type,Mean/Increment);不存在回 null */
-function readCounters(file) {
+const MIB = 1048576;
+
+/** dotnet-counters 的計數器名稱:完全相同,或後接「 (單位[ / 區間])」——dotnet-counters 10.x 的名稱帶單位與區間(「Gen 0 GC Count (Count / 10 sec)」「Gen 0 Size (B)」) */
+export function findCounter(names, base) {
+  return names.find((k) => k === base || k.startsWith(`${base} (`)) ?? null;
+}
+
+/** 大小類計數器 → MiB(與 RSS 同單位):名稱單位 (MB) 是 10^6 B(System.Runtime 的 EventCounters 以 1 000 000 除)、(B) 是位元組;名稱沒有單位時依 defaultUnit */
+function toMiB(v, key, defaultUnit) {
+  const unit = /\(([^()]*)\)$/.exec(key)?.[1]?.split('/')[0].trim() ?? defaultUnit;
+  return unit === 'MB' ? (v * 1e6) / MIB : unit === 'B' ? v / MIB : v;
+}
+
+/** RSS 準則用 counters 判定時必要的計數器(缺任何一個 → 退回只看 RSS 的規則並註明) */
+export const REQUIRED_COUNTERS = ['Gen 0 GC Count', 'GC Committed Bytes', 'Gen 2 Size'];
+
+/**
+ * 讀 dotnet-counters 的 csv(Timestamp,Provider,Counter Name,Counter Type,Mean/Increment);不存在回 null。
+ * 一次刷新列出每個計數器各一次:同一名稱再出現即下一次刷新(不靠時間戳:格式隨系統地區設定而異,一次刷新也可能跨秒)。
+ * 時間軸:第 i 次刷新 = (i + 1) × intervalS 秒(自 dotnet-counters 開始;soak 腳本在客戶端啟動前一刻開始收,與取樣的 elapsed_s 差 1 s 以內)。
+ * 大小一律換算成 MiB;Rate 類(Count / 10 sec、B / 10 sec、ms / 10 sec)是該次刷新區間內的增量。
+ */
+export function readCounters(file, intervalS = 10) {
   if (!fs.existsSync(file)) return null;
   const rows = fs.readFileSync(file, 'utf8').split('\n').slice(1).map((l) => l.split(',')).filter((r) => r.length >= 5);
-  const by = {};
+  const by = new Map();
+  let refresh = 0;
+  let seen = new Set();
   for (const r of rows) {
     const name = r[2].trim();
+    if (seen.has(name)) { refresh++; seen = new Set(); }
+    seen.add(name);
     const v = Number(r[4]);
     if (!Number.isFinite(v)) continue;
-    (by[name] ??= []).push(v);
+    if (!by.has(name)) by.set(name, []);
+    by.get(name).push({ i: refresh, v });
   }
-  const pick = (n) => by[n] ?? null;
-  const last = (a) => (a && a.length ? a[a.length - 1] : null);
-  const sum = (a) => (a && a.length ? a.reduce((x, y) => x + y, 0) : null);
-  const max = (a) => (a && a.length ? Math.max(...a) : null);
+  const refreshes = rows.length ? refresh + 1 : 0;
+  const names = [...by.keys()];
+  /** 逐刷新的值陣列(缺的刷新為 null);conv(v, key) 換算單位;找不到計數器回 null */
+  const series = (base, conv = (v) => v) => {
+    const key = findCounter(names, base);
+    if (!key) return null;
+    const a = new Array(refreshes).fill(null);
+    for (const { i, v } of by.get(key)) a[i] = conv(v, key);
+    return a;
+  };
+  const mbUnit = (v, k) => toMiB(v, k, 'MB');
+  const bUnit = (v, k) => toMiB(v, k, 'B');
+  const gcCount = series('Gen 0 GC Count');   // 每次 GC(任何代)都讓 gen0 計數加 1 → 總 GC 次數
+  const gen1Count = series('Gen 1 GC Count');
+  const gen2Count = series('Gen 2 GC Count');
+  const committed = series('GC Committed Bytes', mbUnit);
+  const budget = series('Gen 0 GC Budget', mbUnit);
+  const heap = series('GC Heap Size', mbUnit);
+  const ws = series('Working Set', mbUnit);
+  const g0 = series('Gen 0 Size', bUnit);
+  const g1 = series('Gen 1 Size', bUnit);
+  const g2 = series('Gen 2 Size', bUnit);
+  const loh = series('LOH Size', bUnit);
+  const poh = series('POH (Pinned Object Heap) Size', bUnit);
+  const alloc = series('Allocation Rate', bUnit);
+  const pause = series('Time paused by GC');
+  const gcPct = series('% Time in GC since last GC');
+  const exc = series('Exception Count');
+  const vals = (a) => (a ? a.filter((x) => x !== null) : []);
+  const sum = (a) => (a ? vals(a).reduce((x, y) => x + y, 0) : null);
+  const last = (a) => { const v = vals(a); return v.length ? round(v[v.length - 1], 2) : null; };
+  const first = (a) => { const v = vals(a); return v.length ? round(v[0], 2) : null; };
+  const max = (a) => { const v = vals(a); return v.length ? round(Math.max(...v), 2) : null; };
+  const firstGcIdx = gcCount ? gcCount.findIndex((x) => x > 0) : -1;
+  const timeline = [];
+  for (let i = 0; i < refreshes; i++) {
+    const managed = g2 && g2[i] !== null ? (g1?.[i] ?? 0) + g2[i] + (loh?.[i] ?? 0) + (poh?.[i] ?? 0) : null;
+    timeline.push({ t: (i + 1) * intervalS, gc: gcCount?.[i] ?? null, committedMb: committed?.[i] === null || committed?.[i] === undefined ? null : round(committed[i], 3),
+      managedMb: managed === null ? null : round(managed, 3), budgetMb: budget?.[i] === null || budget?.[i] === undefined ? null : round(budget[i], 2), pauseMs: pause?.[i] ?? null });
+  }
+  const committedPos = committed ? committed.filter((x) => x !== null && x > 0) : [];
   return {
     samples: rows.length,
-    gcHeapMb: { last: last(pick('GC Heap Size (MB)')), max: max(pick('GC Heap Size (MB)')) },
-    gen0: sum(pick('Gen 0 GC Count')),
-    gen1: sum(pick('Gen 1 GC Count')),
-    gen2: sum(pick('Gen 2 GC Count')),
-    workingSetMb: { last: last(pick('Working Set (MB)')), max: max(pick('Working Set (MB)')) },
-    counters: Object.keys(by),
+    refreshes,
+    intervalS,
+    // RSS 準則需要但 csv 沒有的計數器(非空 → 以只看 RSS 的規則判定)
+    missing: REQUIRED_COUNTERS.filter((b) => !findCounter(names, b)),
+    gen0: sum(gcCount), gen1: sum(gen1Count), gen2: sum(gen2Count),
+    // 第一次 GC 所在刷新的時刻(秒,刷新邊界的上界);null = 無 Gen 0 GC Count,Infinity = 整段沒有 GC(gen0 預算未用完)
+    firstGcS: gcCount ? (firstGcIdx >= 0 ? (firstGcIdx + 1) * intervalS : Infinity) : null,
+    gen0BudgetMb: budget ? { first: first(budget), last: last(budget), min: round(Math.min(...vals(budget)), 2), max: max(budget) } : null,
+    // GC 已提交量(第一次 GC 前計數器為 0,不列入首值)
+    committedMb: committed ? { first: committedPos.length ? round(committedPos[0], 2) : null, last: last(committed), max: max(committed) } : null,
+    gcHeapMb: { last: last(heap), max: max(heap) },
+    workingSetMb: { last: last(ws), max: max(ws) },
+    // 上一次 GC 後各代大小(gen0 GC 前為 0)
+    afterGcMb: { gen0: last(g0), gen1: last(g1), gen2: last(g2), loh: last(loh), poh: last(poh) },
+    allocMb: alloc ? round(sum(alloc), 1) : null,
+    gcPauseMs: pause ? round(sum(pause), 1) : null,
+    gcPauseMaxMsPerRefresh: pause ? max(pause) : null,
+    gcTimePctMax: gcPct ? max(gcPct) : null,
+    exceptions: exc ? sum(exc) : null,
+    counters: names,
+    // 逐刷新:t 秒、該次刷新的 GC 次數、GC 已提交量、受控堆積(gen1+gen2+LOH+POH)、gen0 預算(MiB)、GC 暫停 ms
+    timeline,
   };
 }
 
@@ -71,7 +157,7 @@ export function loadRun(dir) {
     host: readJsonl(path.join(stats, 'host.jsonl')),
     clients: readJsonl(path.join(stats, 'clients.jsonl')),
     student: readJsonl(path.join(stats, 'student.jsonl')),
-    counters: readCounters(path.join(stats, 'counters.csv')),
+    counters: readCounters(path.join(stats, 'counters.csv'), Number(meta.sample_s) > 0 ? Number(meta.sample_s) : 10),
     simcoreLog: fs.existsSync(path.join(dir, 'logs', 'simcore.log')) ? fs.readFileSync(path.join(dir, 'logs', 'simcore.log'), 'utf8') : '',
   };
 }
@@ -87,6 +173,75 @@ export function slope(points) {
 }
 
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+const fx = (x, d = 1) => (x === null || x === undefined ? '—' : String(round(x, d)));
+
+/** [分鐘, MB] 點列的摘要:首、末、筆數、全段最小平方斜率(MB/min) */
+function seriesStats(pts) {
+  return { first: pts.length ? round(pts[0][1], 2) : null, last: pts.length ? round(pts[pts.length - 1][1], 2) : null, samples: pts.length, slopeMbPerMin: pts.length >= 2 ? round(slope(pts), 3) : null };
+}
+
+/**
+ * RSS 準則(docs/design/testing.md 第 6.3、6.6 節)。
+ * 有可用的 counters(REQUIRED_COUNTERS 都在):全部成立才合格——擬合時段內 GC ≥ minGcCount 次(不足 = 無法判定);
+ * 第一次 GC 起受控堆積(gen1+gen2+LOH+POH)全段斜率、暖機後 GC 已提交量全段斜率、暖機後 RSS − GC 已提交量全段斜率皆 ≤ 斜率門檻;RSS 增量 ≤ 增量門檻。
+ * 理由:RSS = GC 已提交量 + 非 GC 記憶體;洩漏的存活物件反映在受控堆積(gen0 預算大時 RSS 可能長時間不動),GC 自己多提交(碎片)反映在已提交量,
+ * 原生記憶體 / 執行緒反映在 RSS − 已提交量。不用「最後一段」或 OR 組合:真的洩漏在 10 分鐘內也會被判出來(第三十輪懷疑者的實驗 B)。
+ * 沒有可用的 counters:暖機後 RSS 全段斜率 ≤ 門檻且增量 ≤ 門檻,並註明無法分辨 gen0 預算填充。
+ */
+function evalRss({ th, ctr, ctrUsable, firstGcS, warmup, baseWarmup, rssSeries, rssPts, winEndS }) {
+  const rpSlope = rssPts.length >= 2 ? slope(rssPts) : null;
+  const growth = rssSeries.length ? rssSeries[rssSeries.length - 1].host.rss_mb - rssSeries[0].host.rss_mb : null;
+  const growthOk = growth !== null && growth <= th.maxRssGrowthMb;
+  const notes = [];
+  if (!ctrUsable) {
+    notes.push(ctr
+      ? `counters.csv 缺少 ${ctr.missing.join('、') || '刷新資料'}(或計數器名稱不同):以只看 RSS 的規則判定,無法分辨 gen0 預算填充`
+      : '無 dotnet-counters:無法分辨 gen0 預算填充(第一次 GC 前 RSS 依配置速率上升;大快取機器的 gen0 預算可達數百 MB),以只看 RSS 的規則判定');
+    const slopeOk = rssSeries.length >= 2 && Math.abs(rpSlope ?? Infinity) <= th.maxRssSlopeMbPerMin;
+    if (!slopeOk) notes.push(`RSS 斜率 ${fx(rpSlope, 3)} MB/min 超過門檻`);
+    if (!growthOk) notes.push(`RSS 增量 ${fx(growth)} MB 超過門檻`);
+    return { rule: 'rss-only', pass: slopeOk && growthOk, undetermined: false, warmupS: round(warmup, 0), baseWarmupS: round(baseWarmup, 0), notes };
+  }
+  const tl = ctr.timeline.filter((x) => x.t <= winEndS);
+  const gcCount = tl.reduce((a, x) => a + (x.gc ?? 0), 0);
+  const managedPts = Number.isFinite(firstGcS) ? tl.filter((x) => x.t >= firstGcS && x.managedMb !== null).map((x) => [x.t / 60, x.managedMb]) : [];
+  const committedPts = tl.filter((x) => x.t >= warmup && x.committedMb > 0).map((x) => [x.t / 60, x.committedMb]);
+  // RSS − GC 已提交量:每筆暖機後的 RSS 取樣配當時(之前最近一次刷新)的已提交量;已提交量為 0(第一次 GC 前)的不配
+  const nonGcPts = [];
+  let j = -1;
+  for (const s of rssSeries) {
+    while (j + 1 < tl.length && tl[j + 1].t <= s.elapsed_s + 1) j++;
+    const c = j >= 0 ? tl[j].committedMb : null;
+    if (c > 0) nonGcPts.push([s.elapsed_s / 60, s.host.rss_mb - c]);
+  }
+  const managed = seriesStats(managedPts);
+  const committed = seriesStats(committedPts);
+  const nonGc = seriesStats(nonGcPts);
+  const reasons = [];
+  if (!Number.isFinite(firstGcS)) reasons.push(`整段未發生 GC(gen0 預算 ${fx(ctr.gen0BudgetMb?.max)} MB 尚未用完)`);
+  else if (gcCount < th.minGcCount) reasons.push(`擬合時段內只 GC ${gcCount} 次(< ${th.minGcCount})`);
+  if (Number.isFinite(firstGcS) && managed.samples < 3) reasons.push(`第一次 GC 之後受控堆積只有 ${managed.samples} 筆`);
+  if (nonGc.samples < 3) reasons.push(`暖機後能與 GC 已提交量配對的 RSS 取樣只有 ${nonGc.samples} 筆`);
+  if (committed.samples < 3) reasons.push(`暖機後 GC 已提交量只有 ${committed.samples} 筆`);
+  const within = (v) => v !== null && Math.abs(v) <= th.maxRssSlopeMbPerMin;
+  const checks = [
+    { id: 'gcCount', name: 'GC 次數', value: gcCount, limit: `≥ ${th.minGcCount}`, pass: gcCount >= th.minGcCount },
+    { id: 'managed', name: '受控堆積斜率(第一次 GC 起)', value: managed.slopeMbPerMin, limit: `≤ ${th.maxRssSlopeMbPerMin} MB/min`, pass: within(managed.slopeMbPerMin) },
+    { id: 'committed', name: 'GC 已提交量斜率(暖機後)', value: committed.slopeMbPerMin, limit: `≤ ${th.maxRssSlopeMbPerMin} MB/min`, pass: within(committed.slopeMbPerMin) },
+    { id: 'nonGc', name: 'RSS − GC 已提交量斜率(暖機後)', value: nonGc.slopeMbPerMin, limit: `≤ ${th.maxRssSlopeMbPerMin} MB/min`, pass: within(nonGc.slopeMbPerMin) },
+    { id: 'growth', name: 'RSS 增量(暖機後)', value: growth === null ? null : round(growth, 1), limit: `≤ ${th.maxRssGrowthMb} MB`, pass: growthOk },
+  ];
+  const undetermined = reasons.length > 0;
+  if (undetermined) notes.push(`無法判定(不合格):${reasons.join(';')}——延長執行,或以 --gen0-budget-mb(DOTNET_GCgen0size)降低 gen0 預算後重跑`);
+  for (const c of checks) if (!c.pass && !(undetermined && c.id === 'gcCount')) notes.push(`${c.name} ${c.value ?? '—'} 未達 ${c.limit}`);
+  if (warmup > baseWarmup) notes.push(`暖機延到第一次 GC(counters 第 ${firstGcS} s 內)之後;--warmup-s 為 ${round(baseWarmup, 0)} s`);
+  if (!undetermined && checks.find((c) => c.id === 'managed').pass === false) notes.push('受控堆積上升 = 存活物件累積:以 dotnet-gcdump 相隔 10 分鐘以上取兩次比較型別數量');
+  return {
+    rule: 'gc-counters', pass: !undetermined && checks.every((c) => c.pass), undetermined, reasons,
+    warmupS: round(warmup, 0), baseWarmupS: round(baseWarmup, 0), firstGcS: Number.isFinite(firstGcS) ? firstGcS : null, noGc: firstGcS === Infinity,
+    gcCount, managed, committed, nonGc, rssSlopeMbPerMin: round(rpSlope, 3), checks, notes,
+  };
+}
 
 export function summarise(run, thresholds = {}) {
   const th = { ...DEFAULT_THRESHOLDS, ...thresholds };
@@ -95,7 +250,15 @@ export function summarise(run, thresholds = {}) {
   // ---- 主控程序取樣 ----
   const samples = run.host.filter((s) => s.kind === 'sample' && s.host);
   const elapsedMax = samples.length ? samples[samples.length - 1].elapsed_s : 0;
-  const warmup = Math.min(th.warmupS, elapsedMax * 0.2);
+  // 暖機:--warmup-s(短於 10 分鐘的執行取總時長 × 20%);有可用的 dotnet-counters 時至少延到第一次 GC 之後一個取樣間隔——
+  // .NET 工作站 GC 第一次 GC 前 RSS 依配置速率上升到 gen0 預算(大快取機器可達數百 MB),之後重用同一批已提交的記憶體,這段不是洩漏
+  // (docs/design/testing.md 第 6.6 節)。延長暖機不會掩蓋洩漏:受控堆積的斜率從第一次 GC 起算,另有 GC 次數下限
+  const ctr = run.counters;
+  const ctrUsable = !!ctr && ctr.missing.length === 0 && ctr.refreshes > 0;
+  const ctrInterval = ctr?.intervalS ?? 10;
+  const baseWarmup = Math.min(th.warmupS, elapsedMax * 0.2);
+  const firstGcS = ctrUsable ? ctr.firstGcS : null;
+  const warmup = ctrUsable && Number.isFinite(firstGcS) ? Math.max(baseWarmup, firstGcS + ctrInterval) : baseWarmup;
   // RSS 擬合排除客戶端收尾後的樣本:超過設定時長(meta.minutes×60)或合成客戶端程序已結束(clients.alive=false)——
   // 客戶端斷線時核心釋放連線與訂閱常有一筆 RSS 尖峰,不代表持續成長;CPU/RSS 起訖/執行緒等原始統計與 hostSamples 仍含全部樣本。
   // 全部都是收尾樣本時(客戶端提前結束)退回用全部樣本,免得 RSS 準則變成「無資料」
@@ -108,6 +271,7 @@ export function summarise(run, thresholds = {}) {
   const rssSeries = post.length >= 3 ? post : fitSamples.filter((s) => Number.isFinite(s.host.rss_mb));
   const rssPts = rssSeries.map((s) => [s.elapsed_s / 60, s.host.rss_mb]);
   const rssAll = samples.map((s) => s.host.rss_mb).filter(Number.isFinite);
+  const rssEval = evalRss({ th, ctr, ctrUsable, firstGcS, warmup, baseWarmup, rssSeries, rssPts, winEndS: (fitSamples.length ? fitSamples[fitSamples.length - 1].elapsed_s : elapsedMax) + ctrInterval / 2 });
   const cpuAll = samples.map((s) => s.host.cpu_pct).filter(Number.isFinite);
   const stepsMeans = samples.map((s) => s.host.stepsPerS?.mean).filter(Number.isFinite);
   const stepsMin = samples.map((s) => s.host.stepsPerS?.min).filter(Number.isFinite);
@@ -189,9 +353,19 @@ export function summarise(run, thresholds = {}) {
   const lat = clientsSummary.latencyMs;
   add('latency', '狀態幀延遲 < 門檻', `p95 < ${th.maxLatencyMs} ms`, lat ? `p50 ${lat.p50} / p95 ${lat.p95} / p99 ${lat.p99} / max ${lat.max} ms(n = ${lat.n})` : '無資料', lat && lat.p95 < th.maxLatencyMs, '牆鐘估計:含核心序列化、WebSocket 與客戶端事件迴圈(lib.mjs LatencyEstimator)');
   const rp = hostSummary.rssPostWarmup;
-  add('rss', 'RSS 不持續成長', `暖機 ${hostSummary.warmup_s} s 後斜率 ≤ ${th.maxRssSlopeMbPerMin} MB/min 且增量 ≤ ${th.maxRssGrowthMb} MB`,
-    rp ? `起 ${rp.first} → 訖 ${rp.last} MB(增量 ${rp.growthMb} MB;斜率 ${rp.slopeMbPerMin} MB/min,後半段 ${rp.secondHalfSlopeMbPerMin} MB/min;${rp.samples} 筆${rp.tailExcluded ? `,排除收尾 ${rp.tailExcluded} 筆` : ''})` : '無資料',
-    rp && rp.samples >= 2 && Math.abs(rp.slopeMbPerMin ?? Infinity) <= th.maxRssSlopeMbPerMin && rp.growthMb <= th.maxRssGrowthMb);
+  const rssMeasured = rp ? `RSS 起 ${rp.first} → 訖 ${rp.last} MB(增量 ${rp.growthMb} MB;斜率 ${rp.slopeMbPerMin} MB/min,後半段 ${rp.secondHalfSlopeMbPerMin} MB/min;${rp.samples} 筆${rp.tailExcluded ? `,排除收尾 ${rp.tailExcluded} 筆` : ''})` : 'RSS 無資料';
+  if (rssEval.rule === 'gc-counters') {
+    const c = Object.fromEntries(rssEval.checks.map((x) => [x.id, x]));
+    add('rss', 'RSS 不持續成長',
+      `有 dotnet-counters:GC ≥ ${th.minGcCount} 次;第一次 GC 後受控堆積、暖機 ${hostSummary.warmup_s} s 後 GC 已提交量與 RSS − 已提交量的斜率皆 ≤ ${th.maxRssSlopeMbPerMin} MB/min;RSS 增量 ≤ ${th.maxRssGrowthMb} MB(全部成立)`,
+      `GC ${rssEval.gcCount} 次;受控堆積 ${fx(rssEval.managed.first)} → ${fx(rssEval.managed.last)} MB(${fx(c.managed.value, 3)} MB/min);GC 已提交 ${fx(rssEval.committed.first)} → ${fx(rssEval.committed.last)} MB(${fx(c.committed.value, 3)} MB/min);` +
+        `RSS − 已提交 ${fx(rssEval.nonGc.first)} → ${fx(rssEval.nonGc.last)} MB(${fx(c.nonGc.value, 3)} MB/min);${rssMeasured}`,
+      rssEval.pass, rssEval.notes.join(';') || null);
+  } else {
+    add('rss', 'RSS 不持續成長', `暖機 ${hostSummary.warmup_s} s 後斜率 ≤ ${th.maxRssSlopeMbPerMin} MB/min 且增量 ≤ ${th.maxRssGrowthMb} MB(無 dotnet-counters 的規則)`,
+      rssMeasured, rssEval.pass, rssEval.notes.join(';') || null);
+  }
+  Object.assign(criteria[criteria.length - 1], { rule: rssEval.rule, undetermined: rssEval.undetermined });
   add('connections', '無斷線與錯誤', '客戶端斷線 0、錯誤 0、網頁失敗 0',
     `斷線 ${clientsSummary.disconnects}、錯誤 ${clientsSummary.errors}、網頁失敗 ${clientsSummary.web?.fail ?? 0}${clientsSummary.lastErrors.length ? `(${clientsSummary.lastErrors.join(';')})` : ''}`,
     clientsSummary.count > 0 && clientsSummary.disconnects === 0 && clientsSummary.errors === 0 && (clientsSummary.web?.fail ?? 0) === 0);
@@ -211,6 +385,7 @@ export function summarise(run, thresholds = {}) {
     host: hostSummary,
     clients: clientsSummary,
     student: studentSummary,
+    rssEval,
     gc: run.counters,
     hostSamples: samples.map((s) => ({ elapsed_s: s.elapsed_s, cpu_pct: s.host.cpu_pct, rss_mb: s.host.rss_mb, threads: s.host.threads ?? null, steps: s.host.stepsPerS?.mean ?? null, dropped: s.host.dropped ?? 0, radarRss: s.radar?.rss_mb ?? null, radarCpu: s.radar?.cpu_pct ?? null })),
   };
@@ -218,16 +393,34 @@ export function summarise(run, thresholds = {}) {
 
 const f = (x, d = 1) => (x === null || x === undefined ? '—' : typeof x === 'number' ? String(round(x, d)) : String(x));
 
+/** meta.gc(tools/soak-test.* 的 --gen0-budget-mb)→ 說明文字;舊版腳本沒有這個欄位 */
+export function gen0SettingText(meta) {
+  const g = meta?.gc;
+  if (!g) return '未記錄(meta.json 無 gc 欄位:舊版 soak 腳本,執行階段預設或外部環境變數)';
+  const env = Object.entries(g.env ?? {}).map(([k, v]) => `${k}=${v}`).join('、');
+  const inherited = Object.entries(g.inherited ?? {}).filter(([k]) => !(env && k === 'DOTNET_GCgen0size')).map(([k, v]) => `${k}=${v}`).join('、');
+  const base = Number(g.gen0BudgetMb) > 0 ? `${g.gen0BudgetMb} MB(${(g.appliesTo ?? ['simcore', 'radar']).join('、')} 以 ${env || 'DOTNET_GCgen0size'} 啟動;--gen0-budget-mb)` : '執行階段預設(--gen0-budget-mb 0)';
+  return `${base}${inherited ? `;繼承的 GC 環境變數 ${inherited}` : ''}`;
+}
+
 export function renderMarkdown(s) {
   const m = s.meta;
   const lines = [];
   lines.push(`# 長時間穩定性(soak)測試報告 — ${s.run}`, '');
   lines.push(`> 規劃書第 14 章「效能」列(核心 50 Hz 無掉拍、延遲 < 50 ms、RSS 不持續成長);工具 \`tools/soak-test.sh\`(docs/design/testing.md 第 6 節)。`);
   lines.push(`> 情境 ${m.scenario ?? '?'};合成客戶端 ${m.clients ?? '?'} + 學員 1;設定時長 ${m.minutes ?? '?'} 分鐘(實際 ${f(s.host.elapsed_s, 0)} s);開始 ${m.startedUtc ?? '?'};結束 ${m.endedUtc ?? '?'};` +
-    `平台 ${m.platform ?? '?'}(${m.cpuCount ?? '?'} 核;${m.machineNote ?? ''});git ${m.gitRev ? m.gitRev.slice(0, 12) : '?'};.NET ${m.dotnet ?? '?'};Node ${m.node ?? '?'}。`, '');
+    `平台 ${m.platform ?? '?'}(${m.cpuCount ?? '?'} 核;${m.machineNote ?? ''});git ${m.gitRev ? m.gitRev.slice(0, 12) : '?'};.NET SDK ${m.dotnet ?? '?'}(執行階段 ${m.dotnetRuntimes || '未記錄'});Node ${m.node ?? '?'};gen0 預算設定 ${gen0SettingText(m)}。`, '');
   lines.push(`## 判定:**${s.pass ? '合格' : '不合格'}**`, '', '| 準則 | 門檻 | 量測 | 結果 |', '|---|---|---|---|');
-  for (const c of s.criteria) lines.push(`| ${c.name} | ${c.threshold} | ${c.measured} | ${c.pass ? '通過' : '**不通過**'} |`);
+  for (const c of s.criteria) lines.push(`| ${c.name} | ${c.threshold} | ${c.measured} | ${c.pass ? '通過' : c.undetermined ? '**無法判定(不通過)**' : '**不通過**'} |`);
   lines.push('');
+  for (const c of s.criteria) if (c.note && c.id !== 'latency') lines.push(`- ${c.name}:${c.note}`);
+  if (s.criteria.some((c) => c.note && c.id !== 'latency')) lines.push('');
+  const ev = s.rssEval;
+  if (ev?.rule === 'gc-counters') {
+    lines.push('RSS 準則逐項(有 dotnet-counters;全部成立才合格):', '', '| 項目 | 值 | 門檻 | 結果 |', '|---|---|---|---|');
+    for (const k of ev.checks) lines.push(`| ${k.name} | ${f(k.value, 3)} | ${k.limit} | ${k.pass ? '通過' : '**不通過**'} |`);
+    lines.push('');
+  }
   const c = s.clients;
   lines.push('## 狀態幀、延遲與雷達幀(合成客戶端)', '');
   lines.push(`全部客戶端合併:狀態幀 ${c.stateFrames}(事件框 ${c.eventFrames}、凍結幀 ${c.frozenFrames});每秒幀率 p50 ${f(c.stateHz?.p50)}(最小 ${f(c.stateHz?.min)}、最大 ${f(c.stateHz?.max)};核心廣播 25 Hz);` +
@@ -251,13 +444,36 @@ export function renderMarkdown(s) {
     lines.push(`動作 ${st.actions}:確認生效 ${st.confirmed}(生效時間 p50 ${f(st.confirmMs?.p50)} ms、最大 ${f(st.confirmMs?.max)} ms)、未確認 ${st.unconfirmed}、snapshot(無回饋)${st.unverified}、commandRejected ${st.rejected}、斷線 ${st.disconnects}、錯誤 ${st.errors}。` +
       `收到事件:${Object.entries(st.events).map(([k, v]) => `${k} ${v}`).join('、') || '無'}。${st.lastError ? `最後錯誤:${st.lastError}` : ''}`, '');
   } else lines.push('(無學員統計)', '');
-  lines.push('## GC(dotnet-counters)', '');
-  if (s.gc) lines.push(`取樣 ${s.gc.samples} 筆:GC 堆積 最後 ${f(s.gc.gcHeapMb.last)} MB / 最大 ${f(s.gc.gcHeapMb.max)} MB;Gen0 ${f(s.gc.gen0, 0)}、Gen1 ${f(s.gc.gen1, 0)}、Gen2 ${f(s.gc.gen2, 0)} 次;Working Set 最後 ${f(s.gc.workingSetMb.last)} MB。`, '');
-  else lines.push('略過:找不到 dotnet-counters(PATH 或 .cache/dotnet-tools);RSS 由 /proc(Windows:Get-Process)取樣。', '');
+  lines.push('## GC 與 gen0 預算(dotnet-counters,核心)', '');
+  lines.push(`gen0 預算設定:${gen0SettingText(m)}。`, '');
+  if (s.gc) {
+    const g = s.gc;
+    const a = g.afterGcMb ?? {};
+    const durMin = g.refreshes ? (g.refreshes * g.intervalS) / 60 : null;
+    lines.push(`每 ${g.intervalS} s 一次刷新,共 ${g.refreshes} 次(${g.samples} 列);大小皆為 MiB(dotnet-counters 的「(MB)」是 10^6 B,已換算,與 RSS 同單位)。` +
+      `${g.missing?.length ? `缺少計數器 ${g.missing.join('、')}:RSS 準則以只看 RSS 的規則判定。` : ''}`, '');
+    lines.push('| 項目 | 值 |', '|---|---|');
+    lines.push(`| gen0 預算(Gen 0 GC Budget) | ${g.gen0BudgetMb ? `首 ${f(g.gen0BudgetMb.first, 2)} / 末 ${f(g.gen0BudgetMb.last, 2)} / 最小 ${f(g.gen0BudgetMb.min, 2)} / 最大 ${f(g.gen0BudgetMb.max, 2)} MB` : '—'} |`);
+    lines.push(`| GC 次數(gen0 計數含所有代) | 共 ${f(g.gen0, 0)}(gen1 ${f(g.gen1, 0)}、gen2 ${f(g.gen2, 0)});第一次 GC:${g.firstGcS === null ? '無計數器' : Number.isFinite(g.firstGcS) ? `counters 開始後 ${g.firstGcS} s 內` : '整段未發生'}${ev?.gcCount !== undefined ? `;擬合時段內 ${ev.gcCount} 次` : ''} |`);
+    lines.push(`| GC 暫停 | 合計 ${f(g.gcPauseMs, 0)} ms、單次刷新最多 ${f(g.gcPauseMaxMsPerRefresh, 1)} ms / ${g.intervalS} s;GC 時間比例最大 ${f(g.gcTimePctMax, 1)} % |`);
+    lines.push(`| GC 已提交量(GC Committed Bytes) | 第一次 GC 後首值 ${f(g.committedMb?.first)} → 末 ${f(g.committedMb?.last)}(最大 ${f(g.committedMb?.max)})MB${ev?.committed ? `;暖機後斜率 ${f(ev.committed.slopeMbPerMin, 3)} MB/min` : ''} |`);
+    lines.push(`| 受控堆積(上次 GC 後 gen1+gen2+LOH+POH) | ${ev?.managed ? `第一次 GC 起 ${f(ev.managed.first)} → ${f(ev.managed.last)} MB(${ev.managed.samples} 次刷新;斜率 ${f(ev.managed.slopeMbPerMin, 3)} MB/min)` : '—'} |`);
+    lines.push(`| RSS − GC 已提交量(非 GC 記憶體) | ${ev?.nonGc ? `暖機後 ${f(ev.nonGc.first)} → ${f(ev.nonGc.last)} MB(${ev.nonGc.samples} 筆;斜率 ${f(ev.nonGc.slopeMbPerMin, 3)} MB/min)` : '—'} |`);
+    lines.push(`| 上次 GC 後各代 | gen0 ${f(a.gen0, 2)} / gen1 ${f(a.gen1, 2)} / gen2 ${f(a.gen2, 2)} / LOH ${f(a.loh, 2)} / POH ${f(a.poh, 2)} MB |`);
+    lines.push(`| 配置總量 | ${f(g.allocMb, 0)} MB${durMin ? `(平均 ${f(g.allocMb / durMin, 1)} MB/min)` : ''} |`);
+    lines.push(`| 例外次數(Exception Count) | ${f(g.exceptions, 0)} |`);
+    lines.push(`| GC 堆積(含未回收的 gen0)/ Working Set | 最後 ${f(g.gcHeapMb?.last)} / ${f(g.workingSetMb?.last)} MB(最大 ${f(g.gcHeapMb?.max)} / ${f(g.workingSetMb?.max)}) |`);
+    lines.push('');
+    lines.push('判讀:第一次 GC 之前 RSS 的上升約等於 gen0 預算(配置速率 × 時間;之後重用同一批已提交的記憶體),不是洩漏;洩漏的存活物件反映在受控堆積,' +
+      'GC 自己多提交反映在 GC 已提交量,原生記憶體 / 執行緒反映在 RSS − 已提交量。gen2 / LOH 在兩次 gen2 GC 之間只增不減,單看短時間的上升不等於洩漏,所以斜率取全段。', '');
+  } else lines.push('略過:找不到 dotnet-counters(PATH 或 .cache/dotnet-tools);RSS 由 /proc(Windows:Get-Process)取樣,RSS 準則無法分辨 gen0 預算填充。', '');
   lines.push('## 方法與限制', '');
   lines.push('- 延遲為牆鐘估計(`tests/soak/lib.mjs` LatencyEstimator):核心以牆鐘推進,第 k 幀理想到達時刻 = 原點 + state.t,原點取連線初期最快一幀;量到的是核心序列化 + WebSocket 傳送 + 客戶端事件迴圈的總延遲,核心落後牆鐘也會反映為延遲上升。凍結幀不計;時間倍率須為 1。');
   lines.push('- tick 率以客戶端牆鐘量測(首末狀態幀的 tick 差 / 到達時間差),與主控程序每秒輸出的 `steps/s` 互相印證;「掉拍」取自主控程序輸出的累計值。');
-  lines.push('- RSS 斜率為暖機後樣本的最小平方直線;超過設定時長或合成客戶端已結束(clients.alive=false)的收尾樣本不入擬合(客戶端斷線時核心釋放連線常有一筆尖峰;起訖/最大值等原始統計仍含)。.NET GC 的堆積在前幾分鐘常呈階梯式擴張(每次 +數 MB),10 分鐘內的斜率可能只反映這個過程,後半段斜率為參考值;門檻為軟體面判準,是否洩漏以實機 2 小時(同一工具)為準。');
+  lines.push('- RSS 準則:有 dotnet-counters 時 GC 次數 ≥ 下限,且第一次 GC 起受控堆積、暖機後 GC 已提交量與 RSS − 已提交量三者的全段最小平方斜率 ≤ 門檻,且暖機後 RSS 增量 ≤ 門檻(全部成立;GC 次數不足 = 無法判定);' +
+    '暖機至少延到第一次 GC 之後。沒有 dotnet-counters 時只看暖機後 RSS 斜率與增量(分辨不出 gen0 預算填充)。.NET 8 工作站 GC 的 gen0 預算約 L3 / 2(雲端大快取機器 136–264 MB,10 分鐘內只 GC 一兩次),' +
+    'soak 腳本預設以 --gen0-budget-mb 6(DOTNET_GCgen0size)模擬船上內顯筆電的小快取。超過設定時長或合成客戶端已結束(clients.alive=false)的收尾樣本不入擬合(客戶端斷線時核心釋放連線常有一筆尖峰;起訖/最大值等原始統計仍含)。' +
+    '後半段斜率為參考值;門檻為軟體面判準,是否洩漏以實機 2 小時(同一工具)為準。');
   lines.push('- 合成客戶端在同一個 Node 程序內(N 條狀態連線 + N 條雷達連線),不含瀏覽器繪圖負載;視景幀率、內顯機 CPU/延遲數字需實機(docs/驗收/需求追溯表.md 第 14 章效能列)。');
   lines.push('');
   return lines.join('\n');

@@ -10,11 +10,14 @@
 #      客戶端與學員都已結束(時間到)後取到的那一筆不寫(客戶端斷線時核心釋放連線常有 RSS 尖峰;report.mjs 另排除 elapsed 超過設定時長或 clients.alive=false 的樣本);
 #      dotnet-counters(PATH 或 .cache/dotnet-tools)可用時另收 System.Runtime GC 計數器到 stats/counters.csv,否則略過並註記
 #   5) 時間到(客戶端自行結束)→ tools/launch/stop-all.sh(停止檔讓核心寫完紀錄 footer)→ tests/soak/report.mjs 寫 build/soak/report-<run>.md 與 .json 並判定
-#      (掉拍 0 且 tick 率 50 ± 0.5;延遲 p95 < 50 ms;暖機後 RSS 斜率 ≤ 1 MB/min 且增量 ≤ 64 MB;無斷線/錯誤、學員指令皆生效、核心寫完 footer)
+#      (掉拍 0 且 tick 率 50 ± 0.5;延遲 p95 < 50 ms;RSS 不持續成長(有 counters 時看 GC 次數、受控堆積、GC 已提交量與非 GC 記憶體);無斷線/錯誤、學員指令皆生效、核心寫完 footer)
+# gen0 預算:--gen0-budget-mb <MB>(預設 6;0 = 不設、用執行階段預設)以 DOTNET_GCgen0size(十六進位位元組)傳給核心與雷達,模擬船上內顯筆電的小 L3 快取:
+#   .NET 8 工作站 GC 的 gen0 預算約 L3 / 2,雲端大快取機器可達 136–264 MB,10 分鐘內只 GC 一兩次,第一次 GC 前 RSS 依配置速率上升,RSS 判定分辨不出洩漏
+#   (docs/design/testing.md 第 6.6 節);設定值寫進 meta.json 的 gc 欄位與報告
 # 全部輸出在 build/soak/:<run>/(bin/ 建置輸出複本、logs/、stats/、records/、media/、meta.json)與 report-<run>.{md,json};<run> 預設為 UTC 時間戳(--run 指定)。
 # 結束碼:0 合格、1 不合格(含中途 Ctrl+C 中止、核心提前結束)、2 前置條件/參數錯誤。需獨佔 CPU:不要與整套測試或端對端併行。
 # 用法:tools/soak-test.sh [--minutes 10] [--clients 3] [--scenario E05_pilot_traffic|<path.yaml>] [--port-base 18800] [--no-radar] [--no-web] [--skip-build]
-#       [--sample-s 10] [--max-latency-ms 50] [--max-rss-slope-mb-per-min 1] [--max-rss-growth-mb 64] [--warmup-s 120] [--run <名稱>] [--note <機器說明>]
+#       [--sample-s 10] [--max-latency-ms 50] [--max-rss-slope-mb-per-min 1] [--max-rss-growth-mb 64] [--warmup-s 120] [--gen0-budget-mb 6] [--run <名稱>] [--note <機器說明>]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -22,7 +25,7 @@ cd "$ROOT"
 source "$ROOT/tools/launch/launch-common.sh"
 
 MINUTES=10; CLIENTS=3; SCENARIO="E05_pilot_traffic"; BASE=18800; RADAR_ON=1; WEB_ON=1; SKIP_BUILD=0; SAMPLE=10
-MAX_LAT=50; MAX_SLOPE=1; MAX_GROWTH=64; WARMUP=120; RUN=""; NOTE=""
+MAX_LAT=50; MAX_SLOPE=1; MAX_GROWTH=64; WARMUP=120; GEN0_MB=6; RUN=""; NOTE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --minutes) MINUTES="$2"; shift 2 ;;
@@ -37,14 +40,19 @@ while [[ $# -gt 0 ]]; do
     --max-rss-slope-mb-per-min) MAX_SLOPE="$2"; shift 2 ;;
     --max-rss-growth-mb) MAX_GROWTH="$2"; shift 2 ;;
     --warmup-s) WARMUP="$2"; shift 2 ;;
+    --gen0-budget-mb) GEN0_MB="$2"; shift 2 ;;
     --run) RUN="$2"; shift 2 ;;
     --note) NOTE="$2"; shift 2 ;;
-    -h|--help) sed -n 2,16p "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n 2,20p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
 [[ "$MINUTES" =~ ^[0-9]+([.][0-9]+)?$ && "$CLIENTS" =~ ^[0-9]+$ && "$BASE" =~ ^[0-9]+$ && "$SAMPLE" =~ ^[0-9]+$ ]] || { echo "--minutes/--clients/--port-base/--sample-s 須為數字" >&2; exit 2; }
 [[ "$CLIENTS" -ge 1 && "$SAMPLE" -ge 1 ]] || { echo "--clients 與 --sample-s 須 ≥ 1" >&2; exit 2; }
+[[ "$GEN0_MB" =~ ^[0-9]+$ ]] || { echo "--gen0-budget-mb 須為 ≥ 0 的整數(MB;0 = 用執行階段預設)" >&2; exit 2; }
+# 核心與雷達的 gen0 預算(DOTNET_GCgen0size 為十六進位位元組;環境變數名稱區分大小寫,runtimeconfig.json 的同名設定在 .NET 8 無效)
+GC_ENV=(); GEN0_HEX=""
+if [[ "$GEN0_MB" -gt 0 ]]; then GEN0_HEX="$(printf '0x%X' $((GEN0_MB * 1048576)))"; GC_ENV=(env "DOTNET_GCgen0size=$GEN0_HEX"); fi
 SECS="$(awk -v m="$MINUTES" 'BEGIN { printf "%d", m * 60 }')"
 [[ "$SECS" -ge 10 ]] || { echo "--minutes 太短(至少 10 s)" >&2; exit 2; }
 # 情境:代號 → data/scenarios/<代號>.yaml
@@ -68,6 +76,8 @@ step() { echo; echo "=== [soak] $1"; }
 now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
 
 echo "Simosa BRM soak 測試 $RUN:情境 $SCEN_ID、客戶端 $CLIENTS、$MINUTES 分鐘;埠 ws $WS / 雷達 $RADAR / 網頁 $WEB / VHF $VHF / 錄影 $MEDIA;輸出 $OUT_REL/"
+if [[ -n "$GEN0_HEX" ]]; then echo "  gen0 預算 $GEN0_MB MB:核心與雷達 DOTNET_GCgen0size=$GEN0_HEX(模擬船上內顯筆電;--gen0-budget-mb 0 = 執行階段預設)"
+else echo "  gen0 預算:執行階段預設(--gen0-budget-mb 0;大快取機器可達數百 MB,RSS 判定見 docs/design/testing.md 第 6.6 節)${DOTNET_GCgen0size:+;繼承的 DOTNET_GCgen0size=$DOTNET_GCgen0size}"; fi
 
 if [[ $SKIP_BUILD == 0 ]]; then
   step "建置 SimCore.Host、Sensors.Radar.Host、StaticWeb(Release)"
@@ -105,6 +115,16 @@ STARTED_UTC="$(date -u +%FT%TZ)"
 ABORTED=0; HOST_EXIT="null"; FOOTER=false; ENDED_UTC=""; HOST_PID=""; CLIENTS_PID=""; STUDENT_PID=""; FINISHED=0
 
 json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# 從外部繼承、會影響核心與雷達 GC 的環境變數(DOTNET_GC* / COMPlus_GC*,例如 GCHeapHardLimit、gcServer)→ JSON 物件;--gen0-budget-mb > 0 時 DOTNET_GCgen0size 以本腳本的值為準
+gc_inherited_json() {
+  local out="{" k v first=1
+  while IFS='=' read -r k v; do
+    [[ -n "$k" ]] || continue
+    [[ $first == 1 ]] || out+=", "
+    first=0; out+="\"$(json_str "$k")\": \"$(json_str "$v")\""
+  done < <(env | grep -E '^(DOTNET|COMPlus)_[Gg][Cc]' || true)
+  echo "$out}"
+}
 write_meta() {
   cat > "$OUT/meta.json" <<JSON
 {
@@ -112,9 +132,10 @@ write_meta() {
   "ports": { "ws": $WS, "radar": $([[ -n "$RADAR_DLL" ]] && echo "$RADAR" || echo 0), "web": $([[ -n "$WEB_DLL" ]] && echo "$WEB" || echo 0), "vhf": $VHF, "media": $MEDIA },
   "startedUtc": "$STARTED_UTC", "endedUtc": $([[ -n "$ENDED_UTC" ]] && echo "\"$ENDED_UTC\"" || echo null),
   "platform": "$(json_str "$(uname -srm 2>/dev/null || echo unknown)")", "cpuCount": $(nproc 2>/dev/null || echo 0), "machineNote": "$(json_str "${NOTE:-容器/開發機,非內顯基準筆電}")",
-  "dotnet": "$(dotnet --version 2>/dev/null || echo ?)", "node": "$(node --version)", "gitRev": $([[ -n "$GIT_REV" ]] && echo "\"$GIT_REV\"" || echo null),
+  "dotnet": "$(dotnet --version 2>/dev/null || echo ?)", "dotnetRuntimes": "$(dotnet --list-runtimes 2>/dev/null | awk '$1 == "Microsoft.NETCore.App" { print $2 }' | paste -sd, -)", "node": "$(node --version)", "gitRev": $([[ -n "$GIT_REV" ]] && echo "\"$GIT_REV\"" || echo null),
   "recordPath": "$(json_str "$OUT_REL/records/soak-$SCEN_ID.jsonl")", "hostPid": ${HOST_PID:-0}, "hostExit": $HOST_EXIT, "footer": $FOOTER, "aborted": $([[ $ABORTED == 1 ]] && echo true || echo false),
   "counters": $([[ -n "$DC" ]] && echo true || echo false),
+  "gc": { "gen0BudgetMb": $GEN0_MB, "env": $([[ -n "$GEN0_HEX" ]] && echo "{ \"DOTNET_GCgen0size\": \"$GEN0_HEX\" }" || echo "{}"), "appliesTo": ["simcore", "radar"], "inherited": $(gc_inherited_json) },
   "thresholds": { "maxLatencyMs": $MAX_LAT, "maxRssSlopeMbPerMin": $MAX_SLOPE, "maxRssGrowthMb": $MAX_GROWTH, "warmupS": $WARMUP }
 }
 JSON
@@ -197,7 +218,7 @@ trap on_exit EXIT
 
 step "啟動 SimCore.Host($SCEN_ID;紀錄 $OUT_REL/records/、VHF $VHF、錄影 $MEDIA)"
 HOST_ARGS=(--scenario "$SCENARIO" --record "$OUT/records/soak-$SCEN_ID.jsonl" --port "$WS" --vhf-port "$VHF" --media-port "$MEDIA" --media-dir "$OUT_REL/media" --no-udp --no-nmea --stop-file "$STOPFILE")
-start_bg simcore "$ROOT/$LOGS_REL/simcore.log" dotnet "$HOST_DLL" "${HOST_ARGS[@]}"
+start_bg simcore "$ROOT/$LOGS_REL/simcore.log" ${GC_ENV[@]+"${GC_ENV[@]}"} dotnet "$HOST_DLL" "${HOST_ARGS[@]}"
 HOST_PID="$LAST_PID"
 write_meta
 rc=0; wait_tcp 127.0.0.1 "$WS" 45 "$HOST_PID" || rc=$?
@@ -205,7 +226,7 @@ if [[ $rc != 0 ]]; then echo "SimCore.Host 未開啟埠 $WS(或已結束),見 $L
 
 if [[ -n "$RADAR_DLL" ]]; then
   step "啟動雷達服務(X+S)"
-  start_bg radar "$ROOT/$LOGS_REL/radar.log" dotnet "$RADAR_DLL" --sim "ws://127.0.0.1:$WS/" --port "$RADAR" --radars x,s --areas data/areas --no-nmea
+  start_bg radar "$ROOT/$LOGS_REL/radar.log" ${GC_ENV[@]+"${GC_ENV[@]}"} dotnet "$RADAR_DLL" --sim "ws://127.0.0.1:$WS/" --port "$RADAR" --radars x,s --areas data/areas --no-nmea
   RADAR_PID="$LAST_PID"
   wait_tcp 127.0.0.1 "$RADAR" 30 "$RADAR_PID" || { echo "雷達服務未開啟埠 $RADAR,見 $LOGS_REL/radar.log" >&2; ABORTED=1; finish; }
 else RADAR_PID=""; fi

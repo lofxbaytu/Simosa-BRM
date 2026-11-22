@@ -8,6 +8,10 @@
     <RollForward>Major</RollForward>
   </PropertyGroup>
   <ItemGroup>
+    <!-- 傳送迴圈的等待者集合(ChannelWaitSet)與 WebSocketStateServer.SendWaitsStarted 的回歸測試 -->
+    <InternalsVisibleTo Include="SimosaBRM.SimCore.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../SimCore/SimCore.csproj" />
     <ProjectReference Include="../Gateway.Nmea/Gateway.Nmea.csproj" />
   </ItemGroup>
