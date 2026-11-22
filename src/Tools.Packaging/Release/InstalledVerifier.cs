@@ -298,8 +298,9 @@ public static class InstalledVerifier
                     : $"覆蓋清單寫入時安裝根目錄沒有可讀的發行清單,之後才安裝了發行版 {m.Version}")
                 + ":清單所列檔案與程式目錄(app\\、tools\\updater\\)改以目前的發行清單核對"
                 + (undone.Count > 0 ? $";{string.Join(";", undone)}。simosa-pkg status 顯示的版次或參數集可能與實際檔案不符,請訪船船長確認(必要時重新派送更新包)" : "")
-                // state\previous 是重新安裝「之前」被更新包換下來的元件:這時 rollback 會把舊版的 app\ 或 data\ 放回來(simosa-pkg 目前不會擋)
-                + (File.Exists(Path.Combine(root, "state", "previous", "previous.json")) ? ";重新安裝之前留下的上一版(state\\previous)已不適用,請不要執行 rollback" : ""));
+                // state\previous 是重新安裝「之前」被更新包換下來的元件:這時 rollback 會把舊版的 app\ 或 data\ 放回來 — simosa-pkg rollback 會拒絕
+                //(UpdateApplier.ReinstalledSinceLastApply);下一次套用更新包後 state\previous 才又是可回復的上一版
+                + (File.Exists(Path.Combine(root, "state", "previous", "previous.json")) ? ";重新安裝之前留下的上一版(state\\previous)已不適用,rollback 會被拒絕(請不要執行 rollback)" : ""));
         }
 
         // 預期內容 = 發行清單 − 更新包刪除的路徑 + 更新包寫入的檔案

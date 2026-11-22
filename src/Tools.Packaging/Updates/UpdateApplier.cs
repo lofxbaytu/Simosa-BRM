@@ -574,8 +574,29 @@ public sealed class UpdateApplier
             reason = "上一個套用的是信任清單變更(trust),不可 rollback(會讓被撤銷的金鑰重新受信任);要撤回請由備援金鑰簽章新的 trust 更新包";
             return false;
         }
+        if (ReinstalledSinceLastApply() is { } reinstalled)
+        {
+            reason = reinstalled;
+            return false;
+        }
         reason = null;
         return true;
+    }
+
+    /// <summary>
+    /// 最近一次套用之後是否曾以安裝程式(或手動複製發行版)重新安裝:覆蓋清單記錄了套用當時 manifest.json 的身分
+    /// (<see cref="InstalledFiles.Baseline"/>),與目前的 manifest.json 不同就是重新安裝過。這時 state/previous 是「重新安裝之前」
+    /// 被更新包換下來的元件,rollback 會把舊版的程式檔或資料放回新的發行版上,留下兩個版本混雜的安裝 — 拒絕並說明回到舊版的正確作法
+    /// (docs/design/packaging-sync.md 第 5.1、10 節)。沒有覆蓋清單(舊版 simosa-pkg 套用)或 manifest.json 讀不到時無從判斷,不擋。
+    /// </summary>
+    private string? ReinstalledSinceLastApply()
+    {
+        var files = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out _);
+        if (files?.Baseline is not { Sha256.Length: > 0 } recorded) return null;
+        var current = Release.InstalledVerifier.ReadBaseline(_layout.Root, out _);
+        if (current is null || Sha256Hex.Equal(recorded.Sha256, current.Sha256)) return null;
+        return $"套用現行更新包之後曾重新安裝(發行版 {recorded.Version ?? "?"} → {current.Version ?? "?"}):state/previous 是重新安裝之前的元件,"
+            + "回復會把舊版的檔案放回新的發行版上,拒絕 rollback。要回到較舊的版本,請以該版本的安裝程式重新安裝;要撤回某個更新包的變更,請派送版本更高的更新包";
     }
 
     /// <summary>回復到上一版(state/previous;只保留一層)。曾套用最高版本不下降,因此回復後不能重新套用同一版或更舊的更新包。trust 類不可回復。</summary>

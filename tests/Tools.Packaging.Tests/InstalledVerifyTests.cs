@@ -1059,6 +1059,14 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.Contains("新增的 2 個檔案不再列入預期", notice.Detail);            // app/added.dll、app/plugins/extra.dll
         Assert.Contains("status", notice.Detail);
         Assert.Contains("請不要執行 rollback", notice.Detail);                    // state/previous 是重新安裝之前的 app/
+        // rollback 拒絕:state/previous 是重新安裝之前的元件,回復會把舊版的 app/version.txt(app 1.0)放回 2026.11.0 的發行版上
+        Assert.False(applier.CanRollback(out var refuse));
+        Assert.Contains("重新安裝", refuse);
+        Assert.Contains("2026.10.0 → 2026.11.0", refuse);
+        var rb = applier.Rollback("測試");
+        Assert.False(rb.Ok);
+        Assert.Equal("app 5.0\n", File.ReadAllText(P(ship, "app/version.txt")));      // 沒有被舊版蓋回
+        AssertOk(ship);
         // 程式目錄照常核對(以新的發行清單)
         File.WriteAllText(P(ship, "app/version.txt"), "app 5.x\n");
         var err = Assert.Single(InstalledVerifier.Verify(ship.Root).Errors);
@@ -1069,6 +1077,7 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.Equal("2026.10.0", InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Baseline!.Version);
         Assert.Single(AssertOk(ship).Notices);
         Assert.True(applier.Apply(SoftwarePackage("2026.11.1", key, ("app/web/index.html", "<!doctype html><title>新</title>\n"))).Ok);
+        Assert.True(applier.CanRollback(out var again), again);              // 重新安裝之後再套用:state/previous 又是可回復的上一版
         var files = InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!;
         Assert.Equal("app/web/index.html", Assert.Single(files.Files).Path);
         Assert.Empty(files.Removed);

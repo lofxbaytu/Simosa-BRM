@@ -240,7 +240,7 @@ export class InstructorApp extends LitElement {
         min-height: 0;
       }
       /* 三欄各自是直向的 flex 容器:欄內面板不互相擠壓(不會被擠到高度 0 或疊到鄰居上),放不下時由欄(或欄內的捲動區)自己捲動。
-         判定由端對端測試把關(tests/e2e/support/layout.ts;src/Instruments.Web/README.md「版面與解析度」) */
+         判定由端對端測試把關(tests/e2e/support/layout.ts;docs/design/web-layout.md) */
       .col {
         display: flex;
         flex-direction: column;

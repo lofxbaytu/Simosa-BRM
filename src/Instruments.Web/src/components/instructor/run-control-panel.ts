@@ -1,7 +1,7 @@
 // 執行控制(規劃書第 9.1 節):凍結/恢復/重設(兩段確認)、結束練習(兩段確認,送 endExercise 定稿 summary)、
 // 時間倍率、快照/還原(列出最近快照)。
 // 版面:最上面兩列是 凍結 | 恢復、重設 | 結束練習,接著時間倍率 — 教官站左欄高度不夠時面板被縮到只剩這三列(約 140 px),
-// 快照鈕、快照清單與說明在面板內捲動(:host 自己是捲動容器;src/Instruments.Web/README.md「版面與解析度」)。
+// 快照鈕、快照清單與說明在面板內捲動(:host 自己是捲動容器;docs/design/web-layout.md)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';

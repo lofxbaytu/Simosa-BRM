@@ -1,6 +1,6 @@
 // 教官用控制(第一版先放同頁,規劃書第 9.1 節執行控制):凍結 / 恢復 / 重設。
 // 操船台下排的最後一格:右欄(BNWAS / 警報 / VHF)跨到下排之後這一格只剩約 90–210 px 寬,
-// 窄於 150 px 時三個鈕改直排、標題只留「教官」(功能不變;src/Instruments.Web/README.md「版面與解析度」)。
+// 窄於 150 px 時三個鈕改直排、標題只留「教官」(功能不變;docs/design/web-layout.md)。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
