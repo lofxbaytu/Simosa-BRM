@@ -62,6 +62,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.dotnet == 'true'
     runs-on: windows-latest
+    timeout-minutes: 40   # 正常約 6 分鐘;沒有上限時卡住的測試會占用執行器 6 小時(run 86)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -80,7 +81,9 @@ jobs:
       - name: 測試
         # -m:1:測試專案依序執行。並行時 Console.Serial 的 HostEndToEndTests(真實 Host 子程序,即時 50 Hz)與雷達單核效能測試
         # 會被同時跑的 SimCore.Tests(900+ 案例)擠到逾時(run 54、55、66);各專案內部仍由 xunit 平行
-        run: dotnet test SimosaBRM.sln -c Release --no-build -m:1 --logger "trx;LogFileName=test.trx"
+        # --blame-hang-timeout:單一測試超過 6 分鐘沒有結束時中止該測試主機並列出當時正在執行的測試(否則只會看到整個步驟卡住;
+        # run 86 的 SimCore.Tests 在 Windows 上卡住 17 分鐘、沒有任何線索)。不產生傾印檔(--blame-hang-dump-type none)
+        run: dotnet test SimosaBRM.sln -c Release --no-build -m:1 --logger "trx;LogFileName=test.trx" --blame-hang-timeout 6m --blame-hang-dump-type none
       - name: PowerShell 腳本(Windows PowerShell 5.1 實跑)
         # 內建的 Windows PowerShell 5.1(安裝程式的捷徑與使用者雙擊都用它):所有 .ps1 能解析(UTF-8 BOM),
         # setup-windows.ps1 -SessionOnly、check-local-data.ps1、build-release.ps1 -WhatIf 能執行;

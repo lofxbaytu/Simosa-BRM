@@ -42,7 +42,8 @@ public class ServerShutdownTests
     private static async Task AssertDisposesPromptlyAsync(IAsyncDisposable server, string name)
     {
         var sw = Stopwatch.StartNew();
-        var dispose = server.DisposeAsync().AsTask();
+        // 經 Task.Run 呼叫:DisposeAsync 的同步段若阻塞(Windows 上 Cancel()/Abort() 曾卡住),本測試要「失敗」而不是「卡住不返回」
+        var dispose = Task.Run(() => server.DisposeAsync().AsTask());
         var first = await Task.WhenAny(dispose, Task.Delay(Limit));
         Assert.True(ReferenceEquals(first, dispose), $"{name}:仍有客戶端連線時 DisposeAsync 未在 {Limit.TotalSeconds:0} s 內返回(核心會被 stop-all 強制結束,紀錄沒有 footer)");
         await dispose;
@@ -61,6 +62,35 @@ public class ServerShutdownTests
         finally { foreach (var c in clients) c.Dispose(); }
         // 可重複呼叫
         await server.DisposeAsync();
+    }
+
+    /// <summary>
+    /// 最壞情況:引擎仍在步進(伺服端不斷送狀態幀)、客戶端完全不讀(送出卡在 TCP 背壓上)時關閉。
+    /// Windows 的 HttpListener WebSocket 在這種情況下 Abort()/取消回呼可能同步阻塞;DisposeAsync 仍須在時限內返回(關機流程之後還要寫紀錄 footer)。
+    /// </summary>
+    [Fact]
+    public async Task StateServerDisposesPromptlyWhileSendingToClientsThatNeverRead()
+    {
+        var engine = TestData.Engine();
+        var server = new WebSocketStateServer(engine, FreePort());
+        server.Start();
+        var clients = await ConnectIdleClientsAsync($"ws://127.0.0.1:{server.Port}/", 3);
+        for (var i = 0; i < 300 && server.ClientCount < 3; i++) await Task.Delay(10);
+        Assert.Equal(3, server.ClientCount);
+        using var stop = new CancellationTokenSource();
+        // 盡快步進約 1.5 s:每個客戶端的送出迴圈持續送幀直到 TCP 緩衝區塞滿(客戶端不讀)
+        var stepping = Task.Run(() => { while (!stop.IsCancellationRequested) engine.Step(); });
+        try
+        {
+            await Task.Delay(1500);
+            await AssertDisposesPromptlyAsync(server, "狀態 WebSocket(送出中、客戶端不讀)");
+        }
+        finally
+        {
+            stop.Cancel();
+            await stepping.WaitAsync(TimeSpan.FromSeconds(10));
+            foreach (var c in clients) c.Dispose();
+        }
     }
 
     [Fact]

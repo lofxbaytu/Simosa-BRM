@@ -41,7 +41,7 @@ public class ServerShutdownTests
             await Task.Delay(200);
             var limit = TimeSpan.FromSeconds(5);
             var sw = Stopwatch.StartNew();
-            var dispose = server.DisposeAsync().AsTask();
+            var dispose = Task.Run(() => server.DisposeAsync().AsTask());   // 同步段阻塞時要失敗而不是卡住
             var first = await Task.WhenAny(dispose, Task.Delay(limit));
             Assert.True(ReferenceEquals(first, dispose), $"仍有顯示端連線時 DisposeAsync 未在 {limit.TotalSeconds:0} s 內返回");
             await dispose;

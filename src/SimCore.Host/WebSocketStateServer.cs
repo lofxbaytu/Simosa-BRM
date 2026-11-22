@@ -297,18 +297,19 @@ public sealed class WebSocketStateServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        try { _cts.Cancel(); } catch (Exception) { }
         var listener = _listener;
-        // 先中止各客戶端,再立即中止監聽(不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow)
-        foreach (var c in _clients.Values)
-        {
-            try { c.Socket.Abort(); } catch (Exception) { }
-        }
-        if (!await HttpListenerStarter.ShutdownAsync(listener, ShutdownWait).ConfigureAwait(false))
+        // 取消權杖、中止各客戶端、中止監聽同時在背景進行,各有等待上限(本方法的同步段不做可能阻塞的事,見 HttpListenerStarter.StopClientsAsync;
+        // 不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow)
+        var clientsStopping = HttpListenerStarter.StopClientsAsync(_cts, _clients.Values.Select(c => c.Socket), ShutdownWait);
+        var listenerStopping = HttpListenerStarter.ShutdownAsync(listener, ShutdownWait);
+        var clientsStopped = await clientsStopping.ConfigureAwait(false);
+        if (!clientsStopped)
+            Log?.Invoke($"WebSocket 客戶端未在 {ShutdownWait.TotalSeconds:0.#} s 內中止,不再等待");
+        if (!await listenerStopping.ConfigureAwait(false))
             Log?.Invoke($"WebSocket 監聽未在 {ShutdownWait.TotalSeconds:0.#} s 內關閉,不再等待");
         if (!await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, ShutdownWait).ConfigureAwait(false))
             Log?.Invoke($"WebSocket 接受迴圈未在 {ShutdownWait.TotalSeconds:0.#} s 內結束,不再等待");
         _listener = null;
-        _cts.Dispose();
+        if (clientsStopped) _cts.Dispose();   // 取消仍卡在背景時不釋放(釋放進行中的 Cancel 會拋例外)
     }
 }

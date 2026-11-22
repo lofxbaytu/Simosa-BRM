@@ -539,18 +539,16 @@ public sealed class VhfRelayServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        try { _cts.Cancel(); } catch (Exception) { }
         var listener = _listener;
-        // 先中止各站,再立即中止監聽(不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow);等待有上限
-        foreach (var s in _stations.Values)
-        {
-            try { s.Socket.Abort(); } catch (Exception) { }
-        }
+        // 取消權杖、中止各站、中止監聽同時在背景進行,各有等待上限(同步段不做可能阻塞的事,見 HttpListenerStarter.StopClientsAsync;
+        // 不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow)
         var wait = TimeSpan.FromSeconds(1.5);
-        await HttpListenerStarter.ShutdownAsync(listener, wait).ConfigureAwait(false);
-        await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, wait).ConfigureAwait(false);
-        await HttpListenerStarter.WaitBoundedAsync(_watchdog, wait).ConfigureAwait(false);
+        var stationsStopping = HttpListenerStarter.StopClientsAsync(_cts, _stations.Values.Select(s => s.Socket), wait);
+        var listenerStopping = HttpListenerStarter.ShutdownAsync(listener, wait);
+        var stationsStopped = await stationsStopping.ConfigureAwait(false);
+        await listenerStopping.ConfigureAwait(false);
+        await Task.WhenAll(HttpListenerStarter.WaitBoundedAsync(_acceptLoop, wait), HttpListenerStarter.WaitBoundedAsync(_watchdog, wait)).ConfigureAwait(false);
         _listener = null;
-        _cts.Dispose();
+        if (stationsStopped) _cts.Dispose();   // 取消仍卡在背景時不釋放
     }
 }

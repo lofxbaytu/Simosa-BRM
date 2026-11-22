@@ -102,4 +102,22 @@ internal static class HttpListenerStarter
         => listener is null
             ? Task.FromResult(true)
             : WaitBoundedAsync(Task.Run(() => { AbortNow(listener); Discard(listener); }), timeout);
+
+    /// <summary>
+    /// 關機的第一步:取消伺服器的權杖並中止各客戶端的 WebSocket — <b>全部放到執行緒集區並設等待上限</b>,呼叫端的同步段不做任何可能阻塞的事。
+    /// Windows(http.sys)的 HttpListener WebSocket 上,<c>WebSocket.Abort()</c> 會取得內部鎖並同步清理送出佇列,對端不讀取或正在
+    /// 握手/傳送時可能卡住;而 <c>CancellationTokenSource.Cancel()</c> 會在呼叫端執行緒上同步執行各個取消回呼 —— 傳給
+    /// ReceiveAsync/SendAsync 的權杖其回呼就是 Abort()。兩者若直接在 DisposeAsync 的同步段呼叫,卡住時連外層的等待上限都還沒開始計時:
+    /// 核心停在關機流程、被 stop-all 逾時強制結束、紀錄沒有 footer(2026-11-22 Windows CI:教官筆電剛開好分頁就停止時發生;
+    /// 同一天 Windows 的單元測試也曾卡住不返回)。每個客戶端各自一個工作,一個卡住不影響其他;逾時回傳 false(留在背景,不阻止程序結束)。
+    /// </summary>
+    public static Task<bool> StopClientsAsync(CancellationTokenSource? cts, IEnumerable<System.Net.WebSockets.WebSocket> sockets, TimeSpan timeout)
+    {
+        var work = new List<Task>();
+        if (cts is not null)
+            work.Add(Task.Run(() => { try { cts.Cancel(); } catch (Exception) { /* 已釋放 */ } }));
+        foreach (var socket in sockets.ToList())
+            work.Add(Task.Run(() => { try { socket.Abort(); } catch (Exception) { /* 已關閉或已釋放 */ } }));
+        return WaitBoundedAsync(Task.WhenAll(work), timeout);
+    }
 }

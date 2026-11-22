@@ -543,12 +543,14 @@ public sealed class MediaUploadServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        try { _cts.Cancel(); } catch (Exception) { }
         var listener = _listener;
-        // 立即中止監聽(不用 Stop():Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow);等接受迴圈有上限,
-        // 之後一定執行下面的定稿(尚未 stop 的錄影在紀錄關閉前定稿)
+        // 取消權杖與中止監聽同時在背景進行(同步段不做可能阻塞的事,見 HttpListenerStarter.StopClientsAsync;不用 Stop():
+        // Windows 上仍有連線時會卡住,見 HttpListenerStarter.AbortNow);等接受迴圈有上限,之後一定執行下面的定稿(尚未 stop 的錄影在紀錄關閉前定稿)
         var wait = TimeSpan.FromSeconds(1.5);
-        if (!await HttpListenerStarter.ShutdownAsync(listener, wait).ConfigureAwait(false))
+        var cancelling = HttpListenerStarter.StopClientsAsync(_cts, Array.Empty<System.Net.WebSockets.WebSocket>(), wait);
+        var listenerStopping = HttpListenerStarter.ShutdownAsync(listener, wait);
+        var cancelled = await cancelling.ConfigureAwait(false);
+        if (!await listenerStopping.ConfigureAwait(false))
             Log?.Invoke("錄影上傳端的監聽未在 1.5 s 內關閉,不再等待");
         if (!await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, wait).ConfigureAwait(false))
             Log?.Invoke("錄影上傳端的接受迴圈未在 1.5 s 內結束,不再等待");
@@ -557,8 +559,7 @@ public sealed class MediaUploadServer : IAsyncDisposable
             try { Finalize(s, null, "hostShutdown"); }
             catch (Exception ex) { Log?.Invoke($"錄影 {s.MediaId} 定稿失敗:{ex.Message}"); }
         }
-        HttpListenerStarter.Discard(listener);
         _listener = null;
-        _cts.Dispose();
+        if (cancelled) _cts.Dispose();   // 取消仍卡在背景時不釋放
     }
 }
