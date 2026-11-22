@@ -114,14 +114,15 @@ public static class LocalDataGuard
     {
         var sys = SystemDriveLabel(target.SystemDrive);
         var roots = target.Roots.Count == 0 ? "(找不到根目錄)" : string.Join("、", target.Roots);
-        return $"{what} 的寫入位置 {target.Path} 在根目錄 {roots} 之外,而且位於系統磁碟 {sys}:" +
+        // 磁碟代號本身以冒號結尾("C:"):後面接句號,不接冒號(避免「C::」)
+        return $"{what} 的寫入位置 {target.Path} 在根目錄 {roots} 之外,而且位於系統磁碟 {sys}。" +
                $"本機資料守則為所有資料放在專案(安裝)資料夾內(D: 或 G:),不寫 {sys}。請改用根目錄內的路徑(相對路徑以根目錄為準)或其他磁碟(例如隨身碟 E:\\);" +
                $"確實要寫到 {sys} 須先取得訓練負責人同意,同意後設環境變數 {AllowSystemDriveVariable}=1 再執行(docs/ops/本機資料位置.md 第 4 節)。";
     }
 
     /// <summary>經同意的例外(SIMOSA_ALLOW_SYSTEM_DRIVE=1)照做時的一行提醒。</summary>
     public static string ConsentNotice(string what, LocalDataTarget target)
-        => $"注意:{what} 寫到根目錄外的系統磁碟 {SystemDriveLabel(target.SystemDrive)}:{target.Path}(已設 {AllowSystemDriveVariable}=1,經同意的例外)";
+        => $"注意:{what} 的寫入位置 {target.Path} 在根目錄外的系統磁碟 {SystemDriveLabel(target.SystemDrive)}(已設 {AllowSystemDriveVariable}=1,經同意的例外)";
 
     private static string SystemDriveLabel(string? systemDrive) => DriveLetter(systemDrive) is { } c ? $"{c}:" : "(系統磁碟)";
 
@@ -137,8 +138,14 @@ public static class LocalDataGuard
     // ---------------------------------------------------------------- Windows 路徑(字串運算;不依賴目前作業系統)
 
     /// <summary>
-    /// Windows 路徑正規化:'/' → '\'、去掉 \\?\ 與 \\.\(\\?\UNC\ → \\)前綴、處理 . 與 ..(不超出根)、去掉各段尾端的空白與句點、去掉結尾的 '\'(磁碟根目錄保留 "C:\")。
-    /// 根的形式:"C:\"(磁碟)、"\\server\share"(UNC);其他(相對路徑、"\foo")不加根原樣處理段落。
+    /// Windows 路徑正規化:'/' → '\'、去掉 \\?\ 與 \\.\(\\?\UNC\ → \\)前綴、處理 . 與 ..(不超出根)、段落尾端的句點與空白(見下)、
+    /// 去掉結尾的 '\'(磁碟根目錄保留 "C:\")。根的形式:"C:\"(磁碟)、"\\server\share"(UNC);其他(相對路徑、"\foo")不加根原樣處理段落。
+    /// <para>
+    /// 段落尾端與 GetFullPathNameW 相同(Microsoft〈File path formats on Windows systems〉的 Trim characters):後面接 '\' 的段落只刪
+    /// <b>一個</b>結尾句點("Simosa BRM.\x" 即 "Simosa BRM\x"),結尾空白保留("Simosa BRM \x" 是根目錄旁的另一個資料夾 "Simosa BRM ");
+    /// 只有路徑不以 '\' 結尾時,最後一段才刪去全部結尾的空白與句點。以 '\' 結尾而最後一段仍以空白或句點結尾時,結果保留結尾的 '\'
+    /// (再正規化一次也不會把那段的空白刪掉;"C:\Simosa BRM \" 不等於 "C:\Simosa BRM")。
+    /// </para>
     /// </summary>
     internal static string NormalizeWindows(string path)
     {
@@ -168,18 +175,35 @@ public static class LocalDataGuard
         }
 
         var segments = new List<string>();
-        foreach (var raw in rest.Split('\\'))
+        var raws = rest.Split('\\');
+        for (var i = 0; i < raws.Length; i++)
         {
+            var raw = raws[i];
             if (raw.Length == 0 || raw == ".") continue;
             if (raw == "..")
             {
                 if (segments.Count > 0) segments.RemoveAt(segments.Count - 1);
                 continue;
             }
-            var seg = raw.TrimEnd(' ', '.');   // Windows 不保留段落尾端的空白與句點("Simosa BRM." 即 "Simosa BRM")
+            // 後面接 '\' 的段落:只刪一個結尾句點,空白保留;最後一段(路徑不以 '\' 結尾)在迴圈後處理
+            var seg = i < raws.Length - 1 && raw.EndsWith('.') ? raw[..^1] : raw;
             if (seg.Length > 0) segments.Add(seg);
         }
-        var joined = string.Join('\\', segments);
+        var endsWithSeparator = raws.Length > 0 && raws[^1].Length == 0 && rest.Length > 0;
+        var keepSeparator = false;
+        if (segments.Count > 0)
+        {
+            var last = segments[^1];
+            if (!endsWithSeparator)
+            {
+                // 路徑不以 '\' 結尾:最後一段(含 . 與 .. 處理後成為最後的那段)刪去全部結尾的空白與句點
+                last = last.TrimEnd(' ', '.');
+                if (last.Length == 0) segments.RemoveAt(segments.Count - 1);
+                else segments[^1] = last;
+            }
+            else keepSeparator = last.EndsWith(' ') || last.EndsWith('.');
+        }
+        var joined = string.Join('\\', segments) + (keepSeparator ? @"\" : "");
         if (prefix.EndsWith('\\')) return prefix + joined;
         if (prefix.Length == 0) return joined;
         return joined.Length == 0 ? prefix : prefix + '\\' + joined;

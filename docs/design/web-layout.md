@@ -52,7 +52,9 @@
 - header:寬度 ≤ 1500 px 時核心位址(ws://…)不另外顯示,位址在連線狀態徽章的 title。故障 / 警報徽章**不合併、不隱藏**,header 可以折成兩行
   (右欄的高度就是依「header 兩行」設計的)。
 - 寬度 ≤ 1900 px 時 conning 條折成兩列(`conning-bar.ts` 同一門檻;各方塊是尺寸容器,字級以 `min(vw, cqi)` 縮放,見該檔註解)。
-  風方塊 ≤ 150 px 寬(1093 寬的視窗)時玫瑰圖移到數值上方,兩列數值用滿方塊寬度(字級下限 11 px 不變)。
+  風方塊 ≤ 185 px 寬(1093–1366 寬的視窗)時玫瑰圖縮小並移到數值上方,兩列數值用滿方塊寬度(字級下限 11 px 不變);
+  並排時(1440 寬以上)一列放不下就把數值換到標籤下一行(靠右),不被方塊裁切。原本門檻 150 px:1280×720 並排時數值列只剩 105 px,
+  本機字型(Inter)剛好 105 px,CI 的 Linux 執行器(拉丁字母 DejaVu Sans)要 110 px 而被裁切(第二十九輪 CI run 92;見第 5 節的字型重現)。
 - 操船台五個面板是尺寸容器,窄時各自改排法(`helm-wheel`、`telegraph-control`、`thruster-lever`、`autopilot-panel`、`instructor-controls` 的 `@container`)。
   **寬度 ≤ 1500 px 時五格的左右內距 8 → 5 px**(面板的內距,不是鈕;鈕的大小與字級不變),省下約 30 px,欄比改為
   操舵 2.2 : 車鐘 1.03 : 艏側推 1.06 : 自動舵 1.355 : 教官小面板 0.6(第二十九輪 L5):舵令預設鈕 1280×720 約 32 px、1366×768 約 36 px 寬
@@ -234,6 +236,13 @@ E20 在 4 倍速 45 s 內沒有進入階段而沒有量(E13 的 waiting、E09 �
 
 更正:第二十九輪 L2 時本節寫「5 解析度 × 駕駛台 / 完整教官站 / 簡化 / 重播 × E13、E09:40 組全部通過」,當時簡化模式與重播檢視只量了
 空白的初始畫面(沒有載入紀錄、沒有進入執行階段),駕駛台的判定清單也沒有列 VHF 文字欄 / DSC;見第 2.3 節。
+
+**以 CI 的字型重現**:這個容器的 `sans-serif` / `system-ui` 解析成 Inter,CI 的 ubuntu 執行器是較寬的 DejaVu Sans(風方塊的數值寬約多 9 %),
+本機剛好放得下的版面在 CI 可能被裁切(run 92 的風方塊)。改版面後先以 DejaVu Sans 跑一次版面案例:建一個 fontconfig 設定檔
+(`<include>/etc/fonts/fonts.conf</include>`、`<selectfont><rejectfont><glob>*/Inter*</glob></rejectfont></selectfont>`、
+把 `sans-serif` 與 `system-ui` 的 `<alias binding="strong">` 指向 DejaVu Sans、`<cachedir>` 放 `build/tmp/` 之下),
+以 `FONTCONFIG_FILE=<該檔> bash tools/run-e2e.sh -- --trace off specs/01-bridge.spec.ts specs/02-instructor.spec.ts specs/08-scenario-editor.spec.ts` 執行;
+也可換成 Liberation Sans(Arial 字寬)。第二十九輪 run 92 之後:本機字型、DejaVu Sans、Liberation Sans 三種都通過這三個規格檔。
 
 ## 6. 尚未確認與已知限制
 

@@ -86,8 +86,11 @@ public sealed class CliApp
               私鑰密碼可用 --key-password 或環境變數 SIMOSA_KEY_PASSWORD。
         寫入位置(本機資料守則;docs/ops/本機資料位置.md 第 4 節):
               寫入用的相對路徑 — keygen / pack / store report 的 --out、--store、store backup 與 export 的 --to、import 的 --from、
-              verification 的 --file、release manifest 的 --dir — 以根目錄(--root;未指定時為預設安裝根目錄,該資料夾不存在時為目前目錄)為準;
-              讀取用的輸入檔(--key、--file、--push、更新包、紀錄包等)仍以目前目錄為準。
+              verification add 的 --file、release manifest 的 --dir — 以根目錄(--root;未指定時為預設安裝根目錄,該資料夾不存在時為目前目錄)為準。
+              讀取本工具產生的檔案 — --key、trust add 的 --file、verification list 的 --file、pack --verification、--push、store register-device --public、
+              release verify --dir、inspect / verify / apply / records accept-report / store import 的檔案 — 相對路徑先找目前目錄,沒有時再找根目錄
+              (所以 keygen --out → pack --key、verification add → pack --verification、pack --out → sync --push 在任何目錄都找得到;兩處都有時用目前目錄的並提醒);
+              其他輸入(--scenario、--parameters、--baseline、--data-root、--record、pack 的 --file / --dir 來源)與 --root 本身以目前目錄為準。
               寫入位置(含 config/packaging.json 的 store,以及 records accept-report、import --role ship、serve 會刪除舊紀錄的 recordsDir)
               在根目錄與專案根目錄之外、而且位於 Windows 系統磁碟(C:)時拒絕(結束碼 1);隨身碟(E: 等)與網路路徑(\\server\share)照常。
               確實要寫到系統磁碟須先取得訓練負責人同意,同意後設環境變數 SIMOSA_ALLOW_SYSTEM_DRIVE=1 再執行。
@@ -189,6 +192,33 @@ public sealed class CliApp
     internal string WritePath(CliArgs a, string what, string path)
         => LocalDataGuard.Require(what, path, WriteBase(a), new[] { RootOf(a).Root, SimCore.Ship.RepositoryPaths.TryFindRoot() }, _localData, n => _err.WriteLine(n));
 
+    /// <summary>
+    /// 讀取本工具產生的檔案(--key、--verification、--push、trust add --file、store register-device --public、release verify --dir、
+    /// inspect / verify / apply / records accept-report / store import 的檔案):絕對路徑原樣;相對路徑先找目前目錄(原本的行為),
+    /// 目前目錄沒有時再找寫入用相對路徑的基準 <see cref="WriteBase"/> — 本工具以相對路徑寫出的檔案都在那裡,所以在根目錄以外的目錄以相對路徑操作時,
+    /// keygen --out → pack --key、verification add → verification list / pack --verification、pack --out → sync --push 彼此找得到。
+    /// 兩處都有(而且不是同一處)時用目前目錄的,並提醒一行;兩處都沒有時原樣回傳(錯誤訊息與原本相同)。只讀,不做寫入位置檢查。
+    /// </summary>
+    internal string ReadPath(CliArgs a, string what, string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path)) return path;
+        string inCwd, inRoot;
+        try
+        {
+            inCwd = Path.GetFullPath(path);
+            inRoot = Path.GetFullPath(Path.Combine(WriteBase(a), path));
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return path; }
+        if (string.Equals(inCwd, inRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) return path;
+        static bool Exists(string p) => File.Exists(p) || Directory.Exists(p);
+        if (Exists(inCwd))
+        {
+            if (Exists(inRoot)) _err.WriteLine($"注意:{what} 的相對路徑 {path} 在目前目錄與根目錄都有,使用目前目錄的 {inCwd}(根目錄的 {inRoot} 未使用;要用它請給絕對路徑)");
+            return path;
+        }
+        return Exists(inRoot) ? inRoot : path;
+    }
+
     /// <summary>config/packaging.json 的位置設定(store、recordsDir):相對路徑以安裝根目錄為準(與 <see cref="InstallLayout"/> 相同),檢查同 <see cref="WritePath"/>。</summary>
     internal string ConfigWritePath(CliArgs a, string what, string configured)
     {
@@ -215,8 +245,9 @@ public sealed class CliApp
             _out.WriteLine($"簽章金鑰:{k.DisplayName}(憑證 {k.Thumbprint},{(k.IsHardwareBacked ? "硬體保護" : "注意:私鑰可匯出")},金鑰 {KeyFiles.Short(k.KeyId)})");
             return k;
         }
-        if (a.Get("key") is { } path)
+        if (a.Get("key") is { } keyArg)
         {
+            var path = ReadPath(a, "--key", keyArg);   // 相對路徑:目前目錄,沒有時根目錄(keygen --out 以根目錄為準)
             var k = PemKeyProvider.FromFile(path, null, password);
             _err.WriteLine($"警告:使用 PEM 檔金鑰 {Path.GetFileName(path)}(僅限開發/測試;正式更新包須以訓練負責人的硬體金鑰 --cert 簽章,規劃書第 5.5 節)");
             _out.WriteLine($"簽章金鑰:{k.DisplayName}(金鑰 {KeyFiles.Short(k.KeyId)})");
@@ -287,7 +318,7 @@ public sealed class CliApp
             case "add":
             {
                 // 安裝時(系統映像)或訪船船長以管理者帳號手動更換;記入稽核(規劃書第 5.5 節)
-                var file = a.Require("file");
+                var file = ReadPath(a, "--file", a.Require("file"));
                 using var k = TrustedKey.Parse(File.ReadAllText(file), file, KeyRoles.Primary);
                 if (!KeyRoles.IsSigner(k.Role)) throw new CliUsageException("信任清單只接受 role 為 primary 或 backup 的公鑰");
                 Directory.CreateDirectory(layout.TrustedKeysDir);
@@ -335,8 +366,8 @@ public sealed class CliApp
     private int Verification(CliArgs a)
     {
         var sub = a.Pos(0, "子指令(add|list)");
-        // --file:add 會寫入(相對路徑以根目錄為準、根目錄外的系統磁碟拒絕);list 讀同一份檔,相對路徑同樣以根目錄為準
-        var file = sub == "add" ? WritePath(a, "--file", a.Require("file")) : LocalDataGuard.FullPath(a.Require("file"), WriteBase(a), _localData);
+        // --file:add 會寫入(相對路徑以根目錄為準、根目錄外的系統磁碟拒絕);list 只讀,與 pack --verification 相同(目前目錄,沒有時根目錄)
+        var file = sub == "add" ? WritePath(a, "--file", a.Require("file")) : ReadPath(a, "--file", a.Require("file"));
         var rec = VerificationRecord.LoadOrNew(file);
         if (sub == "list")
         {
@@ -388,7 +419,8 @@ public sealed class CliApp
             PackageId = a.Get("package-id"), Version = a.Require("version"), Kind = a.Require("kind"), Summary = a.Require("summary"),
             Changes = a.All("change"), SmsDocuments = sms, Ships = a.All("ship"),
             RemoveKeyIds = a.All("remove-key"), TrustReason = a.Get("reason"),
-            ValidationRoot = a.Get("data-root"), BaselineParameters = a.Get("baseline"), VerificationRecordPath = a.Get("verification"),
+            ValidationRoot = a.Get("data-root"), BaselineParameters = a.Get("baseline"),
+            VerificationRecordPath = a.Get("verification") is { } vr ? ReadPath(a, "--verification", vr) : null,
             Force = a.Flag("force"), ForceReason = a.Get("force-reason"),
             Audit = a.Get("store") is not null || a.Get("root") is not null ? StoreOf(a).Audit : null,
         };
@@ -415,7 +447,7 @@ public sealed class CliApp
 
     private int Inspect(CliArgs a)
     {
-        var path = a.Pos(0, "檔案");
+        var path = ReadPath(a, "檔案", a.Pos(0, "檔案"));
         if (path.EndsWith(".sbbak", StringComparison.OrdinalIgnoreCase))
         {
             var doc = SignedDocument.Parse(File.ReadAllBytes(path), "回報");
@@ -446,7 +478,7 @@ public sealed class CliApp
     private int Verify(CliArgs a)
     {
         var layout = Layout(a);
-        var v = new UpdateApplier(layout).Verify(a.Pos(0, "更新包"), a.Flag("allow-unverified"));
+        var v = new UpdateApplier(layout).Verify(ReadPath(a, "更新包", a.Pos(0, "更新包")), a.Flag("allow-unverified"));
         if (v.SignerDescription is not null) _out.WriteLine($"簽章者:{v.SignerDescription}");
         if (v.Manifest is { } m)
         {
@@ -465,7 +497,7 @@ public sealed class CliApp
     {
         var layout = Layout(a);
         if (a.Flag("allow-unverified")) _err.WriteLine("警告:--allow-unverified 允許套用未通過情境驗證的更新包,將記入稽核紀錄");
-        var r = new UpdateApplier(layout).Apply(a.Pos(0, "更新包"), new UpdateApplyOptions { AllowUnverified = a.Flag("allow-unverified"), Operator = a.Get("operator") ?? System.Environment.UserName });
+        var r = new UpdateApplier(layout).Apply(ReadPath(a, "更新包", a.Pos(0, "更新包")), new UpdateApplyOptions { AllowUnverified = a.Flag("allow-unverified"), Operator = a.Get("operator") ?? System.Environment.UserName });
         PrintApply(r);
         return r.Ok ? 0 : 1;
     }
@@ -559,7 +591,7 @@ public sealed class CliApp
                 return 0;
             case "accept-report":
             {
-                var r = mgr.AcceptBackupReport(File.ReadAllBytes(a.Pos(1, "回報檔")));
+                var r = mgr.AcceptBackupReport(File.ReadAllBytes(ReadPath(a, "回報檔", a.Pos(1, "回報檔"))));
                 foreach (var e in r.Errors) _err.WriteLine($"  - {e}");
                 if (r.Ok) _out.WriteLine($"回報 {r.ReportId}(簽章者 {r.Signer}):刪除 {r.Deleted.Count} 個紀錄包、{r.DeletedFiles.Count} 個檔案;保留 {r.Retained.Count} 個");
                 return r.Ok ? 0 : 1;
@@ -579,7 +611,7 @@ public sealed class CliApp
         {
             case "import":
             {
-                var r = store.Import(a.Pos(1, "紀錄包"), a.Flag("enroll-device"));
+                var r = store.Import(ReadPath(a, "紀錄包", a.Pos(1, "紀錄包")), a.Flag("enroll-device"));
                 foreach (var e in r.Errors) _err.WriteLine($"  - {e}");
                 if (r.DeviceEnrolled) _err.WriteLine($"注意:已首次登錄裝置 {r.ShipId}/{r.DeviceId},請與船上 device show 的金鑰 ID 核對");
                 if (r.Ok) _out.WriteLine(r.AlreadyImported ? $"{r.PackageId} 已在紀錄庫" : $"已匯入 {r.PackageId} → {r.Directory}({r.Manifest?.Exercises.Count} 個練習,{r.Manifest?.TrainingHours.TotalHours} 小時)");
@@ -587,7 +619,7 @@ public sealed class CliApp
             }
             case "register-device":
             {
-                using var k = store.RegisterDevice(a.Require("ship"), a.Require("device"), File.ReadAllText(a.Require("public")));
+                using var k = store.RegisterDevice(a.Require("ship"), a.Require("device"), File.ReadAllText(ReadPath(a, "--public", a.Require("public"))));
                 store.Audit.Write(AuditEvents.StoreDeviceEnrolled, new { ship = a.Require("ship"), device = a.Require("device"), k.KeyId, via = "register" });
                 _out.WriteLine($"已登錄裝置 {a.Require("ship")}/{a.Require("device")}(金鑰 {KeyFiles.Short(k.KeyId)})");
                 return 0;
@@ -657,6 +689,7 @@ public sealed class CliApp
             }
             case "verify":
             {
+                dir = ReadPath(a, "--dir", dir);   // 只讀:目前目錄,沒有時根目錄(release manifest --dir 以根目錄為準)
                 if (a.Flag("installed")) return VerifyInstalled(dir, a);
                 var v = ReleaseManifestBuilder.Verify(dir);
                 // 使用中的安裝根目錄(有 state\、build\records…)以一般模式核對時,執行期資料與本機設定都會被列為不符:提示改用 --installed(不改結束碼)
@@ -730,7 +763,7 @@ public sealed class CliApp
         using var key = SigningKey(a);
         var report = SyncClient.SyncAsync(new SyncOptions
         {
-            Host = host, Port = a.Int("port", layout.Config.Port), InstructorKey = key, Store = store, PushPackages = a.All("push"),
+            Host = host, Port = a.Int("port", layout.Config.Port), InstructorKey = key, Store = store, PushPackages = a.All("push").Select(p => ReadPath(a, "--push", p)).ToList(),
             EnrollDevice = a.Flag("enroll-device"), PullRecords = !a.Flag("no-pull"), SendBackupReport = !a.Flag("no-report"), Log = _out,
         }).GetAwaiter().GetResult();
         if (report.Status is { } st) _out.WriteLine($"{report.ShipId} 現行版本 {st.Version ?? "(初始)"},參數集 {st.ParameterSet?.Version ?? "—"},待回傳紀錄包 {st.OutstandingRecordPackages}{(st.Environment is { } env ? $";環境 {env.Describe()}" : "")}");
@@ -750,7 +783,7 @@ public sealed class CliApp
         {
             IKeyProvider? key = a.Get("key") is not null || a.Get("cert") is not null ? SigningKey(a) : null;
             using (key)
-                r = UsbTransfer.InstructorExport(StoreOf(a), to, a.All("push"), key, a.All("ship") is { Count: > 0 } s ? s : null);
+                r = UsbTransfer.InstructorExport(StoreOf(a), to, a.All("push").Select(p => ReadPath(a, "--push", p)).ToList(), key, a.All("ship") is { Count: > 0 } s ? s : null);
             if (key is null) _err.WriteLine("注意:未指定 --key/--cert,未產生已備份回報");
         }
         foreach (var w in r.Written) _out.WriteLine($"已寫入 {w}");

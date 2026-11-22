@@ -26,16 +26,21 @@ export class WindReadout extends LitElement {
          不在尺寸容器內時 cqi 以視窗寬度計,min() 取到的仍是原本的 vw 值 */
       .rows .value {
         font-size: clamp(11px, min(0.95vw, 8cqi), 18px);
+        margin-left: auto;
       }
-      @container (max-width: 165px) {
+      /* 保險:字型比預期寬(數字寬的字型,例如 DejaVu Sans)而一列放不下時,數值換到標籤下一行(靠右),不被方塊邊界裁切 */
+      .rows .row {
+        flex-wrap: wrap;
+        row-gap: 0;
+      }
+      /* 窄方塊(≤ 185 px:1093–1366 寬的視窗):玫瑰圖縮小並放到數值上方,兩列數值用滿方塊寬度。
+         並排時數值列在 1280×720 只剩 105 px,「040° 12.0 kn」加標籤以 DejaVu Sans 要 110 px(CI 的 Linux 執行器;
+         本機的 Inter 剛好 105 px),1366×768 只剩約 4 px 餘裕(第二十九輪 CI run 92;原本門檻 150 / 165 px)。字級下限不變 */
+      @container (max-width: 185px) {
         .rose {
           width: 28px;
           height: 28px;
         }
-      }
-      /* 更窄(方塊 ≤ 150 px,1093 寬的視窗):玫瑰圖放到數值上方,兩列數值用滿方塊寬度(並排時數值列只剩約 91 px,
-         「040° 12.0 kn」以最小字級 11 px 也放不下、被方塊邊界裁切)。字級下限不變 */
-      @container (max-width: 150px) {
         .body {
           flex-direction: column;
           align-items: stretch;

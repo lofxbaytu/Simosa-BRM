@@ -1,4 +1,5 @@
-// WebView2 操船台外殼進入點:解析參數(Shell.Core)→ 全螢幕視窗(ShellForm)。結束碼:0 正常、2 參數錯誤。
+// WebView2 操船台外殼進入點:解析參數(Shell.Core)→ 全螢幕視窗(ShellForm)。
+// 結束碼:0 正常、2 參數錯誤或使用者資料夾(--profile)位置被本機資料守則拒絕(安裝根目錄外的系統磁碟;docs/ops/本機資料位置.md 第 4、5 節)。
 using SimosaBRM.Shell.Core;
 
 namespace SimosaBRM.Shell.App;

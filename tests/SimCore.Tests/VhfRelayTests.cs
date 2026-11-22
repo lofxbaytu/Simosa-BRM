@@ -98,31 +98,53 @@ public class VhfRelayTests
             catch (OperationCanceledException) { return null; }
         }
 
-        /// <summary>等到指定 kind 的文字框(略過 roster 等其他框);逾時失敗。</summary>
-        public async Task<JsonElement> ExpectAsync(string kind, double timeoutS = 5)
+        /// <summary>
+        /// 預設等待上限。loopback 上的轉送通常在數毫秒內到達;上限只在失敗時才會等滿。Windows CI(run 92)曾在測試執行開始約 15 s、
+        /// 多個測試類別同時啟動 dotnet 子程序時等滿 5 s 仍未收到回送(該提交沒有改動 VHF;run 87、88、91 同一測試通過)——
+        /// 推定為執行器滿載時的排程延遲,所以放寬到 15 s,並在逾時訊息列出等待期間收到的框與連線狀態,以便再發生時分辨「沒送到」與「延遲」。
+        /// </summary>
+        private const double DefaultTimeoutS = 15;
+
+        /// <summary>等到指定 kind 的文字框(略過 roster 等其他框);逾時失敗(訊息含等待期間收到的框)。</summary>
+        public async Task<JsonElement> ExpectAsync(string kind, double timeoutS = DefaultTimeoutS)
         {
-            var deadline = DateTime.UtcNow.AddSeconds(timeoutS);
+            var started = DateTime.UtcNow;
+            var deadline = started.AddSeconds(timeoutS);
+            var seen = new List<string>();
+            var ended = false;
             while (DateTime.UtcNow < deadline)
             {
                 var f = await ReceiveAsync(deadline - DateTime.UtcNow);
-                if (f is null) break;
+                if (f is null) { ended = _inbox.Reader.Completion.IsCompleted; break; }
                 if (f.Value.Json is { } j && j.GetProperty("kind").GetString() == kind) return j;
+                seen.Add(Describe(f.Value));
             }
-            throw new Xunit.Sdk.XunitException($"{Name} 在 {timeoutS} s 內未收到 {kind}");
+            throw new Xunit.Sdk.XunitException(Timeout($"{kind}", timeoutS, started, seen, ended));
         }
 
-        /// <summary>等到二進位框;逾時失敗。</summary>
-        public async Task<byte[]> ExpectBinaryAsync(double timeoutS = 5)
+        /// <summary>等到二進位框;逾時失敗(訊息含等待期間收到的框)。</summary>
+        public async Task<byte[]> ExpectBinaryAsync(double timeoutS = DefaultTimeoutS)
         {
-            var deadline = DateTime.UtcNow.AddSeconds(timeoutS);
+            var started = DateTime.UtcNow;
+            var deadline = started.AddSeconds(timeoutS);
+            var seen = new List<string>();
+            var ended = false;
             while (DateTime.UtcNow < deadline)
             {
                 var f = await ReceiveAsync(deadline - DateTime.UtcNow);
-                if (f is null) break;
+                if (f is null) { ended = _inbox.Reader.Completion.IsCompleted; break; }
                 if (f.Value.Binary is { } b) return b;
+                seen.Add(Describe(f.Value));
             }
-            throw new Xunit.Sdk.XunitException($"{Name} 在 {timeoutS} s 內未收到二進位框");
+            throw new Xunit.Sdk.XunitException(Timeout("二進位框", timeoutS, started, seen, ended));
         }
+
+        private static string Describe((JsonElement? Json, byte[]? Binary) f) =>
+            f.Json is { } j ? (j.TryGetProperty("kind", out var k) ? k.GetString() ?? "?" : "?") : $"binary({f.Binary?.Length ?? 0})";
+
+        private string Timeout(string what, double timeoutS, DateTime started, List<string> seen, bool ended) =>
+            $"{Name} 在 {timeoutS} s 內未收到 {what}(實際等了 {(DateTime.UtcNow - started).TotalSeconds:F1} s;" +
+            $"期間收到 [{string.Join(", ", seen)}];連線 {Socket.State}{(ended ? ",讀取迴圈已結束" : "")})";
 
         /// <summary>在時限內不得收到 roster 以外的任何框(不同頻道不轉送)。</summary>
         public async Task ExpectNothingAsync(double seconds = 0.4)
