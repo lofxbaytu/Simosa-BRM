@@ -670,6 +670,14 @@ $pass = @($script:results | Where-Object { $_.level -eq 'PASS' }).Count
 $fail = @($script:results | Where-Object { $_.level -eq 'FAIL' }).Count
 $warn = @($script:results | Where-Object { $_.level -eq 'WARN' }).Count
 Write-Host "通過 $pass,失敗 $fail,待確認 $warn"
-[System.IO.File]::WriteAllText((Join-Path $work ("results-" + ($Stage -join '-') + ".json")), (ConvertTo-Json -InputObject @($script:results) -Depth 3), (New-Object System.Text.UTF8Encoding($false)))
+# 結果寫成 JSON 陣列(供 summary 階段彙整)。Windows PowerShell 5.1 對 List[object] 用 ConvertTo-Json -InputObject 會丟
+# 「Argument types do not match」,所以走管線;只有一筆時管線輸出不是陣列,自行補上方括號
+$resultArray = @($script:results.ToArray())
+$resultJson = '[]'
+if ($resultArray.Count -eq 1) { $resultJson = '[' + ($resultArray[0] | ConvertTo-Json -Depth 3) + ']' }
+elseif ($resultArray.Count -gt 1) { $resultJson = ($resultArray | ConvertTo-Json -Depth 3) }
+if ($Stage -notcontains 'summary' -or $Stage.Count -gt 1) {
+    [System.IO.File]::WriteAllText((Join-Path $work ("results-" + ($Stage -join '-') + ".json")), $resultJson, (New-Object System.Text.UTF8Encoding($false)))
+}
 if ($fail -gt 0) { exit 1 }
 exit 0
