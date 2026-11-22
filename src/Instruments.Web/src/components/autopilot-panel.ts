@@ -56,7 +56,16 @@ export class AutopilotPanel extends LitElement {
       .rot {
         display: flex;
         align-items: center;
+        /* 放不下一行時(1093 / 1152 寬、面板出現捲軸後內容寬約 132–139 px,這一列要約 143 px)
+           輸入框與「°/min」一起換到「ROT 限制」下一行,不超出面板右緣;字級與輸入框大小不變 */
+        flex-wrap: wrap;
+        gap: 2px 6px;
+      }
+      .rot .value {
+        display: inline-flex;
+        align-items: center;
         gap: 6px;
+        white-space: nowrap;
       }
       .rot input {
         width: 56px;
@@ -86,7 +95,7 @@ export class AutopilotPanel extends LitElement {
         }
       }
       /* 更窄(< 180 px,1093 寬的視窗):±10 移到第二列(−10 在左半、+10 在右半),第一列是 −1、航向輸入框、+1,輸入框放得下三位數;
-         面板比格子高時(1093×614 約多 6–22 px)在面板內捲動,「採用現在航向」不被格子裁掉 */
+         面板比格子高時(1093×614 約多 29 px、出現捲軸時 44 px)在面板內捲動,「採用現在航向」不被格子裁掉 */
       @container (max-width: 180px) {
         .panel {
           overflow-y: auto;
@@ -197,8 +206,10 @@ export class AutopilotPanel extends LitElement {
         </div>
         <div class="rot">
           <span class="label">ROT 限制</span>
-          <input type="number" min="1" max=${this.rotLimitMax} step="1" aria-label="ROT 限制" .value=${String(this.rotLimit)} @change=${this.onRotInput} />
-          <span class="label">°/min</span>
+          <span class="value">
+            <input type="number" min="1" max=${this.rotLimitMax} step="1" aria-label="ROT 限制" .value=${String(this.rotLimit)} @change=${this.onRotInput} />
+            <span class="label">°/min</span>
+          </span>
         </div>
         <div class="cur">
           <span>設定 HDG ${formatHeading(this.setHeading)} · 現在 ${formatHeading(this.heading)}</span>

@@ -2397,4 +2397,36 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.DoesNotContain("releaseUnreadable", File.ReadAllText(Path.Combine(absent.PreviousDir, "previous.json")));
         Assert.DoesNotContain("baselineUnreadable", File.ReadAllText(absent.InstalledFilesPath));
     }
+
+    [Fact]
+    public void RolledBackSoftwarePackage_IsNotADowngradeBasis_WhenTheOverlayRestoreFailed()
+    {
+        // 審查第二十九輪第五次 #1:rollback 時「還原覆蓋清單」失敗,覆蓋清單仍記著已撤回的軟體更新包 2027.1.2;
+        // 之後以同版本(2026.12.1)、建置於套用之後的重建版重新安裝 — installed.json 已把那個包標為回復,
+        // 已撤回的版本不能當降版的比較基準(否則會誤報「降版:比曾套用的軟體更新包 2027.1.2 舊」)
+        using var key = _env.Primary();
+        var ship = NewInstall("rollback-overlay-stale", "2026.12.1");
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(ChartsPackage("2026.12.5", key, "data/charts/c5.dat", "c5")).Ok);
+        Assert.True(applier.Apply(SoftwarePackage("2027.1.2", key, ("app/version.txt", "app 9\n"))).Ok);
+        var afterApply = File.ReadAllBytes(ship.InstalledFilesPath);
+        var rolled = applier.Rollback("測試");
+        Assert.True(rolled.Ok, string.Join(";", rolled.Errors));
+        File.WriteAllBytes(ship.InstalledFilesPath, afterApply);   // 模擬還原覆蓋清單失敗:留下套用後的覆蓋清單
+
+        ReinstallKeepingCharts(ship, "2026.12.1", DateTimeOffset.UtcNow.AddMinutes(5));
+        var r = AssertOk(ship);
+        Assert.True(r.InstalledFiles!.Reinstalled);
+        AssertNoDowngrade(ship);
+        Assert.DoesNotContain("2027.1.2", Run("status", "--root", ship.Root).Err);
+
+        // 對照:沒有回復的軟體更新包照舊列入比較基準(同樣的重新安裝 → 降版)
+        var kept = NewInstall("rollback-overlay-kept", "2026.12.1");
+        var keptApplier = new UpdateApplier(kept);
+        Assert.True(keptApplier.Apply(SoftwarePackage("2027.1.2", key, ("app/version.txt", "app 9\n"))).Ok);
+        ReinstallKeepingCharts(kept, "2026.12.1", DateTimeOffset.UtcNow.AddMinutes(5));
+        var down = AssertOk(kept);
+        Assert.NotNull(down.Downgrade);
+        Assert.Equal("2027.1.2", down.Downgrade!.BasisVersion);
+    }
 }

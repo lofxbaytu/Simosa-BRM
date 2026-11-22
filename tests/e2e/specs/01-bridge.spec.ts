@@ -222,6 +222,17 @@ test('操船台 1093×614(1366×768 在 125 % 縮放;E13 與 E09 失電後):鈕�
       // 車鐘(緊急全速倒車)與艏側推快速鈕真實點擊前檢查
       await page.locator('brm-telegraph .list button', { hasText: 'EFAS' }).click({ trial: true });
       await page.locator('brm-thruster-lever .quick button', { hasText: 'P 100' }).click({ trial: true });
+      // 自動舵面板(第二十九輪第五次審查):「ROT 限制 [15] °/min」一行約 143 px、面板內容寬 142 px — 「°/min」曾超出面板右緣;
+      // 判定 6 只看鈕內文字,這裡直接量面板內各元素的右緣(面板出現捲軸時以捲軸內側為界)
+      const apOut = await page.locator('brm-autopilot').evaluate((host) => {
+        const panel = host.shadowRoot!.querySelector('.panel')!;
+        const inner = panel.getBoundingClientRect().left + panel.clientLeft + panel.clientWidth;
+        return [...panel.querySelectorAll('*')]
+          .map((e) => ({ e, b: e.getBoundingClientRect() }))
+          .filter(({ b }) => b.width > 0 && b.right > inner + 0.5)
+          .map(({ e, b }) => `${e.tagName.toLowerCase()}「${(e.textContent ?? '').trim().slice(0, 12)}」 +${Math.round(b.right - inner)} px`);
+      });
+      expect(apOut, '自動舵面板內超出右緣的元素').toEqual([]);
     });
     await test.step('E09 失電後', async () => {
       await ensureScenario(core, 'E09_blackout');

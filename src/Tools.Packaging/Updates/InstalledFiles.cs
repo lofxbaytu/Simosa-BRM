@@ -317,6 +317,9 @@ public sealed class InstalledFiles
         }
         foreach (var c in info.SupersededPackages)
         {
+            // 只算 installed.json 仍在套用中(未 rollback)的更新包:Diverged 時候選可能含覆蓋清單記了、installed.json 已標為回復的包
+            //(rollback 時「還原覆蓋清單」失敗的情況),已撤回的版本不能當降版的比較基準(第二十九輪第五次審查)
+            if (applied.All(a => a.PackageId != c.PackageId)) continue;
             var software = IsSoftware(c.PackageId, c.Kind);
             var listed = manifestPaths is not null
                          && PrefixesOfKind(c.Kind).Any(prefix => manifestPaths.Any(p => InstalledPaths.IsAtOrUnder(p, prefix, comparison)));
