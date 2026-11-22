@@ -224,9 +224,9 @@ jobs:
         if: ${{ !cancelled() }}
         shell: cmd
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage summary
-      - name: 啟動腳本測試(pwsh 7,Windows;先觀察,失敗不讓工作失敗)
+      - name: 啟動腳本測試(pwsh 7,Windows)
+        # run 82、85–88 連續通過(14 項)後由「先觀察」改為正式把關
         if: ${{ !cancelled() }}
-        continue-on-error: true
         shell: pwsh
         run: |
           & tools\launch\tests\launch-common.tests.ps1

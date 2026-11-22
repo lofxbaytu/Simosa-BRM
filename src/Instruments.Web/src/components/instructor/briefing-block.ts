@@ -36,6 +36,10 @@ export class BriefingBlock extends LitElement {
         display: block;
         font-size: 11px;
         color: var(--ob-text-secondary);
+        /* 簡化教官模式的簡報頁把本元件放在 white-space: pre-wrap 的簡報文字容器內:white-space 會繼承進來,
+           樣板裡標籤之間的換行與縮排就被畫成一行行空白(清單上下各多出一大段)。這裡還原,只有清單項目本身保留換行 */
+        white-space: normal;
+        line-height: 1.4;
       }
       :host([large]) {
         font-size: 16px;

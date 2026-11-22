@@ -274,6 +274,9 @@ export class InstructorApp extends LitElement {
       .simple .brief-meta {
         font-size: 14px;
         color: var(--ob-text-secondary);
+        /* 外層 .big 為了簡報文字用 pre-wrap;角色 / 附件兩行不需要(否則樣板的換行變成空白行) */
+        white-space: normal;
+        margin-top: 10px;
       }
       .center .plot {
         min-height: 0;

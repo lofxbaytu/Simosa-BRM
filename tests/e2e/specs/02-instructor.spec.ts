@@ -150,3 +150,51 @@ test('凍結後教官站顯示「已凍結」且「恢復」鈕可用(核心凍�
     await ensureRunning(core);
   }
 });
+
+test('簡化教官模式簡報頁:規劃時間、同儕評估提示緊接在簡報文字之後(無多餘空白行),講評引導問題收合並標示練習後使用', async ({ page, env, core }) => {
+  // 第二十九輪:情境庫每個情境都有規劃時間 / 同儕評估提示 / 講評引導問題。簡報頁的簡報文字容器用 white-space: pre-wrap,
+  // 曾經連帶讓角色 / 附件與 <brm-briefing-block> 內樣板的換行被畫成空白行(清單與標題之間空出一大段,1366×768 上提示被擠到捲動範圍外)。
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env, { mode: 'simple' }));
+  await waitConnected(page);
+  const item = page.locator('brm-scenario-panel .list .item').filter({ hasText: 'E09_blackout' });
+  await expect(item).toHaveCount(1);
+  await item.scrollIntoViewIfNeeded();
+  await item.dispatchEvent('click');
+  const loaded = core.waitState((s) => s.scenario?.id === 'E09_blackout', 30_000, 'E09 的狀態幀');
+  await scenarioLoadButton(page).dispatchEvent('click');
+  await loaded;
+  try {
+    const block = page.locator('.stage.briefing brm-briefing-block');
+    await expect(block).toBeVisible({ timeout: 15_000 });
+    await expect(block.locator('.timer .label')).toHaveText('規劃時間 10 分鐘');
+    const prompts = block.locator('details.prompts');
+    await expect(prompts.locator('li')).toHaveCount(3);
+    await expect(prompts.locator('li').first()).toContainText('觀察');
+    // 講評引導問題:收合、標示練習後使用(題目寫明故障與時刻,練習前不對學員展開)
+    const questions = block.locator('details.questions');
+    await expect(questions).not.toHaveAttribute('open', /.*/);
+    await expect(questions.locator('summary .note')).toContainText('練習後使用');
+    await expect(questions.locator('li')).toHaveCount(5);
+    // 版面:標題與第一條提示之間、角色列與規劃時間之間都沒有多出的空白行
+    const box = async (sel: ReturnType<typeof page.locator>) => (await sel.boundingBox())!;
+    const summary = await box(prompts.locator('summary'));
+    const firstLi = await box(prompts.locator('li').first());
+    const lastLi = await box(prompts.locator('li').last());
+    expect(firstLi.y - (summary.y + summary.height), '同儕評估提示標題與第一條之間的距離(px)').toBeLessThan(16);
+    const qSummary = await box(questions.locator('summary'));
+    expect(qSummary.y - (lastLi.y + lastLi.height), '最後一條提示與「講評引導問題」之間的距離(px)').toBeLessThan(24);
+    const meta = await box(page.locator('.stage.briefing .brief-meta'));
+    const timer = await box(block.locator('.timer'));
+    expect(meta.height, '角色 / 附件兩行的高度(px)').toBeLessThan(70);
+    expect(timer.y - (meta.y + meta.height), '附件列與規劃時間之間的距離(px)').toBeLessThan(24);
+    // 1366×768(船上文書筆電)上三條提示不必捲動就在簡報框內
+    const frame = await box(page.locator('.stage.briefing .briefing-text'));
+    expect(lastLi.y + lastLi.height, '最後一條提示的底邊應在簡報框內').toBeLessThanOrEqual(frame.y + frame.height + 1);
+    errors.expectNone();
+  } finally {
+    // 簡報期間核心凍結:還原成執行中,後面的測試各自以 ensureScenario 載入需要的情境
+    await ensureRunning(core);
+  }
+});
