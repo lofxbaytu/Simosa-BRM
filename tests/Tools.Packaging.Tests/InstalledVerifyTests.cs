@@ -2039,15 +2039,204 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.Equal("2026.12.2", r.Downgrade.SoftwareVersion);
         Assert.Contains("曾套用的軟體更新包 2026.12.2", r.Downgrade.Message);
         Assert.DoesNotContain("先前安裝的發行版", r.Downgrade.Message);
-        // 曾套用的圖資包 2026.12.4(重新安裝之前仍在套用)也比目前的發行版新:列入比較基準
-        Assert.Equal("2026.12.4", r.Downgrade.BasisVersion);
+        // 比較基準只計被安裝覆蓋的軟體更新包(審查第二十九輪 P5):圖資包 2026.12.4 放進 data/charts/、發行清單沒有的檔案,
+        // 安裝沒有覆蓋它,而且是降版之後才套用的 — 不列入,也不要求「版本不低於 2026.12.4 的安裝程式」
+        Assert.Equal("2026.12.2", r.Downgrade.BasisVersion);
+        Assert.Equal("2026.12.2", r.Downgrade.HighestVersion);
+        Assert.DoesNotContain("2026.12.4", r.Downgrade.Message);
+        Assert.Contains("版本不低於 2026.12.2 的安裝程式", r.Downgrade.Message);
 
         // 以版本不低於比較基準的安裝程式重新安裝:提醒消失;下一次套用時證據從檔案清除
-        ReinstallWithInstaller(ship, "2026.12.4", "data/charts/z.dat");
+        ReinstallWithInstaller(ship, "2026.12.2", "data/charts/z.dat");
         AssertNoDowngrade(ship);
         Assert.True(applier.Apply(ChartsPackage("2026.12.6", key, "data/charts/y.dat", "y")).Ok);
         Assert.Null(InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Downgrade);
         AssertNoDowngrade(ship);
+    }
+
+    // ── 審查第二十九輪 P5(P4 第四輪審查):降版的比較基準只計這次重新安裝真的覆蓋到的軟體更新包;套用時讀不到發行清單而覆蓋清單仍有身分 ──
+
+    /// <summary>以安裝程式重新安裝 <paramref name="version"/>(建置於現在;data/charts/ 之下更新包新增的檔案不在發行清單)。</summary>
+    private static void ReinstallKeepingCharts(InstallLayout ship, string version, DateTimeOffset? builtUtc = null)
+    {
+        var charts = Directory.Exists(P(ship, "data/charts"))
+            ? Directory.GetFiles(P(ship, "data/charts")).Select(f => "data/charts/" + Path.GetFileName(f)).ToArray()
+            : Array.Empty<string>();
+        ReinstallBuiltAt(ship, version, builtUtc ?? DateTimeOffset.UtcNow, charts);
+    }
+
+    [Fact]
+    public void ReturnToTheOriginalRelease_AfterNonSoftwarePackages_IsNotADowngrade()
+    {
+        // 審查 P4 第四輪 #1(1):2026.12.1 + 圖資 2026.12.4 → 以 2026.11.1 重新安裝(真的降版:先前的發行版較新)→ 參數 2026.12.8
+        // → 以原本的 2026.12.1 重新安裝:回到原本的發行版,不是降版。參數包是降版之後才套用的(合併時不納入),圖資包安裝沒有覆蓋
+        using var key = _env.Primary();
+        var ship = NewInstall("return-original", "2026.12.1");
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(ChartsPackage("2026.12.4", key, "data/charts/z.dat", "z")).Ok);
+        ReinstallKeepingCharts(ship, "2026.11.1", DateTimeOffset.UtcNow.AddDays(-30));
+        var down = AssertOk(ship);
+        Assert.NotNull(down.Downgrade);                                  // 發行版本身降版:照報
+        Assert.Equal("2026.12.1", down.Downgrade!.BasisVersion);         // 比較基準是先前的發行版,不是圖資包的 2026.12.4
+        Assert.Equal("2026.12.1", down.Downgrade.PreviousReleaseVersion);
+        Assert.Null(down.Downgrade.HighestVersion);
+        Assert.False(down.Downgrade.SoftwareStale);
+        Assert.DoesNotContain("2026.12.4", down.Downgrade.Message);
+
+        var applied = applier.Apply(ParametersPackage("2026.12.8", key));
+        Assert.True(applied.Ok, string.Join(";", applied.Errors));
+        Assert.Equal("2026.12.1", InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Downgrade?.BasisVersion);
+        Assert.Equal("2026.12.1", AssertOk(ship).Downgrade?.BasisVersion);
+
+        ReinstallKeepingCharts(ship, "2026.12.1");
+        var back = AssertOk(ship);
+        Assert.True(back.InstalledFiles!.Reinstalled);
+        AssertNoDowngrade(ship);
+        // 之後再套用圖資包:證據從檔案清除,提醒不會回來
+        Assert.True(applier.Apply(ChartsPackage("2026.12.9", key, "data/charts/c9.dat", "c9")).Ok);
+        Assert.Null(InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Downgrade);
+        AssertNoDowngrade(ship);
+    }
+
+    [Fact]
+    public void UpgradeWithInstaller_AfterHigherVersionedNonSoftwarePackages_IsNotADowngrade()
+    {
+        // 審查 P4 第四輪 #1(2):2026.11.1 + 版本較高的圖資包 2026.12.4 → 以 2026.12.1 的安裝程式升級:不是降版,之後套用參數包也不會出現
+        using var key = _env.Primary();
+        var ship = NewInstall("upgrade-charts", "2026.11.1");
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(ChartsPackage("2026.12.4", key, "data/charts/z.dat", "z")).Ok);
+        ReinstallKeepingCharts(ship, "2026.12.1");
+        var r = AssertOk(ship);
+        Assert.True(r.InstalledFiles!.Reinstalled);
+        AssertNoDowngrade(ship);
+        var applied = applier.Apply(ParametersPackage("2026.12.8", key));
+        Assert.True(applied.Ok, string.Join(";", applied.Errors));
+        Assert.Null(InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Downgrade);
+        Assert.DoesNotContain("\"downgrade\"", File.ReadAllText(ship.InstalledFilesPath));
+        AssertNoDowngrade(ship);
+
+        // 參數包換過發行清單所列的檔案(data/parameters/company-procedures.yaml),之後以安裝程式升級:參數包的變更真的被覆蓋,
+        // 但它不是軟體更新包 — 由「被安裝覆蓋」的 state 提醒說明,不算降版、不寫證據
+        ReinstallKeepingCharts(ship, "2026.12.2");
+        var up = AssertOk(ship);
+        Assert.Contains(up.Notices, n => n.Category == C.State && n.Detail!.Contains("已被安裝覆蓋"));
+        AssertNoDowngrade(ship);
+        var info = new ReconcileInfo();
+        var reconciled = InstalledFiles.Reconcile(InstalledFiles.TryLoad(ship.InstalledFilesPath, out _), InstalledState.LoadOrNew(ship.InstalledStatePath),
+            InstalledVerifier.ReadBaseline(ship.Root, out var paths), paths, StringComparison.Ordinal, info);
+        Assert.Null(reconciled.Downgrade);
+        var overwritten = Assert.Single(info.OverwrittenPackages);       // 圖資包(data/charts/ 之下發行清單沒有的檔案)不算被覆蓋
+        Assert.Equal("2026.12.8", overwritten.Version);
+        Assert.False(overwritten.Software);
+    }
+
+    [Fact]
+    public void RealSoftwareDowngrade_IsStillReported_AndPersists_WhileNonSoftwarePackagesDoNotRaiseTheBasis()
+    {
+        // 真的降版(軟體更新包被較舊的安裝程式覆蓋)照報、照樣存續;降版之前套用、被安裝覆蓋的參數包(版本較高)不提高比較基準
+        using var key = _env.Primary();
+        var ship = NewInstall("real-downgrade", "2026.12.1");
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(SoftwarePackage("2026.12.2", key, ("app/version.txt", "app 3\n"))).Ok);
+        var pa = applier.Apply(ParametersPackage("2026.12.5", key));
+        Assert.True(pa.Ok, string.Join(";", pa.Errors));
+        ReinstallBuiltAt(ship, "2026.11.1", DateTimeOffset.UtcNow.AddDays(-30));
+        AssertDowngradeEverywhere(ship, "2026.12.2", "2026.12.2");
+        Assert.DoesNotContain("2026.12.5", AssertOk(ship).Downgrade!.Message);
+        // 之後套用圖資包:證據寫進檔案,提醒保留,比較基準不變
+        Assert.True(applier.Apply(ChartsPackage("2026.12.6", key, "data/charts/z.dat", "z")).Ok);
+        Assert.Equal("2026.12.2", InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Downgrade?.HighestAppliedVersion);
+        AssertDowngradeEverywhere(ship, "2026.12.2", "2026.12.2");
+        // 以 2026.12.2 的安裝程式重新安裝(不低於比較基準):消失 — 不必找「版本不低於參數包 2026.12.5」的安裝程式
+        ReinstallKeepingCharts(ship, "2026.12.2");
+        AssertNoDowngrade(ship);
+    }
+
+    [Fact]
+    public void ManifestUnreadableAtApply_ThenOlderInstaller_RollbackUsesTheOverlaysLastKnownRelease()
+    {
+        // 審查 P4 第四輪 #2:先套用一包(發行清單讀得到 → 覆蓋清單記下 2026.12.1)→ 發行清單損毀時再套用軟體包(previous.json 記「讀不到」,
+        // 覆蓋清單仍保留 2026.12.1)→ 以較舊、建置於套用之前的發行版重新安裝。時間規則看不出來,但覆蓋清單的最後已知身分看得出來:
+        // rollback 拒絕(與核對的 Rebase 同一個依據),status 顯示沒有可回復的上一版,核對註明「請不要執行 rollback」
+        using var key = _env.Primary();
+        var ship = NewInstall("unreadable-older", "2026.12.1");
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(ChartsPackage("2026.12.4", key, "data/charts/z.dat", "z")).Ok);
+        Assert.Equal("2026.12.1", InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Baseline?.Version);
+        File.WriteAllText(P(ship, "manifest.json"), "{\"format\":\"simosa-release/1\",\"version\":");
+        var applied = applier.Apply(SoftwarePackage("2027.1.2", key, ("app/version.txt", "app 9\n")));
+        Assert.True(applied.Ok, string.Join(";", applied.Errors));
+        var warning = Assert.Single(applied.Warnings, w => w.Contains("manifest.json"));
+        Assert.Contains("最後已知發行版 2026.12.1", warning);
+        Assert.True(PackageJson.Load<PreviousMeta>(Path.Combine(ship.PreviousDir, "previous.json"), "previous.json").ReleaseUnreadable);
+        var overlay = InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!;
+        Assert.Equal("2026.12.1", overlay.Baseline?.Version);
+        Assert.False(overlay.BaselineUnreadable);
+
+        ReinstallBuiltAt(ship, "2026.11.1", DateTimeOffset.UtcNow.AddDays(-30), "data/charts/z.dat");
+        var check = applier.CheckRollback();
+        Assert.False(check.Allowed);
+        Assert.True(check.ReinstalledSinceApply);
+        Assert.Contains("覆蓋清單記錄的最後已知發行版", check.Reason);
+        Assert.Contains("2026.12.1", check.Reason);
+        Assert.False(applier.CanRollback(out _));
+        Assert.False(new Sync.ShipNode(ship).Status().RollbackAvailable);
+        Assert.Contains("無上一版", Run("status", "--root", ship.Root).Out);
+        var r = AssertOk(ship);
+        Assert.True(r.InstalledFiles!.Reinstalled);
+        Assert.Contains(r.Notices, n => n.Detail?.Contains("請不要執行 rollback") == true);
+        Assert.NotNull(r.Downgrade);                                     // 2026.12.1 + 軟體 2027.1.2 → 2026.11.1
+        Assert.False(applier.Rollback("測試").Ok);
+        Assert.Equal("app 5.0\n", File.ReadAllText(P(ship, "app/version.txt")));
+        AssertOk(ship);
+
+        // 對照:覆蓋清單仍是同一個發行版(只把清單修好、沒有重新安裝)→ 放行,說明依據
+        var same = NewInstall("unreadable-same", "2026.12.1");
+        var applierSame = new UpdateApplier(same);
+        Assert.True(applierSame.Apply(ChartsPackage("2026.12.4", key, "data/charts/z.dat", "z")).Ok);
+        var saved = File.ReadAllBytes(P(same, "manifest.json"));
+        File.WriteAllText(P(same, "manifest.json"), "{");
+        Assert.True(applierSame.Apply(SoftwarePackage("2027.1.2", key, ("app/version.txt", "app 9\n"))).Ok);
+        File.WriteAllBytes(P(same, "manifest.json"), saved);
+        var ok = applierSame.CheckRollback();
+        Assert.True(ok.Allowed, ok.Reason);
+        Assert.Contains("最後已知發行版 2026.12.1", ok.Note);
+        Assert.True(new Sync.ShipNode(same).Status().RollbackAvailable);
+        AssertOk(same);
+        var rolled = applierSame.Rollback("測試");
+        Assert.True(rolled.Ok, string.Join(";", rolled.Errors));
+        Assert.Contains(rolled.Warnings, w => w.Contains("最後已知發行版"));
+        AssertOk(same);
+    }
+
+    [Fact]
+    public void NextSteps_Order_InstallerExcludedFilesOnly_ThenPackageAddedFiles_MatchesTheDocs()
+    {
+        // 審查 P4 第四輪 #3:只有「安裝程式不安裝的檔案」(*.pdb)與更新包新增的檔案損毀時,順序是 pdb 的說明 → 更新包新增檔案那一項
+        // (docs/design/packaging-sync.md 第 5.1 節「下一步」的順序:重新安裝那一項或 pdb 的說明擇一,再接更新包新增的檔案)
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        Assert.True(new UpdateApplier(ship).Apply(ChartsPackage("2026.10.3", key, "data/charts/new.dat", "chart new")).Ok);
+        var m = ReleaseManifestBuilder.Load(ship.Root);
+        m.Files.Add(new ReleaseFile { Path = "app/visual/data_SimosaBRM.Visual_x86_64/SimosaBRM.Visual.pdb", Sha256 = new string('0', 64), Size = 3 });
+        ReleaseManifestBuilder.Save(m, ship.Root);
+        File.WriteAllText(P(ship, "data/charts/new.dat"), "corrupted!");
+
+        var r = InstalledVerifier.Verify(ship.Root);
+        Assert.Equal(2, r.Errors.Count);
+        Assert.Equal(2, r.NextSteps.Count);
+        Assert.Contains("安裝程式不安裝的檔案類型", r.NextSteps[0]);
+        Assert.Contains("包含這些檔案", r.NextSteps[1]);
+        Assert.Contains("data/charts/new.dat", r.NextSteps[1]);
+        Assert.DoesNotContain("可能故障", string.Join("\n", r.NextSteps));
+        // 加上程式目錄內多出的檔案:多出的檔案排在更新包那一項之後
+        W(ship.Root, "app/stray.dll", "x");
+        var withExtra = InstalledVerifier.Verify(ship.Root);
+        Assert.Equal(3, withExtra.NextSteps.Count);
+        Assert.Contains("安裝程式不安裝的檔案類型", withExtra.NextSteps[0]);
+        Assert.Contains("包含這些檔案", withExtra.NextSteps[1]);
+        Assert.Contains("多出的檔案", withExtra.NextSteps[2]);
     }
 
     [Fact]
@@ -2129,12 +2318,19 @@ public sealed class InstalledVerifyTests : IDisposable
         AssertNoDowngrade(ship);
         Assert.DoesNotContain("2027.1.2", string.Join("\n", r.Notices.Select(n => n.Detail)));
 
-        // highestVersion 只在沒有任何套用中的更新包時才補位
+        // 比較基準只計這次重新安裝真的覆蓋到的軟體更新包(審查第二十九輪 P5):已 rollback 的不再以 highestVersion 補位,
+        // 非軟體更新包(即使被覆蓋)不建立紀錄
         var state = new InstalledState { HighestVersion = "2026.12.9", History = { new AppliedPackage { PackageId = "a", Version = "2026.12.9", RolledBack = true } } };
-        Assert.Equal("2026.12.9", DowngradeRecord.Observe(null, true, "2026.11.1", null, state, DateTime.UtcNow)?.HighestAppliedVersion);
-        state.PackageId = "b";
-        state.Version = "2026.10.5";
-        Assert.Null(DowngradeRecord.Observe(null, true, "2026.11.1", null, state, DateTime.UtcNow));
+        Assert.Null(DowngradeRecord.Observe(null, true, "2026.11.1", null, Array.Empty<OverwrittenPackage>(), state, DateTime.UtcNow));
+        Assert.Null(DowngradeRecord.Observe(null, true, "2026.11.1", null,
+            new[] { new OverwrittenPackage("p", "2026.12.8", UpdateKinds.Parameters, Software: false) }, state, DateTime.UtcNow));
+        var sw = DowngradeRecord.Observe(null, true, "2026.11.1", null,
+            new[] { new OverwrittenPackage("p", "2026.12.8", UpdateKinds.Parameters, Software: false), new OverwrittenPackage("s", "2026.12.3", UpdateKinds.Software, Software: true) },
+            state, DateTime.UtcNow);
+        Assert.Equal("2026.12.3", sw?.HighestAppliedVersion);
+        Assert.Equal("2026.12.3", sw?.BasisVersion);
+        // 先前的發行版比目前新就是降版(沒有被覆蓋的軟體包也一樣)
+        Assert.Equal("2026.12.1", DowngradeRecord.Observe(null, true, "2026.11.1", "2026.12.1", Array.Empty<OverwrittenPackage>(), state, DateTime.UtcNow)?.BasisVersion);
     }
 
     [Fact]

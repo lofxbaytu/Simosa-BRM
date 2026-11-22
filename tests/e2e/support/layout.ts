@@ -15,6 +15,9 @@
 //  5. 整頁沒有捲軸(html 的 scrollWidth / scrollHeight 不超過視窗)。
 //  6. 按鈕內的文字沒有被自己的 overflow 切掉、也沒有溢出鈕外(button 的 scrollWidth ≤ clientWidth + 1;第二十九輪 L4:
 //     1093×614 的車鐘鈕「EFAS 緊急全速倒車 −150」數值被 overflow: hidden 切掉、艏側推快速鈕的「100」溢出鈕外)。
+//  7.(資訊,不列入不合格)以 text-overflow: ellipsis 截斷的文字(scrollWidth > clientWidth + 1):第二十九輪 L5 加入 —
+//     1093×614 失電後警報 meta 的「00:00:03」被截成「00:00:…」,判定 1–6 都抓不到;各頁仍有刻意以 … 截斷的清單摘要,
+//     所以只列出供量測比對,個別元件的「不截斷」由各自的端對端斷言把關(例:01 的 1093×614 警報 meta)。
 
 /** 關鍵控制:host 是 brm-* 元件的選擇器,inner 是其 shadow root 內的選擇器;至少要有 min 個(預設 1),每一個都必須不捲動就整個點得到 */
 export interface LayoutKeyControl {
@@ -68,6 +71,8 @@ export interface LayoutReport {
   page: string[];
   /** overflow: hidden / clip 的面板內容被裁掉的高度(資訊;控制項被裁掉者已列在 clipped) */
   hiddenClip: string[];
+  /** 以 text-overflow: ellipsis 截斷的文字(資訊;判定 7) */
+  ellipsis: string[];
 }
 
 /** 在頁面內執行(page.evaluate):量測目前視窗下的版面。函式自給自足,不引用模組內其他符號。 */
@@ -186,8 +191,10 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
   // ---- 走訪整頁(含所有 shadow root):控制項與元件
   const controls: Element[] = [];
   const hosts: Element[] = [];
+  const all: Element[] = [];
   const walk = (root: Document | ShadowRoot): void => {
     for (const el of Array.from(root.querySelectorAll('*'))) {
+      all.push(el);
       if (el.shadowRoot) {
         hosts.push(el);
         walk(el.shadowRoot);
@@ -212,6 +219,7 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
     text: [],
     page: [],
     hiddenClip: [],
+    ellipsis: [],
   };
 
   // ---- 1) 每個控制項:直接點得到,或捲動(只靠使用者捲得動的容器)後點得到
@@ -369,6 +377,13 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
     }
   }
 
+  // ---- 7) 以 … 截斷的文字(資訊)
+  for (const el of all) {
+    if (!(el instanceof HTMLElement) || el.clientWidth <= 0 || el.scrollWidth <= el.clientWidth + TEXT_TOLERANCE_PX) continue;
+    if (getComputedStyle(el).textOverflow !== 'ellipsis' || !rendered(el)) continue;
+    report.ellipsis.push(`${describeBox(el)}「${(el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 24)}」 scrollWidth ${el.scrollWidth} > clientWidth ${el.clientWidth}`);
+  }
+
   // ---- 5) 整頁不捲動
   const doc = document.documentElement;
   if (doc.scrollWidth > vw) report.page.push(`html scrollWidth ${doc.scrollWidth} > 視窗寬 ${vw}`);
@@ -376,7 +391,7 @@ export function probeLayout(spec: LayoutSpec): LayoutReport {
   return report;
 }
 
-/** 量測結果中不符合驗收的項目(空陣列 = 通過);hiddenClip 與 scrollContainers 只是資訊,不列入 */
+/** 量測結果中不符合驗收的項目(空陣列 = 通過);hiddenClip、ellipsis 與 scrollContainers 只是資訊,不列入 */
 export function layoutFailures(report: LayoutReport): string[] {
   return [
     ...report.covered.map((s) => `蓋住:${s}`),

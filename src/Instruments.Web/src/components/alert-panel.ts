@@ -39,8 +39,10 @@ export class AlertPanel extends LitElement {
     tileStyles,
     alertIconStyles,
     css`
+      /* 尺寸容器(container: alertpanel):窄面板(1093 寬的視窗右欄 332 px)時標題列的間距略縮,讓標題列維持一行(@container,見最後) */
       :host {
         display: block;
+        container: alertpanel / inline-size;
       }
       .tile {
         gap: 4px;
@@ -112,20 +114,22 @@ export class AlertPanel extends LitElement {
       .alert.unack.tone-warning {
         background: color-mix(in srgb, var(--ob-warning) 16%, var(--ob-bg-surface));
       }
+      /* 警報文字與 meta(狀態 · 優先序 類別 · 來源 · 編號 · 成立時間)不以 … 截斷(第二十九輪 L5:1093 寬時「00:00:03」被截成「00:00:…」):
+         放得下時一行,放不下時換行 — meta 只在「 · 」之後換行(各段不拆開,分隔符號前是不換行空白),警報文字在空白處換行、仍放不下才任意處斷行 */
       .alert .text {
         font-weight: 700;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       .alert .meta {
         grid-column: 2 / 3;
         grid-row: 2 / 3;
         font-size: 10.5px;
         color: var(--ob-text-secondary);
+        min-width: 0;
+      }
+      .alert .meta .seg {
         white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
       }
       /* 明確指定欄位:有 grid-row 的項目會先於自動排列放置,不指定欄位會把按鈕擠到第 2 欄 */
       .alert .icon {
@@ -203,6 +207,20 @@ export class AlertPanel extends LitElement {
         border-color: var(--ob-warning);
         color: var(--ob-warning);
       }
+      /* 窄面板(< 340 px;1093 寬的視窗):標題列各項的間距 4 → 2 px、「未確認 n」左右內距 7 → 5 px、工作站 5 → 4 px(約省 16 px),
+         標題列約 296 px:332 px 的面板(內寬 314 px)放得下一行,右欄出現捲軸(Windows;約 10 px)時內寬 304 px 也放得下
+         (未確認數兩位數約 303 px)。鈕的大小與字級不變 */
+      @container alertpanel (max-width: 339px) {
+        .head {
+          gap: 2px;
+        }
+        .head .count {
+          padding: 0 5px;
+        }
+        .head .station {
+          padding: 0 4px;
+        }
+      }
     `,
   ];
 
@@ -277,7 +295,7 @@ export class AlertPanel extends LitElement {
           ? html`<button class="ack" data-ack=${a.id} @click=${() => this.ack(a.id)}>確認</button>`
           : html`<span class="ack-slot lock" data-lock=${a.id} title="Category ${a.category}${a.transferredTo ? '(已轉移)' : ''}:只能在負責站確認">須在${ALERT_STATION_LABEL[responsible]}確認</span>`
         : html`<span class="ack-slot"></span>`}
-      <span class="meta"><span class="state">${stateText}</span> · ${ALERT_PRIORITY_LABEL[a.priority]} ${a.category} · ${ALERT_SOURCE_LABEL[a.source] ?? a.source} · ${String(a.number).padStart(3, '0')} · ${formatSimTime(a.raisedAt_s)}</span>
+      <span class="meta"><span class="seg state">${stateText}</span>${[`${ALERT_PRIORITY_LABEL[a.priority]} ${a.category}`, ALERT_SOURCE_LABEL[a.source] ?? a.source, String(a.number).padStart(3, '0'), formatSimTime(a.raisedAt_s)].map((t) => html`\u00a0· <span class="seg">${t}</span>`)}</span>
       ${targets.length > 0
         ? html`<select class="transfer" data-transfer=${a.id} aria-label="轉移 ${a.text} 的責任" title="責任轉移到其他工作站(alertTransfer)" @change=${(e: Event) => this.transfer(a.id, e)}>
             <option value="">轉移…</option>

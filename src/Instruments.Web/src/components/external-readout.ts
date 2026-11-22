@@ -6,6 +6,9 @@
 //    有幾何時另顯示距碼頭與艏/艉朝碼頭的法向接近速度。state 沒有對應欄位,由 v、r 與 LPP 推算,畫面註明:
 //    橫向速度為對水(船體座標);碼頭接近速度為對地(加 state.current 海流,與核心碰墊接觸速度、summary.berthing 同基準)。
 // state 沒有 tugs/anchors/berth 時本元件不顯示任何內容(舊狀態、Python 參考伺服器)。
+// 浮貼(floating)時由 <brm-app> 限制最大高度並讓本元件自己捲動;內容真的放不下(scrollHeight > clientHeight)時
+// 本元件設 [scrollable] 屬性(ResizeObserver 觀察本元件與內容框),<brm-app> 依此才讓讀數接收滑鼠(捲得動);
+// 放得下時不攔滑鼠,滾輪縮放與拖曳平移照常作用在下方的航跡圖(第二十九輪 L5;docs/design/web-layout.md 第 2.1 節)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
@@ -35,6 +38,11 @@ export function showBerthing(s: OwnShipState, geometry: BerthGeometry | null, lp
     return q !== null && Math.abs(q.distance_m) < BERTH_APPROACH_SHOW_M;
   }
   return s.berth !== undefined && s.sog < BERTH_APPROACH_SHOW_SOG_KN;
+}
+
+/** 內容是否放不下(要捲動):scrollHeight 超過 clientHeight 1 px 以上(次像素進位不算) */
+export function needsScroll(el: { scrollHeight: number; clientHeight: number }): boolean {
+  return el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 1;
 }
 
 @customElement('brm-external-readout')
@@ -98,6 +106,43 @@ export class ExternalReadout extends LitElement {
   @property({ attribute: false }) config: ShipDisplayConfig | null = null;
   /** 泊位幾何(情境 berth.definition;操船台依 state.scenario.id 由內建情境清單取得,無則 null) */
   @property({ attribute: false }) geometry: BerthGeometry | null = null;
+
+  /** 觀察本元件(最大高度隨航跡圖變)與內容框(拖船 / 錨列數變) → 更新 [scrollable] */
+  private resize: ResizeObserver | null = null;
+  private observedBox: Element | null = null;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (typeof ResizeObserver === 'undefined') return;
+    this.resize = new ResizeObserver(() => this.updateScrollable());
+    this.resize.observe(this);
+    // 重新接上 DOM 時內容框可能已存在(不一定會再 render)
+    this.observedBox = this.shadowRoot?.querySelector('.box') ?? null;
+    if (this.observedBox) this.resize.observe(this.observedBox);
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.resize?.disconnect();
+    this.resize = null;
+    this.observedBox = null;
+  }
+
+  protected override updated(): void {
+    // 內容框在沒有讀數時不存在(render 回 nothing),出現 / 重建時改觀察新的框;尺寸沒變時 ResizeObserver 不回呼,這裡不讀版面
+    const box = this.shadowRoot?.querySelector('.box') ?? null;
+    if (box === this.observedBox) return;
+    if (this.observedBox) this.resize?.unobserve(this.observedBox);
+    this.observedBox = box;
+    if (box) this.resize?.observe(box);
+    else this.toggleAttribute('scrollable', false);
+  }
+
+  /** 只在浮貼時標示(<brm-app> 的 CSS 依 [scrollable] 決定是否接收滑鼠);改屬性不改尺寸,不會讓 ResizeObserver 迴圈 */
+  private updateScrollable(): void {
+    const on = this.hasAttribute('floating') && needsScroll(this);
+    if (on !== this.hasAttribute('scrollable')) this.toggleAttribute('scrollable', on);
+  }
 
   private renderAnchors(s: OwnShipState) {
     const anchors = s.anchors ?? [];

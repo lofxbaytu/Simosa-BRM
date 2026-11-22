@@ -169,9 +169,11 @@ public sealed class InstalledFiles
     /// </para>
     /// <para>
     /// <b>降版的證據</b>(<see cref="Downgrade"/>):這一次看得到重新安裝(第 1 項,或 <see cref="ReconcileInfo.SupersededPackages"/> 非空)時,
-    /// 以重新安裝之前的狀態(先前的發行版、installed.json 的 software 元件、仍在套用狀態的更新包最高版本)比較目前的發行版,
-    /// 比較舊就記下(已有紀錄時合併);沒有重新安裝時原樣保留。紀錄的各項都不比目前的發行版新(以夠新的發行版重新安裝過)時清除。
+    /// 以重新安裝之前的狀態(先前的發行版、被這次重新安裝覆蓋的 software 元件與軟體更新包最高版本;<see cref="ReconcileInfo.OverwrittenPackages"/>)
+    /// 比較目前的發行版,比較舊就記下(已有紀錄時合併);沒有重新安裝時原樣保留。紀錄的各項都不比目前的發行版新(以夠新的發行版重新安裝過)時清除。
     /// 套用時寫回檔案,所以之後再套用圖資、情境、參數更新包(覆蓋清單已對齊到目前的發行版,看不到重新安裝)提醒仍在。
+    /// 非軟體更新包(圖資、情境、參數)的版本不計入:安裝不會覆蓋的(放進 data/ 的新檔)與會覆蓋的(發行清單所列的參數、情境檔)都一樣,
+    /// 後者由「被安裝覆蓋」的 state 提醒說明(審查第二十九輪 P5)。
     /// </para>
     /// </summary>
     /// <param name="baseline">目前 manifest.json 的身分(沒有或讀不到時 null:不做第 1 項與上述例外)</param>
@@ -188,6 +190,7 @@ public sealed class InstalledFiles
         bool Known(string id) => installed.PackageId == id || (installed.History ?? new()).Any(h => h is not null && h.PackageId == id);
         var applied = installed.AppliedPackages();
         var candidates = new List<TrackedPackage>();   // 內容沒有(可信的)紀錄的更新包
+        HashSet<string>? rebasedOwners = null;          // Rebase 作廢的紀錄所屬的更新包
         InstalledFiles f;
         if (existing is null)
         {
@@ -220,7 +223,7 @@ public sealed class InstalledFiles
                     {
                         info.Rebased = true;
                         info.PreviousBaseline = f.Baseline;
-                        (info.SupersededFiles, info.DroppedProgramFiles) = f.Rebase(manifestPaths, baseline, comparison);
+                        (info.SupersededFiles, info.DroppedProgramFiles, rebasedOwners) = f.Rebase(manifestPaths, baseline, comparison);
                     }
                 }
                 // 同一個發行版、但紀錄的原始 SHA-256 不同(manifest.json 只改了編碼)或是沒有內容身分的舊紀錄:換成目前的身分
@@ -265,9 +268,63 @@ public sealed class InstalledFiles
         info.NewlyUntracked.AddRange(untracked);
         info.Missing = existing is null && untracked.Count > 0;
         var reinstalled = info.Rebased || info.SupersededPackages.Count > 0;
+        if (reinstalled) CollectOverwritten(info, existing, installed, applied, rebasedOwners, baseline, manifestPaths, comparison);
         var previousRelease = info.Rebased ? info.PreviousBaseline?.Version : info.LastApplyRelease?.Version;
-        f.Downgrade = DowngradeRecord.Observe(f.Downgrade, reinstalled, baseline?.Version, previousRelease, installed, nowUtc ?? DateTime.UtcNow);
+        f.Downgrade = DowngradeRecord.Observe(f.Downgrade, reinstalled, baseline?.Version, previousRelease, info.OverwrittenPackages, installed, nowUtc ?? DateTime.UtcNow);
         return f;
+    }
+
+    /// <summary>
+    /// 這次重新安裝真的覆蓋到的更新包(<see cref="ReconcileInfo.OverwrittenPackages"/>;審查第二十九輪 P5,降版的比較基準只取其中的軟體包):
+    /// <list type="bullet">
+    /// <item>看得到 <see cref="Rebase"/>(有覆蓋清單):作廢的 files / removed 紀錄所屬的更新包(清單所列路徑、程式目錄之下),
+    ///   加上套用中的軟體更新包與含 app/ 的 mixed 包(安裝程式清空 app/ 重裝,只刪檔的軟體包也算),與 installed.json 的 software 元件
+    ///   (history 只留 50 筆,元件所指的更新包可能已不在其中)。圖資包放進 data/、發行清單沒有的檔案不會被安裝蓋掉,不算。
+    ///   例外:這一次才列為無法核對的更新包(<see cref="ReconcileInfo.NewlyUntracked"/>:覆蓋清單不知道、又不早於發行版建置,
+    ///   例如舊版 simosa-pkg 在重新安裝之後才套用)不知道是在重新安裝之前還是之後,不算。</item>
+    /// <item>被安裝覆蓋而沒有可信紀錄的更新包(<see cref="ReconcileInfo.SupersededPackages"/>;沒有覆蓋清單時的時間規則或 previous.json):
+    ///   只算軟體包、含 app/ 的 mixed 包,與前綴和發行清單所列路徑相交的種類(例如參數包,發行清單列了 data/parameters/ 的檔案);
+    ///   software 元件的更新包不在 history 時,依同一個依據(previous.json 顯示重新安裝過,或元件的套用時間早於發行版建置時間)判斷。</item>
+    /// </list>
+    /// 「軟體包」:種類 software,或 mixed 而觸及 app/(覆蓋清單記錄的前綴,或 installed.json 的 software 元件就是它)。
+    /// </summary>
+    private static void CollectOverwritten(ReconcileInfo info, InstalledFiles? existing, InstalledState installed, List<AppliedPackage> applied,
+                                           HashSet<string>? rebasedOwners, InstalledBaseline? baseline,
+                                           IReadOnlyCollection<string>? manifestPaths, StringComparison comparison)
+    {
+        var component = installed.Components?.GetValueOrDefault(UpdateKinds.Software);
+        // 覆蓋清單(對齊之前)記錄的各更新包實際觸及的前綴
+        var trackedPrefixes = (existing?.Packages ?? new()).GroupBy(p => p.PackageId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().Prefixes, StringComparer.Ordinal);
+        var unknown = info.NewlyUntracked.Select(p => p.PackageId).ToHashSet(StringComparer.Ordinal);
+        bool IsSoftware(string id, string? kind)
+            => kind == UpdateKinds.Software
+               || (kind == UpdateKinds.Mixed && ((component is not null && component.PackageId == id)
+                                                 || (trackedPrefixes.TryGetValue(id, out var prefixes) && prefixes.Contains("app/"))));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        void Add(string id, string version, string? kind, bool software)
+        {
+            if (id.Length > 0 && seen.Add(id)) info.OverwrittenPackages.Add(new OverwrittenPackage(id, version, kind, software));
+        }
+        if (info.Rebased)
+        {
+            foreach (var a in applied)
+            {
+                var software = IsSoftware(a.PackageId, a.Kind);
+                if ((software && !unknown.Contains(a.PackageId)) || rebasedOwners?.Contains(a.PackageId) == true) Add(a.PackageId, a.Version, a.Kind, software);
+            }
+            if (component is not null && !unknown.Contains(component.PackageId)) Add(component.PackageId, component.Version, UpdateKinds.Software, software: true);
+        }
+        foreach (var c in info.SupersededPackages)
+        {
+            var software = IsSoftware(c.PackageId, c.Kind);
+            var listed = manifestPaths is not null
+                         && PrefixesOfKind(c.Kind).Any(prefix => manifestPaths.Any(p => InstalledPaths.IsAtOrUnder(p, prefix, comparison)));
+            if (software || listed) Add(c.PackageId, c.Version, c.Kind, software);
+        }
+        if (!info.Rebased && component is not null && applied.All(a => a.PackageId != component.PackageId)
+            && (info.ReinstalledSinceLastApply || (baseline?.BuiltUtc is { } built && component.AppliedUtc < built)))
+            Add(component.PackageId, component.Version, UpdateKinds.Software, software: true);
     }
 
     /// <summary>
@@ -281,18 +338,25 @@ public sealed class InstalledFiles
     /// <item><b>其他位置</b>(data/、config/trusted-keys/;安裝程式不清空):更新包新增而清單沒有的檔案紀錄保留,仍以覆蓋清單核對。</item>
     /// <item><see cref="Untracked"/> 清空(先前無法核對的前綴已被安裝覆寫)。</item>
     /// </list>
-    /// 回傳(被新清單取代的檔案紀錄數,程式目錄之下因而作廢的檔案紀錄數)。
+    /// 回傳(被新清單取代的檔案紀錄數,程式目錄之下因而作廢的檔案紀錄數,作廢的 files / removed 紀錄所屬的更新包 — 這次重新安裝真的覆蓋到的更新包,
+    /// 見 <see cref="ReconcileInfo.OverwrittenPackages"/>)。
     /// </summary>
-    public (int Superseded, int DroppedProgramFiles) Rebase(IReadOnlyCollection<string> manifestPaths, InstalledBaseline baseline, StringComparison comparison)
+    public (int Superseded, int DroppedProgramFiles, HashSet<string> Owners) Rebase(IReadOnlyCollection<string> manifestPaths, InstalledBaseline baseline, StringComparison comparison)
     {
         var listed = new HashSet<string>(manifestPaths, StringComparer.FromComparison(comparison));
-        var superseded = Files.RemoveAll(x => listed.Contains(x.Path));
-        var dropped = Files.RemoveAll(x => InstalledPaths.IsAtOrUnderProgram(x.Path, comparison));
-        Removed.RemoveAll(r => InstalledPaths.IsAtOrUnderProgram(r.Path, comparison)
-                               || manifestPaths.Any(p => InstalledPaths.IsAtOrUnder(p, r.Path, comparison)));
+        var owners = new HashSet<string>(StringComparer.Ordinal);
+        bool Drop(string packageId)
+        {
+            if (packageId.Length > 0) owners.Add(packageId);
+            return true;
+        }
+        var superseded = Files.RemoveAll(x => listed.Contains(x.Path) && Drop(x.PackageId));
+        var dropped = Files.RemoveAll(x => InstalledPaths.IsAtOrUnderProgram(x.Path, comparison) && Drop(x.PackageId));
+        Removed.RemoveAll(r => (InstalledPaths.IsAtOrUnderProgram(r.Path, comparison)
+                                || manifestPaths.Any(p => InstalledPaths.IsAtOrUnder(p, r.Path, comparison))) && Drop(r.PackageId));
         Untracked.Clear();
         Baseline = baseline;
-        return (superseded, dropped);
+        return (superseded, dropped, owners);
     }
 
     /// <summary>把更新包列為「內容未記錄」,並丟棄其前綴之下的紀錄(已不可信)。</summary>
@@ -363,18 +427,22 @@ public sealed class DowngradeRecord
     public string? ReleaseVersion { get; set; }
     /// <summary>重新安裝之前的發行版(覆蓋清單的 baseline,或 previous.json 的 release;重新安裝不只一次時取最大者)</summary>
     public string? PreviousReleaseVersion { get; set; }
-    /// <summary>當時 installed.json 的 software 元件(被重新安裝取代、status 仍顯示的軟體更新包)</summary>
+    /// <summary>
+    /// 當時 installed.json 的 software 元件(被重新安裝取代、status 仍顯示的軟體更新包)。只在該更新包確實被這次重新安裝覆蓋
+    /// (<see cref="ReconcileInfo.OverwrittenPackages"/>)時記錄:沒有覆蓋清單時,在發行版之後才套用的軟體包仍是實際執行的程式。
+    /// </summary>
     public string? SoftwarePackageId { get; set; }
     public string? SoftwareVersion { get; set; }
     /// <summary>
-    /// 重新安裝之前仍在套用狀態(未 rollback;<see cref="InstalledState.AppliedPackages"/>)的更新包中的最高版本。
-    /// 不用 installed.json 的 highestVersion:rollback 不會降低它,已回復的版本不該算進來(升級 → 套用 → rollback 會誤報降版);
-    /// 只在沒有任何套用中的更新包時才以 highestVersion 補位(沒有其他依據)。
+    /// 這次重新安裝真的覆蓋到的<b>軟體</b>更新包(software,或含 app/ 的 mixed 包;未 rollback;<see cref="ReconcileInfo.OverwrittenPackages"/>)中的最高版本
+    /// (審查第二十九輪 P5)。不計:安裝不會覆蓋的更新包(圖資包放進 data/、發行清單沒有的檔案)、已 rollback 的更新包(不再以 installed.json 的
+    /// highestVersion 補位)、非軟體更新包 — 參數、情境包換過的發行清單檔案被安裝蓋回時,「被安裝覆蓋」的 state 提醒已經說明;
+    /// 把它們的版本算進比較基準,會把升級或回到原本的發行版誤報為降版,還要求可能根本不存在的「版本不低於某個參數包」的安裝程式。
     /// </summary>
     public string? HighestAppliedVersion { get; set; }
     public DateTime RecordedUtc { get; set; }
 
-    /// <summary>比較基準:三者(先前的發行版、軟體元件版次、套用中的更新包最高版本)中的最大者 — 「版本不低於它的安裝程式」才回到降版之前。</summary>
+    /// <summary>比較基準:三者(先前的發行版、軟體元件版次、被覆蓋的軟體更新包最高版本)中的最大者 — 「版本不低於它的安裝程式」才回到降版之前。</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public string? BasisVersion => Max(Max(PreviousReleaseVersion, SoftwareVersion), HighestAppliedVersion);
 
@@ -397,26 +465,31 @@ public sealed class DowngradeRecord
     }
 
     /// <summary>
-    /// <see cref="InstalledFiles.Reconcile"/> 用:這一次看得到重新安裝(<paramref name="reinstalled"/>)時,以重新安裝之前的狀態更新紀錄
-    /// (已有紀錄時,先前的發行版與最高版本取較大者、記錄時間沿用);之後以目前的發行版評估,不再是降版就清除(回傳 null)。
+    /// <see cref="InstalledFiles.Reconcile"/> 用:這一次看得到重新安裝(<paramref name="reinstalled"/>)時,以重新安裝之前的狀態更新紀錄 —
+    /// 先前的發行版、被覆蓋的 software 元件、<paramref name="overwritten"/> 之中軟體更新包的最高版本(已有紀錄時,先前的發行版與最高版本取較大者、
+    /// software 元件沒有新的依據時沿用、記錄時間沿用);之後以目前的發行版評估,不再是降版就清除(回傳 null)。
+    /// 只有非軟體更新包被覆蓋、先前的發行版也不比目前新時不建立紀錄(「被安裝覆蓋」的 state 提醒已說明)。
+    /// 合併時不會納入降版之後才套用的更新包:之後套用的軟體更新包會清除紀錄(<see cref="InstalledFiles.Record"/>),已 rollback 的不在
+    /// <paramref name="overwritten"/> 之內,非軟體更新包本來就不計 — 所以同樣的實體狀態不會因為中間套用過什麼而得到不同的結果。
     /// 讀不到發行清單(<paramref name="releaseVersion"/> 為 null)時無從判斷,原樣保留。
     /// </summary>
     public static DowngradeRecord? Observe(DowngradeRecord? kept, bool reinstalled, string? releaseVersion, string? previousReleaseVersion,
-                                           InstalledState installed, DateTime nowUtc)
+                                           IReadOnlyCollection<OverwrittenPackage> overwritten, InstalledState installed, DateTime nowUtc)
     {
         if (releaseVersion is null || !PackageVersion.TryParse(releaseVersion, out _)) return kept;
         var record = kept;
         if (reinstalled)
         {
-            var software = installed.Components?.GetValueOrDefault(UpdateKinds.Software);
-            var applied = installed.AppliedPackages().Select(a => a.Version).Aggregate((string?)null, Max);
+            var software = overwritten.Where(p => p.Software).ToList();
+            var component = installed.Components?.GetValueOrDefault(UpdateKinds.Software);
+            var stale = component is not null && software.Any(p => p.PackageId == component.PackageId) ? component : null;
             record = new DowngradeRecord
             {
                 ReleaseVersion = releaseVersion,
                 PreviousReleaseVersion = Max(kept?.PreviousReleaseVersion, previousReleaseVersion),
-                SoftwarePackageId = software?.PackageId,
-                SoftwareVersion = software?.Version,
-                HighestAppliedVersion = Max(kept?.HighestAppliedVersion, applied ?? installed.HighestVersion),
+                SoftwarePackageId = stale is not null ? stale.PackageId : kept?.SoftwarePackageId,
+                SoftwareVersion = stale is not null ? stale.Version : kept?.SoftwareVersion,
+                HighestAppliedVersion = Max(kept?.HighestAppliedVersion, software.Select(p => p.Version).Aggregate((string?)null, Max)),
                 RecordedUtc = kept?.RecordedUtc ?? nowUtc,
             };
         }
@@ -436,6 +509,12 @@ public sealed class DowngradeRecord
 
 /// <summary><see cref="DowngradeRecord.Evaluate"/> 的結果:比目前的發行版新的各項(不比它新的為 null)與比較基準(其中的最大者)。</summary>
 public sealed record DowngradeEvaluation(string ReleaseVersion, string? PreviousReleaseVersion, string? SoftwareVersion, string? HighestAppliedVersion, string BasisVersion);
+
+/// <summary>
+/// 這次重新安裝真的覆蓋到的更新包(<see cref="ReconcileInfo.OverwrittenPackages"/>)。<paramref name="Software"/>:software 或含 app/ 的 mixed 包
+/// (只有這類計入降版的比較基準,<see cref="DowngradeRecord.HighestAppliedVersion"/>)。
+/// </summary>
+public sealed record OverwrittenPackage(string PackageId, string Version, string? Kind, bool Software);
 
 /// <summary><see cref="InstalledFiles.Reconcile"/> 做了哪些調整(核對時據以顯示提醒)。</summary>
 public sealed class ReconcileInfo
@@ -469,6 +548,11 @@ public sealed class ReconcileInfo
     public bool ReinstalledSinceLastApply { get; set; }
     /// <summary><see cref="ReinstalledSinceLastApply"/> 時,previous.json 記錄的套用當時的發行清單(當時沒有或讀不到時 null)</summary>
     public InstalledBaseline? LastApplyRelease { get; set; }
+    /// <summary>
+    /// 看得到重新安裝時,這次重新安裝真的覆蓋到的更新包(<c>InstalledFiles.CollectOverwritten</c>:作廢的覆蓋清單紀錄所屬者、軟體更新包、
+    /// 前綴與發行清單相交的種類)。降版的比較基準只取其中的軟體更新包(<see cref="DowngradeRecord.Observe"/>)。沒有重新安裝時是空的。
+    /// </summary>
+    public List<OverwrittenPackage> OverwrittenPackages { get; set; } = new();
     /// <summary>
     /// 覆蓋清單寫入時 manifest.json 讀不到(<see cref="InstalledFiles.BaselineUnreadable"/>),而目前的發行版建置於那次寫入之前:
     /// 視為同一個發行版,改記目前的身分(沒有 Rebase)

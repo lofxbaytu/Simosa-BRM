@@ -86,6 +86,21 @@ describe('<brm-alert-panel> 中央警報面板', () => {
     expect(cmds).toHaveLength(3);
   });
 
+  it('meta 分段(狀態 · 優先序 類別 · 來源 · 編號 · 時間)只在「 · 」之後換行,不以 … 截斷(第二十九輪 L5)', async () => {
+    const el = await mount('brm-alert-panel', { alerts: [alert({ id: 'gyroFailure', number: 1, text: '電羅經失效', raisedAt_s: 3 })] });
+    const meta = q<HTMLElement>(el, '.alert .meta');
+    expect([...meta.querySelectorAll('.seg')].map((s) => s.textContent)).toEqual(['未確認', '警報 B', '電羅經', '001', '00:00:03']);
+    // 分隔符號前是不換行空白(「·」不會跑到下一行開頭),之後是一般空白(換行點)
+    expect(meta.textContent).toBe('未確認 · 警報 B · 電羅經 · 001 · 00:00:03');
+    expect(text(el)).toContain('未確認 · 警報 B · 電羅經 · 001 · 00:00:03');
+    // 樣式:meta / 警報文字不再用 ellipsis 截斷;meta 各段不換行
+    const css = (customElements.get('brm-alert-panel') as unknown as { styles: Array<{ cssText: string }> }).styles.map((s) => s.cssText).join('\n');
+    const rule = (sel: string) => css.match(new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[1] ?? '';
+    expect(rule('.alert .meta')).not.toMatch(/ellipsis|nowrap|overflow:\s*hidden/);
+    expect(rule('.alert .text')).not.toMatch(/ellipsis|nowrap|overflow:\s*hidden/);
+    expect(rule('.alert .meta .seg')).toMatch(/white-space:\s*nowrap/);
+  });
+
   it('「未確認 N」徽章顏色取需確認者的最高優先序(已確認的 alarm 不算)', async () => {
     const list = [
       alert({ id: 'mainEngine', number: 9, state: 'activeAcknowledged', audible: false }),

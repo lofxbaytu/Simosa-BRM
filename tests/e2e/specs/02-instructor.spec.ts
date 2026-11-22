@@ -1,7 +1,8 @@
 // 教官站完整模式(instructor.html):情境清單 → 載入 E07 → 狀態幀情境 id 變更、載入鈕回復;無效內嵌情境 → 核心拒絕(scenarioLoadRejected)
 // 並在面板顯示;下舵令 20°(操船台舵輪預設鈕)→ 操船台舵角指示變化;凍結/恢復(執行控制面板)→ 狀態幟 frozen 與 header「已凍結」;
 // 1366×768、1536×864 與 1920×1080 下每個控制項都點得到、載入與執行控制不必捲動;選了最長 id 的情境(E20_comprehensive_assessment_*)時「載入」鈕
-// 不撐出左欄;重播檢視載入紀錄後與簡化模式「開始練習」後(1366×768)事件串流篩選鈕、PTT 等不被蓋住或裁切(版面;判定在 support/layout.ts)。
+// 不撐出左欄、清單與詳細區的高度依情境面板實際高度(核心固定在有階段的 E13);重播檢視載入紀錄後(講評摘要不水平捲動、補充欄不逐字換行)
+// 與簡化模式「開始練習」後(1366×768)事件串流篩選鈕、PTT 等不被蓋住或裁切(版面;判定在 support/layout.ts)。
 import path from 'node:path';
 import { ROOT, bridgeUrl, instructorUrl } from '../support/env.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
@@ -261,16 +262,36 @@ test('簡化教官模式簡報頁:規劃時間、同儕評估提示緊接在簡�
   }
 });
 
-test('完整教官站 1280×720 與 1366×768 選了最長 id 的情境:「載入」鈕不撐出左欄(id 換行、不截斷),詳細區有基本高度', async ({ page, env }) => {
+test('完整教官站 1280×720 與 1366×768 選了最長 id 的情境(核心在有階段的情境):「載入」鈕不撐出左欄(id 換行、不截斷),詳細區與清單有基本高度', async ({ page, env, core }) => {
   // 第二十九輪 L3:「載入 E20_comprehensive_assessment_kaohsiung」的 id 不可斷行,鈕寬 276 px > 左欄的鈕列 258 px,鈕右緣被右側面板蓋住、
-  // 左欄出現水平捲軸(顯示捲軸時 _default 也一樣)。現在 id 在底線後換行(<wbr>),清單與詳細區只直向捲動。只選取、不載入(核心狀態不變)。
+  // 左欄出現水平捲軸(顯示捲軸時 _default 也一樣)。現在 id 在底線後換行(<wbr>),清單與詳細區只直向捲動。只選取、不載入(核心情境不變)。
+  // 第二十九輪 L5:詳細區的高度取決於情境面板的高度,面板高度又取決於 header(核心在有階段的情境時多一個「階段 waiting」徽章,
+  // 1366×768 的面板由 300 變成 297.6 px;L4 的門檻 300 px 讓詳細區退回 96 px)。原本的斷言只在前一個案例剛好載入沒有階段的情境時才通過;
+  // 現在案例內固定核心情境(E13 跑到進入階段),斷言依面板實際高度:≥ 294 px 時清單 ≥ 80、詳細區 ≥ 120,否則 64 / 96。
   const errors = new PageErrors(page);
+  type Phased = { scenario?: { phase?: string } };
+  const inPhase = (s: unknown): boolean => {
+    const phase = (s as Phased).scenario?.phase;
+    return !!phase && phase !== 'normal';
+  };
+  await ensureScenario(core, 'E13_tug_berthing_mailiao');
+  await ensureRunning(core);
+  if (!inPhase(await core.nextState())) {
+    // E13 在 t ≥ 30 s 進入「等待」階段;以 4 倍速跑到
+    core.send({ type: 'timeScale', value: 4 });
+    try {
+      await core.waitState((s) => inPhase(s), 30_000, 'E13 進入有階段的狀態(scenario.phase 不是 normal)');
+    } finally {
+      core.send({ type: 'timeScale', value: 1 });
+    }
+  }
   for (const size of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }]) {
     for (const id of ['E20_comprehensive_assessment_kaohsiung', 'E20_comprehensive_assessment_default']) {
       await test.step(`${size.width}×${size.height} 選 ${id}`, async () => {
         await page.setViewportSize(size);
         await page.goto(instructorUrl(env));
         await waitConnected(page);
+        await expect(page.locator('header .phase'), 'header 的階段徽章').toBeVisible();
         const item = page.locator('brm-scenario-panel .list .item').filter({ hasText: id });
         await expect(item).toHaveCount(1);
         await item.scrollIntoViewIfNeeded();
@@ -280,20 +301,29 @@ test('完整教官站 1280×720 與 1366×768 選了最長 id 的情境:「載�
         await expect(load).toHaveText(`載入 ${id}`);
         const report = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
         expect(layoutFailures(report), `完整教官站 ${size.width}×${size.height} 選 ${id} 的版面問題`).toEqual([]);
-        // 鈕與詳細區都在情境面板內、不水平溢出;詳細區至少 120 px(1366×768:面板 300 px),面板矮於 300 px 時(1280×720 為 260 px)96 px
-        // (第二十九輪 L4:原本的容器查詢含等於 300,1366×768 / 1536×864 其實都只有 96–104 px)
+        // 鈕與詳細區都在情境面板內、不水平溢出;清單與詳細區的高度依面板實際高度(scenario-panel.ts 的 @container scenario (height < 294px))
         const geo = await page.locator('brm-scenario-panel').evaluate((host) => {
           const root = host.shadowRoot!;
           const btn = root.querySelector('button.load')!.getBoundingClientRect();
           const row = root.querySelector('.btn-row')!.getBoundingClientRect();
           const list = root.querySelector('.list') as HTMLElement;
           const detail = root.querySelector('.detail') as HTMLElement;
-          return { btnRight: btn.right, rowRight: row.right, listOverflowX: list.scrollWidth - list.clientWidth, detailOverflowX: detail.scrollWidth - detail.clientWidth, detailHeight: detail.getBoundingClientRect().height };
+          return {
+            panelHeight: host.getBoundingClientRect().height,
+            btnRight: btn.right,
+            rowRight: row.right,
+            listOverflowX: list.scrollWidth - list.clientWidth,
+            detailOverflowX: detail.scrollWidth - detail.clientWidth,
+            listHeight: list.getBoundingClientRect().height,
+            detailHeight: detail.getBoundingClientRect().height,
+          };
         });
         expect(geo.btnRight, '「載入」鈕右緣不超出鈕列').toBeLessThanOrEqual(geo.rowRight + 1);
         expect(geo.listOverflowX, '情境清單不水平溢出').toBeLessThanOrEqual(1);
         expect(geo.detailOverflowX, '詳細區不水平溢出').toBeLessThanOrEqual(1);
-        expect(geo.detailHeight, '詳細區高度(px)').toBeGreaterThanOrEqual(size.height >= 768 ? 119 : 95);
+        const tall = geo.panelHeight >= 294;
+        expect(geo.detailHeight, `詳細區高度(px;面板 ${geo.panelHeight.toFixed(1)} px)`).toBeGreaterThanOrEqual(tall ? 119 : 95);
+        expect(geo.listHeight, `清單高度(px;面板 ${geo.panelHeight.toFixed(1)} px)`).toBeGreaterThanOrEqual(tall ? 79 : 63);
         await load.click({ trial: true });
       });
     }
@@ -316,13 +346,35 @@ test('重播檢視載入紀錄後(1366×768):事件串流篩選鈕不被蓋住�
   const report = await page.evaluate(probeLayout, REPLAY_LAYOUT);
   expect(layoutFailures(report), '重播檢視 1366×768 的版面問題').toEqual([]);
   // 講評摘要:不水平捲動;指標名稱欄不被擠成一字一行(至少約 6em = 78 px)
-  const summary = await page.locator('brm-replay-view brm-debrief-summary').evaluate((host) => ({
-    overflowX: host.scrollWidth - host.clientWidth,
-    thWidths: [...host.shadowRoot!.querySelectorAll('th')].map((th) => Math.round(th.getBoundingClientRect().width)),
-  }));
+  // 第二十九輪 L5:補充欄(td.src;例:總覽「車鐘變更次數」的「轉速令 0 · 側推 0」、「最大 ROT」的「超限 00:00」)原本只剩約 32 px、
+  // 一字一行;窄面板時移到名稱下方另起一列(與表格同寬),不逐字換行
+  const summary = await page.locator('brm-replay-view brm-debrief-summary').evaluate((host) => {
+    const root = host.shadowRoot!;
+    const srcs = [...root.querySelectorAll('td.src')].filter((td) => (td.textContent ?? '').trim() !== '');
+    return {
+      overflowX: host.scrollWidth - host.clientWidth,
+      thWidths: [...root.querySelectorAll('th')].map((th) => Math.round(th.getBoundingClientRect().width)),
+      srcs: srcs.map((td) => {
+        const cs = getComputedStyle(td);
+        const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.25;
+        const content = td.getBoundingClientRect().height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+        return {
+          text: (td.textContent ?? '').trim().slice(0, 24),
+          width: Math.round(td.getBoundingClientRect().width),
+          tableWidth: Math.round(td.closest('table')!.getBoundingClientRect().width),
+          lines: Math.round(content / lineHeight),
+        };
+      }),
+    };
+  });
   expect(summary.overflowX, '講評摘要的水平溢出(px)').toBeLessThanOrEqual(1);
   expect(summary.thWidths.length, '講評摘要的列數').toBeGreaterThanOrEqual(10);
   expect(Math.min(...summary.thWidths), '指標名稱欄最窄的寬度(px)').toBeGreaterThanOrEqual(70);
+  expect(summary.srcs.length, '有補充內容的列數').toBeGreaterThanOrEqual(3);
+  for (const s of summary.srcs) {
+    expect(s.width, `補充欄「${s.text}」的寬度(px;表格 ${s.tableWidth} px)`).toBeGreaterThanOrEqual(s.tableWidth - 2);
+    expect(s.lines, `補充欄「${s.text}」的行數`).toBeLessThanOrEqual(2);
+  }
   // 真實點擊:篩選鈕(時間表)切換顯示 / 隱藏、播放 / 暫停
   const filter = page.locator('brm-replay-view brm-event-stream .filters button.src-timeline');
   await expect(filter).toHaveClass(/active/);

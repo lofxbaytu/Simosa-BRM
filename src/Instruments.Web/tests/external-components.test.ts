@@ -10,7 +10,7 @@ import { getShipConfig } from '../src/lib/ship-config.js';
 import { berthGeometry } from '../src/lib/external-forces.js';
 import { anchorActionBlocked } from '../src/components/instructor/anchor-panel.js';
 import { mooringActionBlocked } from '../src/components/instructor/mooring-panel.js';
-import { showBerthing } from '../src/components/external-readout.js';
+import { needsScroll, showBerthing } from '../src/components/external-readout.js';
 import type { CommandLogEntry } from '../src/lib/session-record.js';
 
 type Updatable = HTMLElement & { updateComplete: Promise<unknown> };
@@ -265,6 +265,70 @@ describe('<brm-external-readout>(操船台)', () => {
     expect(showBerthing({ ...s, pos: { lat: 0, lon: 0, x: 150, y: -900 } }, GEO, cfg.lpp_m)).toBe(false);
     expect(showBerthing({ ...s, sog: 8 }, null, cfg.lpp_m)).toBe(false);
     expect(showBerthing({ ...s, sog: 2 }, null, cfg.lpp_m)).toBe(true);
+  });
+
+  it('浮貼時只在內容真的放不下(scrollHeight > clientHeight + 1)才設 [scrollable](第二十九輪 L5)', async () => {
+    expect(needsScroll({ scrollHeight: 116, clientHeight: 116 })).toBe(false);
+    expect(needsScroll({ scrollHeight: 117, clientHeight: 116 })).toBe(false);
+    expect(needsScroll({ scrollHeight: 118, clientHeight: 116 })).toBe(true);
+    expect(needsScroll({ scrollHeight: 50, clientHeight: 0 })).toBe(false);
+    // happy-dom 沒有版面:以假的 ResizeObserver 記下觀察對象與回呼,scrollHeight / clientHeight 以 stub 模擬
+    const RealRO = globalThis.ResizeObserver;
+    const observers: Array<{ cb: () => void; targets: Set<Element> }> = [];
+    class FakeRO {
+      private readonly rec: { cb: () => void; targets: Set<Element> };
+      constructor(cb: () => void) {
+        this.rec = { cb, targets: new Set() };
+        observers.push(this.rec);
+      }
+      observe(t: Element): void {
+        this.rec.targets.add(t);
+      }
+      unobserve(t: Element): void {
+        this.rec.targets.delete(t);
+      }
+      disconnect(): void {
+        this.rec.targets.clear();
+      }
+    }
+    globalThis.ResizeObserver = FakeRO as unknown as typeof ResizeObserver;
+    try {
+      const s = { ...defaultState('FSB1'), anchors: ANCHORS, tugs: TUGS };
+      const el = await mount<HTMLElement & { state: unknown }>('brm-external-readout', { state: s, config: cfg }, { floating: '' });
+      let sh = 116;
+      let ch = 116;
+      Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => sh });
+      Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => ch });
+      const rec = observers.at(-1)!;
+      // 觀察本元件與內容框
+      expect(rec.targets.has(el)).toBe(true);
+      expect(rec.targets.has(q(el, '.box'))).toBe(true);
+      rec.cb();
+      expect(el.hasAttribute('scrollable'), '放得下(1280×720:116 = 116)').toBe(false);
+      ch = 70; // 航跡圖變矮(1093×614)
+      rec.cb();
+      expect(el.hasAttribute('scrollable'), '放不下').toBe(true);
+      ch = 116;
+      rec.cb();
+      expect(el.hasAttribute('scrollable')).toBe(false);
+      // 讀數消失(state 沒有外力欄位)時不再觀察舊的內容框
+      ch = 70;
+      rec.cb();
+      el.state = defaultState('FSB1');
+      await el.updateComplete;
+      expect(el.hasAttribute('scrollable')).toBe(false);
+      expect([...rec.targets]).toEqual([el]);
+      // 不是浮貼(沒有 floating 屬性)時不標示
+      const plain = await mount('brm-external-readout', { state: s, config: cfg });
+      Object.defineProperty(plain, 'scrollHeight', { configurable: true, get: () => 200 });
+      Object.defineProperty(plain, 'clientHeight', { configurable: true, get: () => 70 });
+      observers.at(-1)!.cb();
+      expect(plain.hasAttribute('scrollable')).toBe(false);
+      el.remove();
+      expect(rec.targets.size, '移除後解除觀察').toBe(0);
+    } finally {
+      globalThis.ResizeObserver = RealRO;
+    }
   });
 });
 

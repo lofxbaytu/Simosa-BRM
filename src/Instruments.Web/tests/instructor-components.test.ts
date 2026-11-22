@@ -578,6 +578,44 @@ describe('紀錄清單與講評摘要', () => {
     expect(shadowText(el)).toContain('normal 00:00–00:30 → waiting 00:30–01:00 → berthing 01:00–10:00');
     expect(segmented('')).toEqual([]);
   });
+
+  it('窄面板時補充欄另起一列(第二十九輪 L5):每列都有 td.src、沒有補充內容時是空的;表格語意以 role 保留;容器查詢與 subgrid 排法', async () => {
+    const coreSummary = parseAssessmentSummary({
+      version: 1,
+      final: true,
+      assessment: { score: 90, passMark: 70, passed: true, hardFailed: false, hardFails: [], required: [], parameters: [], bands: [] },
+      manoeuvring: { telegraphChanges: 1, telegraphOrders: [{ order: 'STOP', duration_s: 60 }], rpmOrders: 0, thrusterOrders: 0, maxRot_degPerMin: 3.2, timeRotOverLimit_s: 0 },
+    })!;
+    const el = await mount<DebriefSummaryView>('brm-debrief-summary', { coreSummary });
+    const root = el.shadowRoot!;
+    const rows = [...root.querySelectorAll('tr')];
+    const row = (label: string): HTMLTableRowElement => rows.find((r) => r.querySelector('th')?.textContent === label)! as HTMLTableRowElement;
+    expect(row('車鐘變更次數').querySelector('td.src')!.textContent).toBe('轉速令 0 · 側推 0');
+    expect(row('最大 ROT').querySelector('td.src')!.textContent).toBe('超限 00:00');
+    // 沒有補充內容:td.src 沒有元素或文字(只有 Lit 的註解標記;:empty 不計註解,窄面板時不多佔一列)
+    const empty = row('航程').querySelector('td.src')!;
+    expect([...empty.childNodes].filter((n) => n.nodeType === Node.ELEMENT_NODE || (n.nodeType === Node.TEXT_NODE && n.textContent !== '')).length).toBe(0);
+    // role:表格 / 列 / 列標題 / 儲存格(窄面板時 display 不是 table,仍是表格語意)
+    for (const t of root.querySelectorAll('table')) expect(t.getAttribute('role')).toBe('table');
+    expect(rows.every((r) => r.getAttribute('role') === 'row')).toBe(true);
+    expect(row('航程').querySelector('th')!.getAttribute('role')).toBe('rowheader');
+    expect([...row('航程').querySelectorAll('td')].map((td) => td.getAttribute('role'))).toEqual(['cell', 'cell', 'cell']);
+    // 樣式:摘要是尺寸容器;窄於 420 px 時(支援 subgrid)各表三欄格線、補充欄 grid-column: 1 / -1
+    const css = (customElements.get('brm-debrief-summary') as unknown as { styles: Array<{ cssText: string }> }).styles.map((s) => s.cssText).join('\n');
+    expect(css).toMatch(/container:\s*summary\s*\/\s*inline-size/);
+    expect(css).toMatch(/@supports \(grid-template-columns: subgrid\)\s*\{\s*@container summary \(max-width: 419px\)/);
+    expect(css).toMatch(/td\.src\s*\{\s*grid-column:\s*1 \/ -1;/);
+    expect(css).toMatch(/td\.src:empty\s*\{\s*display:\s*none;/);
+  });
+});
+
+describe('情境面板的清單 / 詳細區下限(第二十九輪 L5)', () => {
+  it('面板 ≥ 294 px 用 80 / 120 px,較矮時 64 / 96 px(標題與「載入」鈕列約 94 px;1366×768 有階段徽章時面板 297.6 px)', () => {
+    const css = (customElements.get('brm-scenario-panel') as unknown as { styles: Array<{ cssText: string }> }).styles.map((s) => s.cssText).join('\n');
+    expect(css).toMatch(/@container scenario \(height < 294px\)\s*\{\s*\.list\s*\{\s*min-height:\s*64px;\s*\}\s*\.detail\s*\{\s*min-height:\s*96px;/);
+    expect(css).toMatch(/\.list\s*\{\s*flex:\s*1 1 0;\s*min-height:\s*80px;/);
+    expect(css).toMatch(/\.detail\s*\{\s*flex:\s*1 1 0;\s*min-height:\s*120px;/);
+  });
 });
 
 describe('講評摘要的必要事件倒數', () => {

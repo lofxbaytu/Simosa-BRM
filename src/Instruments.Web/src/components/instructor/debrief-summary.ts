@@ -77,8 +77,10 @@ export class DebriefSummaryView extends LitElement {
     tileStyles,
     instructorStyles,
     css`
+      /* 尺寸容器(container: summary):窄面板時補充欄移到名稱下方另起一列(@container,見最後) */
       :host {
         display: block;
+        container: summary / inline-size;
       }
       table {
         width: 100%;
@@ -200,6 +202,39 @@ export class DebriefSummaryView extends LitElement {
       .params code {
         font-size: 10px;
       }
+      /* 窄面板(< 420 px;重播檢視右欄約 320–340 px):補充欄(來源 / 參數鍵、超限時間、轉速令與側推次數…)移到名稱下方另起一列、
+         橫跨整列寬,不再擠成約 30 px 的第四欄(第二十九輪 L5:總覽的補充欄只剩 32 px,「轉速令 0 · 側推 0」一字一行排成 8 行)。
+         作法:各表的 tbody 是三欄的格線(名稱 1fr、數值 0.7fr(至少放得下最長的一段)、時間 1.4fr;名稱與時間至少 6em),
+         每列以 subgrid 共用同一組欄寬(同一張表內各列對齊),補充欄 grid-column: 1 / -1;沒有補充內容的列不多佔一列。
+         表格語意由標記上的 role(table / row / rowheader / cell)保留。不支援 subgrid 的瀏覽器維持原本的四欄表格 */
+      @supports (grid-template-columns: subgrid) {
+        @container summary (max-width: 419px) {
+          table {
+            display: block;
+          }
+          tbody {
+            display: grid;
+            grid-template-columns: minmax(6em, 1fr) minmax(min-content, 0.7fr) minmax(6em, 1.4fr);
+          }
+          tr {
+            display: grid;
+            grid-column: 1 / -1;
+            grid-template-columns: subgrid;
+            border-bottom: 1px solid var(--ob-border);
+          }
+          th,
+          td {
+            border-bottom: none;
+          }
+          td.src {
+            grid-column: 1 / -1;
+            padding-top: 0;
+          }
+          td.src:empty {
+            display: none;
+          }
+        }
+      }
     `,
   ];
 
@@ -229,19 +264,20 @@ export class DebriefSummaryView extends LitElement {
     const countdownTable =
       active.length > 0
         ? html`<div class="section"><span>必要事件(即時倒數)</span></div>
-            <table aria-label="必要事件倒數"><tbody>${active.map((c) => this.row(c.rule.id, countdownText(c), c.startedAt_s !== null ? `自 ${shortTime(c.startedAt_s)}${c.within_s !== null ? ` / 限 ${Math.round(c.within_s)} s` : ''}` : '', c.state === 'overdue' || c.state === 'missed' ? 'alarm' : c.state === 'met' ? 'ok' : c.state === 'late' ? 'over' : ''))}</tbody></table>`
+            <table role="table" aria-label="必要事件倒數"><tbody>${active.map((c) => this.row(c.rule.id, countdownText(c), c.startedAt_s !== null ? `自 ${shortTime(c.startedAt_s)}${c.within_s !== null ? ` / 限 ${Math.round(c.within_s)} s` : ''}` : '', c.state === 'overdue' || c.state === 'missed' ? 'alarm' : c.state === 'met' ? 'ok' : c.state === 'late' ? 'over' : ''))}</tbody></table>`
         : nothing;
     if (!s || s.samples === 0) return html`${countdownTable}<div class="hint">尚無資料</div>`;
     return html`${countdownTable}${this.renderLocal(s, null)}
       <div class="hint">本地推導:閾值為第一版暫用常數(速限 ${s.thresholds.portSpeedLimit_kn} kn、UKC ${s.thresholds.ukcAlarm_m} m、ROT ${s.thresholds.rotLimit_degPerMin}°/min、滿舵 ${s.thresholds.hardOver_deg}°);核心有評估規則與參數集時會改顯示核心 summary(規劃書第 9.1 節)</div>`;
   }
 
+  /** 一列:名稱 / 數值 / 時間 / 補充。role 讓窄面板改用格線排法(display 不是 table)時仍是表格語意 */
   private row(label: string, value: string, time = '', cls = '', src = '') {
-    return html`<tr class=${cls}>
-      <th>${breakableName(label)}</th>
-      <td class="num">${segmented(value)}</td>
-      <td class="at">${segmented(time)}</td>
-      ${src ? html`<td class="src">${src}</td>` : html`<td class="src"></td>`}
+    return html`<tr class=${cls} role="row">
+      <th role="rowheader">${breakableName(label)}</th>
+      <td class="num" role="cell">${segmented(value)}</td>
+      <td class="at" role="cell">${segmented(time)}</td>
+      <td class="src" role="cell">${src || nothing}</td>
     </tr>`;
   }
 
@@ -264,19 +300,19 @@ export class DebriefSummaryView extends LitElement {
       </div>
       ${a.hardFails.length > 0
         ? html`<div class="section"><span>硬性失敗</span></div>
-            <table><tbody>${a.hardFails.map((h) => this.row(`${h.id}`, `${HARD_FAIL_RULE_LABEL[h.rule ?? ''] ?? h.rule ?? ''}${h.value !== undefined ? ` ${fix(h.value, 2)}${h.limit !== undefined ? ` / ${fix(h.limit, 2)}` : ''}` : ''}`, secs(h.t_s), 'alarm', sourceText(h)))}</tbody></table>`
+            <table role="table" aria-label="硬性失敗"><tbody>${a.hardFails.map((h) => this.row(`${h.id}`, `${HARD_FAIL_RULE_LABEL[h.rule ?? ''] ?? h.rule ?? ''}${h.value !== undefined ? ` ${fix(h.value, 2)}${h.limit !== undefined ? ` / ${fix(h.limit, 2)}` : ''}` : ''}`, secs(h.t_s), 'alarm', sourceText(h)))}</tbody></table>`
         : nothing}
       ${a.required.length > 0
         ? html`<div class="section"><span>必要事件</span></div>
-            <table aria-label="必要事件"><tbody>${a.required.map((r) => this.requiredRow(r))}</tbody></table>`
+            <table role="table" aria-label="必要事件"><tbody>${a.required.map((r) => this.requiredRow(r))}</tbody></table>`
         : nothing}
       ${a.bands.length > 0
         ? html`<div class="section"><span>容許帶</span></div>
-            <table aria-label="容許帶"><tbody>${a.bands.map((b) => this.bandRow(b))}</tbody></table>`
+            <table role="table" aria-label="容許帶"><tbody>${a.bands.map((b) => this.bandRow(b))}</tbody></table>`
         : nothing}
       ${c.faultResponses.length > 0
         ? html`<div class="section"><span>故障應變</span></div>
-            <table aria-label="故障應變"><tbody>
+            <table role="table" aria-label="故障應變"><tbody>
               ${c.faultResponses.map((f) =>
                 this.row(
                   `${f.fault}${f.itemId ? `(${f.itemId})` : ''}`,
@@ -297,7 +333,7 @@ export class DebriefSummaryView extends LitElement {
       ${c.alerts ? this.renderAlerts(c.alerts) : nothing}
       ${c.radar ? this.renderRadar(c.radar) : nothing}
       <div class="section"><span>總覽</span></div>
-      <table aria-label="核心講評摘要">
+      <table role="table" aria-label="核心講評摘要">
         <tbody>
           ${this.row('練習時間', secs(g.duration_s), g.freezes ? `凍結 ${g.freezes} 次` : g.frozen_s ? `凍結 ${shortTime(g.frozen_s)}` : '')}
           ${this.row('航程', fix(g.distance_nm, 2, 'nm'))}
@@ -344,7 +380,7 @@ export class DebriefSummaryView extends LitElement {
     const bn = al.bnwas;
     const prLabel = (p: string | undefined) => (p && p in ALERT_PRIORITY_LABEL ? ALERT_PRIORITY_LABEL[p as AlertPriority] : p ?? '');
     return html`<div class="section"><span>警報與 BNWAS</span></div>
-      <table aria-label="警報與 BNWAS">
+      <table role="table" aria-label="警報與 BNWAS">
         <tbody>
           ${this.row('警報成立 / 確認', `${al.raised ?? 0} / ${al.acknowledged ?? 0}`, `未確認 ${al.unacknowledged ?? 0} · 升級 ${al.escalations ?? 0} · 靜音 ${al.silences ?? 0}`, (al.unacknowledged ?? 0) > 0 || (al.escalations ?? 0) > 0 ? 'over' : '')}
           ${this.row('平均確認時間', fix(al.meanAckTime_s, 1, 's'), `最長 ${fix(al.maxAckTime_s, 1, 's')}`, (al.maxAckTime_s ?? 0) > 30 ? 'over' : '')}
@@ -366,7 +402,7 @@ export class DebriefSummaryView extends LitElement {
   private renderRadar(r: SummaryRadar) {
     const per = Object.entries(r.byRadar).map(([k, c]) => `${k.toUpperCase()}:${c.controlCount} 次(擷取 ${c.acquisitions}、量程 ${c.rangeChanges})`).join(' · ');
     return html`<div class="section"><span>雷達操作</span></div>
-      <table aria-label="雷達操作">
+      <table role="table" aria-label="雷達操作">
         <tbody>
           ${this.row('雷達控制指令', `${r.controlCount} 次`, `手動擷取 ${r.acquisitions} · 量程切換 ${r.rangeChanges}`, r.acquisitions === 0 ? 'over' : '', per)}
         </tbody>
@@ -391,7 +427,7 @@ export class DebriefSummaryView extends LitElement {
     const at = (t: number | null) => (t === null ? '' : shortTime(t));
     const cmp = (v: number | undefined, digits = 1, unit = '') => (core ? `核心 ${fix(v, digits, unit)}` : '');
     return html`
-      <table aria-label="自動講評摘要">
+      <table role="table" aria-label="自動講評摘要">
         <tbody>
           ${this.row('練習時間', shortTime(s.duration_s), s.frozen_s > 0 ? `凍結 ${shortTime(s.frozen_s)}` : '', '', core ? `核心 ${secs(core.general.duration_s)}` : '')}
           ${this.row('航程', `${s.distance_nm.toFixed(2)} nm`, '', '', cmp(core?.general.distance_nm, 2, 'nm'))}

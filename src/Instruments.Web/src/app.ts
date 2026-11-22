@@ -111,14 +111,14 @@ export class BrmApp extends LitElement {
       }
       /* 航跡圖左上角浮貼錨/拖船/靠泊讀數(不佔警報欄高度,中央警報面板維持原大小)。
          讀數不超出航跡圖(第二十九輪 L4:1093×614 的航跡圖只剩約 100 px,約 120 px 高的讀數溢出到下方,蓋住 BNWAS 的標題與階段):
-         最高到航跡圖下緣,放不下時在讀數內捲動。平時不攔滑鼠(拖曳 / 滾輪照常作用在航跡圖);航跡圖矮於 200 px
-         (讀數可能放不下)時才接收滑鼠,讓使用者捲得動。航跡圖格是尺寸容器(container: plot) */
+         最高到航跡圖下緣,放不下時在讀數內捲動。平時不攔滑鼠(拖曳 / 滾輪照常作用在航跡圖);讀數**真的放不下**
+         (scrollHeight > clientHeight,external-readout.ts 以 ResizeObserver 設 [scrollable])時才接收滑鼠,讓使用者捲得動。
+         第二十九輪 L4 原本依航跡圖高度(< 200 px)判斷,1280×720 的航跡圖 194 px、讀數其實放得下,卻攔下了滾輪縮放與拖曳平移(L5 修正) */
       .plot-wrap {
         grid-area: plot;
         position: relative;
         min-height: 0;
         min-width: 0;
-        container: plot / size;
       }
       .plot-wrap brm-external-readout {
         position: absolute;
@@ -130,10 +130,8 @@ export class BrmApp extends LitElement {
         scrollbar-width: thin;
         pointer-events: none;
       }
-      @container plot (max-height: 200px) {
-        .plot-wrap brm-external-readout {
-          pointer-events: auto;
-        }
+      .plot-wrap brm-external-readout[scrollable] {
+        pointer-events: auto;
       }
       /* 右欄:中央警報面板、內建 VHF 角色扮演面板(docs/design/vhf-roleplay.md;?vhf=0 不顯示);BNWAS 在它上方的格子(或高度 ≤ 800 px 時在航跡圖下方)。
          VHF 取自然高度(不縮);警報面板吃剩餘高度,至少放得下標題列與 2 筆警報(含「轉移」選單,每筆約 59 px);
@@ -321,10 +319,14 @@ export class BrmApp extends LitElement {
         }
       }
       /* 1366×768 等較小螢幕:下排操船台略縮、間距縮小、右欄 344 px(操船台約 1010 px 寬)。
-         車鐘與艏側推有最小寬度(第二十九輪 L4;只在 1093 寬等更窄的視窗才起作用,1280 寬以上依比例就比下限寬):
-         車鐘最長的一列「EFAS 緊急全速倒車 −150」(12 / 11 / 10 px 字級、鈕內距 4 px)一行約 135 px,加面板內距 → 156 px;
-         艏側推快速鈕(「P / 100」兩行)每個至少約 26 px → 142 px。原本 1093 寬時車鐘只有 125 px,鈕內文字被 overflow: hidden 切掉、
-         快速鈕的「100」溢出鈕外;不縮字級與觸控目標,寬度由右欄讓出(寬度 ≤ 1150 px 時右欄 300 px,見下;操舵 / 自動舵 / 教官小面板維持原寬) */
+         五格的左右內距 8 → 5 px(面板的內距,不是鈕;鈕的大小與字級不變),省下的約 30 px 給操舵:
+         九個舵令預設鈕在 1280×720 每個約 32 px 寬、1366×768 約 36 px(第二十九輪 L5:原本 29 / 32 px,右欄跨到操船台那一列後
+         比 5d811a1 的 37 / 40 px 窄;門檻是 1280 寬以上 ≥ 32 px,見 docs/design/web-layout.md 第 6 節)。其餘四格的內容寬與原本相同
+         (車鐘、艏側推、教官小面板)或少約 4 px(自動舵;1280 寬以上的內容寬仍 ≥ 180 px、±10 不換列)。
+         車鐘與艏側推有最小寬度(第二十九輪 L4;只在 1152 寬以下才起作用,1280 寬以上依比例就比下限寬):
+         車鐘最長的一列「EFAS 緊急全速倒車 −150」(12 / 11 / 10 px 字級、鈕內距 4 px)一行約 135 px,加面板內距 → 150 px;
+         艏側推快速鈕(「P / 100」兩行)每個至少約 26 px → 136 px。原本 1093 寬時車鐘只有 125 px,鈕內文字被 overflow: hidden 切掉、
+         快速鈕的「100」溢出鈕外(L4 修正;寬度 ≤ 1150 px 另見下) */
       @media (max-width: 1500px) {
         :host {
           --brm-controls-row: minmax(200px, 27vh);
@@ -336,16 +338,24 @@ export class BrmApp extends LitElement {
           gap: 4px;
         }
         .controls {
-          grid-template-columns: minmax(0, 2fr) minmax(156px, 1.08fr) minmax(142px, 1.1fr) minmax(0, 1.42fr) minmax(0, 0.64fr);
+          grid-template-columns: minmax(0, 2.2fr) minmax(150px, 1.03fr) minmax(136px, 1.06fr) minmax(0, 1.355fr) minmax(0, 0.6fr);
           gap: 4px;
         }
+        .controls > * {
+          padding: 6px 5px;
+        }
       }
-      /* 寬度 ≤ 1150 px(1093×614 = 1366×768 在 125 % 縮放):右欄 344 → 300 px,讓出的寬度給操船台
-         (車鐘與艏側推的下限各多要約 30 / 15 px;不讓出時操舵的舵令預設鈕把「35°」折成三行、自動舵的「°/min」被切掉)。
-         右欄在這個尺寸本來就要捲動(VHF 文字欄 / DSC,第 6 節),300 px 仍放得下警報面板的按鈕列與 VHF 兩列頻道鈕 */
+      /* 寬度 ≤ 1150 px(1093×614 = 1366×768 在 125 % 縮放):右欄 344 → 332 px,讓出的寬度與上面省下的內距給車鐘 / 艏側推的下限,
+         操舵維持約 228 px(舵令預設鈕約 22 px 寬,「35°」兩行;再窄就折成三行)、自動舵約 154 px(「°/min」與「現在 058」仍在格內)。
+         332 px 是量出來的:警報面板標題列(警報 · 工作站 · 未確認 n · 靜音 30s · 全部確認 · 聲響)在窄面板約 296 px,
+         332 px 的面板內寬 314 px 放得下一行,右欄出現捲軸(Windows 約 10 px)時內寬 304 px 也放得下;第二十九輪 L4 改成 300 px 時標題列折成兩行、
+         警報清單 122 → 94 px(第 2 筆要捲動)、警報 meta 被 … 截斷(L5 修正;meta 另改為放不下時換行,見 alert-panel.ts) */
       @media (max-width: 1150px) {
         :host {
-          grid-template-columns: minmax(0, 1fr) 300px;
+          grid-template-columns: minmax(0, 1fr) 332px;
+        }
+        .controls {
+          grid-template-columns: minmax(0, 2.1fr) minmax(150px, 1.08fr) minmax(136px, 1.1fr) minmax(0, 1.42fr) minmax(0, 0.6fr);
         }
       }
       /* 高度 ≤ 800 px(1366×768、1280×720 的筆電):BNWAS 改到航跡圖下方(一列的橫條,約 40 px),右欄整欄給警報面板與 VHF。

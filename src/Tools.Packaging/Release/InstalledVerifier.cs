@@ -71,7 +71,7 @@ public sealed class InstallFinding
 
 /// <summary>
 /// 降版(安裝模式核對 --json 的 <c>downgrade</c>、<c>simosa-pkg status --json</c> 的 <c>releaseDowngrade</c>):套用更新包之後重新安裝過,
-/// 而目前的發行版比先前安裝的發行版、曾套用的軟體更新包或仍在套用狀態的更新包最高版本舊(<c>InstalledVerifier.DetectDowngrade</c>,
+/// 而目前的發行版比先前安裝的發行版、曾套用的軟體更新包或被這次重新安裝覆蓋的軟體更新包最高版本舊(<c>InstalledVerifier.DetectDowngrade</c>,
 /// 依覆蓋清單保存的證據 <see cref="DowngradeRecord"/>;之後套用非軟體更新包也保留,直到套用新的軟體更新包或以夠新的安裝程式重新安裝)。
 /// 不是錯誤:以較舊版本的安裝程式回到舊版是 rollback 拒絕訊息建議的正規作法;只是 status 的版次與實際執行的程式不符,一定要明說。
 /// </summary>
@@ -86,8 +86,8 @@ public sealed class ReleaseDowngrade
     /// <summary>重新安裝當時 installed.json 的 software 元件版次(status 顯示的軟體版次;沒有時 null)</summary>
     public string? SoftwareVersion { get; set; }
     /// <summary>
-    /// 重新安裝之前仍在套用狀態(未 rollback)的更新包中的最高版本(<see cref="DowngradeRecord.HighestAppliedVersion"/>;
-    /// 沒有套用中的更新包時才以 installed.json 的 highestVersion 補位)
+    /// 被重新安裝覆蓋的<b>軟體</b>更新包(software,或含 app/ 的 mixed 包;未 rollback)中的最高版本(<see cref="DowngradeRecord.HighestAppliedVersion"/>;
+    /// 圖資、情境、參數更新包與已 rollback 的更新包不計;沒有時 null)
     /// </summary>
     public string? HighestVersion { get; set; }
     /// <summary>software 元件版次比目前的發行版新(而 installed.json 的 software 元件仍是那個更新包):status 顯示的軟體版次不是實際執行的程式</summary>
@@ -542,7 +542,7 @@ public static class InstalledVerifier
     /// <summary>
     /// 降版判斷(核對與 <c>simosa-pkg status</c> 共用;唯一的判斷在 <see cref="DowngradeRecord.Evaluate"/>):讀
     /// <see cref="InstalledFiles.Reconcile"/> 對齊後的覆蓋清單所帶的降版證據 <see cref="InstalledFiles.Downgrade"/> —
-    /// 重新安裝當下記下(先前安裝的發行版、installed.json 的 software 元件、仍在套用狀態的更新包最高版本),之後套用非軟體更新包也保留,
+    /// 重新安裝當下記下(先前安裝的發行版、被覆蓋的 software 元件與軟體更新包最高版本;非軟體更新包不計),之後套用非軟體更新包也保留,
     /// 直到套用新的軟體更新包或以版本不低於比較基準的安裝程式重新安裝為止。目前的發行版 <paramref name="releaseVersion"/> 比其中任一項舊即為降版。
     /// 沒有重新安裝的跡象時一律不算(在 2026.11.1 上套用 2026.11.2 的軟體更新包是正常狀態)。
     /// </summary>
@@ -552,7 +552,7 @@ public static class InstalledVerifier
         var parts = new List<string>();
         if (d.PreviousReleaseVersion is { } previous) parts.Add($"先前安裝的發行版 {previous}");
         if (d.SoftwareVersion is { } software) parts.Add($"曾套用的軟體更新包 {software}");
-        if (d.HighestAppliedVersion is { } highest && highest != d.SoftwareVersion && highest != d.PreviousReleaseVersion) parts.Add($"曾套用過的更新包最高版本 {highest}");
+        if (d.HighestAppliedVersion is { } highest && highest != d.SoftwareVersion && highest != d.PreviousReleaseVersion) parts.Add($"被安裝覆蓋的軟體更新包最高版本 {highest}");
         var stale = d.SoftwareVersion is not null;
         return new ReleaseDowngrade
         {
@@ -682,7 +682,8 @@ public static class InstalledVerifier
     /// 「以更新包修復」那一句要說明須包含受損的檔案,位於其他位置(tools/、docs/…)的檔案只能以安裝程式修復。
     /// 更新包新增、發行版沒有、又不在程式目錄的檔案(<see cref="InstallFinding.RepairableBy"/> = package)另寫一項:安裝程式修不好
     /// (重新安裝後仍會列出,要求的安裝程式版本只會一直往上推),只能以含這些檔案的更新包修復;「重新安裝後仍有錯誤 → 換磁碟」不套用在這類檔案。
-    /// 順序:重新安裝那一項、緊接著更新包新增檔案那一項、多出的檔案,「換磁碟」那一句放在最後;互相參照寫明「見下一步(N)」。
+    /// 順序:重新安裝那一項(或只有「安裝程式不安裝的檔案」時的說明,兩者擇一)、緊接著更新包新增檔案那一項、多出的檔案,
+    /// 「換磁碟」那一句放在最後;互相參照寫明「見下一步(N)」。
     /// </summary>
     private static void Finish(InstallCheckReport rep, InstalledState? installed, StringComparison cmp = StringComparison.Ordinal, bool packagesOnRelease = false)
     {
@@ -712,9 +713,10 @@ public static class InstalledVerifier
         // 更新包新增、發行版沒有的檔案(data\ 等程式目錄以外):安裝程式修不好,另寫一段下一步,也不套用「重新安裝後仍有錯誤 → 換磁碟」
         var packageOnly = damagedAll.Where(e => e.RepairableBy == InstallFinding.RepairByPackage).ToList();
         var damaged = damagedAll.Except(packageOnly).ToList();
-        // 順序:重新安裝那一項 → 緊接著更新包新增檔案那一項 → …(多出的檔案)→ 最後才是「仍有錯誤 → 換磁碟」;互相參照一律寫明「見下一步(N)」
-        // (文字輸出有兩項以上時才編號,這裡一定有三項以上)
-        var packageOnlyNo = rep.NextSteps.Count + (damaged.Count > 0 ? 2 : 1);
+        // 順序:重新安裝那一項(或只有「安裝程式不安裝的檔案」時的說明;兩者擇一)→ 緊接著更新包新增檔案那一項 → 多出的檔案
+        // → 最後才是「仍有錯誤 → 換磁碟」(docs/design/packaging-sync.md 第 5.1 節「下一步」的順序);互相參照一律寫明「見下一步(N)」
+        // (文字輸出有兩項以上時才編號;有參照時一定有三項以上)。目前只有重新安裝那一項與換磁碟那一句參照 N,仍依實際順序計算
+        var packageOnlyNo = rep.NextSteps.Count + (damaged.Count > 0 || broken.Count > packageOnly.Count ? 2 : 1);
         var seePackageOnly = packageOnly.Count > 0 ? $"(標示為更新包新增的檔案見下一步({packageOnlyNo}))" : "";
         string? diskStep = null;
         if (damaged.Count > 0)
