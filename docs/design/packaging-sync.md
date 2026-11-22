@@ -228,22 +228,30 @@ simosa-pkg release verify --dir <安裝根目錄> --installed [--json] [--max-it
 simosa-pkg verify-install [--root <安裝根目錄>] [--json] [--max-items <N>]        ← 同一個實作(InstalledVerifier);預設根目錄同其他指令
 ```
 
-船上筆電離線、程式可能放在隨身碟,這是「程式與資料檔有沒有損毀或不完整」的核對,不是簽章驗證(`manifest.json` 不簽章;更新包的簽章在套用時驗證)。一般模式的行為不變;對看起來是使用中的安裝根目錄(有 `state/`、`build/records`、`build/logs` 或 `config/packaging.json`)未加 `--installed` 時多印一行提示,不改結束碼。`simosa-pkg status` 不做雜湊,只在結尾指向本指令。
+船上筆電離線、程式可能放在隨身碟,這是「程式與資料檔有沒有損毀或不完整」的核對,不是簽章驗證(`manifest.json` 不簽章;更新包的簽章在套用時驗證)。一般模式的行為不變;對看起來是使用中的安裝根目錄(有 `state/`、`build/records`、`build/logs` 或 `config/packaging.json`)未加 `--installed` 時多印一行提示,不改結束碼。`simosa-pkg status` 不做雜湊,文字輸出中有一行指向本指令(在「環境:」一行之前)。
+
+**發行清單只列安裝程式會安裝的檔案**:安裝程式 `[Files]` 的 `Excludes`(`*.pdb`、`Thumbs.db`)不安裝的檔名若列進 `manifest.json`,以安裝程式安裝的筆電上就沒有這些檔案,安裝模式會報「檔案缺少」(審查第二十九輪:Godot .NET 匯出把 `.pdb` 放進 `app/visual/data_*/`)。排除規則只有一份 — `ReleaseManifestBuilder.InstallerExcludedPatterns`(`src/Tools.Packaging/Release/ReleaseManifest.cs`):`release manifest` 遇到目錄內有符合的檔案(`Thumbs.db` 依檔名略過者除外,即目前的 `*.pdb`)就**失敗並列出檔案**,不產生清單;`tools/installer/check-iss.py` 讀這個常數與 `.iss` 的 `Excludes` 對照(`Tools.Packaging.Tests` 再對照一次),**兩邊要一起改**。`tools/build-release.*` 因此在 Godot 視景匯出(步驟 5)之後、`pack`(步驟 6)與 `release manifest`(步驟 7)之前再刪一次 `app/`、`tools/` 之下的 `*.pdb`(軟體更新包也不含偵錯符號)。舊版工具產生、列有這類檔案的清單:一般模式 `release verify` 加一則警告;安裝模式把缺少的這類檔案註明「安裝程式不安裝這類檔案,不是檔案損毀」,只有這種錯誤時「下一步」是回報開發者而不是重新安裝。
 
 **預期內容** = `manifest.json` 所列檔案 − 覆蓋清單 `removed` 的路徑(檔案或整個目錄)+ 覆蓋清單 `files`(取代或新增)。
 
-**分級**(結束碼:有錯誤 1,否則 0;`--json` 為 `simosa-install-check/1`,`errors[]`/`notices[]` 每筆有 `category`、`path`、`detail`、`source` = `release` 或 `package:<版本>`):
+**分級**(結束碼:有錯誤 1,否則 0;`--max-items` 等參數寫錯是用法錯誤 2,在核對開始之前就回報):
 
 | 級別 | `category` |
 |---|---|
-| 錯誤 | `missing` 預期的程式/資料檔不在;`mismatch` 大小或 SHA-256 不符;`unreadable` 讀取失敗(磁碟錯誤、權限);`extra` 程式目錄 `app/`、`tools/updater/` 內多出預期以外的檔案(舊版殘留的組件、被放進去的檔案會被載入或被網頁伺服送出);`manifest` 發行清單讀不到、格式錯、路徑不合法或重複 |
-| 提醒 | `configModified`、`configMissing`:預期內容中 `config/` 之下的檔案與預期不同或不在;`unlisted`:程式目錄與執行期資料位置以外的未列檔案;`unverifiable`:無法核對的前綴(見下);`state`:狀態檔讀不到、發行版在更新包之後重新安裝過(見下) |
+| 錯誤 | `missing` 預期的程式/資料檔不在;`mismatch` 大小或 SHA-256 不符;`unreadable` 讀取失敗(磁碟錯誤、權限);`extra` 程式目錄 `app/`、`tools/updater/` 內多出預期以外的檔案(舊版殘留的組件、被放進去的檔案會被載入或被網頁伺服送出),或程式目錄內(含其上層,例如 `tools/` 本身)有**目錄連結**(其下內容無法核對;`path` 以 `/` 結尾);`manifest` 發行清單讀不到、格式錯(含 `files` 為 null)、路徑不合法或重複 |
+| 提醒 | `configModified`、`configMissing`:預期內容中 `config/` 之下的檔案與預期不同或不在;`unlisted`:程式目錄與執行期資料位置以外的未列檔案,或該處的目錄連結(`path` 以 `/` 結尾);`unverifiable`:無法核對的前綴(見下);`state`:狀態檔讀不到、發行版在更新包之後重新安裝過(見下) |
 | 略過 | 執行期資料位置之下**預期內容沒有列**的檔案:不進入這些目錄、不逐一列出(只列出實際存在的位置)。預期內容有列的檔案即使位於這些位置仍照常核對 |
 
 - **設定檔不在是提醒、不是錯誤**:`config/` 是使用者的檔案(安裝程式對既有設定不覆寫、解除安裝不刪);船上筆電用不到 `instructor-laptop.json`、教官筆電用不到 `ship-laptop.json`,核對工具無從判斷哪一個必要;缺了必要設定時啟動腳本會明確報錯,補救也不是重新安裝程式檔。trust 更新包寫入的信任公鑰同屬 `config/`:與覆蓋清單不同或不在只列提醒(管理者可用 `trust add/remove` 手動變更;現況以 `status` / `trust list` 為準)。
 - **執行期資料位置**集中定義在 `InstalledPaths.RuntimeData`(`src/Tools.Packaging/Common/InstalledPaths.cs`):`build/`、`.cache/`、`state/`、`store/`、`config/device/`、`config/trusted-keys/`、`config/packaging.json`、`data/records/`,以及岸上放入離線執行階段安裝檔的 `tools/webview2/`、`tools/dotnet/`;測試以 `InstallLayout` 的各路徑與安裝程式 `tools/installer/SimosaBRM.iss` 的 `[Dirs]`、`[UninstallDelete]` 對照(`docs/ops/本機資料位置.md` 第 2 節為人讀的對照表)。`packaging.json` 自訂的 `recordsDir` / `store` 位於安裝根目錄內時也算,但不得涵蓋程式目錄。另依檔名略過 `Thumbs.db`、`.DS_Store`、解除安裝檔 `unins000.*` 與 `desktop.ini`。
-- Windows 上路徑比對不分大小寫(與套用時的檔名比較一致);目錄連結(junction/symlink)不跟進。
-- **輸出**:標頭(發行清單版本、現行更新包、覆蓋清單筆數、已核對檔案數、未列入的位置)→ 提醒 → 錯誤(stderr)→「核對通過/核對失敗」→ 有錯誤時的「下一步」。每一類預設列前 10 筆再給總數。下一步依狀況:沒套用過更新包 → 以原安裝程式重新安裝到同一位置;套用過更新包 → 取得**版本不低於現行版本的安裝程式**或**版本更高的更新包**(同一版本不能重複套用;以較舊的安裝程式覆蓋會把更新過的檔案還原成舊版 — 核對會把這種檔案標成「內容與發行清單相同、更新包的變更被還原」的 `mismatch`);程式目錄內多出的檔案不會因重新安裝而消失,須手動刪除。
+- Windows 上路徑比對不分大小寫(與套用時的檔名比較一致)。
+- **目錄連結(junction/symlink)不跟進,但一定列出**(避免走出安裝根目錄或形成迴圈;連結之下多出的檔案查不到):位於程式目錄內 → `extra` 錯誤(「目錄連結,其下內容無法核對」— 連結指到的內容會被載入或被網頁伺服送出;處理方式是移除連結本身);其他位置 → `unlisted` 提醒;執行期資料位置(例如把 `build\records` 連到另一顆磁碟)不進入、不列。清單所列的檔案仍依路徑直接核對(會跟著連結走)。
+- **文字輸出**:標頭(發行清單版本、現行更新包、覆蓋清單筆數、已核對檔案數、未列入的位置)→ 提醒 → 錯誤(stderr)→「核對通過/核對失敗」→ 有錯誤時的「下一步」。每一類預設列前 10 筆再給總數(`--max-items <N>`,0 = 全部)。
+- **下一步**(`nextSteps`)依狀況:
+  - 程式或資料檔缺少、不符、讀不出來,且沒套用過更新包 → 以原安裝程式(或專用隨身碟上的發行版)重新安裝到同一位置。
+  - 同上,套用過更新包 → 取得安裝程式重新安裝,或取得更新包套用。**安裝程式的版本基準 = 發行清單版本與現行更新包版本的較大者**(「版本不低於 X 的安裝程式」):套用更新包之後又以更新的安裝程式重新安裝過時,現行更新包版本比發行版舊,只看它會把整個發行版降版。例外:目前的發行版之上還有套用中的更新包、而發行版版本不低於現行更新包時,以同一個發行版重新安裝只會把更新包換過的檔案還原(核對把這種檔案標成「內容與發行清單相同、更新包的變更被還原」的 `mismatch`),所以寫「版本**高於** <發行版> 的安裝程式」。**更新包**那一句寫明三件事:版本須高於上述基準與曾套用過的最高版本(`highestVersion`,rollback 後不下降)兩者的較大者;必須**包含受損的檔案**(`app\` 的程式檔要完整的軟體更新包,只含情境或參數的更新包修不好;`data\` 的檔案要含該檔的更新包);不在更新包可寫入位置(`app\`、`data\` 以外,例如 `tools\`、`docs\`)的檔案只能以安裝程式修復。已套用過的更新包不能重複套用。
+  - 程式目錄內多出的檔案或目錄連結 → 確認後依清單刪除(連結只移除連結本身,不要刪它指向的內容);以**安裝程式**重新安裝也會清除多出的檔案(安裝前先清空 `app\` 與 `tools\updater\`,見下「重新安裝」;有目錄連結時先手動移除連結再安裝),以壓縮檔或手動複製覆蓋則不會。
+- **`--json`**(`format: simosa-install-check/1`;完整清單不截斷;null 的欄位整個省略):頂層 `format`、`mode`(`installed`)、`ok`、`root`、`release`{`version`、`gitRevision`?、`runtime`?、`builtUtc`、`files`}、`installed`{`version`?、`packageId`?、`kind`?}(`installed.json` 讀不到時沒有;沒套用過更新包時是空物件)、`installedFiles`{`present`、`consistent`、`packageId`?、`version`?、`files`、`removed`、`reinstalled`、`interruptedPackageId`?、`interruptedVersion`?}、`checked`、`skippedLocations[]`、`errors[]`、`notices[]`、`counts`{分類 → 筆數}、`nextSteps[]`(發行清單讀不到時 `release`、`installed`、`installedFiles` 三個物件都沒有)。`errors[]`/`notices[]` 每筆:`category` 與 `path` 必有;`detail` 選填(說明文字);`source`(`release` 或 `package:<版本>`,預期內容的來源)只出現在 `missing`、`mismatch`、`unreadable` 三類錯誤(`unreadable` 的「無法讀取目錄」沒有);`count`(其下未核對的檔案數)只出現在 `unverifiable`。一般模式的 `release verify --json` 是另一個格式 `simosa-release-verify/1`:`format`、`mode`(`release`)、`ok`、`dir`、`version`?、`gitRevision`?、`runtime`?、`files`?、`checked`、`errors[]`(字串)、`warnings[]`(字串)、`hint`?。
 
 **覆蓋清單 `state/installed-files.json`**(`InstalledFiles`):
 
@@ -259,12 +267,19 @@ simosa-pkg verify-install [--root <安裝根目錄>] [--json] [--max-items <N>] 
 
 - **逐檔記錄,沒有「被整個取代的前綴」**:套用時每個頂層元件是「複製現行 → 刪除 → 寫入新檔」再整個目錄改名(第 5 節第 4 步),更新包沒有列的現行檔案會保留,所以 software 包也不是把 `app/` 整個換掉。`files` 是更新包寫入的每個路徑(後套用者取代先套用者的紀錄),`removed` 是套用時實際刪除的路徑(`manifest.remove`,加上 trust 包由 `trust.remove` 推得的金鑰檔;可以是整個目錄);記錄順序與套用相同(先刪後寫),之後又被寫入的檔案以 `files` 為準。路徑一律是 `PackagePaths` 正規化的相對路徑。`packages` 為已納入的更新包(新到舊,最多 50 筆);mixed 包的 `prefixes` 依實際觸及的路徑。
 - **與 `installed.json` 同在提交點之前寫入**(先覆蓋清單、後 `installed.json`;任何一個寫不進去都整體回復,更新包視同未套用、可原包重試)。不採「提交後只記警告」:同一版本不能重複套用,提交後才發現清單寫不進去就再也補不回來,該更新包的前綴會長期停在「無法核對」。套用前的清單存入 `state/previous/`,rollback 時還原(套用前沒有清單則刪除)。
-- **一致性**:`packageId`/`version` 必須等於 `installed.json` 的現行更新包。對不上(覆蓋清單已寫而 `installed.json` 未寫就中斷、rollback 時清單還原失敗、檔案被舊備份蓋回)時,把兩邊對不上的更新包所屬種類的前綴(`UpdateKinds.AllowedPrefixes`)列為 `unverifiable`(`reason: diverged`),其下的紀錄一律不採信 — 不比對、不報錯,但一定有提醒,不會顯示成「沒有提醒的通過」。`installed.json` 讀不到時,更新包能寫入的全部前綴(`app/`、`data/`、`config/trusted-keys/`)都列為無法核對。下一次套用時這些更新包記入 `untracked`,清單恢復一致。
+- **一致性**:`packageId`/`version` 必須等於 `installed.json` 的現行更新包。對不上(覆蓋清單已寫而 `installed.json` 未寫就中斷、rollback 時清單還原失敗、檔案被舊備份蓋回)時,把兩邊對不上的更新包所屬種類的前綴(`UpdateKinds.AllowedPrefixes`)列為 `unverifiable`(`reason: diverged`),其下的紀錄一律不採信 — 不比對、不報錯,但一定有提醒,不會顯示成「沒有提醒的通過」。`installed.json` 讀不到時,更新包能寫入的全部前綴(`app/`、`data/`、`config/trusted-keys/`)都列為無法核對。下一次套用時這些更新包記入 `untracked`,清單恢復一致;之後核對時,這些已寫進清單的 `diverged` 紀錄以過去式說明(「先前…曾與 installed.json 不一致…現在兩者已一致」),不再指示以 `status` 確認(`--json` 的 `installedFiles.consistent` 此時是 true)。
+- **套用中斷後以原包重試**:清單在全部元件換完之後、`installed.json` 之前寫入;若正好在兩者之間中斷(斷電),清單的現行更新包在 `installed.json` 完全沒有紀錄(連 `rolledBack` 都沒有)。核對時仍列為不一致,但註明「該更新包的套用在最後一步中斷,以同一個更新包檔重新套用即可恢復一致」(`installedFiles.interruptedPackageId/Version`;它沒有被記為已套用,版本檢查會通過)。重新套用**同一個**更新包時(`UpdateApplier` 把正在套用的 `packageId` 傳給 `InstalledFiles.Reconcile`)清單原樣沿用 — 它是在元件換完之後、依同一份 `installed.json` 對齊過的,可信 — 不列入 `untracked`、不丟棄紀錄,套用後即一致、沒有提醒。rollback 時清單還原失敗的情況不同(`installed.json` 有該包標為 `rolledBack` 的紀錄),仍照不一致處理;中斷之後改套用別的更新包也照不一致處理。
 - **沒有覆蓋清單、`installed.json` 卻有套用中的更新包**(被 rollback 的不算套用中)分兩種:
   - **實際的舊安裝**:`simosa-pkg` 放在 `tools/updater/`,不會被軟體更新包替換;船上要有會寫覆蓋清單的版本,唯一途徑是重新安裝發行版。因此舊版套用過的更新包,套用時間都早於目前發行版的建置時間(`manifest.json` 的 `builtUtc`)— 發行版一定是在它們之後才安裝的,安裝已覆寫清單所列的每個檔案。這些更新包**不列為無法核對**,清單所列檔案以發行清單照常核對,並以 `state` 提醒說明(`status` 顯示的版次或參數集可能與實際檔案不符)。舊更新包新增而新發行清單沒有的檔案若留在 `app/`,是「程式目錄內多出的檔案」。
   - **清單遺失或損毀**(套用時間不早於發行版建置時間):這些更新包所屬種類的前綴列為 `unverifiable`(`reason: notRecorded`),其他路徑照常核對。**不能靠重新套用同一個更新包建立清單**(版本須遞增,同版本會被拒絕),也不需要:下一次套用任何更新包時,現有的套用歷史記入 `untracked`,該包寫入的檔案開始有紀錄並納入核對;無法核對的前綴之下只核對有紀錄的檔案,其餘只計數。當前綴之下已沒有未核對的檔案(例如套用了涵蓋 `app/` 全部檔案的完整軟體更新包)且清單一致時,提醒自動消失。
   - 以時間判斷的前提是船上筆電的時鐘大致正確;時鐘比發行版建置時間還早、清單又遺失時,會把該列為無法核對的檔案當成錯誤(偏向多報,不會漏報)。同樣的時間規則也用在「不一致」的更新包。
-- **重新安裝**:`baseline` 記錄清單所依據的 `manifest.json`(版本、檔案 SHA-256、建置時間)。覆蓋清單最後一次寫入之後又以安裝程式或複製重新安裝了發行版(`manifest.json` 的 SHA-256 不同)時,安裝會覆寫清單所列的每個檔案,因此**清單所列路徑改以新的發行清單為準**(這些路徑的 `files`/`removed` 紀錄與既有的 `untracked` 作廢;先做這一步,再比對與 `installed.json` 的一致性),更新包新增而發行清單沒有的檔案仍以覆蓋清單核對;核對時以 `state` 提醒說明(更新包對 N 個檔案的變更已被覆蓋,`status` 顯示的版次或參數集可能與實際檔案不符),下一次套用時把調整寫回清單。以**同一個**發行版(`manifest.json` 相同)覆蓋已套用更新包的安裝,則更新包寫入的檔案被還原成舊內容,是 `mismatch` 錯誤。
+- **重新安裝**:`baseline` 記錄清單所依據的 `manifest.json`(版本、檔案 SHA-256、建置時間)。覆蓋清單最後一次寫入之後又重新安裝了發行版(`manifest.json` 的 SHA-256 不同)時,依序(先做這一步,再比對與 `installed.json` 的一致性):
+  - **清單所列路徑改以新的發行清單為準**(安裝會覆寫清單所列的每個檔案):這些路徑的 `files` 紀錄、涵蓋它們的 `removed` 紀錄作廢。
+  - **程式目錄(`app/`、`tools/updater/`)之下、新清單沒有列的紀錄一律作廢**:安裝程式的 `[InstallDelete]` 在安裝前清空這兩個資料夾(`tools/installer/SimosaBRM.iss`;`check-iss.py` 以白名單限定只能列這兩項,`Tools.Packaging.Tests` 與 `InstalledPaths.ProgramPrefixes` 對照),重新安裝後程式目錄與發行版完全相同 — 先前更新包在 `app/` 新增的檔案已不在,若仍留在預期內容會誤報「檔案缺少」。以**壓縮檔或手動複製**覆蓋發行版時沒有這一步清空:舊版留下而新清單沒有的檔案(每次建置檔名雜湊都不同的網頁資產、先前更新包新增的檔案)列為 `extra`「程式目錄內多出的檔案」,依清單刪除(不再以覆蓋清單放行,否則舊組件會一直留在 `app/` 被載入)。
+  - **其他位置(`data/`、`config/trusted-keys/`;安裝程式不清空)**:更新包新增而發行清單沒有的檔案仍以覆蓋清單核對。
+  - 既有的 `untracked` 作廢(那些前綴已被安裝覆寫)。
+
+  核對時以 `state` 提醒說明(更新包對 N 個檔案的變更已被安裝覆蓋、在程式目錄新增的 M 個檔案不再列入預期;`status` 顯示的版次或參數集可能與實際檔案不符;`state/previous` 還在時另註明「請不要執行 rollback」,見第 10 節),下一次套用時把調整寫回清單。因此「以安裝程式重新安裝 / 升級」之後核對即通過,不需要手動清理。以**同一個**發行版(`manifest.json` 相同,偵測不到重新安裝)覆蓋已套用更新包的安裝,更新包寫入的檔案被還原成舊內容、新增的檔案被清掉,仍是 `mismatch`/`missing` 錯誤(`installed.json` 記的版次與實際檔案不符,不能當成通過);「下一步」因此要求版本高於該發行版的安裝程式(見上)。
 - 核對只讀不寫,也不取 `state/.lock`(唯讀媒體上也能執行);套用更新包進行中同時核對,可能看到暫時的不一致。
 
 ## 6. 操作步驟
@@ -351,7 +366,7 @@ DPA 以備援金鑰:`simosa-pkg pack --kind trust --version <新版> --summary "
 
 ## 9. 測試(`tests/Tools.Packaging.Tests`,Linux 以 PEM 金鑰執行)
 
-簽章/驗證(竄改檔案、多餘檔案、竄改 manifest、重複 manifest 項目、未信任金鑰、降版與重播、船舶限定、路徑穿越、`remove` 越權(信任清單、裝置金鑰、他種類路徑,含反斜線/重複斜線/大小寫變形)、`packageId` 白名單)、金鑰輪替(備援金鑰更換主金鑰、主金鑰簽章的信任包被拒、移除最後一把備援被拒、覆寫現有金鑰檔被拒、沿用同名檔更換金鑰、trust 包不可 rollback)、影響分析(列出引用變更鍵的情境與評估規則、共用鍵影響多情境、被移除鍵、情境錯誤)、驗證把關(未驗證拒絕、舊參數集的驗證不算數、--force 記錄且船上拒絕)、套用與 rollback、中途失敗完整回復、提交步驟失敗(回報已套用加警告、rollback 不回到錯誤版本)、稽核內容、紀錄包往返與訓練時數(牆鐘:倍速、凍結)、竄改/他台裝置簽章/重複 manifest 被拒、練習進行中不打包、已備份回報後清理(只刪確認者;未信任/竄改回報被拒;單檔刪除失敗保留重試)、保留上限警告(同一次訪船重連不另計)、TCP 本機迴路端對端(推送、拉取、回報清理、錯誤 nonce、未信任教官金鑰、未登錄裝置、被拒的更新包不中斷 session、未驗證連線灌稽核)、隨身碟往返(含清理通知回寫、偽造通知被拒)、CLI(冒煙、YAML 錯誤回 1、布林旗標在位置參數前)、安裝模式核對(`InstalledVerifyTests`:執行期資料不算多出、設定檔修改/不在為提醒、程式或資料檔差一個位元組/缺少與 `app/` 多出檔案為錯誤、software/scenarios/parameters/trust/mixed 更新包套用後以覆蓋清單核對、刪除後又寫入的順序、rollback 與狀態檔寫入失敗後覆蓋清單還原、清單遺失與不一致列為無法核對、舊版套用後才安裝新發行版者以發行清單核對、清單內容損毀不使套用或核對中止、重新安裝後以新清單為準、路徑分類與 `InstallLayout`/安裝程式 `[Dirs]` 對照、CLI 結束碼/`--json`/每類筆數上限、一般模式行為不變加提示)。測試暫存目錄在 `build/test-tmp/packaging/`,結束即刪除。
+簽章/驗證(竄改檔案、多餘檔案、竄改 manifest、重複 manifest 項目、未信任金鑰、降版與重播、船舶限定、路徑穿越、`remove` 越權(信任清單、裝置金鑰、他種類路徑,含反斜線/重複斜線/大小寫變形)、`packageId` 白名單)、金鑰輪替(備援金鑰更換主金鑰、主金鑰簽章的信任包被拒、移除最後一把備援被拒、覆寫現有金鑰檔被拒、沿用同名檔更換金鑰、trust 包不可 rollback)、影響分析(列出引用變更鍵的情境與評估規則、共用鍵影響多情境、被移除鍵、情境錯誤)、驗證把關(未驗證拒絕、舊參數集的驗證不算數、--force 記錄且船上拒絕)、套用與 rollback、中途失敗完整回復、提交步驟失敗(回報已套用加警告、rollback 不回到錯誤版本)、稽核內容、紀錄包往返與訓練時數(牆鐘:倍速、凍結)、竄改/他台裝置簽章/重複 manifest 被拒、練習進行中不打包、已備份回報後清理(只刪確認者;未信任/竄改回報被拒;單檔刪除失敗保留重試)、保留上限警告(同一次訪船重連不另計)、TCP 本機迴路端對端(推送、拉取、回報清理、錯誤 nonce、未信任教官金鑰、未登錄裝置、被拒的更新包不中斷 session、未驗證連線灌稽核)、隨身碟往返(含清理通知回寫、偽造通知被拒)、CLI(冒煙、YAML 錯誤回 1、布林旗標在位置參數前)、安裝模式核對(`InstalledVerifyTests`:執行期資料不算多出、設定檔修改/不在為提醒、程式或資料檔差一個位元組/缺少與 `app/` 多出檔案為錯誤、software/scenarios/parameters/trust/mixed 更新包套用後以覆蓋清單核對、刪除後又寫入的順序、rollback 與狀態檔寫入失敗後覆蓋清單還原、清單遺失與不一致列為無法核對、舊版套用後才安裝新發行版者以發行清單核對、清單內容損毀不使套用或核對中止、以安裝程式重新安裝後(程式目錄清空重裝)不需手動清理即通過、手動覆蓋殘留的舊程式檔列為多出、`data/` 之下更新包新增的檔案在重新安裝後仍以覆蓋清單核對、以同一個發行版重新安裝仍報「被還原」、程式目錄內的目錄連結為錯誤而其他位置為提醒、套用中斷後原包重試不留下無法核對、「下一步」的版本基準與更新包說明、清單列有安裝程式不安裝的檔案時的說明、路徑分類與 `InstallLayout`/安裝程式 `[Dirs]`、`[InstallDelete]` 對照、Windows CI 實際的安裝根目錄內容不產生錯誤或提醒、CLI 結束碼/`--json`/每類筆數上限/`--max-items` 先解析、一般模式行為不變加提示);發行清單(`ReleaseTests`:目錄含 `*.pdb` 時 `release manifest` 失敗、排除樣式與 `.iss` 的 `Excludes` 相同、`build-release.*` 在 Godot 匯出之後與 pack 之前刪除 `*.pdb`、清單的 `files` 為 null 或含 null 項目時一般模式回報核對失敗而不是未處理例外)。測試暫存目錄在 `build/test-tmp/packaging/`,結束即刪除。
 
 ## 10. 尚未涵蓋
 
@@ -362,4 +377,4 @@ DPA 以備援金鑰:`simosa-pkg pack --kind trust --version <新版> --summary "
 - 永久撤銷清單:目前以「trust 包不可 rollback」防止被撤銷的金鑰回到信任清單;管理者手動 `trust add` 仍可加回(屬刻意操作,記入稽核)。
 - 練習結束的牆鐘時間待 SimCore 在 footer 寫入 `closedUtc`;在此之前以紀錄檔最後修改時間估計(`endEstimated`)。
 - 直連為單一連線服務:未驗證者持續佔用連線仍可阻擋同步(不影響稽核與磁碟);實體上以網路線直連、`listen` 綁定直連介面降低暴露。
-- 安裝模式核對(第 5.1 節)是完整性檢查,不防蓄意竄改:`manifest.json` 與 `state/installed-files.json` 都不簽章,能改程式檔的人也能改清單。以較新的安裝程式覆蓋舊安裝時,舊版留在 `app/` 而新發行清單沒有的檔案會列為「程式目錄內多出的檔案」錯誤,須手動刪除(安裝程式尚未加 `[InstallDelete]` 清除舊的 `app\`)。覆蓋清單遺失後的「無法核對」提醒要等之後的更新包涵蓋該前綴才會消失。Windows 實機上的行為(安裝程式安裝後、啟動過、套用與 rollback 後皆通過;執行時 `app\` 內不會自行產生檔案)尚待 CI 與實機確認。
+- 安裝模式核對(第 5.1 節)是完整性檢查,不防蓄意竄改:`manifest.json` 與 `state/installed-files.json` 都不簽章,能改程式檔的人也能改清單。以安裝程式重新安裝 / 升級時,安裝程式先清空 `app\` 與 `tools\updater\`(`[InstallDelete]`),舊版殘留的程式檔不會留下,核對即通過;以壓縮檔或手動複製覆蓋發行版時舊檔不會清除,會列為「程式目錄內多出的檔案」錯誤,依清單刪除。以**同一個**發行版重新安裝已套用過更新包的筆電偵測不到(`manifest.json` 相同),會報「更新包的變更被還原」,要用更新的安裝程式或更新包才收斂。重新安裝之後 `state/previous`(上一版元件)仍是重新安裝之前的內容:這時執行 `rollback` 會把舊的 `app\` 放回來,核對會報錯(`rollback` 尚未在這種情況拒絕執行;目前只在核對的「狀態」提醒中註明不要 rollback,真的做了就再以安裝程式重新安裝一次)。覆蓋清單遺失後的「無法核對」提醒要等之後的更新包涵蓋該前綴才會消失。Windows 實機上的行為(安裝程式安裝後、啟動過、套用與 rollback 後皆通過;執行時 `app\` 內不會自行產生檔案;`[InstallDelete]` 在重新安裝時確實清空兩個程式目錄、執行中的程式被鎖住時的表現;含 Godot 視景匯出的發行版安裝後通過)尚待 CI 與實機確認。

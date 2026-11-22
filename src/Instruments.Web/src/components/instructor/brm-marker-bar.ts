@@ -23,13 +23,16 @@ export class BrmMarkerBar extends LitElement {
       :host {
         display: block;
         min-height: 0;
+        /* 尺寸容器:完整教官站右欄在 ≤ 1500 px 寬的視窗只有 320 px(@container) */
+        container-type: inline-size;
       }
       .panel {
         height: 100%;
       }
       .buttons {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        /* 欄寬依內容(auto):320 px 寬的欄內五格等寬時「Communication」比格子寬,面板會被撐出欄外 */
+        grid-template-columns: repeat(5, auto);
         gap: 4px;
       }
       :host([large]) .buttons {
@@ -91,8 +94,22 @@ export class BrmMarkerBar extends LitElement {
         padding: 0 6px;
         font-size: 11px;
       }
+      /* 窄欄(< 340 px):英文副標縮到 9 px、鈕的左右內距與間距縮小,五個類別鈕留在面板內(「Communication」不被擠出欄外) */
+      @container (max-width: 340px) {
+        .buttons {
+          gap: 3px;
+        }
+        .buttons button {
+          padding: 6px 1px;
+        }
+        .buttons .key {
+          font-size: 9px;
+          letter-spacing: -0.02em;
+        }
+      }
+      /* 完整教官站右欄:面板取自然高度,標記清單以 --brm-marker-list-max 限高(超過時清單自己捲動);未設定時吃面板的剩餘高度 */
       .list {
-        max-height: 100%;
+        max-height: var(--brm-marker-list-max, 100%);
       }
     `,
   ];

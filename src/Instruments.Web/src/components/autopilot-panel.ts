@@ -20,6 +20,10 @@ export class AutopilotPanel extends LitElement {
   static override styles = [
     tileStyles,
     css`
+      :host {
+        /* 尺寸容器:操船台只佔左欄寬度後這一格在 1366 寬時約 200 px(@container) */
+        container-type: inline-size;
+      }
       .panel {
         height: 100%;
         display: flex;
@@ -62,8 +66,28 @@ export class AutopilotPanel extends LitElement {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        /* 放不下時「採用現在航向」鈕換到下一行(不擠壓文字、不被裁掉) */
+        flex-wrap: wrap;
+        gap: 2px 6px;
         font-size: 11px;
         color: var(--ob-text-secondary);
+      }
+      /* 窄格(內容寬 < 240 px):±1 / ±10 鈕與航向輸入框縮小內距,整列留在格內 */
+      @container (max-width: 240px) {
+        .panel {
+          gap: 4px;
+        }
+        .set button {
+          padding: 4px 4px;
+          min-width: 0;
+        }
+        .set input {
+          font-size: 16px;
+          padding: 3px 2px;
+        }
+        .toggle {
+          min-height: 30px;
+        }
       }
     `,
   ];

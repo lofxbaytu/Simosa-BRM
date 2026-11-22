@@ -182,4 +182,157 @@ public sealed class ReleaseTests : IDisposable
         Assert.Equal(2, Run("release", "bogus", "--dir", dir).Code);
         Assert.Equal(2, Run("release", "manifest", "--dir", dir, "--version", "1", "--component", "nameonly").Code);
     }
+
+    // ── 安裝程式排除的檔案不得進發行清單(審查第二十九輪:Godot 匯出的 .pdb)─────────
+
+    [Fact]
+    public void Manifest_FailsWhenDirectoryHasFilesTheInstallerExcludes()
+    {
+        // 安裝程式 [Files] 的 Excludes 不安裝 *.pdb:清單若列了它,以安裝程式安裝後 release verify --installed 必報「檔案缺少」。
+        // Godot .NET 匯出會把 .pdb 放進 app/visual/data_*/(匯出在 build-release 步驟 3 的 *.pdb 刪除之後)→ release manifest 直接失敗並說明
+        var dir = NewRelease();
+        var pdb = Path.Combine(dir, "app", "visual", "data_SimosaBRM.Visual_x86_64", "SimosaBRM.Visual.pdb");
+        Directory.CreateDirectory(Path.GetDirectoryName(pdb)!);
+        File.WriteAllText(pdb, "pdb");
+        File.WriteAllText(Path.Combine(dir, "app", "simcore", "Other.PDB"), "pdb");   // 檔名比對不分大小寫
+
+        Assert.Equal(new[] { "app/simcore/Other.PDB", "app/visual/data_SimosaBRM.Visual_x86_64/SimosaBRM.Visual.pdb" }, ReleaseManifestBuilder.FindExcludedByInstaller(dir));
+        var ex = Assert.Throws<InvalidDataException>(() => ReleaseManifestBuilder.Build(dir, "2026.11.1"));
+        Assert.Contains("*.pdb", ex.Message);
+        Assert.Contains("app/visual/data_SimosaBRM.Visual_x86_64/SimosaBRM.Visual.pdb", ex.Message);
+        Assert.Contains("安裝程式", ex.Message);
+        Assert.Contains("檔案缺少", ex.Message);
+
+        // CLI:結束碼 1、說明原因、不留下 manifest.json
+        var cli = Run("release", "manifest", "--dir", dir, "--version", "2026.11.1");
+        Assert.Equal(1, cli.Code);
+        Assert.Contains("安裝程式不會安裝", cli.Err);
+        Assert.Contains("Other.PDB", cli.Err);
+        Assert.False(File.Exists(Path.Combine(dir, ReleaseManifest.FileName)));
+
+        // 刪掉之後即可產生;同樣被安裝程式排除的 Thumbs.db 是依檔名略過(不列入清單、也不擋)
+        File.Delete(pdb);
+        File.Delete(Path.Combine(dir, "app", "simcore", "Other.PDB"));
+        File.WriteAllText(Path.Combine(dir, "app", "web", "Thumbs.db"), "x");
+        var m = ReleaseManifestBuilder.Build(dir, "2026.11.1");
+        Assert.Equal(8, m.FileCount);
+        Assert.DoesNotContain(m.Files, f => ReleaseManifestBuilder.IsExcludedByInstaller(f.Path));
+        ReleaseManifestBuilder.Save(m, dir);
+        Assert.True(ReleaseManifestBuilder.Verify(dir).Ok);
+
+        Assert.True(ReleaseManifestBuilder.IsExcludedByInstaller("app/x/a.pdb"));
+        Assert.True(ReleaseManifestBuilder.IsExcludedByInstaller("app\\x\\THUMBS.DB"));
+        Assert.False(ReleaseManifestBuilder.IsExcludedByInstaller("app/x/a.pdb.txt"));
+        Assert.False(ReleaseManifestBuilder.IsExcludedByInstaller("app/pdb/a.dll"));
+    }
+
+    [Fact]
+    public void Verify_WarnsWhenOldManifestListsFilesTheInstallerExcludes()
+    {
+        // 舊版 simosa-pkg 產生的清單可能列有 .pdb:目錄本身核對得過(檔案在),但要警告 — 以安裝程式安裝後會少這些檔案
+        var dir = NewRelease();
+        File.WriteAllText(Path.Combine(dir, "app", "simcore", "SimosaBRM.SimCore.Host.pdb"), "pdb");
+        ReleaseManifestBuilder.Save(new ReleaseManifest { Version = "2026.11.1", Files = ReleaseManifestBuilder.Scan(dir) }, dir);
+
+        var v = ReleaseManifestBuilder.Verify(dir);
+        Assert.True(v.Ok, string.Join("; ", v.Errors));
+        var warning = Assert.Single(v.Warnings);
+        Assert.Contains("app/simcore/SimosaBRM.SimCore.Host.pdb", warning);
+        Assert.Contains("檔案缺少", warning);
+        var cli = Run("release", "verify", "--dir", dir);
+        Assert.Equal(0, cli.Code);
+        Assert.Contains("警告", cli.Err);
+    }
+
+    /// <summary>tools/installer/SimosaBRM.iss 某區段(到下一個區段為止)的非註解行。</summary>
+    private IEnumerable<string> IssSection(string section)
+    {
+        var current = "";
+        foreach (var raw in File.ReadAllLines(Path.Combine(_env.RepoRoot, "tools", "installer", "SimosaBRM.iss")))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith('[') && line.EndsWith(']'))
+            {
+                current = line;
+                continue;
+            }
+            if (current == section && line.Length > 0 && !line.StartsWith(';') && !line.StartsWith('#')) yield return line;
+        }
+    }
+
+    [Fact]
+    public void InstallerExcludedPatterns_MatchTheInstallerScript()
+    {
+        // 排除規則只有一份(ReleaseManifestBuilder.InstallerExcludedPatterns);.iss [Files] 主項目的 Excludes 必須相同(另列安裝的 \config\* 除外)。
+        // tools/installer/check-iss.py 從另一個方向(讀 C# 原始碼)做同一個對照
+        var main = Assert.Single(IssSection("[Files]"), l => l.Contains("DestDir: \"{app}\";"));
+        var marker = "Excludes: \"";
+        var at = main.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(at >= 0, main);
+        var start = at + marker.Length;
+        var excludes = main[start..main.IndexOf('"', start)].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("\\config\\*", excludes);
+        Assert.Equal(ReleaseManifestBuilder.InstallerExcludedPatterns.OrderBy(x => x, StringComparer.OrdinalIgnoreCase),
+            excludes.Where(x => x != "\\config\\*").OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+        // 其他 [Files] 項目沒有自己的 Excludes
+        Assert.All(IssSection("[Files]").Where(l => l != main), l => Assert.DoesNotContain("Excludes:", l));
+    }
+
+    [Theory]
+    [InlineData("build-release.sh", "step \"5/7", "step \"6/7", "step \"7/7", "-delete")]
+    [InlineData("build-release.ps1", "Step '5/7", "Step '6/7", "Step '7/7", "Remove-Item")]
+    public void BuildReleaseScripts_DeletePdbAfterGodotExport_BeforePackAndManifest(string script, string step5, string step6, string step7, string deleteCommand)
+    {
+        // *.pdb 的刪除必須在 Godot 匯出(步驟 5)之後、pack(步驟 6)與 manifest(步驟 7)之前:
+        // 之前只在步驟 3 結尾刪,Godot .NET 匯出放進 app/visual/data_*/ 的 .pdb 會進到軟體更新包與發行清單
+        var lines = File.ReadAllLines(Path.Combine(_env.RepoRoot, "tools", script));
+        int IndexOf(string marker) => Array.FindIndex(lines, l => l.TrimStart().StartsWith(marker, StringComparison.Ordinal));
+        var (i5, i6, i7) = (IndexOf(step5), IndexOf(step6), IndexOf(step7));
+        Assert.True(i5 > 0 && i6 > i5 && i7 > i6, $"{script}:找不到步驟 5/6/7 的標記({i5}、{i6}、{i7})");
+        bool DeletesPdb(string l) => !l.TrimStart().StartsWith('#') && l.Contains("*.pdb", StringComparison.Ordinal) && l.Contains(deleteCommand, StringComparison.Ordinal);
+        var between = Enumerable.Range(i5 + 1, i6 - i5 - 1).Where(i => DeletesPdb(lines[i])).ToList();
+        Assert.True(between.Count > 0, $"{script}:步驟 5(Godot 匯出)與步驟 6(pack)之間沒有刪除 *.pdb");
+        // 這一段的最後一個動作:它之後、步驟 6 之前不得再有會產生檔案的指令(只允許空行與註解)
+        Assert.All(lines[(between[^1] + 1)..i6], l => Assert.True(l.Trim().Length == 0 || l.TrimStart().StartsWith('#'), $"{script}:*.pdb 刪除之後、步驟 6 之前還有指令:{l}"));
+        // 刪除範圍涵蓋 app 與 tools(Godot 匯出在 app/visual)
+        Assert.Contains("app", lines[between[^1]]);
+        Assert.Contains("tools", lines[between[^1]]);
+    }
+
+    // ── 清單損毀時一般模式不得以未處理例外中止(與安裝模式一致)────────────────
+
+    [Theory]
+    [InlineData("{\"format\":\"simosa-release/1\",\"version\":\"1\",\"files\":[null]}", "清單路徑不合法")]
+    [InlineData("{\"format\":\"simosa-release/1\",\"version\":\"1\",\"files\":[{\"path\":null,\"sha256\":null,\"size\":1}]}", "清單路徑不合法")]
+    [InlineData("{\"format\":\"simosa-release/1\",\"version\":\"1\",\"files\":null}", "files")]
+    public void Verify_ManifestWithNullFilesOrEntries_FailsCleanly(string manifest, string expected)
+    {
+        var dir = NewRelease("null-files");
+        File.WriteAllText(Path.Combine(dir, ReleaseManifest.FileName), manifest);
+
+        var v = ReleaseManifestBuilder.Verify(dir);   // 之前:NullReferenceException(CLI 結束碼 134)
+        Assert.False(v.Ok);
+        Assert.Contains(v.Errors, e => e.Contains(expected));
+
+        var cli = Run("release", "verify", "--dir", dir);
+        Assert.Equal(1, cli.Code);
+        Assert.Contains("核對失敗", cli.Err);
+        var json = Run("release", "verify", "--dir", dir, "--json");
+        Assert.Equal(1, json.Code);
+        Assert.False(System.Text.Json.Nodes.JsonNode.Parse(json.Out)!["ok"]!.GetValue<bool>());
+        // 安裝模式對同一個檔案同樣是「核對失敗」
+        var installed = InstalledVerifier.Verify(dir);
+        Assert.False(installed.Ok);
+        Assert.Contains(installed.Errors, e => e.Category == InstallFindingCategories.Manifest);
+    }
+
+    [Fact]
+    public void Verify_ManifestEntryWithNullSha_IsMismatchNotCrash()
+    {
+        var dir = NewRelease("null-sha");
+        File.WriteAllText(Path.Combine(dir, ReleaseManifest.FileName),
+            "{\"format\":\"simosa-release/1\",\"version\":\"1\",\"files\":[{\"path\":\"contracts/state.schema.json\",\"sha256\":null,\"size\":3}]}");
+        var v = ReleaseManifestBuilder.Verify(dir);
+        Assert.Contains(v.Errors, e => e.Contains("SHA-256 不符") && e.Contains("contracts/state.schema.json"));
+    }
 }

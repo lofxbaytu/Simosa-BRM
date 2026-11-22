@@ -52,7 +52,11 @@ public static class InstalledPaths
         new("tools/dotnet/", ".NET 執行階段離線安裝檔"),
     };
 
-    /// <summary>程式目錄:app/(軟體更新包的元件)與 tools/updater/(simosa-pkg 本身)。</summary>
+    /// <summary>
+    /// 程式目錄:app/(軟體更新包的元件)與 tools/updater/(simosa-pkg 本身)。
+    /// 安裝程式 tools/installer/SimosaBRM.iss 的 [InstallDelete] 在安裝前清空的正是這兩個資料夾(重新安裝後與發行版完全一致;
+    /// tools/installer/check-iss.py 與 tests/Tools.Packaging.Tests/InstalledVerifyTests 對照),要改須三邊一起改。
+    /// </summary>
     public static readonly IReadOnlyList<string> ProgramPrefixes = new[] { "app/", "tools/updater/" };
 
     /// <summary>使用者依本機修改的設定檔所在(config/ship-laptop.json、config/instructor-laptop.json…;安裝程式對既有檔不覆寫)。</summary>
@@ -85,6 +89,17 @@ public static class InstalledPaths
 
     public static bool IsProgram(string relative, StringComparison comparison)
         => ProgramPrefixes.Any(p => relative.StartsWith(p, comparison));
+
+    /// <summary>路徑(檔案或目錄;不必帶結尾的 '/')是否為程式目錄本身或在其下(覆蓋清單的紀錄用:被刪除的路徑可以是整個目錄)。</summary>
+    public static bool IsAtOrUnderProgram(string path, StringComparison comparison)
+        => ProgramPrefixes.Any(p => IsAtOrUnder(path, p, comparison));
+
+    /// <summary>
+    /// 目錄(結尾帶 '/')是否位於程式目錄內、是程式目錄本身,或是程式目錄的上層(例如 tools/ 之於 tools/updater/)—
+    /// 這樣的目錄若無法走訪(例如是目錄連結),程式目錄內多出的檔案就查不到。
+    /// </summary>
+    public static bool IsProgramOrAbove(string relativeDir, StringComparison comparison)
+        => ProgramPrefixes.Any(p => relativeDir.StartsWith(p, comparison) || p.StartsWith(relativeDir, comparison));
 
     public static bool IsUserConfig(string relative, StringComparison comparison)
         => relative.StartsWith(UserConfigPrefix, comparison);

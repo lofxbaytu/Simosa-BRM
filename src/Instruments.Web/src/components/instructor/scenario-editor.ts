@@ -4,8 +4,10 @@
 // 即時以 parseScenario 與編輯器檢查顯示問題清單 → 「下載 YAML」或「載入核心」(scenario-editor-load 事件;教官站以 loadScenario args.scenario
 // 內嵌送核心,沿用 loadScenarioSummary 的樂觀切換與 scenarioLoadRejected 還原)。草稿每次修改存 localStorage(船上離線;重新整理後還原)。
 // 草稿模型與輸出見 lib/scenario-editor.ts;擴充區段的表單在 scenario-editor-sections.ts;未被表單涵蓋的欄位原樣保留。
-// 第二十一輪:「海圖點選編輯」面板(scenario-editor-plot.ts;中欄最上方,由航線/區域/船與初始/目標船的「在圖上編輯」鈕開啟):
+// 第二十一輪:「海圖點選編輯」面板(scenario-editor-plot.ts;第二組面板最上方,由航線/區域/船與初始/目標船的「在圖上編輯」鈕開啟):
 // 內嵌 <brm-track-plot editable> 以示意幾何為底圖點選新增/拖曳/右鍵刪除/方向鍵微調航點、頂點、自船與目標船初始位置,與表格雙向同步。
+// 第二十九輪:版面依寬度調整(1366 / 1536 寬的教官筆電上固定三欄會擠壓標籤與輸入框):欄數看編輯器寬度(三欄 / 兩欄 / 一欄),
+// 面板內的欄位格線看面板寬度(一列一至三組「標籤 + 輸入」);規則寫在樣式開頭的註解與 docs/design/scenario-engine.md 第 6.1 節「版面」。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -120,53 +122,218 @@ export class ScenarioEditor extends LitElement {
     tileStyles,
     instructorStyles,
     css`
+      /* ---------------------------------------------------------------- 版面(第二十九輪 L1;docs/design/scenario-engine.md 第 6.1 節「版面」)
+         教官筆電常見的有效寬度是 1366(1366×768)與 1536(1920×1080 在 Windows 125 % 縮放)。固定三欄時每欄只有 447–504 px,
+         標籤被擠成逐字換行、輸入框只剩約 30 px、面板內容超出面板。現在分兩層依「容器寬度」調整(container query,不看視窗寬度):
+         1. 欄數看編輯器本身的寬度(brm-editor):≥ 1800 px 三欄、1150–1800 px 兩欄、更窄一欄;每欄至少約 570 px。
+            三組面板(DOM 順序即閱讀順序):甲 = 範本 → 基本資料 → 船與初始狀態 → 環境 → 環境進階 → 簡報 → 感測器;
+            乙 = (海圖點選編輯)→ 目標船 → 時間表 → 航線 → 區域;丙 = 評估規則 → 拖船/錨/泊位/岸壁 → 驗證與輸出。
+            三欄:甲 | 乙 | 丙 各自捲動;兩欄:左 = 甲,右 = 乙接丙(.col-rest 合成同一個捲動欄);一欄:甲、乙、丙依序往下,整個編輯器一起捲動。
+         2. 面板內的欄位格線看面板本身的寬度(brm-panel):≥ 520 px 一列兩組「標籤 + 輸入」,更窄一列一組;
+            目標船 / 容許帶列在 ≥ 780 px 時一列三組(2560 寬三欄時與原本相同)。
+         標籤一律不換行(欄寬取該格線最長的標籤),輸入欄平分剩餘寬度;一列塞多個小輸入的 .pair 有最小寬度、放不下就換列。
+         端對端案例(tests/e2e/specs/08-scenario-editor.spec.ts「情境編輯器版面」)在 1366 / 1536 / 1920 寬量測不溢出、不逐字換行、輸入框不被擠壓或裁切。 */
       :host {
         display: block;
         min-height: 0;
         height: 100%;
         overflow: hidden;
+        container: brm-editor / inline-size;
       }
       :host([hidden]) {
         display: none !important;
       }
       .editor {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1fr);
+        align-content: start;
         gap: 6px;
         height: 100%;
         min-height: 0;
+        overflow-y: auto;
       }
-      .col {
+      .col,
+      .col-rest {
         display: flex;
         flex-direction: column;
         gap: 6px;
+        min-width: 0;
         min-height: 0;
-        overflow-y: auto;
+      }
+      .col-rest > .col {
+        flex: 0 0 auto;
+      }
+      @container brm-editor (min-width: 1150px) {
+        .editor {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-rows: minmax(0, 1fr);
+          overflow: visible;
+        }
+        .editor > .col,
+        .col-rest {
+          overflow-y: auto;
+        }
+      }
+      @container brm-editor (min-width: 1800px) {
+        .editor {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        .col-rest {
+          display: contents;
+          overflow: visible;
+        }
+        .col-rest > .col {
+          overflow-y: auto;
+        }
       }
       .panel {
         flex: 0 0 auto;
+        min-width: 0;
+        container: brm-panel / inline-size;
       }
-      .form {
-        grid-template-columns: auto 1fr auto 1fr;
+
+      /* ---------------------------------------------------------------- 欄位格線:.form、fieldset、.row(子項依序為 標籤、輸入、標籤、輸入 …) */
+      .form,
+      fieldset,
+      .row {
+        grid-template-columns: auto minmax(0, 1fr);
       }
-      .form .full {
+      @container brm-panel (min-width: 520px) {
+        .form,
+        fieldset,
+        .row.g4,
+        .row.target,
+        .row.band {
+          grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+        }
+        /* 兩組一列時,目標船的船型選單佔滿第二列(其後「位置」整列),航點的名稱佔滿第一列:每一列都排滿,不留孤立的半列 */
+        .row.target .t-type {
+          grid-column: 2 / -1;
+        }
+      }
+      @container brm-panel (min-width: 780px) {
+        .row.target,
+        .row.band {
+          grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+        }
+        .row.target .t-type {
+          grid-column: auto;
+        }
+        /* 三組一列:位置佔前兩組的寬度,同列最後一組放「長/寬」 */
+        .row.target .full-span {
+          grid-column: 2 / 5;
+        }
+      }
+      .form .full,
+      fieldset .full,
+      .row .full {
         grid-column: 1 / -1;
       }
-      .form textarea {
+      /* 標籤之後佔滿該列其餘欄位(初始位置、風/流、目標船與航點的位置、故障選單、必要事件的 項目/目標/航點 …);標籤固定在第一欄,
+         否則自動排位可能把標籤留在上一列的後半、輸入掉到下一列 */
+      .full-span {
+        grid-column: 2 / -1;
+      }
+      label:has(+ .full-span) {
+        grid-column-start: 1;
+      }
+      /* 佔兩欄(一組「標籤 + 輸入」的寬度):觸發條件的值、只記錄勾選、無潮汐/常數流的說明 */
+      .span2 {
+        grid-column: span 2;
+      }
+      /* 同一列後半沒有其他欄位的輸入(其後是整列的說明、文字區塊或佔整列的欄位):佔滿該列,placeholder 與參數引用看得完整 */
+      .form .mmsi,
+      .form .start-utc,
+      .form .b-planning,
+      fieldset.settings .as-minCpa,
+      .row.wp .wp-name {
+        grid-column: 2 / -1;
+      }
+      fieldset {
+        border: 1px solid var(--ob-border);
+        border-radius: 4px;
+        padding: 4px 8px;
+        margin: 0;
+        min-width: 0;
+        display: grid;
+        gap: 4px 8px;
+        font-size: 12px;
+        align-items: center;
+      }
+      /* 升沉/縱搖(ship.seakeeping):標籤較長(k_yy/L、GM_L),一列一個欄位,placeholder(預設值/估計值)才看得完整 */
+      fieldset.seakeeping {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+      legend {
+        color: var(--ob-text-muted);
+        font-size: 11px;
+        padding: 0 4px;
+      }
+      fieldset.settings {
+        margin-top: 4px;
+      }
+      .row {
+        display: grid;
+        gap: 4px 6px;
+        align-items: center;
+        font-size: 12px;
+        border: 1px solid var(--ob-border);
+        border-radius: 4px;
+        padding: 4px 6px;
+      }
+      .form label,
+      fieldset label,
+      .row label {
+        color: var(--ob-text-secondary);
+        white-space: nowrap;
+      }
+      /* 整列的標籤(文字區塊的標題、勾選列)可以換行 */
+      .form label.full,
+      fieldset label.full,
+      .row label.full,
+      label.pair {
+        white-space: normal;
+      }
+      input:not([type='checkbox']),
+      select,
+      textarea {
         width: 100%;
-        min-height: 48px;
+        min-width: 0;
+      }
+      /* 文字區塊只能上下拉(左右拉會超出面板);流場網格的 u_kn / v_kn 維持等寬字,方便對齊每列數值 */
+      textarea {
         resize: vertical;
+      }
+      .form textarea {
+        min-height: 48px;
         font: inherit;
         font-size: 12px;
       }
+
+      /* ---------------------------------------------------------------- .pair:一格內並排的小輸入、單位、按鈕;各有最小寬度,放不下就換列 */
       .pair {
         display: flex;
+        flex-wrap: wrap;
         gap: 4px;
         align-items: center;
-      }
-      .pair input {
-        width: 100%;
         min-width: 0;
+      }
+      .pair > input:not([type='checkbox']),
+      .pair > select {
+        flex: 1 1 72px;
+        width: auto;
+        min-width: 72px;
+      }
+      /* 數值輸入(type=number 含上下鈕,或 inputmode=decimal 可填參數引用):56 px 可完整顯示 3–5 位數 */
+      .pair > input[type='number'],
+      .pair > input[inputmode='decimal'] {
+        flex-basis: 56px;
+        min-width: 56px;
+      }
+      .pair > button,
+      .pair > span.pair {
+        flex: 0 0 auto;
+        white-space: nowrap;
       }
       /* 勾選列(橫搖 / 升沉縱搖 / 船間交互作用 / 浪的「啟用」)沿用 .pair 時勾選框不可被拉成整列寬 */
       .pair input[type='checkbox'] {
@@ -178,29 +345,49 @@ export class ScenarioEditor extends LitElement {
         white-space: nowrap;
         font-size: 11px;
       }
-      .row {
-        display: grid;
-        gap: 4px 6px;
+      /* 勾選框 + 說明文字:不換列;最後一段文字在剩餘寬度內換行(前面的短標題如「檢查點」不被擠壓) */
+      label.pair {
+        flex-wrap: nowrap;
+      }
+      label.pair > span {
+        flex: 0 0 auto;
+      }
+      label.pair > span:last-child {
+        flex: 0 1 auto;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      /* 位置(自船、目標船、航點、區域頂點):座標系選單取內容寬;兩個座標一組,經緯度到小數 5 位(約 9 個字)要 96 px 才看得完整;
+         放不下時座標一組整個換到下一列 */
+      .pair > select.pos-mode {
+        flex: 0 0 auto;
+        min-width: 0;
+      }
+      .pair > .pos-xy {
+        flex: 1 1 236px;
+      }
+      .pair.pos-xy > input:not([type='checkbox']) {
+        flex-basis: 96px;
+        min-width: 96px;
+      }
+      /* 範本列與「新增硬性失敗」列:標籤、選單(與輸入)、按鈕並排,窄時按鈕換到下一列 */
+      .panel.template .form,
+      .form.hf-form {
+        display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        font-size: 12px;
-        border: 1px solid var(--ob-border);
-        border-radius: 4px;
-        padding: 4px 6px;
       }
-      .row.target {
-        grid-template-columns: auto 1fr auto 1fr auto 1fr;
+      .panel.template .form > select,
+      .form.hf-form > select,
+      .form.hf-form > input {
+        flex: 1 1 140px;
+        width: auto;
+        min-width: 120px;
       }
-      .row.band {
-        grid-template-columns: auto 1fr auto 1fr auto 1fr;
-      }
-      .row.g4 {
-        grid-template-columns: auto 1fr auto 1fr;
-      }
-      .row.g2 {
-        grid-template-columns: auto 1fr;
-      }
-      .row .full {
-        grid-column: 1 / -1;
+      .panel.template .form > button,
+      .form.hf-form > button {
+        flex: 0 0 auto;
+        white-space: nowrap;
       }
       .row .vertices,
       .row .actions,
@@ -212,33 +399,37 @@ export class ScenarioEditor extends LitElement {
       .tl-editor {
         margin-top: 4px;
       }
-      .tl-editor .row.action .pair input {
-        flex: 1 1 auto;
+      .tl-editor .row.action .pair > input {
+        flex: 1 1 120px;
       }
       .list .item .edit-body {
         flex-basis: 100%;
+        min-width: 0;
+        max-width: 100%;
       }
       .list .item {
         flex-wrap: wrap;
       }
-      fieldset.settings {
-        margin-top: 4px;
+      .list .item .text {
+        overflow-wrap: anywhere;
       }
-      .row label {
-        color: var(--ob-text-secondary);
-        white-space: nowrap;
-      }
-      .row input,
-      .row select {
-        width: 100%;
-        min-width: 0;
-      }
+      /* 列尾(說明在左、按鈕在右):說明可換行(含沒有空白的長字串),按鈕不被擠壓 */
       .row .tail {
         grid-column: 1 / -1;
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 6px;
+      }
+      .row .tail > :first-child {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .row .tail > :last-child {
+        flex: 0 0 auto;
+      }
+      .hint {
+        overflow-wrap: anywhere;
       }
       .item .text .sub {
         color: var(--ob-text-muted);
@@ -257,6 +448,7 @@ export class ScenarioEditor extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 2px;
+        overflow-wrap: anywhere;
       }
       .issues .issue {
         color: var(--ob-alarm);
@@ -270,6 +462,7 @@ export class ScenarioEditor extends LitElement {
       .error {
         color: var(--ob-warning);
         font-size: 12px;
+        overflow-wrap: anywhere;
       }
       .rejected {
         font-size: 11px;
@@ -302,34 +495,6 @@ export class ScenarioEditor extends LitElement {
         padding: 4px 6px;
         white-space: pre;
       }
-      fieldset {
-        border: 1px solid var(--ob-border);
-        border-radius: 4px;
-        padding: 4px 8px;
-        margin: 0;
-        display: grid;
-        grid-template-columns: auto 1fr auto 1fr;
-        gap: 4px 8px;
-        font-size: 12px;
-        align-items: center;
-      }
-      fieldset .full {
-        grid-column: 1 / -1;
-      }
-      /* 升沉/縱搖(ship.seakeeping):標籤較長(k_yy/L、GM_L),四欄排法在 1536 寬(內顯 1080p 125 % 縮放)會把區段撐出面板而被裁切,
-         改為一列一個欄位、輸入框可縮,placeholder(預設值/估計值)才看得完整 */
-      fieldset.seakeeping {
-        grid-template-columns: auto 1fr;
-      }
-      fieldset.seakeeping input[type='text'] {
-        width: 100%;
-        min-width: 0;
-      }
-      legend {
-        color: var(--ob-text-muted);
-        font-size: 11px;
-        padding: 0 4px;
-      }
       .checks {
         display: flex;
         flex-wrap: wrap;
@@ -356,8 +521,9 @@ export class ScenarioEditor extends LitElement {
         flex-direction: column;
         gap: 4px;
       }
-      .field-gen .pair input {
+      .field-gen .pair > input:not([type='checkbox']) {
         width: 64px;
+        min-width: 64px;
         flex: 0 0 auto;
       }
       .field-gen .pair span {
@@ -639,33 +805,36 @@ export class ScenarioEditor extends LitElement {
           ${renderBriefingSection(this.host)}
           ${renderSensorsSection(this.host)}
         </div>
-        <div class="col">
-          ${renderPlotEditor(this.host)}
-          ${this.renderTargets()}
-          ${this.renderTimeline()}
-          ${renderRouteSection(this.host)}
-          ${renderZonesSection(this.host)}
-        </div>
-        <div class="col">
-          ${this.renderAssessment()}
-          ${renderExternalSection(this.host)}
-          <div class="panel output">
-            <div class="panel-title"><span>驗證與輸出 VALIDATE</span><span class="zh">parseScenario + 編輯器檢查</span></div>
-            <div class="issues">
-              ${v.issues.length === 0
-                ? html`<div class="ok">結構檢查通過 · ${d.ship.id} ${loadingLabel(d.ship.loading ?? 'ballast')} · 目標船 ${v.summary.stats.targets} · 時間表 ${v.summary.stats.timelineItems} 項 · 航點 ${v.summary.stats.routeWaypoints} · 區域 ${v.summary.stats.zones} · 評估規則 ${v.summary.stats.assessmentRules} 條 · 參數引用 ${v.summary.stats.paramRefs} 個</div>`
-                : v.issues.map((i) => html`<div class="issue">✖ ${i}</div>`)}
-              ${v.warnings.map((w) => html`<div class="warning">⚠ ${w}</div>`)}
+        <!-- 第二、三組面板:兩欄時合成同一個捲動欄(右欄),三欄時 .col-rest 為 display: contents、兩組各自成欄(樣式開頭的註解) -->
+        <div class="col-rest">
+          <div class="col">
+            ${renderPlotEditor(this.host)}
+            ${this.renderTargets()}
+            ${this.renderTimeline()}
+            ${renderRouteSection(this.host)}
+            ${renderZonesSection(this.host)}
+          </div>
+          <div class="col">
+            ${this.renderAssessment()}
+            ${renderExternalSection(this.host)}
+            <div class="panel output">
+              <div class="panel-title"><span>驗證與輸出 VALIDATE</span><span class="zh">parseScenario + 編輯器檢查</span></div>
+              <div class="issues">
+                ${v.issues.length === 0
+                  ? html`<div class="ok">結構檢查通過 · ${d.ship.id} ${loadingLabel(d.ship.loading ?? 'ballast')} · 目標船 ${v.summary.stats.targets} · 時間表 ${v.summary.stats.timelineItems} 項 · 航點 ${v.summary.stats.routeWaypoints} · 區域 ${v.summary.stats.zones} · 評估規則 ${v.summary.stats.assessmentRules} 條 · 參數引用 ${v.summary.stats.paramRefs} 個</div>`
+                  : v.issues.map((i) => html`<div class="issue">✖ ${i}</div>`)}
+                ${v.warnings.map((w) => html`<div class="warning">⚠ ${w}</div>`)}
+              </div>
+              ${this.error ? html`<div class="error">${this.error}</div>` : nothing}
+              ${this.rejection ? renderRejection(this.rejection) : nothing}
+              <div class="btn-row">
+                <button class="toggle-yaml" @click=${() => (this.showYaml = !this.showYaml)}>${this.showYaml ? '隱藏 YAML' : '預覽 YAML'}</button>
+                <button class="download" @click=${this.download}>下載 YAML</button>
+                <button class="primary load" ?disabled=${this.busy || v.issues.length > 0} @click=${this.load}>${this.busy ? '載入中…' : '載入核心'}</button>
+              </div>
+              ${this.showYaml ? html`<pre class="yaml">${v.yaml}</pre>` : nothing}
+              <div class="hint">載入核心以 loadScenario args.scenario 內嵌送出(不寫檔);要加入情境清單請下載 YAML 放到 data/scenarios/ 並重新建置。</div>
             </div>
-            ${this.error ? html`<div class="error">${this.error}</div>` : nothing}
-            ${this.rejection ? renderRejection(this.rejection) : nothing}
-            <div class="btn-row">
-              <button class="toggle-yaml" @click=${() => (this.showYaml = !this.showYaml)}>${this.showYaml ? '隱藏 YAML' : '預覽 YAML'}</button>
-              <button class="download" @click=${this.download}>下載 YAML</button>
-              <button class="primary load" ?disabled=${this.busy || v.issues.length > 0} @click=${this.load}>${this.busy ? '載入中…' : '載入核心'}</button>
-            </div>
-            ${this.showYaml ? html`<pre class="yaml">${v.yaml}</pre>` : nothing}
-            <div class="hint">載入核心以 loadScenario args.scenario 內嵌送出(不寫檔);要加入情境清單請下載 YAML 放到 data/scenarios/ 並重新建置。</div>
           </div>
         </div>
       </div>
@@ -803,7 +972,7 @@ export class ScenarioEditor extends LitElement {
         ${TARGET_SHIP_TYPES.map((s) => html`<option value=${s}>${s}</option>`)}
       </select>
       <label>位置</label>
-      <div class="pair" style="grid-column: 2 / 5">${renderPosition(() => this.draft.targets[i]?.position ?? {}, 't-pos', (p) => patch({ position: p }))}${plotEditButton(this.host, 't-plot', { kind: 'target', index: i }, '圖上')}</div>
+      <div class="full-span pair">${renderPosition(() => this.draft.targets[i]?.position ?? {}, 't-pos', (p) => patch({ position: p }))}${plotEditButton(this.host, 't-plot', { kind: 'target', index: i }, '圖上')}</div>
       <label>長/寬 (m)</label>
       <div class="pair">
         <input class="t-loa" type="number" step="1" .value=${numberOrRefText(t.loa)} @change=${(e: Event) => patch({ loa: this.num(e) })} />
@@ -856,7 +1025,7 @@ export class ScenarioEditor extends LitElement {
         <label>名稱</label>
         <input class="f-name" type="text" .value=${f.name} @change=${(e: Event) => this.patchFault({ name: textOf(e) })} />
         <label>故障</label>
-        <select class="f-fault full-span" style="grid-column: 2 / 5" data-value=${f.fault} @change=${(e: Event) => this.patchFault({ fault: textOf(e) })}>
+        <select class="f-fault full-span" data-value=${f.fault} @change=${(e: Event) => this.patchFault({ fault: textOf(e) })}>
           ${this.faults.map((x) => html`<option value=${x.name}>${x.name} ${x.label}${x.modelled ? '' : '(只記錄)'}</option>`)}
         </select>
         ${def?.effect ? html`<div class="full hint">${def.effect}</div>` : nothing}
@@ -867,10 +1036,10 @@ export class ScenarioEditor extends LitElement {
           <option value="condition">自訂條件</option>
         </select>
         ${f.trigger === 'time'
-          ? html`<div class="pair"><input class="f-time" type="number" step="30" min="0" .value=${f.atLeast} @change=${(e: Event) => this.patchFault({ atLeast: textOf(e) })} /><span>s</span></div>`
+          ? html`<div class="span2 pair"><input class="f-time" type="number" step="30" min="0" .value=${f.atLeast} @change=${(e: Event) => this.patchFault({ atLeast: textOf(e) })} /><span>s</span></div>`
           : f.trigger === 'condition'
-            ? html`<input class="f-condition" type="text" placeholder="{ type: ownSpeed, lessThan: 5 }" .value=${f.condition} @change=${(e: Event) => this.patchFault({ condition: textOf(e) })} />`
-            : html`<span class="hint">時間表面板「觸發」鈕</span>`}
+            ? html`<input class="f-condition span2" type="text" placeholder="{ type: ownSpeed, lessThan: 5 }" .value=${f.condition} @change=${(e: Event) => this.patchFault({ condition: textOf(e) })} />`
+            : html`<span class="span2 hint">時間表面板「觸發」鈕</span>`}
         <label>階段</label>
         <select class="f-phase" data-value=${f.phase} @change=${(e: Event) => this.patchFault({ phase: textOf(e) })}>
           <option value="">(不變)</option>
@@ -880,7 +1049,7 @@ export class ScenarioEditor extends LitElement {
         <input class="f-args" type="text" placeholder=${def?.args ? JSON.stringify(def.args) : '(無)'} .value=${f.args} @change=${(e: Event) => this.patchFault({ args: textOf(e) })} />
         <label>教官訊息</label>
         <input class="f-message" type="text" .value=${f.message} @change=${(e: Event) => this.patchFault({ message: textOf(e) })} />
-        <label class="pair"><input class="f-record-only" type="checkbox" .checked=${f.recordOnly} @change=${(e: Event) => this.patchFault({ recordOnly: checked(e) })} /><span>只記錄(recordOnly)</span></label>
+        <label class="span2 pair"><input class="f-record-only" type="checkbox" .checked=${f.recordOnly} @change=${(e: Event) => this.patchFault({ recordOnly: checked(e) })} /><span>只記錄(recordOnly)</span></label>
         <div class="full btn-row"><button class="add-fault" @click=${this.addFault}>加入故障項目</button></div>
       </fieldset>
     </div>`;
@@ -907,7 +1076,7 @@ export class ScenarioEditor extends LitElement {
             : html`<div class="item" role="listitem"><span class="text">${String(h['id'])} · ${hardFailText(h)}</span><button class="small danger hf-remove" @click=${() => this.setDraft(removeHardFail(this.draft, i))}>刪除</button></div>`,
         )}
       </div>
-      <div class="form">
+      <div class="form hf-form">
         <label>新增硬性失敗</label>
         <select class="hf-rule" data-value=${hf.rule} @change=${(e: Event) => (this.hardFailForm = { ...this.hardFailForm, rule: textOf(e) })}>
           ${HARD_FAIL_RULES.filter((r) => !SIMPLE_HARD_FAILS.includes(r)).map((r) => html`<option value=${r}>${HARD_FAIL_RULE_LABEL[r] ?? r}</option>`)}

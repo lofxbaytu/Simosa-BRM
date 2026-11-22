@@ -6,7 +6,8 @@
 #      (simosa-pkg 放在 app/ 之外:套用軟體更新包時 app/ 整個被替換,執行中的更新工具不可位於其中;docs/design/packaging-sync.md 第 5 節);
 #      Gateway.Nmea 為類別庫,隨 SimCore.Host 一併發布;Python 校正工具不打包,附說明於 docs/;
 #   4) 網頁 → app/web、啟動腳本 → app/launch、data/(排除 ships/*/confidential/)、contracts/、docs/、config/ 範例;
-#   5) Godot 視景:有 Godot 與匯出範本時 --export-release → app/visual/,否則略過並記入清單註記;
+#   5) Godot 視景:有 Godot 與匯出範本時 --export-release → app/visual/,否則略過並記入清單註記;匯出後再刪一次 app/、tools/ 之下的 *.pdb
+#      (安裝程式不安裝 *.pdb,發行清單與軟體更新包也不得含;release manifest 遇到 *.pdb 會失敗);
 #   6) 以 simosa-pkg pack 把 app/ 包成簽章更新包 packages/simosa-<版本>-software.sbupd(開發用 PEM 金鑰 build/release/dev-keys/,僅供測試);
 #   7) 發行清單 manifest.json(版本、git 版次、每檔 SHA-256、元件版本)→ release verify、更新包 verify(暫時船上根目錄);
 #   8) --installer:Windows 安裝程式腳本(tools/installer/SimosaBRM.iss,Inno Setup 6.3+)— Linux 無 ISCC,只做靜態檢查並把腳本、說明與編譯指令
@@ -31,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     --no-package) PACKAGE=0; shift ;;
     --zip) ZIP=1; shift ;;
     --installer) INSTALLER=1; shift ;;
-    -h|--help) sed -n 2,14p "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n 2,15p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
@@ -100,7 +101,7 @@ else
   note "WebView2 外殼未發布可執行檔($RID 非 Windows;步驟 1 在有 WindowsDesktop SDK 時才實際編譯 src/Shell.WebView2,否則只建空組件):win-x64 發行版(tools/build-release.ps1 或 --rid win-x64)才有 app/shell/"
   COMPONENTS+=("shell=$VERSION==略過:非 win-x64(僅建置,未發布)")
 fi
-find "$OUT/app" "$OUT/tools" -name '*.pdb' -delete
+find "$OUT/app" "$OUT/tools" -name '*.pdb' -delete   # 發布輸出的偵錯符號;Godot 匯出(步驟 5)之後還要再刪一次
 # WebView2 Runtime 離線安裝檔的放置位置(岸上下載,不在儲存庫;外殼偵測不到 Runtime 時顯示此路徑)
 mkdir -p "$OUT/tools/webview2"
 cat > "$OUT/tools/webview2/README.txt" <<TXT
@@ -184,6 +185,11 @@ else
     else note "視景匯出失敗(見 build/visual/release-export.log)"; COMPONENTS+=("visual=$VERSION==匯出失敗"); rm -rf "$OUT/app/visual"; fi
   fi
 fi
+# 偵錯符號不進發行版:Godot .NET 匯出(src/Visual.Godot/export_presets.cfg 的 dotnet/include_debug_symbols=true)會把專案與 Visual.Shared 的 .pdb
+# 放進 app/visual/data_*/,而步驟 3 的刪除在匯出之前。安裝程式(tools/installer/SimosaBRM.iss [Files] 的 Excludes)不安裝 *.pdb,
+# 所以必須在 pack(步驟 6:否則軟體更新包會把 .pdb 寫到船上)與發行清單(步驟 7:release manifest 遇到 *.pdb 會失敗)之前再刪一次。
+# 排除規則的單一出處:ReleaseManifestBuilder.InstallerExcludedPatterns(tools/installer/check-iss.py 與 .iss 對照)
+find "$OUT/app" "$OUT/tools" -name '*.pdb' -delete
 
 step "6/7 簽章更新包(app/ → packages/;開發用 PEM 金鑰,僅供測試)"
 if [[ $PACKAGE == 1 ]]; then

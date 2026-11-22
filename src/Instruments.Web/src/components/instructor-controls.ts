@@ -1,4 +1,6 @@
 // 教官用控制(第一版先放同頁,規劃書第 9.1 節執行控制):凍結 / 恢復 / 重設。
+// 操船台下排的最後一格:右欄(BNWAS / 警報 / VHF)跨到下排之後這一格只剩約 90–210 px 寬,
+// 窄於 150 px 時三個鈕改直排、標題只留「教官」(功能不變;src/Instruments.Web/README.md「版面與解析度」)。
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -10,6 +12,10 @@ export class InstructorControls extends LitElement {
   static override styles = [
     tileStyles,
     css`
+      :host {
+        /* 尺寸容器:依自己的寬度決定排法(@container) */
+        container-type: inline-size;
+      }
       .panel {
         height: 100%;
         display: flex;
@@ -37,6 +43,26 @@ export class InstructorControls extends LitElement {
       .confirm {
         font-size: 11px;
         color: var(--ob-warning);
+      }
+      /* 窄欄(1366–1900 寬的操船台):凍結 / 恢復 / 重設直排,標題的英文與說明文字不顯示 */
+      @container (max-width: 150px) {
+        .panel {
+          gap: 4px;
+        }
+        .panel-title .en,
+        .note {
+          display: none;
+        }
+        .buttons {
+          grid-template-columns: 1fr;
+        }
+        .buttons .reset {
+          grid-column: auto;
+        }
+        .buttons button {
+          padding: 2px 4px;
+          min-height: 0;
+        }
       }
     `,
   ];
@@ -75,13 +101,13 @@ export class InstructorControls extends LitElement {
   override render() {
     return html`
       <div class="panel">
-        <div class="panel-title"><span>教官 INSTRUCTOR</span><span class="label">${this.frozen ? '已凍結' : '執行中'}</span></div>
+        <div class="panel-title"><span>教官<span class="en"> INSTRUCTOR</span></span><span class="label">${this.frozen ? '已凍結' : '執行中'}</span></div>
         <div class="buttons">
           <button class=${this.frozen ? 'frozen' : ''} ?disabled=${this.frozen} @click=${this.freeze}>凍結</button>
           <button ?disabled=${!this.frozen} @click=${this.resume}>恢復</button>
           <button class="reset" @click=${this.reset}>${this.confirmReset ? '再按一次確認重設' : '重設'}</button>
         </div>
-        ${this.confirmReset ? html`<div class="confirm">重設會回到練習初始狀態並清除航跡</div>` : html`<div class="label muted">第一版教官控制暫放本頁</div>`}
+        ${this.confirmReset ? html`<div class="confirm">重設會回到練習初始狀態並清除航跡</div>` : html`<div class="label muted note">第一版教官控制暫放本頁</div>`}
       </div>
     `;
   }

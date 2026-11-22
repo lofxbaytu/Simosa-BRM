@@ -6,7 +6,7 @@ namespace SimosaBRM.Packaging.Updates;
 /// 船上筆電 <c>state/installed-files.json</c>(更新包覆蓋清單;規劃書第 5.5 節、R13;docs/design/packaging-sync.md 第 5.1 節):
 /// 記錄「更新包安裝的檔案」— 每個被更新包寫入的路徑的 SHA-256、大小與來源更新包,以及被更新包刪除的路徑。
 /// 安裝模式核對(<c>simosa-pkg release verify --installed</c>)的預期內容 = 發行清單 manifest.json 疊上本清單:
-/// 先扣掉 <see cref="Removed"/>,再以 <see cref="Files"/> 取代/新增。
+/// 先扣掉 <see cref="Removed"/>,再以 <see cref="Files"/> 取代/新增。重新安裝發行版之後的調整見 <see cref="Rebase"/>。
 /// <para>
 /// <b>逐檔覆蓋,不是整個前綴替換</b>:UpdateApplier 對每個頂層元件(app/、data/、config/)是「複製現行 → 刪除 remove → 寫入新檔」再整個目錄改名,
 /// 更新包沒有列的現行檔案會保留,所以 software 包也不是把 app/ 整個換掉;本清單因此只記路徑,不記「被整個取代的前綴」。
@@ -33,7 +33,7 @@ public sealed class InstalledFiles
     public DateTime UpdatedUtc { get; set; }
     /// <summary>
     /// 本清單所依據的發行清單(安裝根目錄 manifest.json 的版本與 SHA-256;沒有 manifest.json 時 null)。
-    /// 與目前的 manifest.json 不同 = 之後又重新安裝過發行版(安裝程式會覆寫清單所列的每個檔案),見 <see cref="Rebase"/>。
+    /// 與目前的 manifest.json 不同 = 之後又重新安裝過發行版(安裝程式先清空程式目錄,再覆寫清單所列的每個檔案),見 <see cref="Rebase"/>。
     /// </summary>
     public InstalledBaseline? Baseline { get; set; }
     /// <summary>已納入本清單的更新包(新到舊,最多 <see cref="MaxPackages"/> 筆)</summary>
@@ -131,13 +131,24 @@ public sealed class InstalledFiles
     /// 第 2、3 項的例外:套用時間早於目前發行版建置時間(<see cref="InstalledBaseline.BuiltUtc"/>)的更新包不列入 — 發行版一定是在它之後才安裝的,
     /// 安裝已覆寫清單所列的每個檔案(<see cref="ReconcileInfo.SupersededPackages"/>)。這正是實際的舊安裝:simosa-pkg 放在 tools/updater/,
     /// 不會被軟體更新包替換,船上要有會寫覆蓋清單的版本,唯一途徑就是重新安裝發行版。
+    /// <para>
+    /// 第 3 項的另一個例外 — <b>套用中斷後以原包重試</b>(<paramref name="applyingPackageId"/>):覆蓋清單的現行更新包正是現在要套用的更新包,
+    /// 而 installed.json 完全沒有它的紀錄(連 rolledBack 都沒有)= 上一次套用在「覆蓋清單已寫、installed.json 未寫」之間中斷。
+    /// 這時覆蓋清單是可信的:它在全部元件換完之後才寫,而且是依同一份 installed.json 對齊過的(其間若套用或回復過別的更新包,
+    /// 清單的現行更新包就不會還是它)。因此不列入 <see cref="Untracked"/>、不丟棄紀錄,接著的 <see cref="Record"/> 以相同內容覆寫
+    /// (<see cref="ReconcileInfo.Retried"/>)。回復時清單還原失敗的情況不同:installed.json 有該包標為 rolledBack 的紀錄,照第 3 項處理。
+    /// </para>
     /// </summary>
     /// <param name="baseline">目前 manifest.json 的身分(沒有或讀不到時 null:不做第 1 項與上述例外)</param>
     /// <param name="manifestPaths">目前發行清單所列的路徑(第 1 項用)</param>
+    /// <param name="applyingPackageId">正在套用的更新包(UpdateApplier 傳入;核對時為 null)</param>
     public static InstalledFiles Reconcile(InstalledFiles? existing, InstalledState installed, InstalledBaseline? baseline,
-                                           IReadOnlyCollection<string>? manifestPaths, StringComparison comparison, ReconcileInfo? info = null)
+                                           IReadOnlyCollection<string>? manifestPaths, StringComparison comparison, ReconcileInfo? info = null,
+                                           string? applyingPackageId = null)
     {
         info ??= new ReconcileInfo();
+        // installed.json 是否有這個更新包的任何紀錄(現行,或 history 中的任一筆,含已 rollback 者)
+        bool Known(string id) => installed.PackageId == id || (installed.History ?? new()).Any(h => h is not null && h.PackageId == id);
         var applied = installed.AppliedPackages();
         var candidates = new List<TrackedPackage>();   // 內容沒有(可信的)紀錄的更新包
         InstalledFiles f;
@@ -154,11 +165,18 @@ public sealed class InstalledFiles
             {
                 info.Rebased = true;
                 info.PreviousBaseline = f.Baseline;
-                info.SupersededFiles = f.Rebase(manifestPaths, baseline, comparison);
+                (info.SupersededFiles, info.DroppedProgramFiles) = f.Rebase(manifestPaths, baseline, comparison);
             }
-            if (f.PackageId != installed.PackageId || f.Version != installed.Version)
+            if (applyingPackageId is not null && f.PackageId == applyingPackageId && !Known(applyingPackageId))
+            {
+                // 上一次套用同一個更新包時在寫 installed.json 之前中斷:清單可信,原樣沿用(Record 以相同內容覆寫)
+                info.Retried = true;
+            }
+            else if (f.PackageId != installed.PackageId || f.Version != installed.Version)
             {
                 info.Diverged = true;
+                // 清單的現行更新包在 installed.json 完全沒有紀錄:該包的套用沒有完成,可用原包重新套用(核對時據以提示)
+                if (f.PackageId is { } overlayHead && !Known(overlayHead)) info.InterruptedPackage = f.Packages.FirstOrDefault(p => p.PackageId == overlayHead);
                 // 覆蓋清單記了、installed.json 沒有(或已標為回復)
                 foreach (var p in f.Packages.Where(p => applied.All(a => a.PackageId != p.PackageId)))
                     candidates.Add(new TrackedPackage { PackageId = p.PackageId, Version = p.Version, Kind = p.Kind, AppliedUtc = p.AppliedUtc, Prefixes = PrefixesOfKind(p.Kind), Reason = UntrackedReasons.Diverged });
@@ -183,23 +201,34 @@ public sealed class InstalledFiles
             else untracked.Add(c);
         }
         f.MarkUntracked(untracked, comparison);
+        info.NewlyUntracked.AddRange(untracked);
         info.Missing = existing is null && untracked.Count > 0;
         return f;
     }
 
     /// <summary>
-    /// 發行清單換過(覆蓋清單寫入之後又以安裝程式或複製重新安裝了發行版):安裝會覆寫清單所列的每個檔案,
-    /// 所以清單所列路徑改以新的發行清單為準 — 丟棄這些路徑的紀錄與涵蓋它們的刪除紀錄,<see cref="Untracked"/> 清空;
-    /// 清單沒有列的路徑(更新包新增的檔案)紀錄保留。回傳被取代的檔案紀錄數。
+    /// 發行清單換過(覆蓋清單寫入之後又重新安裝了發行版;以 manifest.json 的身分改變偵測):
+    /// <list type="bullet">
+    /// <item><b>清單所列路徑</b>改以新的發行清單為準(安裝會覆寫清單所列的每個檔案):丟棄這些路徑的紀錄與涵蓋它們的刪除紀錄。</item>
+    /// <item><b>程式目錄</b>(<see cref="InstalledPaths.ProgramPrefixes"/>:app/、tools/updater/)之下、新清單沒有列的紀錄<b>一律作廢</b>:
+    ///   安裝程式在安裝前清空程式目錄(tools/installer/SimosaBRM.iss 的 [InstallDelete]),重新安裝後程式目錄與發行版完全相同;
+    ///   以壓縮檔或手動複製覆蓋而留下的舊檔(含先前更新包新增的檔案)則應被列為「程式目錄內多出的檔案」,由人依清單刪除 —
+    ///   若仍以覆蓋清單為準,前者會誤報「檔案缺少」。</item>
+    /// <item><b>其他位置</b>(data/、config/trusted-keys/;安裝程式不清空):更新包新增而清單沒有的檔案紀錄保留,仍以覆蓋清單核對。</item>
+    /// <item><see cref="Untracked"/> 清空(先前無法核對的前綴已被安裝覆寫)。</item>
+    /// </list>
+    /// 回傳(被新清單取代的檔案紀錄數,程式目錄之下因而作廢的檔案紀錄數)。
     /// </summary>
-    public int Rebase(IReadOnlyCollection<string> manifestPaths, InstalledBaseline baseline, StringComparison comparison)
+    public (int Superseded, int DroppedProgramFiles) Rebase(IReadOnlyCollection<string> manifestPaths, InstalledBaseline baseline, StringComparison comparison)
     {
         var listed = new HashSet<string>(manifestPaths, StringComparer.FromComparison(comparison));
         var superseded = Files.RemoveAll(x => listed.Contains(x.Path));
-        Removed.RemoveAll(r => manifestPaths.Any(p => InstalledPaths.IsAtOrUnder(p, r.Path, comparison)));
+        var dropped = Files.RemoveAll(x => InstalledPaths.IsAtOrUnderProgram(x.Path, comparison));
+        Removed.RemoveAll(r => InstalledPaths.IsAtOrUnderProgram(r.Path, comparison)
+                               || manifestPaths.Any(p => InstalledPaths.IsAtOrUnder(p, r.Path, comparison)));
         Untracked.Clear();
         Baseline = baseline;
-        return superseded;
+        return (superseded, dropped);
     }
 
     /// <summary>把更新包列為「內容未記錄」,並丟棄其前綴之下的紀錄(已不可信)。</summary>
@@ -263,6 +292,17 @@ public sealed class ReconcileInfo
     public InstalledBaseline? PreviousBaseline { get; set; }
     /// <summary>重新安裝後被發行清單取代的檔案紀錄數</summary>
     public int SupersededFiles { get; set; }
+    /// <summary>重新安裝後作廢的「程式目錄之下、新清單沒有列」的檔案紀錄數(更新包在 app/ 新增的檔案:安裝程式已清除,手動覆蓋而留下者列為多出)</summary>
+    public int DroppedProgramFiles { get; set; }
+    /// <summary>套用中斷後以原包重試:覆蓋清單原樣沿用(只在套用時)</summary>
+    public bool Retried { get; set; }
+    /// <summary>
+    /// 不一致,且覆蓋清單的現行更新包在 installed.json 完全沒有紀錄:該包的套用在寫 installed.json 之前中斷,
+    /// 以同一個更新包重新套用即可恢復一致(核對時據以提示)。
+    /// </summary>
+    public TrackedPackage? InterruptedPackage { get; set; }
+    /// <summary>這一次對齊才列入 <see cref="InstalledFiles.Untracked"/> 的更新包(與檔案內原有的紀錄區分:原有的是「先前曾經」對不上)</summary>
+    public List<TrackedPackage> NewlyUntracked { get; set; } = new();
     /// <summary>沒有覆蓋清單,且在目前發行版建置之前套用的更新包(已被這次安裝覆蓋,不列為未記錄)</summary>
     public List<TrackedPackage> SupersededPackages { get; set; } = new();
 }

@@ -305,10 +305,11 @@ function probeEditorLayout(host: Element): LayoutReport {
         issues.push({ kind: 'control-outside', where: where(el), detail: `外框 x ${px(r.left)}–${px(r.right)}、y ${px(r.top)}–${px(r.bottom)} 超出面板 x ${px(p.left)}–${px(p.right)}、y ${px(p.top)}–${px(p.bottom)}` });
       }
     }
-    // 往上找所有水平方向會裁切或捲動的祖先(overflow-x 不是 visible):輸入框的左右緣必須在其內距框內;元件本身(:host)也算
+    // 往上找所有水平方向會裁切或捲動的祖先(overflow-x 不是 visible;display: contents 沒有外框,不裁切):輸入框的左右緣必須在其內距框內;元件本身(:host)也算
     let clippedBy = '';
     for (let a = el.parentElement; a && clippedBy === ''; a = a.parentElement) {
-      if (getComputedStyle(a).overflowX === 'visible') continue;
+      const style = getComputedStyle(a);
+      if (style.overflowX === 'visible' || style.display === 'contents') continue;
       const ar = a.getBoundingClientRect();
       const left = ar.left + a.clientLeft;
       const right = left + a.clientWidth;

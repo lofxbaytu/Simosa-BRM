@@ -17,6 +17,10 @@ export class HelmWheel extends LitElement {
   static override styles = [
     tileStyles,
     css`
+      :host {
+        /* 尺寸容器:操船台只佔左欄寬度後這一格在 1366 寬時約 300 px,預設鈕列依自己的寬度縮字(@container) */
+        container-type: inline-size;
+      }
       .panel {
         height: 100%;
         display: flex;
@@ -98,6 +102,20 @@ export class HelmWheel extends LitElement {
       }
       .mode b {
         color: var(--ob-accent-strong);
+      }
+      /* 窄格(內容寬 < 340 px):九個預設鈕每個只有約 30 px,「P 35°」以 11 px 字放不下(格線會被撐寬、最右邊的鈕被裁掉) */
+      @container (max-width: 340px) {
+        .presets {
+          gap: 2px;
+        }
+        .presets button {
+          font-size: 10px;
+          padding: 3px 0;
+          min-width: 0;
+        }
+        .side button {
+          min-width: 58px;
+        }
       }
     `,
   ];

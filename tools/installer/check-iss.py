@@ -1,10 +1,14 @@
 """Inno Setup 腳本(tools/installer/SimosaBRM.iss)的靜態檢查:容器/CI 沒有 Inno Setup 時,以純 Python 解析區段與必要鍵,
 抓結構性錯誤與本專案的部署規則(規劃書第 5.5 節、第 11.2 節;docs/ops/安裝與啟動.md 第 2.8 節):
-  - 區段:[Setup]、[Tasks]、[Dirs]、[Files]、[Icons]、[Run]、[UninstallDelete]、[Code] 皆須存在;[Setup] 必要鍵齊全、每行為 鍵=值
+  - 區段:[Setup]、[Tasks]、[Dirs]、[InstallDelete]、[Files]、[Icons]、[Run]、[UninstallDelete]、[Code] 皆須存在;[Setup] 必要鍵齊全、每行為 鍵=值
   - 參數式區段([Files]、[Icons]、[Run]…)每行為 參數: 值; …,引號成對
   - 預設安裝位置由 GetDefaultDir 決定:D:\\Simosa BRM,其次 G:\\Simosa BRM;裝在系統磁碟須明確確認(/ALLOWSYSTEMDRIVE=1 或對話框);
     腳本中(註解外)不得出現 C:\\;UninstallFilesDir 在 {app} 內
-  - [Files] 來源皆為 {#SourceDir}、目的地皆在 {app};config\\ 以 onlyifdoesntexist 安裝
+  - [Files] 來源皆為 {#SourceDir}、目的地皆在 {app};config\\ 以 onlyifdoesntexist 安裝;主項目 Excludes 的檔名樣式(\\config\\* 以外)
+    必須與 simosa-pkg 的 ReleaseManifestBuilder.InstallerExcludedPatterns(src/Tools.Packaging/Release/ReleaseManifest.cs;本檢查直接讀該原始碼)
+    完全相同 — 發行清單若列了安裝程式排除的檔案(例如 *.pdb),安裝後 release verify --installed 會報「檔案缺少」;兩邊要一起改
+  - [InstallDelete](重新安裝前清空程式目錄)只允許 {app}\\app 與 {app}\\tools\\updater 兩項、Type: filesandordirs(白名單;
+    = InstalledPaths.ProgramPrefixes,Tools.Packaging.Tests 對照):不得動到 config、data、state、store、build,不得用萬用字元或刪上層
   - 捷徑:start-ship-laptop.ps1 -Shell、start-instructor-laptop.ps1、stop-all.ps1
   - 防火牆:8765、8766、8767、8768、7300 各有規則,remoteip 限 DirectLinkSubnet、profile=any
   - WebView2 離線安裝檔在 [Run] 中以 FileExists 條件納入並 Check: not WebView2RuntimeInstalled
@@ -13,6 +17,7 @@
   - 前置處理指令 #if/#ifdef/#ifndef/#ifexist/#ifnexist 與 #endif 成對;[Code] 的 begin/case/try/record 與 end 數量相等、括號成對
 只能抓結構性錯誤,不能取代 ISCC 編譯(需 Windows + Inno Setup 6.3+)。用法:python3 -I tools/installer/check-iss.py <檔案>...
 """
+import os
 import re
 import sys
 
@@ -20,7 +25,7 @@ SETUP_REQUIRED = [
     'AppId', 'AppName', 'AppVersion', 'DefaultDirName', 'DefaultGroupName', 'OutputDir', 'OutputBaseFilename', 'PrivilegesRequired',
     'ArchitecturesInstallIn64BitMode', 'MinVersion', 'Compression', 'UninstallFilesDir', 'WizardStyle',
 ]
-SECTIONS_REQUIRED = ['Setup', 'Tasks', 'Dirs', 'Files', 'Icons', 'Run', 'UninstallDelete', 'Code']
+SECTIONS_REQUIRED = ['Setup', 'Tasks', 'Dirs', 'InstallDelete', 'Files', 'Icons', 'Run', 'UninstallDelete', 'Code']
 FIREWALL_PORTS = ['8765', '8766', '8767', '8768', '7300']
 PREPROC_OPEN = re.compile(r'^\s*#\s*(if|ifdef|ifndef|ifexist|ifnexist)\b')
 PREPROC_CLOSE = re.compile(r'^\s*#\s*endif\b')
@@ -66,6 +71,28 @@ def strip_pascal(code, keep_strings=False):
         out.append(c)
         i += 1
     return ''.join(out), []
+
+
+# 安裝程式排除樣式的單一出處(C# 常數;release manifest 遇到符合的檔案會失敗):本腳本位於 tools/installer/,往上兩層是專案根目錄
+RELEASE_MANIFEST_CS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'src', 'Tools.Packaging', 'Release', 'ReleaseManifest.cs')
+# [InstallDelete] 白名單 = simosa-pkg 的 InstalledPaths.ProgramPrefixes(app/、tools/updater/;src/Tools.Packaging/Common/InstalledPaths.cs)。
+# 要改須三邊一起改:.iss、InstalledPaths.ProgramPrefixes、這裡(tests/Tools.Packaging.Tests/InstalledVerifyTests 對照前兩者)
+INSTALL_DELETE_ALLOWED = ['{app}\\app', '{app}\\tools\\updater']
+
+
+def installer_excluded_patterns(source=RELEASE_MANIFEST_CS):
+    """讀 ReleaseManifestBuilder.InstallerExcludedPatterns(new[] { "…", "…" } 寫在同一行)→ (樣式清單, 錯誤訊息)。"""
+    try:
+        text = open(source, encoding='utf-8-sig').read()
+    except OSError as ex:
+        return None, f'讀不到 {os.path.normpath(source)}(無法核對 [Files] 的 Excludes):{ex}'
+    m = re.search(r'InstallerExcludedPatterns\s*=\s*new\s*(?:string\s*)?\[\]\s*\{([^}\n]*)\}', text)
+    if not m:
+        return None, f'{os.path.normpath(source)} 找不到 InstallerExcludedPatterns = new[] {{ "…" }}(常數改名或換行了?本檢查以正規表示式讀取)'
+    items = re.findall(r'"([^"]*)"', m.group(1))
+    if not items:
+        return None, f'{os.path.normpath(source)} 的 InstallerExcludedPatterns 是空的'
+    return items, None
 
 
 def split_params(line):
@@ -191,7 +218,7 @@ def check(path):
 
     # 參數式區段
     parsed = {}
-    for name in ['Tasks', 'Dirs', 'Files', 'Icons', 'Run', 'UninstallDelete', 'Languages']:
+    for name in ['Tasks', 'Dirs', 'InstallDelete', 'Files', 'Icons', 'Run', 'UninstallDelete', 'Languages']:
         parsed[name] = []
         for no, st in entries(name):
             if st.count('"') % 2 == 1:
@@ -224,6 +251,32 @@ def check(path):
     manifest_in_excludes = any('manifest' in p.get('Excludes', '') for _, p in files)
     if manifest_in_excludes:
         errs.append('[Files] 不得排除 manifest.json(安裝後 release verify 需要)')
+    # 主項目(DestDir = {app})的 Excludes:\\config\\*(另列安裝)以外的樣式必須與發行清單端的排除規則完全相同。
+    # 安裝程式排除、發行清單卻列出的檔案,安裝後 release verify --installed 會報「檔案缺少」(審查第二十九輪:Godot 匯出的 .pdb);
+    # 反過來清單端排除而安裝程式照裝的檔案不會出錯,但規則只留一份才不會漂移
+    expected, perr = installer_excluded_patterns()
+    if perr:
+        errs.append(perr)
+    for no, p in files:
+        patterns = [x.strip() for x in p.get('Excludes', '').split(',') if x.strip()]
+        names = [x for x in patterns if x.lower() != '\\config\\*']
+        for x in names:
+            if '\\' in x or '/' in x:
+                errs.append(f'{no}: [Files] Excludes 的 {x} 含路徑:\\config\\* 以外只能用檔名樣式(發行清單端只比對檔名)')
+        if expected is None:
+            continue
+        want = sorted(x.lower() for x in expected)
+        if p.get('DestDir') == '{app}':
+            # 主項目:集合必須相同
+            if sorted(x.lower() for x in names) != want:
+                errs.append(f'{no}: [Files] Excludes 的檔名樣式 {sorted(names)} 與 ReleaseManifestBuilder.InstallerExcludedPatterns {sorted(expected)} 不同'
+                            '(src/Tools.Packaging/Release/ReleaseManifest.cs;兩邊要一起改,否則安裝後 release verify --installed 會報檔案缺少)')
+        else:
+            # 其他項目(config\ 等):不得排除發行清單端不排除的檔名
+            for x in names:
+                if x.lower() not in want:
+                    errs.append(f'{no}: [Files] Excludes 的 {x} 不在 ReleaseManifestBuilder.InstallerExcludedPatterns {sorted(expected)} 內'
+                                '(發行清單會列出這類檔案,安裝後 release verify --installed 會報檔案缺少;兩邊要一起改)')
 
     # [Icons]
     icon_params = ' '.join(p.get('Parameters', '') + ' ' + p.get('Filename', '') for _, p in parsed['Icons'])
@@ -263,6 +316,24 @@ def check(path):
             errs.append(f'{no}: [UninstallDelete] 只允許 {{app}}\\build\\logs 與 {{app}}\\build\\tmp(解除安裝保留紀錄、設定與瀏覽器端資料;不得用萬用字元或刪上層):{p.get("Name")}')
     if not any(p.get('Name', '').startswith('{app}') for _, p in parsed['Dirs']):
         errs.append('[Dirs] 應建立 {app} 下的紀錄/log 目錄')
+
+    # [InstallDelete]:白名單 — 重新安裝前只清空程式目錄 {app}\\app 與 {app}\\tools\\updater(兩項都要有;整個資料夾,Type: filesandordirs)。
+    # 清空後安裝的程式目錄才與發行版完全一致(release verify --installed 不會有舊版殘留的「多出的檔案」)。其餘一律不准:
+    # config、data、state、store、build 是設定、紀錄與執行期資料;與 [UninstallDelete] 相同,用白名單才擋得住「刪上層」與萬用字元
+    seen_delete = []
+    for no, p in parsed['InstallDelete']:
+        n = p.get('Name', '').lower().replace('/', '\\').rstrip('\\')
+        if '*' in n or '?' in n or n not in INSTALL_DELETE_ALLOWED:
+            errs.append(f'{no}: [InstallDelete] 只允許 {{app}}\\app 與 {{app}}\\tools\\updater(重新安裝只清空程式目錄;不得動到設定、紀錄與執行期資料,不得用萬用字元或刪上層):{p.get("Name")}')
+            continue
+        if p.get('Type', '').lower() != 'filesandordirs':
+            errs.append(f'{no}: [InstallDelete] {p.get("Name")} 的 Type 應為 filesandordirs(整個資料夾連同子資料夾):{p.get("Type")}')
+        if n in seen_delete:
+            errs.append(f'{no}: [InstallDelete] {p.get("Name")} 重複')
+        seen_delete.append(n)
+    for need in INSTALL_DELETE_ALLOWED:
+        if need not in seen_delete:
+            errs.append(f'[InstallDelete] 缺少 {need}(重新安裝前須清空程式目錄,否則舊版殘留的檔案會被 release verify --installed 列為多出)')
 
     # [Code]
     code = '\n'.join(code_lines)

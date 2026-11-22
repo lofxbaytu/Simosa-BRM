@@ -346,15 +346,17 @@ public sealed class UpdateApplier
 
     /// <summary>
     /// 組出套用本更新包之後的覆蓋清單(不寫檔):現有清單先對齊 installed.json 與目前的發行清單(<see cref="InstalledFiles.Reconcile"/>:
-    /// 重新安裝過發行版 → 以新清單為準;舊安裝或清單遺失 → 先前的更新包列為未記錄;對不上 → 列為未記錄;
+    /// 重新安裝過發行版 → 清單所列路徑與程式目錄以新清單為準;舊安裝或清單遺失 → 先前的更新包列為未記錄;對不上 → 列為未記錄;
     /// 在目前發行版建置之前套用的更新包已被安裝覆蓋,不列入),再記入本更新包寫入與刪除的路徑。
+    /// 傳入本更新包的 packageId:上一次套用同一個更新包時若在「覆蓋清單已寫、installed.json 未寫」之間中斷(斷電),
+    /// 這次是原包重試 — 覆蓋清單原樣沿用,不把它列為未記錄(否則 app/ 會長期停在「無法核對」)。
     /// </summary>
     private InstalledFiles BuildInstalledFiles(InstalledState installed, UpdateManifest m, List<string> removePaths, UpdateApplyResult result)
     {
         var existing = InstalledFiles.TryLoad(_layout.InstalledFilesPath, out var loadError);
         if (loadError is not null) result.Warnings.Add($"覆蓋清單 state/{InstalledFiles.FileName} 無法讀取,已重新建立(先前更新包的檔案在安裝模式核對時列為無法核對):{loadError}");
         var baseline = Release.InstalledVerifier.ReadBaseline(_layout.Root, out var manifestPaths);
-        var files = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, InstalledPaths.DefaultComparison);
+        var files = InstalledFiles.Reconcile(existing, installed, baseline, manifestPaths, InstalledPaths.DefaultComparison, applyingPackageId: m.PackageId);
         files.Record(m, removePaths, Now, InstalledPaths.DefaultComparison);
         return files;
     }

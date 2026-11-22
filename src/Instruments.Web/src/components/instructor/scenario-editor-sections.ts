@@ -4,6 +4,8 @@
 // 第二十一輪:航線/區域的「在圖上編輯」鈕開啟海圖點選編輯面板(scenario-editor-plot.ts;EditorHost.plotTarget),
 // 空間網格加「由均勻流產生網格」「由兩端流速線性內插」產生器與「網格預覽」。
 // 以純函式渲染,透過 EditorHost 讀寫 <brm-scenario-editor> 的草稿,樣式沿用主元件(模板渲染在同一個 shadow root)。
+// 版面用的 class(第二十九輪;規則在主元件樣式):格線子項依序為「標籤、輸入 …」;.full 整列、.full-span 標籤之後佔滿該列、.span2 佔一組的寬度;
+// 一格內並排的小輸入包在 .pair(放不下會換列);位置欄為 select.pos-mode + .pair.pos-xy。
 // 草稿模型與各區段的修改函式見 lib/scenario-editor.ts(原樣物件 + 點路徑修改,未改的鍵不動)。
 
 import { html, nothing, type TemplateResult } from 'lit';
@@ -257,16 +259,16 @@ export function renderPosition(current: () => DraftPosition, cls: string, apply:
     apply(want === 'latlon' ? { lat: 23.9, lon: 119.98 } : { x: 0, y: 0 });
   };
   return html`
-    <select class="${cls}-mode" data-value=${mode} @change=${switchMode}>
+    <select class="${cls}-mode pos-mode" data-value=${mode} @change=${switchMode}>
       <option value="latlon">經緯度</option>
       <option value="enu">ENU x/y (m)</option>
     </select>
     ${mode === 'latlon'
-      ? html`<div class="pair">
+      ? html`<div class="pair pos-xy">
           <input class="${cls}-lat" type="number" step="0.0001" .value=${numberOrRefText(p.lat)} @change=${(e: Event) => setPositionKey(current, 'lat', e, apply)} /><span>°N</span>
           <input class="${cls}-lon" type="number" step="0.0001" .value=${numberOrRefText(p.lon)} @change=${(e: Event) => setPositionKey(current, 'lon', e, apply)} /><span>°E</span>
         </div>`
-      : html`<div class="pair">
+      : html`<div class="pair pos-xy">
           <input class="${cls}-x" type="number" step="1" .value=${numberOrRefText(p.x)} @change=${(e: Event) => setPositionKey(current, 'x', e, apply)} /><span>x</span>
           <input class="${cls}-y" type="number" step="1" .value=${numberOrRefText(p.y)} @change=${(e: Event) => setPositionKey(current, 'y', e, apply)} /><span>y</span>
         </div>`}
@@ -321,7 +323,7 @@ function renderWaypoint(h: EditorHost, w: RawSection, i: number, count: number):
     <label>#${i + 1} 名稱</label>
     <input class="wp-name" type="text" .value=${txt(w['name'])} @change=${(e: Event) => h.setDraft(patchWaypoint(h.draft, i, 'name', textOf(e)))} />
     <label>位置</label>
-    <div class="pair">${renderPosition(() => positionOf(routeWaypoints(h.draft)[i]), 'wp-pos', (p) => h.setDraft(patchWaypointPosition(h.draft, i, p)))}</div>
+    <div class="full-span pair">${renderPosition(() => positionOf(routeWaypoints(h.draft)[i]), 'wp-pos', (p) => h.setDraft(patchWaypointPosition(h.draft, i, p)))}</div>
     ${WAYPOINT_FIELDS.map(
       ([key, label, unit]) => html`<label>${label} (${unit})</label>${numInput(`wp-${key}`, w[key], (v) => h.setDraft(patchWaypoint(h.draft, i, key, v)))}`,
     )}
@@ -434,10 +436,10 @@ export function renderTimelineItemEditor(h: EditorHost, index: number): Template
       <option value="condition">自訂條件</option>
     </select>
     ${f.trigger === 'time'
-      ? html`<div class="pair"><input class="tl-time" type="number" step="30" min="0" .value=${f.atLeast} @change=${(e: Event) => setTrigger('time', textOf(e), '')} /><span>s</span></div>`
+      ? html`<div class="span2 pair"><input class="tl-time" type="number" step="30" min="0" .value=${f.atLeast} @change=${(e: Event) => setTrigger('time', textOf(e), '')} /><span>s</span></div>`
       : f.trigger === 'condition'
-        ? html`<input class="tl-condition" type="text" .value=${f.condition} @change=${(e: Event) => setTrigger('condition', '', textOf(e))} />`
-        : html`<span class="hint">時間表面板「觸發」鈕</span>`}
+        ? html`<input class="tl-condition span2" type="text" .value=${f.condition} @change=${(e: Event) => setTrigger('condition', '', textOf(e))} />`
+        : html`<span class="span2 hint">時間表面板「觸發」鈕</span>`}
     <label>階段</label>
     <select class="tl-phase" data-value=${f.phase} @change=${(e: Event) => h.setDraft(patchTimelineItem(h.draft, index, 'phase', textOf(e)))}>
       <option value="">(不變)</option>
@@ -511,9 +513,9 @@ export function renderBriefingSection(h: EditorHost): TemplateResult {
       ${numInput('b-duration', d.briefing['duration_s'], (v) => h.setDraft(patchBriefing(h.draft, 'duration_s', v)))}
       <label title="簡報後給團隊的規劃時間;教官站簡報區顯示本地倒數(規劃書第 9.1 節)">規劃時間 (min)</label>
       <input class="b-planning" type="number" step="1" min="0" max=${PLANNING_TIME_MAX_MIN} placeholder="未設 = 不顯示計時器" .value=${txt(d.briefing['planningTimeMin'])} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'planningTimeMin', numberFromText(textOf(e))))} />
-      <label title="簡報與講評時列出,供學員互相觀察(規劃書第 9.1 節)">同儕評估提示(每行一條)</label>
+      <label class="full" title="簡報與講評時列出,供學員互相觀察(規劃書第 9.1 節)">同儕評估提示(每行一條)</label>
       <textarea class="full b-peer" rows="3" .value=${prompts} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'peerAssessmentPrompts', linesToList(textOf(e))))}></textarea>
-      <label title="講評時由帶領者帶領討論;教官站簡報區可摺疊、講評報告列於講評紀錄旁(規劃書第 8.4 節;練習後使用,題目可寫明事件)">講評引導問題(每行一條)</label>
+      <label class="full" title="講評時由帶領者帶領討論;教官站簡報區可摺疊、講評報告列於講評紀錄旁(規劃書第 8.4 節;練習後使用,題目可寫明事件)">講評引導問題(每行一條)</label>
       <textarea class="full b-questions" rows="3" .value=${questions} @change=${(e: Event) => h.setDraft(patchBriefing(h.draft, 'debriefQuestions', linesToList(textOf(e))))}></textarea>
       ${kept.length > 0 ? html`<div class="full hint">範本的 ${kept.join('、')} 原樣保留</div>` : nothing}
     </div>
@@ -604,7 +606,7 @@ export function renderAssessmentExtras(h: EditorHost): TemplateResult {
       <label>CPA 警報 (nm)</label>
       ${numInput('as-minCpa', s['minCpa_nm'], (v) => h.setDraft(patchAssessmentSetting(h.draft, 'minCpa_nm', v)), '預設 0.5')}
       <label>UKC 下限</label>
-      <div class="pair">
+      <div class="full-span pair">
         <select class="ukc-kind" data-value=${ukc.kind} @change=${(e: Event) => h.setDraft(setAssessmentUkcMin(h.draft, textOf(e) as UkcLimitKind | '', ukcLimitForm(isRecord(h.draft.assessment.settings['ukc']) ? h.draft.assessment.settings['ukc']['min'] : undefined).value ?? (textOf(e) === 'metres' ? 1 : 0.1)))}>
           <option value="">(無)</option>
           ${UKC_LIMIT_KINDS.map((k) => html`<option value=${k}>${k === 'metres' ? 'm' : '吃水比例'}</option>`)}
@@ -626,7 +628,7 @@ function renderRequired(h: EditorHost, r: RawSection, i: number, count: number):
     <label>計時起點事件</label>
     <input class="rq-event" type="text" list="after-events" .value=${f.event} @change=${(e: Event) => set('after.event', textOf(e).trim())} />
     <label>項目 / 目標 / 航點</label>
-    <div class="pair">
+    <div class="full-span pair">
       <input class="rq-item" type="text" list="timeline-ids" placeholder="itemId" .value=${f.itemId} @change=${(e: Event) => set('after.itemId', textOf(e).trim())} />
       <input class="rq-target" type="text" placeholder="targetId" .value=${f.targetId} @change=${(e: Event) => set('after.targetId', textOf(e).trim())} />
       <input class="rq-waypoint" type="text" placeholder="waypoint" .value=${f.waypoint} @change=${(e: Event) => set('after.waypoint', textOf(e).trim())} />
@@ -856,7 +858,7 @@ function renderTide(h: EditorHost): TemplateResult {
     <select class="tide-mode" data-value=${mode} @change=${(e: Event) => h.setDraft(setTideMode(h.draft, textOf(e) as TideMode))}>
       ${TIDE_MODES.map((m) => html`<option value=${m}>${TIDE_MODE_LABEL[m]}</option>`)}
     </select>
-    ${mode === 'table' ? renderTideTable(h) : mode === 'harmonic' ? renderHarmonic(h) : html`<span class="hint">無潮汐:潮高恆為 0(數值與舊版相同)</span>`}
+    ${mode === 'table' ? renderTideTable(h) : mode === 'harmonic' ? renderHarmonic(h) : html`<span class="span2 hint">無潮汐:潮高恆為 0(數值與舊版相同)</span>`}
   </fieldset>`;
 }
 
@@ -950,7 +952,7 @@ function renderCurrentModel(h: EditorHost): TemplateResult {
     <select class="cur-model" data-value=${mode} @change=${(e: Event) => h.setDraft(setCurrentTimeModel(h.draft, textOf(e) as CurrentTimeModel))}>
       ${CURRENT_TIME_MODELS.map((m) => html`<option value=${m}>${CURRENT_TIME_MODEL_LABEL[m]}</option>`)}
     </select>
-    ${mode === 'table' ? renderCurrentTable(h) : mode === 'tidal' ? renderTidal(h) : html`<span class="hint">流不隨時間變化(教官站可練習中覆寫)</span>`}
+    ${mode === 'table' ? renderCurrentTable(h) : mode === 'tidal' ? renderTidal(h) : html`<span class="span2 hint">流不隨時間變化(教官站可練習中覆寫)</span>`}
     <label class="full pair"><input class="field-enabled" type="checkbox" .checked=${field !== null} @change=${(e: Event) => h.setDraft(setCurrentFieldEnabled(h.draft, checked(e)))} /><span>${field ? '空間變化流場 field(規則網格,雙線性內插;可與上列時變模型並存作時間縮放)' : '無空間網格(均勻流)'}</span></label>
     ${field ? renderField(h, field) : nothing}
   </fieldset>`;
@@ -985,7 +987,7 @@ function renderTidal(h: EditorHost): TemplateResult {
   const phase = (name: string) => (isRecord(tidal[name]) ? (tidal[name] as RawSection) : {});
   return html`${['flood', 'ebb'].map(
       (name) => html`<label>${name === 'flood' ? '漲潮流' : '退潮流'} 流速 (kn) / 流向 (°)</label>
-        <div class="pair">
+        <div class="full-span pair">
           ${numInput(`ctd-${name}-speed`, phase(name)['speed_kn'], (v) => h.setDraft(patchCurrentModel(h.draft, `tidal.${name}.speed_kn`, v)))}
           ${numInput(`ctd-${name}-dir`, phase(name)['direction_deg'], (v) => h.setDraft(patchCurrentModel(h.draft, `tidal.${name}.direction_deg`, v)))}
         </div>`,
@@ -1010,7 +1012,7 @@ function renderField(h: EditorHost, field: RawSection): TemplateResult {
             : numInput(`fg-${key}`, grid[key], (v) => h.setDraft(patchCurrentModel(h.draft, `field.grid.${key}`, v)))}`,
       )}
       <label>格外 / 時間縮放</label>
-      <div class="pair">
+      <div class="full-span pair">
         <select class="fg-outside" data-value=${txt(field['outside'])} @change=${(e: Event) => h.setDraft(patchCurrentModel(h.draft, 'field.outside', textOf(e)))}>
           <option value="">(預設 edge)</option>
           ${FIELD_OUTSIDE_OPTIONS.map((o) => html`<option value=${o}>${o === 'edge' ? 'edge 取邊緣值' : 'zero 取 0'}</option>`)}

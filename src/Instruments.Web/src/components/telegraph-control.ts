@@ -12,6 +12,10 @@ export class TelegraphControl extends LitElement {
   static override styles = [
     tileStyles,
     css`
+      :host {
+        /* 尺寸容器:操船台只佔左欄寬度後這一格在 1280–1366 寬時約 155–175 px(@container) */
+        container-type: inline-size;
+      }
       .panel {
         height: 100%;
         display: flex;
@@ -33,6 +37,10 @@ export class TelegraphControl extends LitElement {
         min-height: 0;
         font-size: 12px;
         line-height: 1;
+        /* 窄格(1280–1366 寬的操船台約 155–175 px)也不換行;鈕很矮時(720 高每鈕約 13 px)文字不溢出到相鄰的鈕上 */
+        white-space: nowrap;
+        overflow: hidden;
+        gap: 4px;
       }
       .list button.stop {
         border-color: var(--ob-accent-strong);
@@ -52,6 +60,13 @@ export class TelegraphControl extends LitElement {
       .zh {
         font-size: 11px;
         opacity: 0.85;
+      }
+      /* 窄格(內容寬 < 150 px):縮小左右內距,最長的「EFAS 緊急全速倒車 −150」留在一行內 */
+      @container (max-width: 150px) {
+        .list button {
+          padding: 0 4px;
+          gap: 2px;
+        }
       }
     `,
   ];

@@ -27,12 +27,13 @@ export class EventStream extends LitElement {
       }
       .filters {
         display: flex;
-        gap: 3px;
+        gap: 2px;
         flex-wrap: wrap;
       }
+      /* 六個來源篩選鈕在 320 px 寬的欄內排成一行(左右內距 4 px);折成兩行會少掉一列事件的高度 */
       .filters button {
         min-height: 20px;
-        padding: 0 6px;
+        padding: 0 4px;
         font-size: 11px;
       }
       .filters button.src-traffic.active {

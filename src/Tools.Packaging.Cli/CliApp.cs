@@ -66,10 +66,11 @@ public sealed class CliApp
         發行版(tools/build-release.*;規劃書第 5.4–5.5 節)
           release manifest --dir <發行目錄> --version <版本> [--git <版次>] [--branch <分支>] [--runtime win-x64|linux-x64]
                            [--component <名稱>=<版本>[=<相對路徑>[=<狀態>]]]... [--note <註記>]...
+                           (目錄內有安裝程式不安裝的檔案 *.pdb 時失敗並列出:清單只能列安裝後會存在的檔案)
           release verify --dir <發行目錄> [--json]                      (安裝前:目錄內容須與 manifest.json 完全相同)
           release verify --dir <安裝根目錄> --installed [--json] [--max-items <N>]
                            (安裝後/使用中:manifest.json 疊上更新包覆蓋清單 state/installed-files.json;執行期資料不算多出、
-                            本機修改的 config\ 設定只列提醒;程式/資料檔缺少或雜湊不符、app\ 內多出檔案為錯誤;每類預設列前 10 筆)
+                            本機修改的 config\ 設定只列提醒;程式/資料檔缺少或雜湊不符、app\ 內多出檔案或目錄連結為錯誤;每類預設列前 10 筆)
         直連同步與隨身碟備援
           serve [--root] [--listen <直連 IP>] [--port 7300]                            (船上筆電)
           sync --ship <IP|船舶ID> (--key | --cert) [--push <檔.sbupd>]... [--store] [--port 7300]
@@ -629,9 +630,11 @@ public sealed class CliApp
     /// </summary>
     private int VerifyInstalled(string root, CliArgs a)
     {
+        // 先解析參數再核對:--max-items 寫錯時立刻回用法錯誤,不要等全部檔案的雜湊算完(程式在隨身碟、檔案數千個時要等很久)才把結果丟掉
+        var maxItems = a.Int("max-items", 10);
         var rep = InstalledVerifier.Verify(root);
         if (a.Flag("json")) _out.WriteLine(PackageJson.ToText(rep));
-        else InstalledVerifier.Write(rep, _out, _err, a.Int("max-items", 10));
+        else InstalledVerifier.Write(rep, _out, _err, maxItems);
         return rep.Ok ? 0 : 1;
     }
 

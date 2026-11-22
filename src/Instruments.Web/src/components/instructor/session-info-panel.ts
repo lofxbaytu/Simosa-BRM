@@ -115,6 +115,27 @@ export class SessionInfoPanel extends LitElement {
         flex-direction: column;
         gap: 2px;
       }
+      /* 休息時間確認的勾選列(整列寬):聲明文字要換行顯示。共用樣式的 label 不換行、input 寬 100%,
+         原本勾選框佔滿整列、聲明文字被推到面板外看不到(內容寬約 880 px;第二十九輪 L2 量測發現) */
+      .form label.full {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+        white-space: normal;
+        color: var(--ob-text);
+      }
+      .form label.full input[type='checkbox'] {
+        flex: none;
+        width: 16px;
+        height: 16px;
+        min-height: 0;
+        margin: 1px 0 0;
+        padding: 0;
+      }
+      :host([compact]) .form label.full input[type='checkbox'] {
+        width: 20px;
+        height: 20px;
+      }
       :host([compact]) table,
       :host([compact]) .form,
       :host([compact]) .status,

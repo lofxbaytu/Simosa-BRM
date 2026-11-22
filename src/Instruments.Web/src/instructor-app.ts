@@ -194,10 +194,10 @@ export class InstructorApp extends LitElement {
         color: #1a1000;
         border-color: var(--ob-warning);
       }
+      /* 狀態徽章(故障、階段、休息時間未確認、警報未確認…)直接當 header 的排版項目(display: contents):一個一個接在同一行後面換行。
+         原本整組是一個不可分的方塊,放不下時整組掉到下一行,1366 寬且徽章多時 header 折成三行、下面的欄少了約 40 px 高 */
       .alarms {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
+        display: contents;
       }
       .alarms .alarm {
         font-weight: 700;
@@ -239,20 +239,76 @@ export class InstructorApp extends LitElement {
         gap: 6px;
         min-height: 0;
       }
+      /* 三欄各自是直向的 flex 容器:欄內面板不互相擠壓(不會被擠到高度 0 或疊到鄰居上),放不下時由欄(或欄內的捲動區)自己捲動。
+         判定由端對端測試把關(tests/e2e/support/layout.ts;src/Instruments.Web/README.md「版面與解析度」) */
       .col {
-        display: grid;
+        display: flex;
+        flex-direction: column;
         gap: 6px;
         min-height: 0;
+        min-width: 0;
       }
+      /* 左欄:執行控制在最上面、不隨下方捲動區捲走(凍結 / 恢復 / 重設 / 結束練習與時間倍率任何高度都看得到);
+         其餘面板(情境、時間表、畫面錄影)在下方的捲動區。欄高不夠放完整的執行控制(約 265 px)加 520 px 的捲動區時,
+         執行控制先縮(flex-shrink 8):最少留到時間倍率那一列(138 px,剛好切在該列與快照鈕之間;快照、快照清單與說明在面板內捲動),
+         捲動區最少 220 px(情境面板的清單、幾行詳細區與「載入」鈕)。兩者都在最小值仍放不下(欄高 < 364 px)才整欄捲動 */
       .col.left {
-        /* 四個面板(情境/時間表/…)各一列;端對端測試發現 1600×1000 下只有三列時情境面板的載入鈕被蓋住 */
-        grid-template-rows: minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 0.8fr) auto;
+        overflow-y: auto;
+        scrollbar-width: thin;
       }
-      .col.center {
-        grid-template-rows: minmax(0, 1fr) auto;
+      .col.left > brm-run-control {
+        flex: 0 8 auto;
+        min-height: 138px;
       }
+      .left-scroll {
+        flex: 1 1 520px;
+        min-height: 220px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+      }
+      .left-scroll > * {
+        flex: 0 0 auto;
+      }
+      /* 情境面板:捲動區高度的 70%(250–440 px;捲動區不到 250 px 時與捲動區同高),不捲動時「載入」鈕就在捲動區的可見範圍內,
+         下面露出時間表面板的開頭;捲動區放得下全部面板時(高螢幕)情境面板吃掉剩餘高度 */
+      .left-scroll > brm-scenario-panel {
+        flex: 1 0 min(100%, clamp(250px, 70%, 440px));
+      }
+      /* 時間表面板取自然高度,項目清單超過 220 px 時在面板內捲動(確認快速鈕留在清單下方) */
+      .left-scroll > brm-timeline-panel {
+        --brm-timeline-list-max: 220px;
+      }
+      /* 中欄:航跡圖至少 180 px;下方面板區依內容高度,最多 36vh,放不下時自己捲動 */
+      .col.center > .plot {
+        flex: 1 1 0;
+        min-height: 180px;
+      }
+      /* 右欄:事件串流至少 190 px(清單約 120 px:單行的事件 5 列,320 px 寬的欄內折成兩行的事件 3 列);BRM 標記與 VHF 取自然高度;
+         學員操作與教官指令兩個紀錄各有基本高度;
+         欄有餘裕時三個清單依 2:1:1 分掉剩餘高度,加起來超過欄高時整欄捲動。
+         順序是「要操作的在前、只看的紀錄在後」:事件 → BRM 標記 → VHF → 學員操作 → 教官指令(Tab 順序相同) */
       .col.right {
-        grid-template-rows: minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 0.5fr) auto;
+        overflow-y: auto;
+        scrollbar-width: thin;
+      }
+      .col.right > * {
+        flex: 0 0 auto;
+      }
+      .col.right > brm-event-stream {
+        flex: 2 0 190px;
+      }
+      .col.right > brm-operation-log {
+        flex: 1 0 112px;
+      }
+      .col.right > brm-command-log {
+        flex: 1 0 88px;
+      }
+      /* BRM 標記清單超過 110 px(約 5 筆)時在面板內捲動,匯出鈕留在清單下方 */
+      .col.right > brm-marker-bar {
+        --brm-marker-list-max: 110px;
       }
       header .warn-badge {
         color: var(--ob-warning);
@@ -278,10 +334,9 @@ export class InstructorApp extends LitElement {
         white-space: normal;
         margin-top: 10px;
       }
-      .center .plot {
-        min-height: 0;
-      }
       .center .bottom {
+        flex: 0 1 auto;
+        min-height: 0;
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         /* 列高依面板內容(不平均分配),放不下時整列捲動,面板不會互相疊上 */
@@ -290,35 +345,27 @@ export class InstructorApp extends LitElement {
         gap: 6px;
         max-height: 36vh;
         overflow: auto;
+        scrollbar-width: thin;
       }
-      .col.right brm-marker-bar {
-        max-height: 30vh;
-      }
-      /* 寬度 ≤ 1900 px:conning 條折成兩列(conning-bar.ts 同一門檻),需要較高的列 */
+      /* 寬度 ≤ 1900 px:conning 條折成兩列(conning-bar.ts 同一門檻),需要較高的列;中欄下方的面板改兩欄
+         (三欄時每個面板只有約 300 px,環境面板的浪列輸入框會被「套用 / 關閉」鈕蓋住) */
       @media (max-width: 1900px) {
         .full {
           grid-template-rows: minmax(220px, 30vh) minmax(0, 1fr);
         }
+        .center .bottom {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
       }
       @media (max-width: 1500px) {
-        .full {
-          grid-template-rows: minmax(220px, 30vh) minmax(0, 1fr);
-        }
         .body {
           grid-template-columns: 280px minmax(0, 1fr) 320px;
         }
       }
-      /* 1366×768 等寬度 ≤ 1440px 的筆電:中欄下方四個面板改兩列兩欄;左欄面板依內容高度排列、整欄捲動,避免面板擠壓與文字截斷 */
+      /* 1366×768 等寬度 ≤ 1440px 的筆電:中欄下方面板區可以高一點(航跡圖仍至少 180 px) */
       @media (max-width: 1440px) {
         .center .bottom {
-          grid-template-columns: 1fr 1fr;
           max-height: 42vh;
-        }
-        .col.left {
-          /* auto 列在可捲動的格線容器內會被平均分配(Chromium),用 max-content 讓列高跟著內容 */
-          grid-template-rows: max-content max-content max-content;
-          align-content: start;
-          overflow-y: auto;
         }
       }
 
@@ -1265,22 +1312,26 @@ export class InstructorApp extends LitElement {
     const moor = this.mooringContext(overlay);
     // 核心有錨資料時一律輸出 anchors:錨使用中、情境初始已錨泊或情境有泊位/拖船時錨面板排前面,否則放在最後(不擠下警報監看)
     const anchorsFirst = (s.anchors ?? []).some((a) => a.status !== 'stowed') || this.activeScenario?.anchorsInitial === true || s.berth !== undefined || (s.tugs?.length ?? 0) > 0;
+    // 版面與 DOM(= Tab)順序(第二十九輪 L2):左欄 執行控制(不在捲動區內,任何視窗高度都看得到)→ 捲動區(情境 → 時間表 → 畫面錄影);
+    // 中欄 航跡圖 → 下方面板區;右欄 事件 → BRM 標記 → VHF → 學員操作 → 教官指令(要操作的在前、只看的紀錄在後)。
     return html`
       <div class="full" ?hidden=${this.view !== 'live'}>
         <brm-conning-bar .state=${s} .config=${cfg} .issues=${this.issues} .noData=${!this.hasReceived}></brm-conning-bar>
         <div class="body">
           <div class="col left">
-            <brm-scenario-panel .scenarios=${this.scenarios} .activeId=${this.activeScenario?.id ?? ''} .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-scenario-panel>
-            <brm-timeline-panel
-              .timeline=${this.activeScenario?.timeline ?? []}
-              .events=${this.events}
-              .scenarioStatus=${s.scenario ?? null}
-              .assessment=${this.activeScenario?.assessment ?? null}
-              .simTime=${s.t}
-              .unsupported=${this.engineUnsupported}
-            ></brm-timeline-panel>
             <brm-run-control .frozen=${s.flags?.frozen ?? false} .ended=${s.scenario?.ended ?? false} .tick=${s.tick} .simTime=${s.t} .snapshots=${this.snapshots} .timeScale=${this.timeScale} .restHoursConfirmed=${!!this.sessionInfo?.restHoursConfirmation}></brm-run-control>
-            <brm-recording-panel .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
+            <div class="left-scroll">
+              <brm-scenario-panel .scenarios=${this.scenarios} .activeId=${this.activeScenario?.id ?? ''} .rejection=${this.scenarioRejection} .busy=${this.loadPending}></brm-scenario-panel>
+              <brm-timeline-panel
+                .timeline=${this.activeScenario?.timeline ?? []}
+                .events=${this.events}
+                .scenarioStatus=${s.scenario ?? null}
+                .assessment=${this.activeScenario?.assessment ?? null}
+                .simTime=${s.t}
+                .unsupported=${this.engineUnsupported}
+              ></brm-timeline-panel>
+              <brm-recording-panel .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
+            </div>
           </div>
           <div class="col center">
             <brm-track-plot class="plot" .state=${s} .config=${cfg} .history=${this.history} .noData=${!this.hasReceived} .overlay=${overlay} .targets=${s.targets} .alarmTargets=${this.alarmTargets} target-table></brm-track-plot>
@@ -1300,10 +1351,10 @@ export class InstructorApp extends LitElement {
           </div>
           <div class="col right">
             <brm-event-stream .events=${this.events} voiceButtons .unsupported=${this.engineUnsupported}></brm-event-stream>
-            <brm-operation-log .events=${this.opEvents}></brm-operation-log>
-            <brm-command-log .entries=${this.commandLog}></brm-command-log>
             <brm-marker-bar .markers=${this.markers}></brm-marker-bar>
             ${this.vhfUrl && this.sourceMode === 'live' ? html`<brm-vhf dualWatch .url=${this.vhfUrl} .station=${this.vhfStation}></brm-vhf>` : nothing}
+            <brm-operation-log .events=${this.opEvents}></brm-operation-log>
+            <brm-command-log .entries=${this.commandLog}></brm-command-log>
           </div>
         </div>
       </div>

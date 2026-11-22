@@ -32,8 +32,8 @@ public sealed class ReleaseManifest
     public List<string> Notes { get; set; } = new();
     /// <summary>發行目錄內全部檔案(相對路徑、以 '/' 分隔、排序),不含本清單</summary>
     public List<ReleaseFile> Files { get; set; } = new();
-    public int FileCount => Files.Count;
-    public long TotalSize => Files.Sum(f => f.Size);
+    public int FileCount => Files?.Count ?? 0;
+    public long TotalSize => Files?.Sum(f => f?.Size ?? 0) ?? 0;
 }
 
 public sealed class ReleaseComponent
@@ -66,6 +66,7 @@ public sealed class ReleaseVerification
 /// 產生與核對發行清單:掃描目錄(不含 manifest.json 與暫存檔)、每檔 SHA-256;核對時檔案缺少、雜湊/大小不符、多出的檔案都列為錯誤。
 /// 這是「剛複製好的發行版」的核對(安裝前);使用中的安裝根目錄有執行期資料、本機設定與更新包換過的檔案,
 /// 改用 <see cref="InstalledVerifier"/>(<c>simosa-pkg release verify --installed</c>)。
+/// 發行清單所列的檔案必須是安裝程式會安裝的檔案:目錄內有安裝程式排除的檔名(<see cref="InstallerExcludedPatterns"/>)時 <see cref="Build"/> 失敗。
 /// </summary>
 public static class ReleaseManifestBuilder
 {
@@ -77,17 +78,49 @@ public static class ReleaseManifestBuilder
     /// </summary>
     private static readonly Regex UninstallerFile = new(@"^unins\d{3}\.(exe|dat|msg)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// 安裝程式不會安裝的檔名樣式 — 與 tools/installer/SimosaBRM.iss [Files] 主項目的 Excludes(扣掉另列安裝的 \config\*)必須完全相同,
+    /// <b>兩邊要一起改</b>:tools/installer/check-iss.py 以正規表示式讀下面這一行(請維持「new[] { "…", "…" }」寫在同一行)與 .iss 對照,
+    /// tests/Tools.Packaging.Tests/ReleaseTests 再對照一次。樣式只比對檔名(不含路徑),'*' 與 '?' 為萬用字元,不分大小寫。
+    /// 這些檔案一旦列進發行清單,以安裝程式安裝的筆電上就沒有清單所列的檔案,<c>release verify --installed</c> 會報「檔案缺少」
+    /// (審查第二十九輪:Godot .NET 匯出把 .pdb 放進 app/visual/data_*/,而安裝程式排除 *.pdb)。所以掃描時不是依檔名略過
+    /// (<see cref="Skip"/> 的 Thumbs.db),就是讓 <see cref="Build"/> 失敗(*.pdb:偵錯符號不進發行版,也不進軟體更新包)。
+    /// </summary>
+    public static readonly IReadOnlyList<string> InstallerExcludedPatterns = new[] { "*.pdb", "Thumbs.db" };
+
     internal static bool IsSkipped(string file)
     {
         var name = Path.GetFileName(file);
         return Skip.Contains(name) || UninstallerFile.IsMatch(name);
     }
 
+    /// <summary>檔名是否符合安裝程式的排除樣式(<see cref="InstallerExcludedPatterns"/>;只看檔名,不分大小寫)。</summary>
+    public static bool IsExcludedByInstaller(string file)
+    {
+        var name = Path.GetFileName(file.Replace('\\', '/'));
+        return InstallerExcludedPatterns.Any(p => System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(p, name, ignoreCase: true));
+    }
+
+    /// <summary>目錄內會被列進發行清單、安裝程式卻不會安裝的檔案(相對路徑,排序)。</summary>
+    public static List<string> FindExcludedByInstaller(string dir)
+        => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Where(f => !IsSkipped(f) && IsExcludedByInstaller(f))
+            .Select(f => PackagePaths.Relative(dir, f)).OrderBy(p => p, StringComparer.Ordinal).ToList();
+
     public static ReleaseManifest Build(string dir, string version, string? gitRevision = null, string? gitBranch = null, string? runtime = null,
                                         IReadOnlyDictionary<string, ReleaseComponent>? components = null, IEnumerable<string>? notes = null, TimeProvider? clock = null)
     {
         if (!Directory.Exists(dir)) throw new DirectoryNotFoundException($"找不到發行目錄:{dir}");
         PackageVersion.Parse(version);
+        // 安裝程式會排除、清單卻會列出的檔案:在產生端擋下(tools/build-release.* 與手動組裝的發行版都經過這裡),不等到安裝後才報「檔案缺少」
+        var excluded = FindExcludedByInstaller(dir);
+        if (excluded.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"發行目錄內有 {excluded.Count} 個安裝程式不會安裝的檔案(檔名樣式 {string.Join("、", InstallerExcludedPatterns)};tools/installer/SimosaBRM.iss [Files] 的 Excludes):"
+                + string.Join("、", excluded.Take(5)) + (excluded.Count > 5 ? $" …等 {excluded.Count} 個" : "")
+                + "。這些檔案若列進發行清單,以安裝程式安裝後 release verify --installed 會報「檔案缺少」;請先刪除再產生清單"
+                + "(偵錯符號 *.pdb 不進發行版:tools/build-release.* 在 Godot 視景匯出之後、簽章更新包與清單之前刪除 app/ 與 tools/ 之下的 *.pdb)");
+        }
         clock ??= TimeProvider.System;
         var m = new ReleaseManifest
         {
@@ -115,6 +148,8 @@ public static class ReleaseManifestBuilder
         if (!File.Exists(path)) throw new FileNotFoundException($"發行目錄沒有 {ReleaseManifest.FileName}:{dir}");
         var m = PackageJson.Load<ReleaseManifest>(path, "發行清單");
         if (m.Format != ReleaseManifest.FormatId) throw new InvalidDataException($"發行清單格式不是 {ReleaseManifest.FormatId}:{m.Format}");
+        // "files": null(損毀或手動編輯):不是「沒有檔案的發行版」,當成清單損毀回報,不讓呼叫端以未處理例外中止、也不讓空目錄因此「核對通過」
+        if (m.Files is null) throw new InvalidDataException("發行清單的 files 不是清單(null):清單損毀");
         return m;
     }
 
@@ -132,16 +167,25 @@ public static class ReleaseManifestBuilder
         var v = new ReleaseVerification { Manifest = m };
         if (!PackageVersion.TryParse(m.Version, out _)) v.Errors.Add($"版本格式不合法:{m.Version}");
         var listed = new Dictionary<string, ReleaseFile>(StringComparer.Ordinal);
+        var excludedByInstaller = new List<string>();
         foreach (var f in m.Files)
         {
+            // 清單項目為 null 或沒有 path(損毀或手動編輯):列為「清單路徑不合法」,與安裝模式(InstalledVerifier)一致,不以未處理例外中止
             string norm;
-            try { norm = PackagePaths.Normalize(f.Path); }
+            try { norm = PackagePaths.Normalize(f?.Path ?? ""); }
             catch (InvalidDataException ex)
             {
                 v.Errors.Add($"清單路徑不合法:{ex.Message}");
                 continue;
             }
-            if (!listed.TryAdd(norm, f)) v.Errors.Add($"清單路徑重複:{norm}");
+            if (!listed.TryAdd(norm, f!)) v.Errors.Add($"清單路徑重複:{norm}");
+            else if (IsExcludedByInstaller(norm)) excludedByInstaller.Add(norm);
+        }
+        // 舊版 simosa-pkg 產生的清單可能列有安裝程式不安裝的檔案(*.pdb):這個目錄本身核對得過,但以安裝程式安裝後會報「檔案缺少」
+        if (excludedByInstaller.Count > 0)
+        {
+            v.Warnings.Add($"清單列有 {excludedByInstaller.Count} 個安裝程式不會安裝的檔案(檔名樣式 {string.Join("、", InstallerExcludedPatterns)};例如 {excludedByInstaller[0]}):"
+                           + "以安裝程式安裝後 release verify --installed 會把它們報為「檔案缺少」;請刪除這些檔案後以目前的 simosa-pkg 重新產生清單(release manifest)");
         }
         var present = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))

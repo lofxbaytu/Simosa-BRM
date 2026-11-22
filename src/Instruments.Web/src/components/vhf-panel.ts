@@ -48,8 +48,9 @@ export class VhfPanel extends LitElement {
       :host {
         display: block;
       }
+      /* 駕駛台右欄在 768 高的筆電上以 --brm-vhf-* 略縮(間距、PTT、訊息列最小高度;app.ts),未設定時為原尺寸 */
       .tile {
-        gap: 5px;
+        gap: var(--brm-vhf-gap, 5px);
       }
       .status {
         display: flex;
@@ -131,7 +132,7 @@ export class VhfPanel extends LitElement {
         align-items: center;
       }
       .ptt {
-        min-height: 44px;
+        min-height: var(--brm-vhf-ptt-height, 44px);
         font-size: 15px;
         font-weight: 700;
         letter-spacing: 0.06em;
@@ -161,7 +162,7 @@ export class VhfPanel extends LitElement {
       }
       .log {
         flex: 1 1 auto;
-        min-height: 54px;
+        min-height: var(--brm-vhf-log-min, 54px);
         max-height: 150px;
         overflow-y: auto;
         font-size: 11px;
@@ -222,6 +223,13 @@ export class VhfPanel extends LitElement {
         gap: 4px;
         align-items: center;
         font-size: 11px;
+      }
+      /* 平時的說明文字可設為單行(--brm-vhf-hint-wrap: nowrap;放不下以 … 截斷,完整文字在 title);二次確認中的提示照常換行 */
+      .dsc .hint:not(.warn) {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: var(--brm-vhf-hint-wrap, normal);
       }
       .dsc button {
         min-height: 22px;
@@ -468,7 +476,7 @@ export class VhfPanel extends LitElement {
           <span class="label">DSC</span>
           <button class="distress ${this.armed === 'distress' ? 'armed' : ''}" ?disabled=${!m?.joined} @click=${() => this.dsc('distress')}>${this.armed === 'distress' ? '再按一次送出 DISTRESS' : 'DISTRESS'}</button>
           <button class="urgency ${this.armed === 'urgency' ? 'armed' : ''}" ?disabled=${!m?.joined} @click=${() => this.dsc('urgency')}>${this.armed === 'urgency' ? '再按一次送出 URGENCY' : 'URGENCY'}</button>
-          ${this.armed ? html`<button class="cancel" @click=${() => this.disarm()}>取消</button><span class="hint warn">文字欄內容會附在 DSC 警示;${DSC_ARM_MS / 1000} s 內未確認自動取消</span>` : html`<span class="hint">簡化 DSC:文字警示送所有站(非真實 DSC 編碼)</span>`}
+          ${this.armed ? html`<button class="cancel" @click=${() => this.disarm()}>取消</button><span class="hint warn">文字欄內容會附在 DSC 警示;${DSC_ARM_MS / 1000} s 內未確認自動取消</span>` : html`<span class="hint" title="簡化 DSC:文字警示送所有站(非真實 DSC 編碼)">簡化 DSC:文字警示送所有站(非真實 DSC 編碼)</span>`}
         </div>
       </div>
     `;

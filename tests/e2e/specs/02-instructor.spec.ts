@@ -1,7 +1,9 @@
 // 教官站完整模式(instructor.html):情境清單 → 載入 E07 → 狀態幀情境 id 變更、載入鈕回復;無效內嵌情境 → 核心拒絕(scenarioLoadRejected)
-// 並在面板顯示;下舵令 20°(操船台舵輪預設鈕)→ 操船台舵角指示變化;凍結/恢復(執行控制面板)→ 狀態幟 frozen 與 header「已凍結」。
+// 並在面板顯示;下舵令 20°(操船台舵輪預設鈕)→ 操船台舵角指示變化;凍結/恢復(執行控制面板)→ 狀態幟 frozen 與 header「已凍結」;
+// 1536×864 與 1920×1080 下每個控制項都點得到、載入與執行控制不必捲動(版面;判定在 support/layout.ts)。
 import { bridgeUrl, instructorUrl } from '../support/env.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
+import { INSTRUCTOR_LAYOUT, layoutFailures, probeLayout } from '../support/layout.ts';
 import { PageErrors, scenarioLoadButton, waitConnected } from '../support/pages.ts';
 
 /** 與 tests/SimCore.Tests/ScenarioLoadRejectionTests.cs 相同的兩個結構 error:多邊形只有 2 點、hardFail 引用不存在的區域 */
@@ -25,16 +27,17 @@ test('情境清單 → 載入 E07 → 狀態幀情境 id 變更、載入鈕回�
   expect(await items.count(), '建置時匯入的情境數(data/scenarios/*.yaml)').toBeGreaterThanOrEqual(20);
   const e07 = items.filter({ hasText: 'E07_steering_failure' });
   await expect(e07).toHaveCount(1);
-  // 清單為捲動容器,項目可能被說明區遮住:捲到可見後直接派發 click(面板以 @click 選取)
+  // 清單為捲動容器:捲到可見後以真實點擊選取
   await e07.scrollIntoViewIfNeeded();
-  await e07.dispatchEvent('click');
+  await e07.click();
   await expect(e07).toHaveClass(/selected/);
   const load = scenarioLoadButton(page);
   await expect(load).toBeEnabled();
   await expect(load).toHaveText('載入 E07_steering_failure');
   const switched = core.waitState((s) => s.scenario?.id === 'E07_steering_failure', 30_000, 'E07 的狀態幀');
-  // 1600×1000 視窗下左欄情境面板的內容超出格列、載入鈕被時間表面板蓋住(真實點擊會被攔截):直接派發 click 給按鈕(面板以 @click 處理)
-  await load.dispatchEvent('click');
+  // 真實點擊:載入鈕固定在情境面板底部、不必捲動就點得到(第二十九輪 L2 之前情境面板的內容超出格列,鈕被時間表面板蓋住,
+  // 當時只能以 dispatchEvent 繞過;被別的面板攔截時這裡會失敗)
+  await load.click();
   const frame = await switched;
   expect(frame.scenario?.id).toBe('E07_steering_failure');
   // 載入成功:載入鈕回復(不停在「載入中…」)、清單標示已載入、header 顯示情境 id
@@ -147,6 +150,62 @@ test('凍結後教官站顯示「已凍結」且「恢復」鈕可用(核心凍�
     await panel.locator('button.resume').click();
     await resumedEvent;
   } finally {
+    await ensureRunning(core);
+  }
+});
+
+test('完整教官站 1536×864 與 1920×1080:控制項不被蓋住,載入、凍結 / 恢復 / 結束、時間倍率不必捲動就點得到', async ({ page, env, core }) => {
+  // 第二十九輪 L2:左欄四個面板原本以固定比例分列,情境面板的詳細區(簡報結構區塊)比格列高,「載入」「開始規劃時間」被時間表面板蓋住;
+  // 1536×864(1920×1080 筆電在 Windows 125% 縮放)下執行控制的「結束練習」「時間倍率」「快照」被畫面錄影面板蓋住、事件串流只剩約 10 px 高。
+  // 現在三欄各自捲動、執行控制固定在左欄最上方;判定與開發時的量測腳本共用 support/layout.ts 的 probeLayout。
+  // 情境用 E13(拖船、錨、繫纜、泊位面板都有)。
+  const errors = new PageErrors(page);
+  const id = 'E13_tug_berthing_mailiao';
+  await ensureRunning(core);
+  try {
+    for (const size of [{ width: 1536, height: 864 }, { width: 1920, height: 1080 }]) {
+      await test.step(`${size.width}×${size.height}`, async () => {
+        await page.setViewportSize(size);
+        await page.goto(instructorUrl(env));
+        await waitConnected(page);
+        // 以真實點擊選情境並載入(教官站據此顯示時間表與確認鈕;第二個視窗時核心已是 E13,以模擬時間歸零辨識重新載入)
+        const item = page.locator('brm-scenario-panel .list .item').filter({ hasText: id });
+        await expect(item).toHaveCount(1);
+        await item.scrollIntoViewIfNeeded();
+        await item.click();
+        const load = scenarioLoadButton(page);
+        await expect(load).toHaveText(`載入 ${id}`);
+        const loaded = core.waitState((s) => s.scenario?.id === id && s.t < 5, 30_000, `${id} 重新載入後的狀態幀`);
+        await load.click();
+        await loaded;
+        await expect(load).toBeEnabled({ timeout: 15_000 });
+        await expect(page.locator('header .ship')).toContainText(id);
+        for (const tag of ['brm-tug-panel', 'brm-anchor-panel', 'brm-mooring-panel']) await expect(page.locator(`.bottom ${tag}`)).toBeVisible();
+        await expect(page.locator('brm-timeline-panel .list .item').first()).toBeVisible();
+        const report = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
+        expect(report.controls.total, '量到的控制項數(button / input / select)').toBeGreaterThanOrEqual(150);
+        expect(layoutFailures(report), `完整教官站 ${size.width}×${size.height} 的版面問題`).toEqual([]);
+        // 真實點擊(被別的面板攔截時 Playwright 會失敗):凍結 → 恢復、時間倍率 ×2 → ×1;結束練習只做點擊前檢查(不真的結束)
+        const panel = page.locator('brm-run-control');
+        const frozenEvent = core.waitEvent('frozen', 10_000);
+        await panel.locator('button.freeze').click();
+        await frozenEvent;
+        await expect(panel.locator('button.resume')).toBeEnabled({ timeout: 3000 });
+        const resumedEvent = core.waitEvent('resumed', 10_000);
+        await panel.locator('button.resume').click();
+        await resumedEvent;
+        await panel.locator('.seg button', { hasText: '×2' }).click();
+        await expect(panel.locator('.panel-title .zh')).toContainText('×2');
+        await panel.locator('.seg button', { hasText: /^×1$/ }).click();
+        await expect(panel.locator('.panel-title .zh')).toContainText('×1');
+        await panel.locator('button.end').click({ trial: true });
+        await load.click({ trial: true });
+      });
+    }
+    errors.expectNone();
+  } finally {
+    // 不論斷言結果:核心恢復執行、時間倍率回 1(後面的案例各自以 ensureScenario 載入需要的情境)
+    core.send({ type: 'timeScale', value: 1 });
     await ensureRunning(core);
   }
 });

@@ -16,7 +16,7 @@ public static class InstallFindingCategories
     public const string Mismatch = "mismatch";
     /// <summary>讀取失敗(磁碟錯誤、權限)</summary>
     public const string Unreadable = "unreadable";
-    /// <summary>程式目錄(app/、tools/updater/)內多出清單與覆蓋清單都沒有的檔案</summary>
+    /// <summary>程式目錄(app/、tools/updater/)內多出清單與覆蓋清單都沒有的檔案,或有目錄連結(其下內容無法核對;路徑以 '/' 結尾)</summary>
     public const string Extra = "extra";
 
     // ── 提醒(結束碼 0)──
@@ -24,7 +24,7 @@ public static class InstallFindingCategories
     public const string ConfigModified = "configModified";
     /// <summary>清單內 config/ 之下的檔案不在</summary>
     public const string ConfigMissing = "configMissing";
-    /// <summary>執行期資料位置以外、也不在程式目錄內的未列檔案</summary>
+    /// <summary>執行期資料位置以外、也不在程式目錄內的未列檔案,或目錄連結(不跟進;路徑以 '/' 結尾)</summary>
     public const string Unlisted = "unlisted";
     /// <summary>無法核對的前綴(舊安裝沒有覆蓋清單、覆蓋清單與 installed.json 不一致)</summary>
     public const string Unverifiable = "unverifiable";
@@ -40,10 +40,10 @@ public static class InstallFindingCategories
         Missing => "檔案缺少",
         Mismatch => "內容不符(大小或 SHA-256)",
         Unreadable => "無法讀取",
-        Extra => "程式目錄內多出的檔案(發行清單與更新包都沒有)",
+        Extra => "程式目錄內多出的檔案(發行清單與更新包都沒有)或目錄連結",
         ConfigModified => "設定檔已依本機修改(正常)",
         ConfigMissing => "設定檔不在(本機用不到可忽略;需要時自發行版的 config\\ 複製,安裝程式不會覆寫既有設定)",
-        Unlisted => "清單沒有列的檔案(不在程式目錄內)",
+        Unlisted => "清單沒有列的檔案或目錄連結(不在程式目錄內)",
         Unverifiable => "無法核對(不算錯誤)",
         State => "狀態",
         _ => category,
@@ -91,6 +91,12 @@ public sealed class InstallCheckOverlay
     public int Removed { get; set; }
     /// <summary>覆蓋清單寫入之後又重新安裝過發行版(manifest.json 換過)</summary>
     public bool Reinstalled { get; set; }
+    /// <summary>
+    /// 套用沒有完成的更新包(覆蓋清單已寫、installed.json 完全沒有它的紀錄:在最後一步之前中斷);
+    /// 以同一個更新包重新套用即可恢復一致。沒有這種情況時 null。
+    /// </summary>
+    public string? InterruptedPackageId { get; set; }
+    public string? InterruptedVersion { get; set; }
 }
 
 /// <summary>安裝模式核對結果(<c>simosa-pkg release verify --installed --json</c> 的輸出;format simosa-install-check/1)。</summary>
@@ -129,8 +135,9 @@ public sealed class InstalledVerifyOptions
 /// 都列為錯誤,只適用剛複製好的發行版。本類別的預期內容 = 發行清單 manifest.json 疊上更新包覆蓋清單 state/installed-files.json
 /// (<see cref="InstalledFiles"/>),結果分三級:
 /// <list type="bullet">
-/// <item><b>錯誤</b>:清單所列的程式/資料檔缺少、大小或 SHA-256 不符、讀不出來;程式目錄(<see cref="InstalledPaths.ProgramPrefixes"/>)內多出檔案;清單讀不到。</item>
-/// <item><b>提醒</b>:config/ 之下的設定檔已修改或不在;其他位置的未列檔案;無法核對的前綴;狀態說明。</item>
+/// <item><b>錯誤</b>:清單所列的程式/資料檔缺少、大小或 SHA-256 不符、讀不出來;程式目錄(<see cref="InstalledPaths.ProgramPrefixes"/>)內多出檔案
+///   或有目錄連結(其下內容無法核對);清單讀不到。</item>
+/// <item><b>提醒</b>:config/ 之下的設定檔已修改或不在;其他位置的未列檔案與目錄連結;無法核對的前綴;狀態說明。</item>
 /// <item><b>略過</b>:執行期資料位置(<see cref="InstalledPaths.RuntimeData"/>)之下清單沒有列的檔案(不列出、不進入這些目錄)。</item>
 /// </list>
 /// 設定檔「不在」列為提醒而不是錯誤:config/ 是使用者的檔案(安裝程式對既有設定不覆寫、解除安裝不刪),船上筆電用不到 instructor-laptop.json、
@@ -269,6 +276,7 @@ public static class InstalledVerifier
             Present = existing is not null, PackageId = existing?.PackageId, Version = existing?.Version,
             Files = existing?.Files.Count ?? 0, Removed = existing?.Removed.Count ?? 0, Reinstalled = info.Rebased,
             Consistent = installed is not null && overlayError is null && !info.Diverged && !info.Missing,
+            InterruptedPackageId = info.InterruptedPackage?.PackageId, InterruptedVersion = info.InterruptedPackage?.Version,
         };
         if (info.SupersededPackages.Count > 0)
         {
@@ -279,12 +287,19 @@ public static class InstalledVerifier
         }
         if (info.Rebased)
         {
+            // 重新安裝後:清單所列路徑與整個程式目錄只認新的發行清單(安裝程式的 [InstallDelete] 先清空 app\ 與 tools\updater\;
+            // 以壓縮檔或手動複製覆蓋而留下的舊檔會在走訪時列為「多出的檔案」);data\ 等其他位置由更新包新增的檔案仍以覆蓋清單核對
+            var undone = new List<string>();
+            if (info.SupersededFiles > 0) undone.Add($"更新包對 {info.SupersededFiles} 個檔案的變更已被安裝覆蓋");
+            if (info.DroppedProgramFiles > 0) undone.Add($"更新包在程式目錄新增的 {info.DroppedProgramFiles} 個檔案不再列入預期(安裝程式已清除;手動覆蓋而留下者列為多出的檔案)");
             Notice(InstallFindingCategories.State, ReleaseManifest.FileName,
                 (info.PreviousBaseline is { } prev
                     ? $"發行版在最後一次套用更新包之後重新安裝過(覆蓋清單依據的發行清單版本 {prev.Version ?? "?"},目前 {m.Version})"
                     : $"覆蓋清單寫入時安裝根目錄沒有可讀的發行清單,之後才安裝了發行版 {m.Version}")
-                + ":清單所列檔案改以目前的發行清單核對"
-                + (info.SupersededFiles > 0 ? $";更新包對其中 {info.SupersededFiles} 個檔案的變更已被安裝覆蓋,simosa-pkg status 顯示的版次或參數集可能與實際檔案不符,請訪船船長確認(必要時重新派送更新包)" : ""));
+                + ":清單所列檔案與程式目錄(app\\、tools\\updater\\)改以目前的發行清單核對"
+                + (undone.Count > 0 ? $";{string.Join(";", undone)}。simosa-pkg status 顯示的版次或參數集可能與實際檔案不符,請訪船船長確認(必要時重新派送更新包)" : "")
+                // state\previous 是重新安裝「之前」被更新包換下來的元件:這時 rollback 會把舊版的 app\ 或 data\ 放回來(simosa-pkg 目前不會擋)
+                + (File.Exists(Path.Combine(root, "state", "previous", "previous.json")) ? ";重新安裝之前留下的上一版(state\\previous)已不適用,請不要執行 rollback" : ""));
         }
 
         // 預期內容 = 發行清單 − 更新包刪除的路徑 + 更新包寫入的檔案
@@ -368,12 +383,20 @@ public static class InstalledVerifier
                     Skip(rule);
                     continue;
                 }
-                try
-                {
-                    // 目錄連結(junction/symlink)不跟進,避免走出安裝根目錄或形成迴圈
-                    if ((File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0) continue;
-                }
+                var isLink = false;
+                try { isLink = (File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0; }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                if (isLink)
+                {
+                    // 目錄連結(junction/symlink)不跟進(避免走出安裝根目錄或形成迴圈),但一定列出:其下多出的檔案查不到。
+                    // 程式目錄內(或其上層,例如 tools\ 本身)→ 錯誤:連結指到的內容會被載入或被網頁伺服送出;其他位置 → 提醒。
+                    // 清單所列的檔案之後仍依路徑直接核對(會跟著連結走);執行期資料位置(build\ 等)在上面就略過,不算
+                    if (InstalledPaths.IsProgramOrAbove(relSub, cmp))
+                        Error(InstallFindingCategories.Extra, relSub, "目錄連結(junction/symlink),其下內容無法核對:程式目錄內不應有連結,請移除連結本身(不是刪除它指向的內容)");
+                    else
+                        Notice(InstallFindingCategories.Unlisted, relSub, "目錄連結(junction/symlink),不跟進:清單所列的檔案仍依路徑核對,其下未列的檔案沒有檢查");
+                    continue;
+                }
                 Walk(sub, relSub);
             }
         }
@@ -408,7 +431,7 @@ public static class InstalledVerifier
             if (actual is null)
             {
                 if (isConfig) Notice(InstallFindingCategories.ConfigMissing, e.Path, isTrustKey ? "信任公鑰不在(曾以 trust remove 手動移除?以 simosa-pkg trust list 核對)" : null);
-                else Error(InstallFindingCategories.Missing, e.Path, null, source);
+                else Error(InstallFindingCategories.Missing, e.Path, e.PackageVersion is null && ReleaseManifestBuilder.IsExcludedByInstaller(e.Path) ? ExcludedByInstallerDetail : null, source);
                 continue;
             }
             try
@@ -442,11 +465,16 @@ public static class InstalledVerifier
         foreach (var g in gaps)
         {
             if (g.Count == 0 && !alwaysReport) continue;
-            Notice(InstallFindingCategories.Unverifiable, g.Prefix, DescribeGap(g), g.Count);
+            Notice(InstallFindingCategories.Unverifiable, g.Prefix, DescribeGap(g, info), g.Count);
         }
-        Finish(rep, installed);
+        // 目前的發行版之上是否還有套用中的更新包(重新安裝過、或更新包都早於這個發行版的安裝時不算):決定「下一步」建議的安裝程式版本
+        var applied = installed?.AppliedPackages().Count ?? 0;
+        Finish(rep, installed, cmp, packagesOnRelease: applied > 0 && !info.Rebased && applied > info.SupersededPackages.Count);
         return rep;
     }
+
+    /// <summary>發行清單列了安裝程式不安裝的檔案(<see cref="ReleaseManifestBuilder.InstallerExcludedPatterns"/>;舊版 simosa-pkg 產生的清單)而檔案不在時的說明。</summary>
+    private const string ExcludedByInstallerDetail = "安裝程式不安裝這類檔案(偵錯符號等),發行清單不該列入:這是發行版建置的問題,不是檔案損毀,不影響執行";
 
     private static void AddCustomRuntime(List<InstalledPathRule> rules, string root, string? configured, string description, StringComparison cmp)
     {
@@ -460,18 +488,33 @@ public static class InstalledVerifier
         rules.Add(new InstalledPathRule(prefix, description));
     }
 
-    private static string DescribeGap(Gap g)
+    private static string DescribeGap(Gap g, ReconcileInfo info)
     {
-        string Packages(string reason)
-            => string.Join("、", g.Packages.Where(p => p.Reason == reason && p.Version.Length > 0).Select(p => $"{p.Version}({p.Kind ?? "?"})").Distinct());
+        static string List(IEnumerable<TrackedPackage> packages)
+            => string.Join("、", packages.Where(p => p.Version.Length > 0).Select(p => $"{p.Version}({p.Kind ?? "?"})").Distinct());
         var parts = new List<string>();
         if (g.Packages.Any(p => p.Reason == UntrackedReasons.StateUnreadable))
             parts.Add("state/installed.json 無法讀取,無法確認套用過哪些更新包");
-        if (g.Packages.Any(p => p.Reason == UntrackedReasons.Diverged))
-            parts.Add($"覆蓋清單與 state/installed.json 不一致(更新包 {Packages(UntrackedReasons.Diverged)};套用或回復可能中途中斷,先以 simosa-pkg status 確認現行版本)");
+        // 不一致分兩種:這一次核對才發現的(現在式:兩個狀態檔此刻對不上),與先前某次套用時發現、已寫進覆蓋清單的(過去式:現在已一致,
+        // 只是當時作廢的紀錄補不回來)。後者不再指示以 status 確認 — 沒有待處理的事,--json 的 installedFiles.consistent 也是 true
+        var diverged = g.Packages.Where(p => p.Reason == UntrackedReasons.Diverged).ToList();
+        var live = diverged.Where(p => info.NewlyUntracked.Any(n => n.PackageId == p.PackageId && n.Reason == p.Reason)).ToList();
+        var past = diverged.Except(live).ToList();
+        if (live.Count > 0)
+        {
+            var text = $"覆蓋清單與 state/installed.json 不一致(更新包 {List(live)};套用或回復可能中途中斷,先以 simosa-pkg status 確認現行版本)";
+            if (info.InterruptedPackage is { } ip && live.Any(p => p.PackageId == ip.PackageId))
+                text += $";更新包 {ip.Version} 的套用在最後一步中斷、沒有記入 installed.json:以同一個更新包檔重新套用(simosa-pkg apply)即可恢復一致";
+            parts.Add(text);
+        }
+        if (past.Count > 0)
+        {
+            parts.Add($"先前套用或回復更新包 {List(past)} 時,覆蓋清單曾與 state/installed.json 不一致(當時中途中斷過),其下在那之前的紀錄已作廢"
+                      + (info.Diverged ? "" : ";現在兩者已一致"));
+        }
         if (g.Packages.Any(p => p.Reason == UntrackedReasons.NotRecorded))
         {
-            var list = Packages(UntrackedReasons.NotRecorded);
+            var list = List(g.Packages.Where(p => p.Reason == UntrackedReasons.NotRecorded));
             parts.Add(list.Length > 0
                 ? $"更新包 {list} 套用時沒有留下覆蓋清單(由舊版 simosa-pkg 套用,或 state/{InstalledFiles.FileName} 遺失)"
                 : $"state/{InstalledFiles.FileName} 無法讀取");
@@ -480,7 +523,25 @@ public static class InstalledVerifier
         return $"{string.Join(";", parts)}:{count}";
     }
 
-    private static void Finish(InstallCheckReport rep, InstalledState? installed)
+    /// <summary>兩個版本取較大者(其中一個為 null 或格式不合法時取另一個)。</summary>
+    private static string? MaxVersion(string? a, string? b)
+    {
+        var okA = a is not null && PackageVersion.TryParse(a, out _);
+        var okB = b is not null && PackageVersion.TryParse(b, out _);
+        if (!okA) return okB ? b : a ?? b;
+        if (!okB) return a;
+        return PackageVersion.Compare(a!, b!) >= 0 ? a : b;
+    }
+
+    /// <summary>
+    /// 統計各分類筆數,有錯誤時產生「下一步」。重新安裝的版本基準取<b>發行清單版本與現行更新包版本的較大者</b>:
+    /// 套用更新包之後又以更新的安裝程式重新安裝過時,現行更新包版本比發行版舊,照它去找安裝程式會把整個發行版降版。
+    /// 例外(<paramref name="packagesOnRelease"/>):目前的發行版之上還有套用中的更新包、而發行版版本不低於現行更新包時,
+    /// 以同一個發行版重新安裝會把更新包換過的檔案還原(核對報「被還原」),所以要求版本<b>高於</b>發行版的安裝程式。
+    /// 更新包只能寫 app/、data/(與信任清單),而且同一版本不能重複套用、版本須高於曾套用過的最高版本:
+    /// 「以更新包修復」那一句要說明須包含受損的檔案,位於其他位置(tools/、docs/…)的檔案只能以安裝程式修復。
+    /// </summary>
+    private static void Finish(InstallCheckReport rep, InstalledState? installed, StringComparison cmp = StringComparison.Ordinal, bool packagesOnRelease = false)
     {
         foreach (var f in rep.Errors.Concat(rep.Notices))
             rep.Counts[f.Category] = rep.Counts.GetValueOrDefault(f.Category) + 1;
@@ -492,16 +553,63 @@ public static class InstalledVerifier
                 ? "確認 --dir(或 --root)指到安裝根目錄(含 app\\、data\\ 與 manifest.json 的資料夾,例如 D:\\Simosa BRM);發行清單遺失或損毀時,以安裝程式重新安裝到同一位置。"
                 : "發行清單 manifest.json 本身有問題:以安裝程式重新安裝到同一位置。");
         }
-        if (Has(InstallFindingCategories.Missing, InstallFindingCategories.Mismatch, InstallFindingCategories.Unreadable))
+
+        const string installerClears = "安裝程式會先清除舊的程式檔(app\\ 與 tools\\updater\\)再安裝;以壓縮檔或手動複製覆蓋發行版時舊檔不會清除,殘留者會列為「程式目錄內多出的檔案」,依清單刪除";
+        const string kept = "設定檔、練習紀錄與 state\\ 都會保留。";
+        var release = rep.Release?.Version is { } rv && PackageVersion.TryParse(rv, out _) ? rv : null;
+        var current = installed?.Version;   // 現行更新包版本(null:沒套用過更新包,或 installed.json 讀不到)
+        var basis = MaxVersion(release, current);
+        // 「…的安裝程式」:沒套用過更新包 → 原安裝程式;否則依版本基準
+        var installer = current is null || basis is null ? null
+            : packagesOnRelease && release is not null && basis == release ? $"版本高於 {release} 的安裝程式"
+            : $"版本不低於 {basis} 的安裝程式";
+
+        var broken = rep.Errors.Where(e => e.Category is InstallFindingCategories.Missing or InstallFindingCategories.Mismatch or InstallFindingCategories.Unreadable).ToList();
+        var damaged = broken.Where(e => e.Detail != ExcludedByInstallerDetail).ToList();
+        if (damaged.Count > 0)
         {
-            rep.NextSteps.Add(installed?.Version is { } ver
-                ? $"程式或資料檔損壞或不完整,請先不要用於訓練,並通知訪船船長。現行版本 {ver} 是以更新包安裝的:請取得「版本不低於 {ver} 的安裝程式」重新安裝到同一位置,"
-                  + $"或「版本高於 {ver} 的更新包」重新套用(同一版本的更新包不能重複套用;以較舊的安裝程式覆蓋安裝會把更新過的檔案還原成舊版)。設定檔、練習紀錄與 state\\ 都會保留。"
-                : "程式或資料檔損壞或不完整,請先不要用於訓練。以原安裝程式(SimosaBRM-Setup-<版本>.exe)或專用隨身碟上的發行版重新安裝到同一位置,再執行本核對;設定檔、練習紀錄與 state\\ 都會保留。");
-            rep.NextSteps.Add("重新安裝(或重新套用更新包)後仍有錯誤時,磁碟(隨身碟)可能故障,請更換後再安裝。");
+            if (installer is null)
+            {
+                rep.NextSteps.Add("程式或資料檔損壞或不完整,請先不要用於訓練。以原安裝程式(SimosaBRM-Setup-<版本>.exe)或專用隨身碟上的發行版重新安裝到同一位置,再執行本核對"
+                                  + $"({installerClears})。{kept}");
+            }
+            else
+            {
+                // 更新包能不能修:只能寫 app/、data/;版本須高於曾套用過的最高版本(rollback 後仍不下降),也不該比現行發行版舊
+                bool Under(InstallFinding e, string prefix) => InstalledPaths.IsAtOrUnder(e.Path, prefix, cmp);
+                var inApp = damaged.Any(e => Under(e, "app/"));
+                var inData = damaged.Any(e => Under(e, "data/"));
+                var outside = damaged.Count(e => !Under(e, "app/") && !Under(e, "data/"));
+                var packageBasis = MaxVersion(basis, installed?.HighestVersion);
+                string byPackage;
+                if (!inApp && !inData) byPackage = ";上列檔案都不在更新包可寫入的位置(app\\、data\\),只能以安裝程式修復";
+                else
+                {
+                    var example = inApp && inData ? "app\\ 的程式檔要完整的軟體更新包,data\\ 的檔案要含該檔的情境、參數或圖資更新包"
+                        : inApp ? "例如完整的軟體更新包會涵蓋 app\\ 的全部程式檔;只含情境或參數的更新包修不好程式檔"
+                        : "例如含該檔的情境、參數或圖資更新包;軟體更新包不含 data\\ 的檔案";
+                    byPackage = $",或取得「版本高於 {packageBasis}、且包含上列受損檔案的更新包」套用({example}"
+                                + (outside > 0 ? $";上列有 {outside} 個檔案不在更新包可寫入的位置(app\\、data\\ 以外),那些只能以安裝程式修復" : "") + ")";
+                }
+                rep.NextSteps.Add("程式或資料檔損壞或不完整,請先不要用於訓練,並通知訪船船長。"
+                                  + $"這台筆電的發行版是 {rep.Release?.Version ?? "?"}、現行更新包是 {current}:請取得「{installer}」重新安裝到同一位置({installerClears})"
+                                  + byPackage
+                                  + $"。已套用過的更新包不能重複套用(版本須遞增);以較舊的安裝程式重新安裝會把更新過的檔案還原成舊版,核對會指出。{kept}");
+            }
+            rep.NextSteps.Add("重新安裝(或套用更新包)後仍有錯誤時,磁碟(隨身碟)可能故障,請更換後再安裝。");
+        }
+        else if (broken.Count > 0)
+        {
+            // 只有「發行清單列了安裝程式不安裝的檔案」:不是損毀,重新安裝也不會好
+            rep.NextSteps.Add("上列缺少的檔案是安裝程式不安裝的檔案類型(偵錯符號 *.pdb 等),不影響執行、不需要重新安裝:發行清單多列了這些檔案(發行版建置的問題),請回報開發者取得修正後的發行版。");
         }
         if (Has(InstallFindingCategories.Extra))
-            rep.NextSteps.Add("程式目錄(app\\、tools\\updater\\)內多出的檔案不會因重新安裝而消失:確認不是要保留的資料後刪除,或移到程式目錄之外,再執行本核對。");
+        {
+            rep.NextSteps.Add("程式目錄(app\\、tools\\updater\\)內多出的檔案(舊版殘留、或被放進去的檔案)與目錄連結:確認不是要保留的資料後依上列清單刪除"
+                              + "(或移到程式目錄之外;目錄連結只移除連結本身,不要刪它指向的內容),再執行本核對。以安裝程式重新安裝也會清除多出的檔案(安裝前先清空這兩個資料夾"
+                              + (installer is null ? "" : $";須用{installer},較舊的會把更新過的檔案還原")
+                              + ";有目錄連結時請先手動移除連結再安裝);以壓縮檔或手動複製覆蓋發行版不會清除舊檔。");
+        }
     }
 
     /// <summary>
@@ -525,8 +633,11 @@ public static class InstalledVerifier
         }
         WriteGroup(stdout, $"提醒 {rep.Notices.Count} 項(不影響核對結果):", rep.Notices, InstallFindingCategories.NoticeOrder, maxItems);
         if (rep.Notices.Any(n => n.Category == InstallFindingCategories.Unverifiable))
+        {
             stdout.WriteLine("  「無法核對」不是錯誤:之後每套用一個更新包,該包寫入的檔案就會納入核對(例如下一次完整的軟體更新包會涵蓋 app\\ 的程式檔);"
-                + "同一版本的更新包不能重複套用(版本須遞增),不需要、也無法為了建立清單而重套。");
+                + "已套用過的更新包不能重複套用(版本須遞增),不需要、也無法為了建立清單而重套。"
+                + (rep.InstalledFiles?.InterruptedVersion is { } iv ? $"例外:更新包 {iv} 的套用沒有完成(見上),以同一個更新包檔重新套用即可。" : ""));
+        }
         WriteGroup(stderr, $"錯誤 {rep.Errors.Count} 個:", rep.Errors, InstallFindingCategories.ErrorOrder, maxItems);
         var notices = rep.Notices.Count > 0 ? $"{rep.Notices.Count} 項提醒" : "沒有提醒";
         if (rep.Ok) stdout.WriteLine($"核對通過({rep.Checked} 個檔案;{notices})");

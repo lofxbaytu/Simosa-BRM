@@ -9,6 +9,8 @@
 ;   裝在系統磁碟(通常 C:)須明確確認(須經訓練負責人同意;靜默安裝加 /ALLOWSYSTEMDRIVE=1):守則為本機資料放 D: 或 G:。
 ; 另做:開始功能表/桌面捷徑(操船台外殼、教官站、停止)、Windows 防火牆入站規則(僅直連私有網段;全部設定檔,因直連無 DHCP 會被判為公用網路)、
 ;   WebView2 Runtime 離線安裝檔(tools\webview2\)存在且尚未安裝時一併執行、.NET 8 執行階段離線安裝檔(tools\dotnet\)存在時一併執行。
+; 重新安裝/升級:[InstallDelete] 在安裝前先清空程式目錄 app\ 與 tools\updater\(舊版留下、新版沒有的程式檔;安裝後這兩個資料夾與發行版完全一致,
+;   release verify --installed 不會把舊檔列為「多出的檔案」);config\、data\、state\、store\、build\(設定、紀錄、執行期資料)不動。安裝前先以 stop-all.ps1 結束全部程序。
 ; 解除安裝:只移除安裝程式放進去的檔案與 build\logs、build\tmp;保留 data\records、build\records、state\、store\、config\(練習紀錄與設定)
 ;   以及 build\webview2、build\browser(瀏覽器端資料:草稿、參與者資料、講評報告站的訓練紀錄)、build\downloads(從網頁下載的檔案)。
 ; 本腳本的靜態檢查:python3 -I tools\installer\check-iss.py tools\installer\SimosaBRM.iss(tools\run-ps-tests.sh 一併執行);編譯與安裝需 Windows 實機。
@@ -95,8 +97,20 @@ Name: "{app}\store"; Flags: uninsneveruninstall
 Name: "{app}\config\trusted-keys"; Flags: uninsneveruninstall
 Name: "{app}\config\device"; Flags: uninsneveruninstall
 
+[InstallDelete]
+; 重新安裝/升級時,安裝前先清空程式目錄:安裝後 app\ 與 tools\updater\ 才與發行版(manifest.json)完全一致。不清的話,舊版留下而新版沒有的檔案
+; (每次建置檔名雜湊都不同的網頁資產、先前更新包新增的檔案)會被載入或被網頁伺服送出,release verify --installed 也會把它們列為
+; 「程式目錄內多出的檔案」錯誤(docs\design\packaging-sync.md 第 5.1 節;覆蓋清單在重新安裝後同樣只認新的發行清單)。
+; 只能列這兩個程式目錄(= simosa-pkg 的 InstalledPaths.ProgramPrefixes;check-iss.py 以白名單檢查、Tools.Packaging.Tests 對照):
+; 不可動到 config\、data\、state\、store\、build\(設定、船模與情境、更新包狀態、紀錄庫、練習紀錄與瀏覽器端資料)。
+; 全新安裝時這兩個資料夾不存在,不做任何事;執行中的檔案刪不掉,重新安裝前先以 stop-all.ps1 結束全部程序(含同步服務)。
+Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\tools\updater"
+
 [Files]
-; 發行版全部內容(manifest.json、README.txt、app\、tools\、data\、contracts\、docs\、packages\);config\ 另列
+; 發行版全部內容(manifest.json、README.txt、app\、tools\、data\、contracts\、docs\、packages\);config\ 另列。
+; Excludes 的檔名樣式(\config\* 以外)必須與 simosa-pkg 的 ReleaseManifestBuilder.InstallerExcludedPatterns(src\Tools.Packaging\Release\ReleaseManifest.cs)
+; 完全相同,兩邊要一起改(check-iss.py 對照):發行清單若列了這裡排除的檔案,安裝後 release verify --installed 會報「檔案缺少」。
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "\config\*,*.pdb,Thumbs.db"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 設定範例(ship-laptop.json、instructor-laptop.json、packaging.*.example.json、README.md):已存在(安裝時依機器修改過)者不覆寫、解除安裝不刪
 Source: "{#SourceDir}\config\*"; DestDir: "{app}\config"; Flags: recursesubdirs createallsubdirs onlyifdoesntexist uninsneveruninstall

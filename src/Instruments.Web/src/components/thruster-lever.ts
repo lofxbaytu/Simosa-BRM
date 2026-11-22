@@ -15,6 +15,10 @@ export class ThrusterLever extends LitElement {
   static override styles = [
     tileStyles,
     css`
+      :host {
+        /* 尺寸容器:操船台只佔左欄寬度後這一格在 1366 寬時約 170 px,快速鈕依自己的寬度調整(@container) */
+        container-type: inline-size;
+      }
       .panel {
         height: 100%;
         display: flex;
@@ -90,6 +94,25 @@ export class ThrusterLever extends LitElement {
         color: var(--ob-text-secondary);
         text-align: center;
         width: 44px;
+      }
+      /* 窄格(內容寬 < 200 px):端點標示與推桿略窄,把寬度留給「P 100 / S 100」等快速鈕(兩欄,每鈕至少約 38 px) */
+      @container (max-width: 200px) {
+        .body {
+          gap: 5px;
+        }
+        .ends {
+          width: 24px;
+        }
+        .track {
+          width: 36px;
+        }
+        .quick {
+          gap: 2px;
+        }
+        .quick button {
+          padding: 3px 1px;
+          min-width: 0;
+        }
       }
     `,
   ];

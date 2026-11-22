@@ -84,6 +84,7 @@ pnpm --dir tests/e2e report           # 開 HTML 報告(build/e2e/report)
 | `07-report` | 報告頁開啟最近的核心紀錄 | 本輪最新且已寫 footer 的 `.jsonl`(`build/e2e/records` 或 `build/records`)→ 「已載入 … 狀態 n 筆」、無錯誤訊息、無 console 錯誤 |
 | | 教官站「講評報告」→ 新分頁載入交接紀錄 | `report.html?from=instructor` 顯示「已載入 教官站紀錄」 |
 | `08-scenario-editor` | 開啟範本、改 Hs、驗證通過、YAML 預覽含 waves | 套用範本 E05 → 勾浪、Hs 2.5 → 「結構檢查通過」、`pre.yaml` 含 `waves:`/`significantHeight_m: 2.5`;Hs −1 → 錯誤且載入鈕停用 |
+| | 版面(每個範本一案:E17b / E13 / E20 / E08) | 套用範本、展開各區段(兩種互斥組合)後在 1366 / 1536 / 1920 寬(高 = 寬 × 9/16)量測:面板/欄不水平溢出、標籤不逐字換行、輸入框不被擠壓或裁切、頁面無水平捲軸;1366 / 1536 兩欄、1920 三欄、每欄 ≥ 560 px(`probeEditorLayout`;規則見 `scenario-engine.md` 第 6.1 節「版面」) |
 
 容器不可行而略過的項目會以 `test.skip(條件, 原因)` 標示並在報告列為 skipped(目前只有雷達服務未啟動一種)。
 

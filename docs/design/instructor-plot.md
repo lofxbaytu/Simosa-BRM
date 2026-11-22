@@ -76,7 +76,7 @@
 
 ### 4.1 開啟與對象
 
-完整教官模式「情境編輯」分頁的中欄最上方出現「海圖點選編輯 PLOT」面板(`renderPlotEditor`),由以下按鈕開啟並設定**對象**(`EditorHost.plotTarget`):
+完整教官模式「情境編輯」分頁第二組面板(目標船、時間表、航線、區域)的最上方出現「海圖點選編輯 PLOT」面板(`renderPlotEditor`;編輯器三欄時在中欄最上方,兩欄時在右欄最上方,一欄時接在第一組面板之後——欄數依編輯器寬度切換,見 `scenario-engine.md` 第 6.1 節「版面」),由以下按鈕開啟並設定**對象**(`EditorHost.plotTarget`):
 
 | 按鈕 | 對象 `PlotEditTarget` | 點擊空白處 |
 |---|---|---|

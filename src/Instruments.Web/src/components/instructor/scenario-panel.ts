@@ -1,6 +1,8 @@
 // 情境選擇(規劃書第 9.1 節執行控制「載入/啟動」):列出建置時匯入的 data/scenarios/*.yaml,
 // 顯示 id、標題、船、裝載、環境摘要、時間表/航線/規則/參數引用數、簡報附件與角色,以及簡報結構(規劃時間倒數、同儕評估提示、
 // 講評引導問題;<brm-briefing-block>,R7);按「載入」發出 scenario-load 事件(由教官站送 loadScenario 指令)。
+// 版面:面板高度由外層決定(教官站左欄捲動區內至少 250 px;簡化模式選擇頁整欄)。清單與詳細區平分剩餘高度
+// (清單至少 96 px;詳細區不超過自己的內容高度,放不下時在面板內捲動);「載入」鈕固定在面板底部,不會被詳細區擠出面板(第二十九輪 L2)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -21,13 +23,26 @@ export class ScenarioPanel extends LitElement {
     instructorStyles,
     css`
       :host {
-        display: block;
+        display: flex;
+        flex-direction: column;
         min-height: 0;
       }
       .panel {
-        height: 100%;
+        flex: 1 1 auto;
+        min-height: 0;
       }
-      .item {
+      /* 清單與詳細區平分剩餘高度:清單至少 96 px(約 3 個情境),詳細區最多到自己的內容高度(多的給清單);
+         拒絕說明可縮(自己捲動),「載入」鈕列不縮 */
+      .list {
+        flex: 1 1 0;
+        min-height: 96px;
+      }
+      .btn-row {
+        flex: 0 0 auto;
+      }
+      /* 選擇器要比共用樣式的 .list .item(align-items: baseline)明確:否則各行不會撐滿項目寬度,
+         過長的摘要行不是以 … 截斷而是把清單撐出水平捲動 */
+      .list .item {
         flex-direction: column;
         align-items: stretch;
         gap: 1px;
@@ -57,6 +72,11 @@ export class ScenarioPanel extends LitElement {
         white-space: nowrap;
       }
       .detail {
+        flex: 1 1 0;
+        min-height: 0;
+        max-height: max-content;
+        overflow-y: auto;
+        scrollbar-width: thin;
         font-size: 11px;
         color: var(--ob-text-secondary);
         border-top: 1px solid var(--ob-border);
@@ -64,6 +84,10 @@ export class ScenarioPanel extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 2px;
+      }
+      /* 詳細區是直向 flex 容器:子項不可被壓縮(否則文字互相疊上),超出的部分靠詳細區自己捲動 */
+      .detail > * {
+        flex: 0 0 auto;
       }
       .detail .desc {
         color: var(--ob-text);
@@ -80,6 +104,10 @@ export class ScenarioPanel extends LitElement {
         margin-right: 6px;
       }
       .rejected {
+        flex: 0 1 auto;
+        min-height: 44px;
+        overflow-y: auto;
+        scrollbar-width: thin;
         font-size: 11px;
         color: var(--ob-alarm);
         border: 1px solid var(--ob-alarm);
@@ -88,6 +116,9 @@ export class ScenarioPanel extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 2px;
+      }
+      .rejected > * {
+        flex: 0 0 auto;
       }
       .rejected .title {
         font-weight: 600;

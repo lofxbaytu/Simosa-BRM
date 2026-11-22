@@ -30,16 +30,68 @@ public sealed class InstalledVerifyTests : IDisposable
 
     private static string P(InstallLayout ship, string rel) => Path.Combine(ship.Root, rel.Replace('/', Path.DirectorySeparatorChar));
 
-    /// <summary>發行清單不含的位置(安裝後才建立:信任清單、裝置金鑰、packaging.json、state/)。</summary>
+    /// <summary>發行清單不含的位置(安裝後才建立:信任清單、裝置金鑰、packaging.json、state/,以及使用後的執行期資料與岸上放入的離線安裝檔)。</summary>
     private static bool CreatedAfterInstall(string path)
         => path.StartsWith("state/", StringComparison.Ordinal) || path.StartsWith("config/trusted-keys/", StringComparison.Ordinal)
-           || path.StartsWith("config/device/", StringComparison.Ordinal) || path == "config/packaging.json";
+           || path.StartsWith("config/device/", StringComparison.Ordinal) || path == "config/packaging.json"
+           || path.StartsWith("build/", StringComparison.Ordinal) || path.StartsWith(".cache/", StringComparison.Ordinal)
+           || path.StartsWith("store/", StringComparison.Ordinal) || path.StartsWith("data/records/", StringComparison.Ordinal)
+           || path.EndsWith(".exe", StringComparison.Ordinal) || path.EndsWith("desktop.ini", StringComparison.Ordinal);
 
-    private static void WriteManifest(InstallLayout ship, string version, TimeProvider? clock = null)
+    /// <param name="notInRelease">磁碟上有、但不屬於這個發行版的檔案(更新包新增的檔案、手動覆蓋後殘留的舊檔)</param>
+    private static void WriteManifest(InstallLayout ship, string version, TimeProvider? clock = null, params string[] notInRelease)
     {
         var m = ReleaseManifestBuilder.Build(ship.Root, version, "0123456789abcdef", "main", "linux-x64", clock: clock);
-        m.Files.RemoveAll(f => CreatedAfterInstall(f.Path));
+        m.Files.RemoveAll(f => CreatedAfterInstall(f.Path) || notInRelease.Contains(f.Path));
         ReleaseManifestBuilder.Save(m, ship.Root);
+    }
+
+    /// <summary>新版發行版的程式檔(與 <see cref="NewInstall"/> 的 2026.10.0 相比:內容不同,網頁資產檔名的雜湊也不同)。</summary>
+    private static void WriteNewerProgramFiles(InstallLayout ship)
+    {
+        W(ship.Root, "app/version.txt", "app 5.0\n");
+        W(ship.Root, "app/simcore/SimosaBRM.SimCore.Host.dll", "fake host 5.0\n");
+        W(ship.Root, "app/web/index.html", "<!doctype html><title>儀器 5</title>\n");
+        W(ship.Root, "app/web/assets/index-xyz.js", "console.log(5)\n");
+        W(ship.Root, "tools/updater/simosa-pkg.dll", "fake pkg 5\n");
+    }
+
+    /// <summary>
+    /// 模擬以安裝程式重新安裝較新的發行版(tools/installer/SimosaBRM.iss):[InstallDelete] 先清空程式目錄 app\ 與 tools\updater\,
+    /// 再安裝新版的檔案並換上新的 manifest.json;config\(已存在不覆寫)、data\ 內清單沒有的檔案、state\ 都不動。
+    /// </summary>
+    private static void ReinstallWithInstaller(InstallLayout ship, string version, params string[] notInRelease)
+    {
+        foreach (var prefix in InstalledPaths.ProgramPrefixes)
+        {
+            var dir = P(ship, prefix.TrimEnd('/'));
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+        WriteNewerProgramFiles(ship);
+        WriteManifest(ship, version, null, notInRelease);
+    }
+
+    /// <summary>建立目錄連結:Windows 先試 junction(mklink /J,不需特殊權限),否則符號連結;建不出來回傳 false。</summary>
+    private static bool TryLinkDirectory(string link, string target)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+            if (OperatingSystem.IsWindows())
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+                    { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                using var proc = System.Diagnostics.Process.Start(psi)!;
+                proc.WaitForExit(10000);
+                if (proc.HasExited && proc.ExitCode == 0 && Directory.Exists(link)) return true;
+            }
+            Directory.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -212,9 +264,89 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.All(r.Errors, e => Assert.Equal(C.Extra, e.Category));
         Assert.Equal(new[] { "data/scenarios/custom_local.yaml", "docs/note.txt", "primary.pub.pem" },
             r.Notices.Where(n => n.Category == C.Unlisted).Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal).ToArray());
-        // 多出的檔案不會因重新安裝而消失:下一步是刪除
-        Assert.Contains(r.NextSteps, s => s.Contains("刪除"));
-        Assert.DoesNotContain(r.NextSteps, s => s.Contains("原安裝程式"));
+        // 只有多出的檔案:下一步是依清單刪除(以安裝程式重新安裝也會清除 — 安裝前先清空程式目錄;手動覆蓋不會),不是「檔案損壞」那一段
+        var step = Assert.Single(r.NextSteps);
+        Assert.Contains("刪除", step);
+        Assert.Contains("安裝程式重新安裝也會清除", step);
+        Assert.Contains("手動複製覆蓋發行版不會清除", step);
+        Assert.DoesNotContain("請先不要用於訓練", step);
+    }
+
+    [Fact]
+    public void DirectoryLink_InProgramDirIsError_ElsewhereIsNotice_RuntimeDataIgnored()
+    {
+        // 目錄連結(junction/symlink)不跟進,但不能靜默略過:程式目錄內的連結指到的內容會被載入或被網頁伺服送出,卻查不到多出的檔案
+        var ship = NewInstall();
+        var outside = _env.PathIn("outside");
+        W(outside, "web/index.html", File.ReadAllText(P(ship, "app/web/index.html")));
+        W(outside, "web/assets/index-abc.js", File.ReadAllText(P(ship, "app/web/assets/index-abc.js")));
+        W(outside, "web/Injected.dll", "x");
+        W(outside, "plugins/Plugin.dll", "x");
+        W(outside, "docs/n.txt", "x");
+        W(outside, "records/a.jsonl", "{}\n");
+        W(outside, "updater/simosa-pkg.dll", File.ReadAllText(P(ship, "tools/updater/simosa-pkg.dll")));
+        var links = new List<string>();
+        bool Link(string rel, string target)
+        {
+            var link = P(ship, rel);
+            if (!TryLinkDirectory(link, Path.Combine(outside, target))) return false;
+            links.Add(link);
+            return true;
+        }
+        try
+        {
+            // app/web 整個換成指到別處的連結(內容相同、另多一個 DLL)、app/ 內多一個連結、其他位置的連結、執行期資料位置的連結
+            Directory.Delete(P(ship, "app/web"), recursive: true);
+            if (!Link("app/web", "web"))
+            {
+                // 建不出目錄連結只可能發生在 Windows(junction 與符號連結都被拒);其他平台一定要建得出來,不讓這個測試靜默略過
+                Assert.True(OperatingSystem.IsWindows(), "無法建立目錄符號連結");
+                return;
+            }
+            Assert.True(Link("app/plugins", "plugins"));
+            Assert.True(Link("linked-docs", "docs"));
+            Assert.True(Link("build/records", "records"));
+
+            var r = InstalledVerifier.Verify(ship.Root);
+            Assert.False(r.Ok);
+            Assert.Equal(new[] { "app/plugins/", "app/web/" }, r.Errors.Select(e => e.Path).ToArray());
+            Assert.All(r.Errors, e =>
+            {
+                Assert.Equal(C.Extra, e.Category);
+                Assert.Contains("目錄連結", e.Detail);
+                Assert.Contains("無法核對", e.Detail);
+            });
+            var notice = Assert.Single(r.Notices);
+            Assert.Equal(C.Unlisted, notice.Category);
+            Assert.Equal("linked-docs/", notice.Path);
+            Assert.Contains("目錄連結", notice.Detail);
+            Assert.Contains("build/", r.SkippedLocations);                       // 執行期資料位置的連結(例如紀錄移到另一顆磁碟)不算
+            Assert.Contains(r.NextSteps, s => s.Contains("目錄連結"));
+            // 清單所列的檔案仍依路徑核對(跟著連結走):內容相同所以沒有 missing/mismatch
+            Assert.DoesNotContain(r.Errors, e => e.Category is C.Missing or C.Mismatch);
+
+            // 程式目錄的上層本身是連結(tools → 別處):同樣是錯誤
+            Directory.Delete(P(ship, "app/plugins"));
+            Directory.Delete(P(ship, "app/web"));
+            links.RemoveAll(l => l.EndsWith("plugins", StringComparison.Ordinal) || l.EndsWith("web", StringComparison.Ordinal));
+            W(ship.Root, "app/web/index.html", File.ReadAllText(Path.Combine(outside, "web", "index.html")));
+            W(ship.Root, "app/web/assets/index-abc.js", File.ReadAllText(Path.Combine(outside, "web", "assets", "index-abc.js")));
+            Directory.Delete(P(ship, "tools/updater"), recursive: true);
+            Assert.True(Link("tools/updater", "updater"));
+            var r2 = InstalledVerifier.Verify(ship.Root);
+            var e2 = Assert.Single(r2.Errors);
+            Assert.Equal("tools/updater/", e2.Path);
+            Assert.Equal(C.Extra, e2.Category);
+        }
+        finally
+        {
+            // 連結本身先移除(不動它指向的內容),測試目錄才能照常清掉
+            foreach (var link in links)
+            {
+                try { Directory.Delete(link); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
     }
 
     [Fact]
@@ -324,8 +456,15 @@ public sealed class InstalledVerifyTests : IDisposable
         var err = Assert.Single(tampered.Errors);
         Assert.Equal(C.Mismatch, err.Category);
         Assert.Equal("package:2026.10.1", err.Source);
-        // 套用過更新包:下一步不是「原安裝程式」而是不低於現行版本的安裝程式或更高版本的更新包(同版本不可重複套用)
-        Assert.Contains(tampered.NextSteps, s => s.Contains("2026.10.1") && s.Contains("不能重複套用"));
+        // 套用過更新包:下一步不是「原安裝程式」而是不低於現行版本的安裝程式或更高版本的更新包(同版本不可重複套用)。
+        // 版本基準 = 發行清單版本(2026.10.0)與現行更新包版本(2026.10.1)的較大者;更新包須包含受損的檔案
+        var next = tampered.NextSteps[0];
+        Assert.Contains("版本不低於 2026.10.1 的安裝程式", next);
+        Assert.Contains("版本高於 2026.10.1、且包含上列受損檔案的更新包", next);
+        Assert.Contains("完整的軟體更新包", next);
+        Assert.Contains("不能重複套用", next);
+        Assert.Contains("安裝程式會先清除舊的程式檔", next);
+        Assert.DoesNotContain("原安裝程式", next);
         File.WriteAllText(P(ship, "app/simcore/SimosaBRM.SimCore.Host.dll"), "fake host 2.0\n");
 
         // 更新包新增的檔案不見了:缺少
@@ -764,7 +903,109 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.Equal(next.PackageId, after.PackageId);
         Assert.Contains(after.Untracked, u => u.Reason == UntrackedReasons.Diverged);
         Assert.DoesNotContain(after.Packages, p => p.PackageId == "upd-future");
-        Assert.True(AssertOk(ship).InstalledFiles!.Consistent);
+        var settled = AssertOk(ship);
+        Assert.True(settled.InstalledFiles!.Consistent);
+        Assert.Null(settled.InstalledFiles.InterruptedVersion);
+        // 已寫進覆蓋清單的「不一致」紀錄:現在兩個狀態檔已一致,說明用過去式,不再指示以 status 確認(沒有待處理的事)
+        var gaps = settled.Notices.Where(n => n.Category == C.Unverifiable).ToList();
+        Assert.Contains(gaps, n => n.Path == "app/");
+        Assert.All(gaps, n =>
+        {
+            Assert.Contains("曾與 state/installed.json 不一致", n.Detail);
+            Assert.Contains("現在兩者已一致", n.Detail);
+            Assert.DoesNotContain("先以 simosa-pkg status", n.Detail);
+        });
+    }
+
+    [Fact]
+    public void InterruptedApply_OverlayWrittenButInstalledJsonNot_RetryWithSamePackageConverges()
+    {
+        // 套用在「覆蓋清單已寫、installed.json 未寫」之間中斷(斷電):元件已換成新版,installed.json 還是舊的、完全沒有這個更新包的紀錄
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"), ("app/q.dll", "q"))).Ok);
+        var stateBeforeP = File.ReadAllBytes(ship.InstalledStatePath);
+        var p = SoftwarePackage("2026.10.2", key, ("app/version.txt", "app 3.0\n"), ("app/p.dll", "p"));
+        Assert.True(applier.Apply(p).Ok);
+        File.WriteAllBytes(ship.InstalledStatePath, stateBeforeP);   // 模擬 installed.json 沒寫進去
+
+        // 重試之前:app/ 列為無法核對,並指出可用同一個更新包重新套用(它沒有被記為已套用,版本檢查會通過)
+        var torn = AssertOk(ship);
+        Assert.False(torn.InstalledFiles!.Consistent);
+        Assert.Equal("2026.10.2", torn.InstalledFiles.InterruptedVersion);
+        var gap = Assert.Single(torn.Notices, n => n.Category == C.Unverifiable);
+        Assert.Equal("app/", gap.Path);
+        Assert.Contains("以同一個更新包檔重新套用", gap.Detail);
+        var text = Run("verify-install", "--root", ship.Root);
+        Assert.Equal(0, text.Code);
+        Assert.Contains("例外:更新包 2026.10.2 的套用沒有完成", text.Out);
+
+        // 原包重試:成功,而且不留下「無法核對 app/」— 之前同一個更新包會同時在 packages 與 untracked(diverged),提醒永久存在
+        var again = applier.Apply(p);
+        Assert.True(again.Ok, string.Join(";", again.Errors));
+        var files = InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!;
+        Assert.Empty(files.Untracked);
+        Assert.Equal(new[] { "2026.10.2", "2026.10.1" }, files.Packages.Select(x => x.Version).ToArray());
+        Assert.Equal(new[] { "app/p.dll", "app/q.dll", "app/version.txt" }, files.Files.Select(f => f.Path).ToArray());
+        var ok = AssertOk(ship);
+        Assert.Empty(ok.Notices);
+        Assert.True(ok.InstalledFiles!.Consistent);
+        Assert.Null(ok.InstalledFiles.InterruptedVersion);
+        // 先前更新包(2026.10.1)的紀錄沒有被丟掉:它寫入的檔案仍在核對範圍
+        File.WriteAllText(P(ship, "app/q.dll"), "Q");
+        var err = Assert.Single(InstalledVerifier.Verify(ship.Root).Errors);
+        Assert.Equal("app/q.dll", err.Path);
+        Assert.Equal("package:2026.10.1", err.Source);
+    }
+
+    [Fact]
+    public void Reconcile_RetryRule_OnlyWhenInstalledJsonHasNoTraceOfThePackage()
+    {
+        // 「原包重試」只認:覆蓋清單的現行更新包 = 正在套用的更新包,且 installed.json 完全沒有它(現行、history 含 rolledBack 都沒有)。
+        // rollback 時清單還原失敗的情況(history 有該包、標為 rolledBack)清單不可信,仍照不一致處理
+        var overlay = new InstalledFiles { PackageId = "upd-P", Version = "2026.10.2" };
+        overlay.Packages.Add(new TrackedPackage { PackageId = "upd-P", Version = "2026.10.2", Kind = UpdateKinds.Software, Prefixes = { "app/" } });
+        overlay.Packages.Add(new TrackedPackage { PackageId = "upd-Q", Version = "2026.10.1", Kind = UpdateKinds.Software, Prefixes = { "app/" } });
+        overlay.Files.Add(new InstalledFile { Path = "app/q.dll", Sha256 = "00", Size = 1, PackageId = "upd-Q", Version = "2026.10.1" });
+        overlay.Files.Add(new InstalledFile { Path = "app/p.dll", Sha256 = "11", Size = 1, PackageId = "upd-P", Version = "2026.10.2" });
+        InstalledState State(bool withRolledBackP)
+        {
+            var st = new InstalledState { PackageId = "upd-Q", Version = "2026.10.1", Kind = UpdateKinds.Software };
+            if (withRolledBackP) st.History.Add(new AppliedPackage { PackageId = "upd-P", Version = "2026.10.2", Kind = UpdateKinds.Software, RolledBack = true });
+            st.History.Add(new AppliedPackage { PackageId = "upd-Q", Version = "2026.10.1", Kind = UpdateKinds.Software });
+            return st;
+        }
+
+        var retry = new ReconcileInfo();
+        var kept = InstalledFiles.Reconcile(overlay, State(false), null, null, StringComparison.Ordinal, retry, applyingPackageId: "upd-P");
+        Assert.True(retry.Retried);
+        Assert.False(retry.Diverged);
+        Assert.Empty(kept.Untracked);
+        Assert.Equal(2, kept.Files.Count);
+
+        // 核對時(沒有正在套用的更新包):不一致,並指出這個更新包的套用沒有完成
+        var verify = new ReconcileInfo();
+        var gapped = InstalledFiles.Reconcile(overlay, State(false), null, null, StringComparison.Ordinal, verify);
+        Assert.True(verify.Diverged);
+        Assert.Equal("upd-P", verify.InterruptedPackage!.PackageId);
+        Assert.Equal("upd-P", Assert.Single(gapped.Untracked).PackageId);
+        Assert.Empty(gapped.Files);
+
+        // 套用的是別的更新包:不是重試
+        var other = new ReconcileInfo();
+        InstalledFiles.Reconcile(overlay, State(false), null, null, StringComparison.Ordinal, other, applyingPackageId: "upd-R");
+        Assert.False(other.Retried);
+        Assert.True(other.Diverged);
+
+        // installed.json 有該包標為 rolledBack 的紀錄:清單還原失敗,不是套用中斷
+        var rolledBack = new ReconcileInfo();
+        var dropped = InstalledFiles.Reconcile(overlay, State(true), null, null, StringComparison.Ordinal, rolledBack, applyingPackageId: "upd-P");
+        Assert.False(rolledBack.Retried);
+        Assert.True(rolledBack.Diverged);
+        Assert.Null(rolledBack.InterruptedPackage);
+        Assert.Equal(UntrackedReasons.Diverged, Assert.Single(dropped.Untracked).Reason);
+        Assert.Empty(dropped.Files);
     }
 
     [Fact]
@@ -790,43 +1031,247 @@ public sealed class InstalledVerifyTests : IDisposable
     }
 
     [Fact]
-    public void ReinstallAfterUpdate_ManifestWinsForListedFiles_AndNextApplyRebases()
+    public void ReinstallWithInstaller_AfterUpdateAddedProgramFiles_ConvergesWithoutManualCleanup()
     {
+        // 更新包在 app/ 新增檔案、刪除檔案 → 以安裝程式重新安裝較新的發行版(安裝前清空 app\ 與 tools\updater\)→ 核對通過。
+        // 之前的規則把更新包新增的 app/added.dll 留在預期內容,安裝程式清掉它之後會誤報「檔案缺少」
         var ship = NewInstall();
+        AddRuntimeData(ship);
         using var key = _env.Primary();
         var applier = new UpdateApplier(ship);
-        Assert.True(applier.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"), ("app/added.dll", "a"))).Ok);
+        var pkg = SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"), ("app/added.dll", "a"), ("app/plugins/extra.dll", "e"));
+        TestEnv.ResignManifest(pkg, key, m => m.Remove.Add("app/web/assets/index-abc.js"));
+        Assert.True(applier.Apply(pkg).Ok);
         AssertOk(ship);
 
-        // 以較新的發行版覆蓋安裝:清單所列檔案全部被安裝程式覆寫、manifest.json 換新;更新包新增的 app/added.dll 留在原處
-        File.WriteAllText(P(ship, "app/version.txt"), "app 5.0\n");
-        File.WriteAllText(P(ship, "app/simcore/SimosaBRM.SimCore.Host.dll"), "fake host 5.0\n");
-        var keep = File.ReadAllBytes(P(ship, "app/added.dll"));
-        File.Delete(P(ship, "app/added.dll"));
-        WriteManifest(ship, "2026.11.0");
-        File.WriteAllBytes(P(ship, "app/added.dll"), keep);
+        ReinstallWithInstaller(ship, "2026.11.0");
+        Assert.False(File.Exists(P(ship, "app/added.dll")));
+        Assert.False(File.Exists(P(ship, "app/web/assets/index-abc.js")));
 
         var r = AssertOk(ship);
+        Assert.Empty(r.Errors);
         Assert.True(r.InstalledFiles!.Reinstalled);
+        Assert.True(r.InstalledFiles.Consistent);
         var notice = Assert.Single(r.Notices);
         Assert.Equal(C.State, notice.Category);
         Assert.Contains("重新安裝", notice.Detail);
-        Assert.Contains("1 個檔案", notice.Detail);
-        // 清單所列檔案以新清單核對;更新包新增而清單沒有的檔案仍以覆蓋清單核對
+        Assert.Contains("對 1 個檔案的變更已被安裝覆蓋", notice.Detail);          // app/version.txt
+        Assert.Contains("新增的 2 個檔案不再列入預期", notice.Detail);            // app/added.dll、app/plugins/extra.dll
+        Assert.Contains("status", notice.Detail);
+        Assert.Contains("請不要執行 rollback", notice.Detail);                    // state/previous 是重新安裝之前的 app/
+        // 程式目錄照常核對(以新的發行清單)
         File.WriteAllText(P(ship, "app/version.txt"), "app 5.x\n");
         var err = Assert.Single(InstalledVerifier.Verify(ship.Root).Errors);
         Assert.Equal("release", err.Source);
         File.WriteAllText(P(ship, "app/version.txt"), "app 5.0\n");
-        File.WriteAllText(P(ship, "app/added.dll"), "b");
-        Assert.Equal("package:2026.10.1", Assert.Single(InstalledVerifier.Verify(ship.Root).Errors).Source);
-        File.WriteAllBytes(P(ship, "app/added.dll"), keep);
 
-        // 下一次套用:覆蓋清單改依新的發行清單(被取代的紀錄丟掉),不再提醒
+        // 核對只讀不寫:覆蓋清單還是舊的,每次核對的結論相同;下一次套用才把調整寫回(程式目錄的舊紀錄全部作廢)
+        Assert.Equal("2026.10.0", InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!.Baseline!.Version);
+        Assert.Single(AssertOk(ship).Notices);
         Assert.True(applier.Apply(SoftwarePackage("2026.11.1", key, ("app/web/index.html", "<!doctype html><title>新</title>\n"))).Ok);
         var files = InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!;
-        Assert.Equal(new[] { "app/added.dll", "app/web/index.html" }, files.Files.Select(f => f.Path).ToArray());
+        Assert.Equal("app/web/index.html", Assert.Single(files.Files).Path);
+        Assert.Empty(files.Removed);
+        Assert.Empty(files.Untracked);
         Assert.Equal("2026.11.0", files.Baseline!.Version);
         Assert.Empty(AssertOk(ship).Notices);
+    }
+
+    [Fact]
+    public void ManualOverwriteWithNewerRelease_LeftoverProgramFiles_AreReportedAsExtra()
+    {
+        // 以壓縮檔或手動複製覆蓋發行版(沒有經過安裝程式的清空):舊版留下、新清單沒有的程式檔 — 舊的網頁資產、先前更新包新增的檔案 —
+        // 都是「程式目錄內多出的檔案」,依清單刪除後通過。更新包新增的檔案不再以覆蓋清單「放行」(那樣舊組件會一直留在 app/ 被載入)
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        Assert.True(new UpdateApplier(ship).Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"), ("app/added.dll", "a"))).Ok);
+        AssertOk(ship);
+
+        // 手動覆蓋:新版的檔案蓋上去,舊檔原地不動(app/web/assets/index-abc.js 是舊版的資產,新版改名為 index-xyz.js)
+        WriteNewerProgramFiles(ship);
+        WriteManifest(ship, "2026.11.0", null, "app/added.dll", "app/web/assets/index-abc.js");
+
+        var r = InstalledVerifier.Verify(ship.Root);
+        Assert.False(r.Ok);
+        Assert.Equal(new[] { "app/added.dll", "app/web/assets/index-abc.js" }, r.Errors.Select(e => e.Path).ToArray());
+        Assert.All(r.Errors, e => Assert.Equal(C.Extra, e.Category));
+        Assert.True(r.InstalledFiles!.Reinstalled);
+        var step = Assert.Single(r.NextSteps);
+        Assert.Contains("依上列清單刪除", step);
+        // 套用過更新包(現行 2026.10.1)、發行版已是 2026.11.0:若要改用安裝程式清除,版本基準是兩者較大者
+        Assert.Contains("版本不低於 2026.11.0 的安裝程式", step);
+
+        File.Delete(P(ship, "app/added.dll"));
+        File.Delete(P(ship, "app/web/assets/index-abc.js"));
+        var ok = AssertOk(ship);
+        Assert.Equal(C.State, Assert.Single(ok.Notices).Category);
+    }
+
+    [Fact]
+    public void Reinstall_OutsideProgramDirs_FilesAddedByUpdatesAreStillVerifiedAgainstOverlay()
+    {
+        // 安裝程式只清空程式目錄:data/ 之下由更新包新增、發行清單沒有的檔案還在,重新安裝後仍以覆蓋清單核對(P1 的規則不變);
+        // 清單有列的 data/ 檔案被安裝覆寫,改以新的發行清單為準
+        var ship = NewInstall();
+        W(ship.Root, "data/charts/base.txt", "chart base 1");
+        WriteManifest(ship, "2026.10.0");
+        var a = _env.PathIn("app.txt");
+        var added = _env.PathIn("chart-added.txt");
+        var changed = _env.PathIn("chart-changed.txt");
+        File.WriteAllText(a, "app 2.0\n");
+        File.WriteAllText(added, "chart A");
+        File.WriteAllText(changed, "chart base 2");
+        using var key = _env.Primary();
+        var applier = new UpdateApplier(ship);
+        var pkg = UpdatePackageBuilder.Build(new UpdateBuildRequest
+        {
+            Version = "2026.10.1", Kind = UpdateKinds.Mixed, Summary = "軟體與圖資",
+            SmsDocuments = { new SmsDocumentRef { DocumentId = "BRM-TRN-001", Revision = "1", ApprovedBy = "訪船船長" } },
+            Files =
+            {
+                new PackageSource("app/version.txt", a), new PackageSource("app/added.dll", a),
+                new PackageSource("data/charts/test.txt", added), new PackageSource("data/charts/base.txt", changed),
+            },
+        }, key, _env.PathIn("mixed.sbupd")).OutputPath;
+        var applied = applier.Apply(pkg);
+        Assert.True(applied.Ok, string.Join(";", applied.Errors));
+        Assert.Empty(AssertOk(ship).Notices);
+
+        // 重新安裝 2026.11.0:程式目錄清空重裝;清單所列的 data/charts/base.txt 被新版覆寫;更新包新增的 data/charts/test.txt 原地不動
+        File.WriteAllText(P(ship, "data/charts/base.txt"), "chart base 5");
+        ReinstallWithInstaller(ship, "2026.11.0", "data/charts/test.txt");
+
+        var r = AssertOk(ship);
+        var notice = Assert.Single(r.Notices);
+        Assert.Equal(C.State, notice.Category);
+        Assert.Contains("對 2 個檔案的變更已被安裝覆蓋", notice.Detail);     // app/version.txt、data/charts/base.txt
+        Assert.Contains("新增的 1 個檔案不再列入預期", notice.Detail);       // app/added.dll
+        // 更新包新增的資料檔:仍在預期內容,來源是更新包
+        File.WriteAllText(P(ship, "data/charts/test.txt"), "chart X");
+        var err = Assert.Single(InstalledVerifier.Verify(ship.Root).Errors);
+        Assert.Equal("data/charts/test.txt", err.Path);
+        Assert.Equal("package:2026.10.1", err.Source);
+        File.Delete(P(ship, "data/charts/test.txt"));
+        Assert.Equal(C.Missing, Assert.Single(InstalledVerifier.Verify(ship.Root).Errors).Category);
+        File.WriteAllText(P(ship, "data/charts/test.txt"), "chart A");
+        // 清單有列的資料檔:以新的發行清單核對
+        File.WriteAllText(P(ship, "data/charts/base.txt"), "chart base 2");
+        var err2 = Assert.Single(InstalledVerifier.Verify(ship.Root).Errors);
+        Assert.Equal("data/charts/base.txt", err2.Path);
+        Assert.Equal("release", err2.Source);
+        File.WriteAllText(P(ship, "data/charts/base.txt"), "chart base 5");
+
+        // 下一次套用寫回:程式目錄的舊紀錄作廢,data/ 之下清單沒有的紀錄保留
+        Assert.True(applier.Apply(SoftwarePackage("2026.11.1", key, ("app/version.txt", "app 6.0\n"))).Ok);
+        var files = InstalledFiles.TryLoad(ship.InstalledFilesPath, out _)!;
+        Assert.Equal(new[] { "app/version.txt", "data/charts/test.txt" }, files.Files.Select(f => f.Path).ToArray());
+        Assert.Equal("2026.11.0", files.Baseline!.Version);
+        Assert.Empty(AssertOk(ship).Notices);
+    }
+
+    [Fact]
+    public void ReinstallSameRelease_AfterUpdate_IsStillReportedAsReverted()
+    {
+        // 以「同一個」發行版重新安裝(manifest.json 相同,偵測不到重新安裝):更新包換過的檔案被還原、新增的檔案被清掉 → 仍是錯誤,並說明原因;
+        // installed.json 記的現行版次與實際檔案不符,不能當成通過。下一步的安裝程式版本基準因此不能是現行發行版本身
+        var ship = NewInstall(version: "2026.12.0");
+        using var key = _env.Primary();
+        Assert.True(new UpdateApplier(ship).Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"), ("app/added.dll", "a"))).Ok);
+        AssertOk(ship);
+
+        File.WriteAllText(P(ship, "app/version.txt"), "app 1.0\n");   // 發行版 2026.12.0 的內容
+        File.Delete(P(ship, "app/added.dll"));                         // [InstallDelete] 清空 app\
+
+        var r = InstalledVerifier.Verify(ship.Root);
+        Assert.False(r.InstalledFiles!.Reinstalled);
+        Assert.Equal(new[] { C.Missing, C.Mismatch }, r.Errors.Select(e => e.Category).ToArray());
+        Assert.Contains("被還原", r.Errors[1].Detail);
+        // 發行版 2026.12.0 之上還有套用中的更新包(版本 2026.10.1 較舊):以 2026.12.0 的安裝程式重新安裝只會再還原一次 → 要求更新的發行版
+        Assert.Contains("版本高於 2026.12.0 的安裝程式", r.NextSteps[0]);
+        Assert.DoesNotContain("版本不低於", r.NextSteps[0]);
+        Assert.Contains("版本高於 2026.12.0、且包含上列受損檔案的更新包", r.NextSteps[0]);
+    }
+
+    // ── 「下一步」的版本基準與更新包說明 ───────────────────
+
+    [Fact]
+    public void NextSteps_VersionBasisIsTheLargerOfReleaseAndCurrentPackage()
+    {
+        // 套用 2026.10.1 更新包之後又以 2026.11.0 的安裝程式重新安裝,之後檔案損毀:
+        // 之前的訊息寫「版本不低於 2026.10.1 的安裝程式」,照字面拿 2026.10.x 的安裝程式會把整個發行版降版
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        Assert.True(new UpdateApplier(ship).Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"))).Ok);
+        ReinstallWithInstaller(ship, "2026.11.0");
+        AssertOk(ship);
+
+        File.AppendAllText(P(ship, "app/web/index.html"), "<!-- 損毀 -->");
+        var r = InstalledVerifier.Verify(ship.Root);
+        var next = r.NextSteps[0];
+        Assert.Contains("發行版是 2026.11.0、現行更新包是 2026.10.1", next);
+        Assert.Contains("版本不低於 2026.11.0 的安裝程式", next);
+        Assert.DoesNotContain("不低於 2026.10.1", next);
+        // 更新包那一句:版本要高於基準,而且必須包含受損的檔案(app/ → 完整的軟體更新包;情境或參數包修不好)
+        Assert.Contains("版本高於 2026.11.0、且包含上列受損檔案的更新包", next);
+        Assert.Contains("完整的軟體更新包", next);
+        Assert.Contains("修不好程式檔", next);
+        Assert.Contains("磁碟", r.NextSteps[1]);
+    }
+
+    [Fact]
+    public void NextSteps_UpdatePackageSentence_DependsOnWhereTheDamageIs()
+    {
+        var ship = NewInstall();
+        using var key = _env.Primary();
+        var applier = new UpdateApplier(ship);
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.1", key, ("app/version.txt", "app 2.0\n"))).Ok);
+        Assert.True(applier.Apply(SoftwarePackage("2026.10.2", key, ("app/version.txt", "app 3.0\n"))).Ok);
+        Assert.True(applier.Rollback("測試").Ok);   // 現行 2026.10.1,曾套用最高版本 2026.10.2
+
+        // 受損的是 data/ 的檔案:要含該檔的更新包,版本須高於「曾套用過的最高版本」(rollback 後不下降;2026.10.2 會被拒絕)
+        var particulars = P(ship, "data/ships/FSB1/particulars.json");
+        var original = File.ReadAllBytes(particulars);
+        File.AppendAllText(particulars, " ");
+        var data = InstalledVerifier.Verify(ship.Root).NextSteps[0];
+        Assert.Contains("版本不低於 2026.10.1 的安裝程式", data);
+        Assert.Contains("版本高於 2026.10.2、且包含上列受損檔案的更新包", data);
+        Assert.Contains("軟體更新包不含 data\\ 的檔案", data);
+        File.WriteAllBytes(particulars, original);
+
+        // 受損的檔案不在更新包可寫入的位置(tools\、docs\、contracts\):只能以安裝程式修復,不提更新包
+        File.AppendAllText(P(ship, "docs/README.md"), "x");
+        File.AppendAllText(P(ship, "tools/updater/simosa-pkg.dll"), "x");
+        var outside = InstalledVerifier.Verify(ship.Root).NextSteps[0];
+        Assert.Contains("只能以安裝程式修復", outside);
+        Assert.DoesNotContain("的更新包」套用", outside);
+
+        // 兩種都有:更新包只能修 app\ 的那一部分
+        File.AppendAllText(P(ship, "app/web/index.html"), "x");
+        var both = InstalledVerifier.Verify(ship.Root).NextSteps[0];
+        Assert.Contains("完整的軟體更新包", both);
+        Assert.Contains("上列有 2 個檔案不在更新包可寫入的位置", both);
+    }
+
+    [Fact]
+    public void ManifestListingFilesTheInstallerExcludes_IsExplained_NotReportedAsDamage()
+    {
+        // 舊版 simosa-pkg 產生的發行清單可能列有 .pdb(安裝程式不安裝):缺少的說明要指出不是損毀,下一步不是「不要用於訓練、重新安裝」
+        var ship = NewInstall();
+        var m = ReleaseManifestBuilder.Load(ship.Root);
+        m.Files.Add(new ReleaseFile { Path = "app/visual/data_SimosaBRM.Visual_x86_64/SimosaBRM.Visual.pdb", Sha256 = new string('0', 64), Size = 3 });
+        ReleaseManifestBuilder.Save(m, ship.Root);
+
+        var r = InstalledVerifier.Verify(ship.Root);
+        var err = Assert.Single(r.Errors);
+        Assert.Equal(C.Missing, err.Category);
+        Assert.Contains("安裝程式不安裝這類檔案", err.Detail);
+        var step = Assert.Single(r.NextSteps);
+        Assert.Contains("不需要重新安裝", step);
+        Assert.DoesNotContain("請先不要用於訓練", step);
+
+        // 同時真的有檔案損毀:照常給「損壞」的下一步
+        File.AppendAllText(P(ship, "app/web/index.html"), "x");
+        Assert.Contains(InstalledVerifier.Verify(ship.Root).NextSteps, s => s.Contains("請先不要用於訓練"));
     }
 
     // ── 路徑分類與安裝程式、InstallLayout 對照 ─────────────
@@ -881,7 +1326,101 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.True(InstalledPaths.IsAtOrUnder("APP/Web/a", "app/web", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>tools/installer/SimosaBRM.iss 指定區段內 Name: "{app}\…" 的相對路徑('/' 分隔、結尾加 '/')。</summary>
+    private List<string> IssAppDirs(string section)
+    {
+        var result = new List<string>();
+        var current = "";
+        foreach (var raw in File.ReadAllLines(Path.Combine(_env.RepoRoot, "tools", "installer", "SimosaBRM.iss")))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith('[') && line.EndsWith(']'))
+            {
+                current = line;
+                continue;
+            }
+            if (current != section || line.StartsWith(';')) continue;
+            const string marker = "Name: \"{app}\\";
+            var at = line.IndexOf(marker, StringComparison.Ordinal);
+            if (at < 0) continue;
+            var start = at + marker.Length;
+            result.Add(line[start..line.IndexOf('"', start)].Replace('\\', '/').TrimEnd('/') + "/");
+        }
+        return result;
+    }
+
+    [Fact]
+    public void InstallerInstallDelete_ClearsExactlyTheProgramDirs()
+    {
+        // 安裝程式重新安裝前清空的資料夾([InstallDelete])= 程式目錄(InstalledPaths.ProgramPrefixes):
+        // 覆蓋清單在重新安裝後作廢的範圍、「多出的檔案 = 錯誤」的範圍、安裝程式清空的範圍,三者必須相同
+        var deleted = IssAppDirs("[InstallDelete]");
+        Assert.Equal(InstalledPaths.ProgramPrefixes.OrderBy(x => x, StringComparer.Ordinal), deleted.OrderBy(x => x, StringComparer.Ordinal));
+        // 不得動到執行期資料、設定與資料檔;安裝程式另建的資料資料夾([Dirs])也不在被清空的範圍內
+        Assert.All(deleted, d =>
+        {
+            Assert.Null(InstalledPaths.FindRuntimeData(d, StringComparison.Ordinal));
+            Assert.False(InstalledPaths.IsUserConfig(d, StringComparison.Ordinal));
+            Assert.DoesNotContain(InstalledPaths.UpdatePrefixes.Where(p => p != "app/"), p => p.StartsWith(d, StringComparison.Ordinal) || d.StartsWith(p, StringComparison.Ordinal));
+        });
+        Assert.All(IssAppDirs("[Dirs]").Concat(IssAppDirs("[UninstallDelete]")), d => Assert.False(InstalledPaths.IsProgramOrAbove(d, StringComparison.Ordinal), d));
+        Assert.True(InstalledPaths.IsProgramOrAbove("tools/", StringComparison.Ordinal));
+        Assert.True(InstalledPaths.IsProgramOrAbove("app/web/", StringComparison.Ordinal));
+        Assert.False(InstalledPaths.IsProgramOrAbove("tools/webview2/", StringComparison.Ordinal));
+        Assert.True(InstalledPaths.IsAtOrUnderProgram("app", StringComparison.Ordinal));
+        Assert.True(InstalledPaths.IsAtOrUnderProgram("app/web/assets", StringComparison.Ordinal));
+        Assert.False(InstalledPaths.IsAtOrUnderProgram("data/charts/a", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InstalledRootAsObservedOnWindowsCi_HasNoErrorsAndNothingUnlisted()
+    {
+        // Windows CI(run 88)以安裝程式安裝並啟動後,安裝根目錄內實際出現的位置:build\logs、build\records、build\tmp、build\browser、
+        // build\downloads、build\webview2、config\device、config\trusted-keys、config\packaging.json、config\ship-laptop.json(安裝程式建立)、
+        // data\records、state、store、tools\uninstall\unins000.*。安裝模式下都不是錯誤,也不列為「清單沒有列的檔案」
+        var ship = NewInstall();
+        foreach (var rel in new[]
+                 {
+                     "build/logs/simcore.log", "build/logs/simosa.pids", "build/records/20261122T010203Z-E01_baseline.jsonl", "build/tmp/setup.tmp",
+                     "build/browser/edge/Default/Preferences", "build/downloads/draft.yaml", "build/webview2/ship/EBWebView/Local State",
+                     "config/device/device-extra.json", "config/trusted-keys/installed-by-admin.pem", "data/records/old.jsonl",
+                     "state/audit.jsonl", "state/records-ledger.json", "store/records/FSB1/p.sbrec",
+                     "tools/uninstall/unins000.exe", "tools/uninstall/unins000.dat", "tools/uninstall/unins000.msg",
+                 })
+            W(ship.Root, rel, "x");
+        // 安裝程式 [Dirs] 建立、還沒有資料的空資料夾
+        foreach (var dir in IssAppDirs("[Dirs]")) Directory.CreateDirectory(P(ship, dir.TrimEnd('/')));
+        Assert.True(File.Exists(P(ship, "config/packaging.json")));
+        Assert.True(File.Exists(P(ship, "config/ship-laptop.json")));   // 安裝程式建立(= 發行版的範例,未修改)
+
+        var r = AssertOk(ship);
+        Assert.Empty(r.Errors);
+        Assert.Empty(r.Notices);
+        foreach (var loc in new[] { "build/", "state/", "store/", "config/device/", "config/trusted-keys/", "config/packaging.json", "data/records/" })
+            Assert.Contains(loc, r.SkippedLocations);
+        var cli = Run("release", "verify", "--dir", ship.Root, "--installed");
+        Assert.Equal(0, cli.Code);
+        Assert.Contains("沒有提醒", cli.Out);
+        Assert.Equal("", cli.Err);
+    }
+
     // ── CLI ───────────────────────────────────────────────
+
+    [Fact]
+    public void Cli_MaxItems_IsParsedBeforeVerifying()
+    {
+        // --max-items 寫錯:立刻回用法錯誤(結束碼 2),不先跑完整核對。之前先核對再解析 — 加了 --json 時甚至不檢查這個參數
+        var ship = NewInstall();
+        var bad = Run("verify-install", "--root", ship.Root, "--max-items", "abc");
+        Assert.Equal(2, bad.Code);
+        Assert.Equal("", bad.Out);
+        Assert.Contains("--max-items", bad.Err);
+        Assert.DoesNotContain("核對", bad.Err);
+        var badJson = Run("release", "verify", "--dir", ship.Root, "--installed", "--json", "--max-items", "abc");
+        Assert.Equal(2, badJson.Code);
+        Assert.Equal("", badJson.Out);
+        Assert.Equal(0, Run("verify-install", "--root", ship.Root, "--max-items", "3").Code);
+    }
 
     [Fact]
     public void Cli_ReleaseVerifyInstalled_ExitCodes_TextAndJson()

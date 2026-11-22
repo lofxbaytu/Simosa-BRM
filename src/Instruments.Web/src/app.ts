@@ -1,6 +1,8 @@
-// <brm-app>:整頁版面(上排 conning 條、中間鳥瞰航跡圖、下排操船台)、資料來源(WebSocket 或示範模式)、
+// <brm-app>:整頁版面(上排 conning 條、中間鳥瞰航跡圖、下排操船台、右欄 BNWAS / 警報 / VHF)、資料來源(WebSocket 或示範模式)、
 // 主題切換(日/黃昏/夜)與指令路由。規劃書第 7 章第一版儀器;教官控制暫放同頁(第 9.1 節)。
-// 右側警報欄另有精簡錨/拖船讀數與接近泊位時的艏/艉橫向速度(<brm-external-readout>;state 有 tugs/anchors/berth 時才顯示),
+// 版面(src/Instruments.Web/README.md「版面與解析度」):右欄跨航跡圖與操船台兩列,文書筆電(1366×768、1536×864)上警報面板與 VHF 都放得下;
+// 放不下時右欄自己捲動,面板不互相擠壓。判定由端對端測試把關(tests/e2e/support/layout.ts)。
+// 航跡圖左上角另有精簡錨/拖船讀數與接近泊位時的艏/艉橫向速度(<brm-external-readout>;state 有 tugs/anchors/berth 時才顯示),
 // 泊位幾何依 state.scenario.id 由建置時匯入的情境清單取得(示範模式用示範泊位),航跡圖同時畫碼頭線、碰墊、纜繩、拖船與錨鏈。
 
 import { LitElement, html, css, nothing } from 'lit';
@@ -76,21 +78,31 @@ export class BrmApp extends LitElement {
       :host {
         display: grid;
         height: 100%;
+        /* 兩欄四列:header 與 conning 條跨兩欄;左欄是航跡圖(中段)與操船台(下段),右欄(BNWAS、警報、VHF)跨中段與下段。
+           右欄只佔中段時,1366×768 / 1536×864 的中段只剩約 225–300 px,警報面板被擠到高度 0、VHF 下半被操船台蓋住(第二十九輪 L2);
+           跨兩列後右欄有約 435–540 px。寬螢幕也用同一種排法:1920 寬的瀏覽器視窗高度常不足 1080,只佔中段時第 2 筆警報就會被切到 */
+        grid-template-columns: minmax(0, 1fr) 360px;
         grid-template-rows: auto minmax(150px, 20vh) minmax(0, 1fr) minmax(210px, 27vh);
+        grid-template-areas:
+          'header header'
+          'conning conning'
+          'plot side'
+          'controls side';
         gap: 6px;
         padding: 6px;
         background: var(--ob-bg-app);
         filter: brightness(var(--ob-dim));
       }
-      /* 中間列:鳥瞰航跡圖 + 右側警報欄(BNWAS 指示、中央警報面板) */
+      brm-conning-bar {
+        grid-area: conning;
+      }
+      /* .middle 只是分組(航跡圖 + 右欄;DOM 與 Tab 順序維持 航跡圖 → 右欄 → 操船台):不產生方框,兩個子元素直接排進 :host 的格線 */
       .middle {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 360px;
-        gap: 6px;
-        min-height: 0;
+        display: contents;
       }
       /* 航跡圖左上角浮貼錨/拖船/靠泊讀數(不佔警報欄高度,中央警報面板維持原大小) */
       .plot-wrap {
+        grid-area: plot;
         position: relative;
         min-height: 0;
         min-width: 0;
@@ -102,14 +114,28 @@ export class BrmApp extends LitElement {
         max-width: min(380px, 60%);
         pointer-events: none;
       }
-      /* 警報欄:BNWAS、中央警報面板、內建 VHF 角色扮演面板(docs/design/vhf-roleplay.md;?vhf=0 不顯示) */
+      /* 右欄:BNWAS、中央警報面板、內建 VHF 角色扮演面板(docs/design/vhf-roleplay.md;?vhf=0 不顯示)。
+         BNWAS 與 VHF 取自然高度(不縮);警報面板吃剩餘高度,至少放得下標題列與 2 筆警報(含「轉移」選單,每筆約 59 px);
+         三者加起來超過欄高時整欄捲動(不互相擠壓、不疊到別的面板上) */
       .alert-col {
-        display: grid;
-        grid-template-rows: auto minmax(0, 1fr) auto;
+        grid-area: side;
+        display: flex;
+        flex-direction: column;
         gap: 6px;
         min-height: 0;
+        min-width: 0;
+        overflow-y: auto;
+        scrollbar-width: thin;
+      }
+      .alert-col > * {
+        flex: 0 0 auto;
+      }
+      .alert-col > brm-alert-panel {
+        flex: 1 1 0;
+        min-height: 170px;
       }
       header {
+        grid-area: header;
         display: flex;
         align-items: center;
         gap: 10px;
@@ -206,11 +232,15 @@ export class BrmApp extends LitElement {
         color: var(--ob-alarm-text);
         border-color: var(--ob-alarm);
       }
+      /* 操船台五個面板:操舵、車鐘、艏側推、自動舵、教官小面板。只佔左欄寬度(右欄跨到這一列);
+         各面板是尺寸容器,窄時自己改排法(helm-wheel / thruster-lever / autopilot-panel / instructor-controls 的 @container) */
       .controls {
+        grid-area: controls;
         display: grid;
-        grid-template-columns: 2.2fr 1.3fr 1.3fr 1.5fr 1fr;
+        grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, 1.5fr) minmax(0, 1fr);
         gap: 6px;
         min-height: 0;
+        min-width: 0;
       }
       .controls > * {
         background: var(--ob-bg-surface);
@@ -250,25 +280,40 @@ export class BrmApp extends LitElement {
         background: var(--ob-warning);
         color: #1a1000;
       }
-      /* 寬度 ≤ 1900 px(含 1920×1080 筆電在 125% 縮放下的 1536 px):conning 條折成兩列(conning-bar.ts 同一門檻),需要較高的列 */
+      /* 寬度 ≤ 1900 px(含 1920×1080 筆電在 125% 縮放下的 1536 px):conning 條折成兩列(conning-bar.ts 同一門檻),需要較高的列;
+         操船台只有約 1150 px 寬,教官小面板改窄欄(三個鈕直排) */
       @media (max-width: 1900px) {
         :host {
           grid-template-rows: auto minmax(220px, 32vh) minmax(0, 1fr) minmax(210px, 27vh);
         }
+        .controls {
+          grid-template-columns: minmax(0, 2fr) minmax(0, 1.15fr) minmax(0, 1.25fr) minmax(0, 1.45fr) minmax(0, 0.65fr);
+        }
       }
-      /* 1366×768 等較小螢幕:下排操船台略縮、間距縮小 */
+      /* 1366×768 等較小螢幕:下排操船台略縮、間距縮小、右欄 344 px(操船台約 1010 px 寬) */
       @media (max-width: 1500px) {
         :host {
+          grid-template-columns: minmax(0, 1fr) 344px;
           grid-template-rows: auto minmax(220px, 32vh) minmax(0, 1fr) minmax(200px, 27vh);
           gap: 4px;
           padding: 4px;
         }
-        .middle {
-          grid-template-columns: minmax(0, 1fr) 344px;
-          gap: 4px;
-        }
         .alert-col {
           gap: 4px;
+        }
+        .controls {
+          grid-template-columns: minmax(0, 2fr) minmax(0, 1.08fr) minmax(0, 1.1fr) minmax(0, 1.42fr) minmax(0, 0.64fr);
+          gap: 4px;
+        }
+      }
+      /* 768 高的筆電(1366×768):右欄約 470 px(header 兩行時約 435 px)。VHF 略縮(間距、PTT、訊息列最小高度、DSC 說明單行),
+         header 一行時三個面板剛好放得下、不必捲動;再放不下(header 兩行、BNWAS 作動)時右欄捲動 */
+      @media (max-height: 800px) {
+        .alert-col {
+          --brm-vhf-gap: 4px;
+          --brm-vhf-ptt-height: 40px;
+          --brm-vhf-log-min: 30px;
+          --brm-vhf-hint-wrap: nowrap;
         }
       }
     `,

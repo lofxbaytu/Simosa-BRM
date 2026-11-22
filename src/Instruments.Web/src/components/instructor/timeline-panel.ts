@@ -172,7 +172,14 @@ export class TimelinePanel extends LitElement {
       .panel {
         height: 100%;
       }
-      .item {
+      /* 教官站左欄的捲動區內面板取自然高度:項目清單以 --brm-timeline-list-max 限高(超過時清單自己捲動),
+         確認快速鈕留在清單下方;未設定時不限高(面板高度由外層決定時清單吃剩餘高度) */
+      .list {
+        max-height: var(--brm-timeline-list-max, none);
+      }
+      /* 選擇器要比共用樣式的 .list .item(align-items: baseline)明確:否則標題列與條件 / 動作兩行不會撐滿項目寬度,
+         長的項目把「強制 / 觸發」鈕推到清單右緣外、清單出現約 1000 px 寬的水平捲動(第二十九輪 L2 量測發現) */
+      .list .item {
         flex-direction: column;
         align-items: stretch;
         gap: 1px;
