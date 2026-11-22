@@ -65,6 +65,52 @@ public class LocalDataGuardTests
         Assert.Equal(LocalDataVerdict.InsideRoot, V(@"C:\Simosa BRM\y", RootC + @"\"));   // 根目錄結尾有 \ 也一樣
     }
 
+    /// <summary>
+    /// 段落尾端的空白與句點照 GetFullPathNameW(Microsoft〈File path formats on Windows systems〉):中間段只刪一個結尾句點、空白保留;
+    /// 路徑不以 \ 結尾時最後一段刪去全部結尾的空白與句點;以 \ 結尾時最後一段的空白保留。
+    /// </summary>
+    [Fact]
+    public void TrailingSpacesAndDots_FollowWindowsNormalization()
+    {
+        static LocalDataVerdict C(string path, string root) => LocalDataGuard.Check(path, new[] { root }, Win).Verdict;
+        // 中間段結尾的空白不刪:"Simosa BRM \records" 是根目錄旁的另一個資料夾 "Simosa BRM "(根目錄外的 C:)
+        Assert.Equal(LocalDataVerdict.Rejected, C(@"C:\Simosa BRM \records\x.jsonl", RootC));
+        Assert.Equal(LocalDataVerdict.Rejected, V(@"C:\Simosa BRM \records\x.jsonl", RootC));
+        Assert.Equal(LocalDataVerdict.Rejected, V(@"C:\Simosa BRM  \records\x.jsonl", RootC));
+        // 中間段只刪一個結尾句點:"Simosa BRM.\records" 即根目錄內
+        Assert.Equal(LocalDataVerdict.InsideRoot, V(@"C:\Simosa BRM.\records\x.jsonl", RootC));
+        Assert.Equal(LocalDataVerdict.InsideRoot, C(@"C:\Simosa BRM.\records\x.jsonl", RootC));
+        Assert.Equal(LocalDataVerdict.Rejected, C(@"C:\Simosa BRM. \records\x.jsonl", RootC));   // 句點後還有空白:不刪
+        // 最後一段(路徑不以 \ 結尾):結尾的空白與句點全刪
+        Assert.Equal(LocalDataVerdict.InsideRoot, V(@"C:\Simosa BRM\records\x.jsonl. .", RootC));
+        Assert.Equal(LocalDataVerdict.InsideRoot, V(@"C:\Simosa BRM. ", RootC));
+        Assert.Equal(LocalDataVerdict.InsideRoot, C(@"C:\Simosa BRM \.", RootC));                // . 處理後的最後一段也刪
+        // 以 \ 結尾:最後一段的空白保留(資料夾選項,例如 --profile、--store、--to)
+        Assert.Equal(LocalDataVerdict.Rejected, V(@"C:\Simosa BRM \", RootC));
+        Assert.Equal(LocalDataVerdict.Rejected, C(@"C:\Simosa BRM \", RootC));
+        Assert.Equal(LocalDataVerdict.InsideRoot, V(@"C:\Simosa BRM\profile \", RootC));
+        Assert.Equal(LocalDataVerdict.InsideRoot, V(@"C:\Simosa BRM\", RootC));
+        // 相對路徑組合後的結果相同(Linux 上以字串運算組合,Windows 上以 System.IO.Path)
+        Assert.Equal(LocalDataVerdict.Rejected, V(@"..\Simosa BRM \records\x.jsonl", RootC));
+        Assert.Equal(LocalDataVerdict.InsideRoot, V(@"..\Simosa BRM.\records\x.jsonl", RootC));
+        // 根目錄在 D:(一般情況):根目錄旁的 "Simosa BRM " 在 D: → 不是系統磁碟,照常
+        Assert.Equal(LocalDataVerdict.NotSystemDrive, V(@"D:\Simosa BRM \records\x.jsonl", RootD));
+    }
+
+    [Fact]
+    public void Messages_HaveNoDoubleColonAfterDriveLetter()
+    {
+        var rejected = LocalDataGuard.Evaluate(@"C:\Users\x\console.log", RootD, new[] { RootD }, Win);
+        var message = LocalDataGuard.RejectionMessage("--log", rejected);
+        Assert.DoesNotContain("C::", message);
+        Assert.Contains("位於系統磁碟 C:。", message);
+        var allowed = LocalDataGuard.Evaluate(@"C:\Users\x\console.log", RootD, new[] { RootD }, WinAllowed);
+        var notice = LocalDataGuard.ConsentNotice("--log", allowed);
+        Assert.DoesNotContain("C::", notice);
+        Assert.Contains(@"C:\Users\x\console.log", notice);
+        Assert.Contains("SIMOSA_ALLOW_SYSTEM_DRIVE=1", notice);
+    }
+
     [Fact]
     public void Switch_AllowsWithNotice_OtherwiseRejectedWithGuidance()
     {

@@ -170,6 +170,89 @@ public sealed class CliWriteLocationTests : IDisposable
         Assert.True(File.Exists(Path.Combine(rel, "manifest.json")));
     }
 
+    /// <summary>
+    /// 成對的指令在目前目錄不是根目錄時以相對路徑互相找得到(審查 F1):寫入用的相對路徑以根目錄為準,
+    /// 讀取本工具產生的檔案(--key、--verification、verification list --file、--push、inspect / verify 的檔案)目前目錄沒有時再找根目錄。
+    /// 目前目錄 = 測試程序的目前目錄(不改它:其他測試平行執行),根目錄 = 暫存資料夾;檔名帶亂數,目前目錄不會剛好有同名檔。
+    /// </summary>
+    [Fact]
+    public void PairedCommands_WithRelativePaths_FindEachOther_WhenCwdIsNotRoot()
+    {
+        var root = _env.PathIn("pair-root");
+        Directory.CreateDirectory(root);
+        var cwd = Directory.GetCurrentDirectory();
+        Assert.NotEqual(Path.GetFullPath(root), Path.GetFullPath(cwd));
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var ver = $"ver-{tag}.json";
+        var key = $"k-{tag}";
+        var pkg = $"p-{tag}.sbupd";
+        Assert.False(File.Exists(ver) || File.Exists(key + ".key.pem") || File.Exists(pkg));
+
+        var p = _env.EditParameter("navigation.cpa.coastal_nm", "0.5", "0.6");
+        var scenario = Path.Combine(_env.InstructorRoot, "data", "scenarios", "E01_baseline.yaml");
+        var add = Run(null, "verification", "add", "--root", root, "--file", ver, "--scenario", scenario, "--parameters", p, "--by", "測試");
+        Assert.True(add.Code == 0, add.Err);
+        Assert.True(File.Exists(Path.Combine(root, ver)));
+        var list = Run(null, "verification", "list", "--root", root, "--file", ver);
+        Assert.Equal(0, list.Code);
+        Assert.Contains("E01_baseline", list.Out);
+
+        Assert.Equal(0, Run(null, "keygen", "--root", root, "--out", key, "--name", "k", "--role", "primary").Code);
+        Assert.True(File.Exists(Path.Combine(root, key + ".key.pem")));
+
+        // 改動前在目前目錄找不到 → 「找不到金鑰檔」「找不到驗證紀錄」;現在 --key 與 --verification 都找到根目錄內的檔
+        var pack = Run(null, "pack", "--root", root, "--kind", "parameters", "--version", "2026.10.2", "--summary", "相對路徑成對", "--sms", "DWO-007:4:DPA",
+            "--file", $"data/parameters/company-procedures.yaml={p}", "--data-root", _env.InstructorRoot, "--baseline", _env.BaselineParameters,
+            "--verification", ver, "--key", key + ".key.pem", "--out", pkg);
+        Assert.True(pack.Code == 0, pack.Out + pack.Err);
+        Assert.True(File.Exists(Path.Combine(root, pkg)));
+        Assert.DoesNotContain("目前目錄與根目錄都有", pack.Err);   // 只有根目錄有:不提醒
+
+        // pack --out 的產物:inspect、export --push 以相對路徑讀得到
+        var inspect = Run(null, "inspect", pkg, "--root", root);
+        Assert.True(inspect.Code == 0, inspect.Err);
+        Assert.Contains("2026.10.2", inspect.Out);
+        var export = Run(null, "export", "--root", root, "--to", "usb", "--role", "instructor", "--store", "st", "--push", pkg);
+        Assert.True(export.Code == 0, export.Err);
+        Assert.True(File.Exists(Path.Combine(root, "usb", "simosa-transfer", "to-ship", pkg)));
+        // 目前目錄沒有留下任何檔案
+        Assert.False(File.Exists(ver) || File.Exists(key + ".key.pem") || File.Exists(pkg) || File.Exists(Path.Combine("usb", "simosa-transfer", "to-ship", pkg)));
+    }
+
+    /// <summary>ReadPath:絕對路徑原樣;相對路徑目前目錄優先(原本的行為),沒有時根目錄;兩處都有時用目前目錄的並提醒;兩處都沒有時原樣。</summary>
+    [Fact]
+    public void ReadPath_CwdFirst_ThenRoot()
+    {
+        var root = _env.PathIn("read-root");
+        Directory.CreateDirectory(root);
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var name = $"read-{tag}.json";
+        var err = new StringWriter();
+        var app = new CliApp(new StringWriter(), err);
+        var a = new CliArgs(new[] { "--root", root });
+
+        Assert.Equal(name, app.ReadPath(a, "--verification", name));                         // 兩處都沒有:原樣(錯誤訊息與原本相同)
+        File.WriteAllText(Path.Combine(root, name), "{}");
+        Assert.Equal(Path.Combine(root, name), app.ReadPath(a, "--verification", name));     // 只有根目錄有
+        var abs = Path.Combine(_env.Dir, "elsewhere.json");
+        Assert.Equal(abs, app.ReadPath(a, "--verification", abs));                           // 絕對路徑原樣
+        Assert.Equal(string.Empty, err.ToString());
+
+        var inCwd = Path.GetFullPath(name);
+        try
+        {
+            File.WriteAllText(inCwd, "{}");
+            Assert.Equal(name, app.ReadPath(a, "--verification", name));                     // 兩處都有:目前目錄(原本的行為)並提醒
+            Assert.Contains("注意:--verification", err.ToString());
+            Assert.Contains("目前目錄與根目錄都有", err.ToString());
+            File.Delete(Path.Combine(root, name));
+            var quiet = new StringWriter();
+            Assert.Equal(name, new CliApp(new StringWriter(), quiet).ReadPath(a, "--verification", name));   // 只有目前目錄有:不提醒
+            Assert.Equal(string.Empty, quiet.ToString());
+        }
+        finally { File.Delete(inCwd); }
+    }
+
     /// <summary>Windows 才有系統磁碟:以目前程序的環境(未注入)執行,keygen --out 到系統磁碟上根目錄外 → 結束碼 1、不建立檔案(已設開關的機器略過)。</summary>
     [Fact]
     public void RealEnvironment_RejectsSystemDrive_OnWindows()

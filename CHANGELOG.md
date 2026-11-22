@@ -2,6 +2,12 @@
 
 > 版本號 = `VERSION` 檔(`<年>.<月>.<輪次>`,例如 2026.11.24;更新包只接受版本遞增,此方案大於舊的 `0.<日期>.<時分>` 後備與文件示例 2026.11.1,船上曾套用的任何版本都不會把它判為降版;`tools/build-release.*` 無 `--version` 時以此為發行版本,與更新包版本規則相同:1–4 段數字)。每輪一條,只列新增/修正/已知限制的摘要;細節、驗證指令與測試數見 `docs/dev-log/2026-10-08-工作階段交接.md` 各輪與各 `docs/design/*.md`。日期為該輪提交日。
 
+## 2026.11.30 — 2026-11-22(第三十輪)
+
+- 新增(本機資料守則):**各程式拒絕寫到根目錄外的系統磁碟**(經同意後設環境變數 `SIMOSA_ALLOW_SYSTEM_DRIVE=1` 才照做並提醒)。涵蓋 `SimCore.Host --record`、`SimosaBRM.Console.Serial --log` / `--loopback`、WebView2 外殼 `--profile`、`simosa-pkg` 各寫入選項(`keygen --out`、`pack --out`、`store … --store` / `backup --to` / `report --out`、`sync --store`、`export --to`、`import --from`、`release manifest --dir`、`verification add --file`)與 `config/packaging.json` 的 `store` / `recordsDir`;寫到隨身碟(E: 等)照常。判斷只有一份(`src/SimCore/Ship/LocalDataGuard.cs`;UNC、`\\?\` 前綴、正斜線、`..`、大小寫、段落尾端的空白與句點),非 Windows 不檢查。寫入用的相對路徑改以根目錄(專案根目錄或安裝根目錄)為準,不再以目前目錄為準;`simosa-pkg` 讀取自己產生的檔案時先找目前目錄、找不到再找根目錄。原本 `docs/ops/本機資料位置.md` 第 5 節列為「尚未檢查寫入位置的手動用法」。
+- 修正(網頁版面,CI run 92 發現):conning 條的風方塊在 1280×720 被裁切 — CI 的 Linux 執行器以 DejaVu Sans 顯示拉丁字母,一列要 110 px、方塊只給 105 px(本機的 Inter 剛好 105 px)。方塊 ≤ 185 px(1093–1366 寬的視窗)時玫瑰圖移到數值上方,並排時一列放不下就把數值換行;本機字型、DejaVu Sans、Liberation Sans 下版面案例都通過。`docs/design/web-layout.md` 第 5 節補上以 CI 字型重現的作法。
+- 測試:`VhfRelayTests` 的等待上限 5 → 15 s,逾時訊息列出期間收到的框與連線狀態(CI run 92 在 Windows 執行器滿載時等滿 5 s;該提交沒有改動 VHF,根因推定為排程延遲)。
+
 ## 2026.11.29 — 2026-11-22(第二十九輪)
 
 - 新增(R7):情境庫 **38 個情境都有規劃時間、同儕評估提示與講評引導問題**(原本只有 E20 兩檔與 E22a–d);E05 補簡報區段。同儕提示只用簡報已告知的內容(不透露故障、升級觸發與「引水人 / 船長是錯的」劇情),講評問題練習後使用;六個既有範本依同一規則修訂。教官站簡報區把講評引導問題收合並標示「練習後使用」。寫法規則與各情境的規劃時間見 `docs/design/scenario-library.md` 第 20.1 節。**內容待 BRM 教官定稿**。
