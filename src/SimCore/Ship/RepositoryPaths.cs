@@ -25,6 +25,24 @@ public static class RepositoryPaths
     public static string FindRoot(string? start = null)
         => TryFindRoot(start) ?? throw new DirectoryNotFoundException("找不到專案根目錄(需含 Directory.Build.props 與 data/);可設定環境變數 SIMOSA_BRM_ROOT");
 
+    /// <summary>
+    /// 自 <paramref name="start"/> 往上找發行版的安裝根目錄(同時含 data/ 與 app/ 的目錄;發行版 &lt;root&gt;/app/&lt;元件&gt;/…);找不到回傳 null。
+    /// 安裝版沒有 Directory.Build.props,<see cref="TryFindRoot"/> 只在設了 SIMOSA_BRM_ROOT(啟動腳本)時才找得到;單獨執行的程式以此補足。
+    /// </summary>
+    public static string? FindInstalledRoot(string start, Func<string, bool>? directoryExists = null)
+    {
+        directoryExists ??= Directory.Exists;
+        var dir = Path.GetFullPath(start).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        while (!string.IsNullOrEmpty(dir))
+        {
+            if (directoryExists(Path.Combine(dir, "data")) && directoryExists(Path.Combine(dir, "app"))) return dir;
+            var parent = Path.GetDirectoryName(dir);
+            if (parent is null || parent == dir) break;
+            dir = parent;
+        }
+        return null;
+    }
+
     public static string RecordsDirectory(string? root = null) => Path.Combine(root ?? FindRoot(), "build", "records");
 
     /// <summary>

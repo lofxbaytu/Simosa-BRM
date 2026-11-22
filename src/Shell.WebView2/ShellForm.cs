@@ -33,13 +33,14 @@ internal sealed class ShellForm : Form
     private string _documentTitle = "";
     private Rectangle _windowedBounds;
 
-    public ShellForm(ShellOptions options, string installRoot, ShellLog log)
+    /// <param name="profileDir">WebView2 使用者資料夾(Program 以 ShellPaths.ProfileDirectory 解析並檢查過本機資料守則)</param>
+    public ShellForm(ShellOptions options, string installRoot, string profileDir, ShellLog log)
     {
         _options = options;
         _installRoot = installRoot;
         _log = log;
         _url = options.BuildUrl();
-        _profileDir = ShellPaths.ResolveProfileDirectory(options.Profile, installRoot, options.ProfileName);
+        _profileDir = profileDir;
 
         Text = options.WindowTitle;
         BackColor = Color.Black;

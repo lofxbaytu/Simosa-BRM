@@ -9,4 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="../Tools.Packaging/Tools.Packaging.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SimosaBRM.Packaging.Tests" />
+  </ItemGroup>
 </Project>

@@ -1,4 +1,5 @@
 using SimosaBRM.SimCore.Contracts;
+using SimosaBRM.SimCore.Ship;
 
 namespace SimosaBRM.SimCore.Host;
 
@@ -62,6 +63,8 @@ public sealed class HostOptions
           --loading full|ballast|intermediate
           --scenario <path.yaml>      情境檔(預設 data/scenarios/E01_baseline.yaml)
           --record [<file.jsonl>]     紀錄到 build/records/<yyyyMMdd-HHmmss>-<scenario>.jsonl(或指定路徑;loadScenario 切換情境時另開新檔)
+                                      (相對路徑以專案根目錄為準;在根目錄外而且位於 Windows 系統磁碟 C: 時拒絕(結束碼 2),
+                                      經同意後設環境變數 SIMOSA_ALLOW_SYSTEM_DRIVE=1 才照做)
           --replay <file.jsonl>       離線重播紀錄並比對狀態雜湊、事件序列與 summary(不啟動網路)
           --parameters <path.yaml>    公司程序參數集(預設 data/parameters/company-procedures.yaml 或情境 assessment.parameterSet)
           --validate                  只做情境靜態檢查(列出 error/warning)後結束
@@ -160,6 +163,14 @@ public sealed class HostOptions
         }
         return o;
     }
+
+    /// <summary>
+    /// --record 的完整路徑(null = 未指定路徑,用預設 build/records/…,在根目錄內):相對路徑以 <paramref name="root"/>(專案根目錄)為準;
+    /// 在根目錄外而且位於 Windows 系統磁碟時丟 <see cref="LocalDataRejectedException"/>(本機資料守則;docs/ops/本機資料位置.md 第 4 節),
+    /// 設了 SIMOSA_ALLOW_SYSTEM_DRIVE=1 則照做並以 <paramref name="notice"/> 提醒。
+    /// </summary>
+    public string? ResolveRecordPath(string root, LocalDataEnvironment env, Action<string>? notice = null)
+        => RecordPath is { } rp ? LocalDataGuard.Require("--record", rp, root, new[] { root }, env, notice) : null;
 
     private static (string, int) SplitEndpoint(string s, int defaultPort)
     {

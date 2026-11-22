@@ -7,7 +7,7 @@ using SimosaBRM.SimCore.Ship;
 
 // USB 實體操控台服務(規劃書第 5.4 節精簡版操控台;協定 src/Contracts/console-serial.md):
 // Teensy USB CDC 序列埠(或 --loopback 檔案/具名管道的假裝置)的文字行 ↔ SimCore.Host 的狀態/指令 WebSocket。
-// 只做轉換,不改核心、不進狀態雜湊;log 寫 build/logs/console.log(與主控台)。Ctrl+C / SIGINT / SIGTERM 優雅結束(結束碼 0)。
+// 只做轉換,不改核心、不進狀態雜湊;log 寫 <根目錄>/build/logs/console.log(與主控台;根目錄見 ConsoleOptions.FindRoot)。Ctrl+C / SIGINT / SIGTERM 優雅結束(結束碼 0)。
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 Console.OutputEncoding = Encoding.UTF8;
 ConsoleOptions options;
@@ -25,15 +25,22 @@ if (options.Help)
     return 0;
 }
 
-var root = RepositoryPaths.TryFindRoot() ?? Directory.GetCurrentDirectory();
-string Resolve(string p) => Path.IsPathRooted(p) ? p : Path.Combine(root, p);
+// 根目錄:專案根目錄 → 安裝根目錄(安裝版單獨執行時;舊版在此改以目前目錄為準)→ 都找不到才用目前目錄。
+// --log 與 --loopback 的相對路徑以根目錄為準;位置在根目錄外的 Windows 系統磁碟時拒絕(本機資料守則;經同意設 SIMOSA_ALLOW_SYSTEM_DRIVE=1)
+ResolvedFiles files;
+var consentNotices = new List<string>();
+try { files = options.ResolveFiles(ConsoleOptions.FindRoot(), LocalDataEnvironment.FromProcess(), consentNotices.Add); }
+catch (LocalDataRejectedException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    return 2;
+}
 
 StreamWriter? logFile = null;
-if (options.LogPath != "-")
+if (files.Log is { } logPath)
 {
-    var path = Resolve(options.LogPath);
-    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-    logFile = new StreamWriter(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false)) { AutoFlush = true };
+    Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+    logFile = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false)) { AutoFlush = true };
 }
 var logGate = new object();
 void Log(string message)
@@ -67,7 +74,8 @@ return await RunAsync();
 
 async Task<int> RunAsync()
 {
-    Log($"SimosaBRM.Console.Serial 啟動:核心 {options.WsUrl};{(options.Loopback ? $"loopback 讀 {options.LoopbackIn} 寫 {options.LoopbackOut ?? "(無)"}" : $"序列埠 {options.Port} {options.Baud}")};心跳逾時 {options.HeartbeatTimeoutS:0.#} s;log {(logFile is null ? "(僅主控台)" : Resolve(options.LogPath))}");
+    Log($"SimosaBRM.Console.Serial 啟動:核心 {options.WsUrl};{(options.Loopback ? $"loopback 讀 {options.LoopbackIn} 寫 {options.LoopbackOut ?? "(無)"}" : $"序列埠 {options.Port} {options.Baud}")};心跳逾時 {options.HeartbeatTimeoutS:0.#} s;log {files.Log ?? "(僅主控台)"}");
+    foreach (var n in consentNotices) Log(n);
     if (options.DurationS is { } d) cts.CancelAfter(TimeSpan.FromSeconds(d));
     var session = new ConsoleSession(options.HeartbeatTimeoutS * 1000.0);
     var core = new CoreLink(new Uri(options.WsUrl));
@@ -82,7 +90,7 @@ async Task<int> RunAsync()
             try
             {
                 device = options.Loopback
-                    ? StreamDeviceLink.OpenFiles(Resolve(options.LoopbackIn!), options.LoopbackOut is null ? null : Resolve(options.LoopbackOut))
+                    ? StreamDeviceLink.OpenFiles(files.LoopbackIn!, files.LoopbackOut)
                     : SerialDeviceLink.Open(options.Port!, options.Baud);
             }
             catch (Exception ex)

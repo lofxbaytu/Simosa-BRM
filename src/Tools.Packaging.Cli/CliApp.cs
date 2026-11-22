@@ -12,6 +12,7 @@ using SimosaBRM.Packaging.Updates;
 using SimosaBRM.SimCore.Parameters;
 using SimosaBRM.SimCore.Recording;
 using SimosaBRM.SimCore.Scenario;
+using SimosaBRM.SimCore.Ship;
 
 namespace SimosaBRM.Packaging.Cli;
 
@@ -22,11 +23,14 @@ public sealed class CliApp
 {
     private readonly TextWriter _out;
     private readonly TextWriter _err;
+    private readonly LocalDataEnvironment _localData;
 
-    public CliApp(TextWriter? stdout = null, TextWriter? stderr = null)
+    /// <param name="localData">本機資料守則的檢查環境(作業系統、系統磁碟、SIMOSA_ALLOW_SYSTEM_DRIVE;預設目前程序,測試可注入)</param>
+    public CliApp(TextWriter? stdout = null, TextWriter? stderr = null, LocalDataEnvironment? localData = null)
     {
         _out = stdout ?? Console.Out;
         _err = stderr ?? Console.Error;
+        _localData = localData ?? LocalDataEnvironment.FromProcess();
     }
 
     public const string Usage = """
@@ -80,6 +84,13 @@ public sealed class CliApp
 
         共通:--root 安裝根目錄(預設 SIMOSA_INSTALL_ROOT → 程式所在的安裝/專案根目錄 → D:\Simosa BRM 或 G:\Simosa BRM;不會自動落到 C:);--store 預設 <root>/store;
               私鑰密碼可用 --key-password 或環境變數 SIMOSA_KEY_PASSWORD。
+        寫入位置(本機資料守則;docs/ops/本機資料位置.md 第 4 節):
+              寫入用的相對路徑 — keygen / pack / store report 的 --out、--store、store backup 與 export 的 --to、import 的 --from、
+              verification 的 --file、release manifest 的 --dir — 以根目錄(--root;未指定時為預設安裝根目錄,該資料夾不存在時為目前目錄)為準;
+              讀取用的輸入檔(--key、--file、--push、更新包、紀錄包等)仍以目前目錄為準。
+              寫入位置(含 config/packaging.json 的 store,以及 records accept-report、import --role ship、serve 會刪除舊紀錄的 recordsDir)
+              在根目錄與專案根目錄之外、而且位於 Windows 系統磁碟(C:)時拒絕(結束碼 1);隨身碟(E: 等)與網路路徑(\\server\share)照常。
+              確實要寫到系統磁碟須先取得訓練負責人同意,同意後設環境變數 SIMOSA_ALLOW_SYSTEM_DRIVE=1 再執行。
         """;
 
     public int Run(string[] argv)
@@ -145,12 +156,52 @@ public sealed class CliApp
 
     private static InstallLayout Layout(CliArgs a) => new(a.Get("root") ?? InstallLayout.DefaultRoot());
 
-    private static RecordStore StoreOf(CliArgs a)
+    private RecordStore StoreOf(CliArgs a)
     {
-        if (a.Get("store") is { } s) return new RecordStore(s);
+        if (a.Get("store") is { } s) return new RecordStore(WritePath(a, "--store", s));
         var layout = Layout(a);
-        var rel = layout.Config.Store ?? "store";
-        return new RecordStore(Path.IsPathRooted(rel) ? rel : Path.Combine(layout.Root, rel));
+        // packaging.json store:相對路徑以安裝根目錄為準(預設 store);絕對路徑在根目錄外的系統磁碟時拒絕
+        return new RecordStore(layout.Config.Store is { Length: > 0 } cfg
+            ? ConfigWritePath(a, "config/packaging.json 的 store", cfg)
+            : Path.Combine(layout.Root, "store"));
+    }
+
+    // ── 本機資料守則:寫入位置(docs/ops/本機資料位置.md 第 4 節;判斷邏輯在 SimCore LocalDataGuard,各主控程式共用)──
+
+    /// <summary>根目錄(--root 或預設安裝根目錄)的完整路徑,與是否以 --root 明確指定。</summary>
+    private (string Root, bool Explicit) RootOf(CliArgs a)
+    {
+        var explicitRoot = a.Get("root");
+        return (LocalDataGuard.FullPath(explicitRoot ?? InstallLayout.DefaultRoot(), Directory.GetCurrentDirectory(), _localData), explicitRoot is not null);
+    }
+
+    /// <summary>寫入用相對路徑的基準:--root,或已存在的預設安裝根目錄;兩者皆非(找不到根目錄)時維持原行為,以目前目錄為準。</summary>
+    private string WriteBase(CliArgs a)
+    {
+        var (root, isExplicit) = RootOf(a);
+        return isExplicit || Directory.Exists(root) ? root : Directory.GetCurrentDirectory();
+    }
+
+    /// <summary>
+    /// 命令列的寫入位置:相對路徑以 <see cref="WriteBase"/> 為準;在安裝根目錄與專案根目錄之外、而且位於 Windows 系統磁碟時
+    /// 丟 <see cref="LocalDataRejectedException"/>(→ 結束碼 1);設了 SIMOSA_ALLOW_SYSTEM_DRIVE=1 則照做並提醒一行。回傳完整路徑。
+    /// </summary>
+    internal string WritePath(CliArgs a, string what, string path)
+        => LocalDataGuard.Require(what, path, WriteBase(a), new[] { RootOf(a).Root, SimCore.Ship.RepositoryPaths.TryFindRoot() }, _localData, n => _err.WriteLine(n));
+
+    /// <summary>config/packaging.json 的位置設定(store、recordsDir):相對路徑以安裝根目錄為準(與 <see cref="InstallLayout"/> 相同),檢查同 <see cref="WritePath"/>。</summary>
+    internal string ConfigWritePath(CliArgs a, string what, string configured)
+    {
+        var root = RootOf(a).Root;
+        return LocalDataGuard.Require(what, configured, root, new[] { root, SimCore.Ship.RepositoryPaths.TryFindRoot() }, _localData, n => _err.WriteLine(n));
+    }
+
+    /// <summary>船上依已備份回報刪除舊紀錄的指令(records accept-report、import --role ship、serve)用:packaging.json recordsDir 也是寫入位置。</summary>
+    private InstallLayout ShipRecordsLayout(CliArgs a)
+    {
+        var layout = Layout(a);
+        if (layout.Config.RecordsDir is { Length: > 0 } r) ConfigWritePath(a, "config/packaging.json 的 recordsDir", r);
+        return layout;
     }
 
     private IKeyProvider SigningKey(CliArgs a)
@@ -194,7 +245,7 @@ public sealed class CliApp
 
     private int Keygen(CliArgs a)
     {
-        var basePath = a.Require("out");
+        var basePath = WritePath(a, "--out", a.Require("out"));   // 相對路徑以根目錄為準;根目錄外的系統磁碟拒絕
         var role = a.Get("role") ?? KeyRoles.Primary;
         if (!KeyRoles.IsSigner(role)) throw new CliUsageException("--role 須為 primary 或 backup");
         var meta = new Dictionary<string, string?> { ["role"] = role, ["name"] = a.Require("name"), ["holder"] = a.Get("holder"), ["created"] = DateTime.UtcNow.ToString("yyyy-MM-dd") };
@@ -284,7 +335,8 @@ public sealed class CliApp
     private int Verification(CliArgs a)
     {
         var sub = a.Pos(0, "子指令(add|list)");
-        var file = a.Require("file");
+        // --file:add 會寫入(相對路徑以根目錄為準、根目錄外的系統磁碟拒絕);list 讀同一份檔,相對路徑同樣以根目錄為準
+        var file = sub == "add" ? WritePath(a, "--file", a.Require("file")) : LocalDataGuard.FullPath(a.Require("file"), WriteBase(a), _localData);
         var rec = VerificationRecord.LoadOrNew(file);
         if (sub == "list")
         {
@@ -324,6 +376,7 @@ public sealed class CliApp
 
     private int Pack(CliArgs a)
     {
+        var outPath = WritePath(a, "--out", a.Require("out"));   // 先檢查寫入位置,再讀來源與簽章
         var sms = a.All("sms").Select(s =>
         {
             var parts = s.Split(':');
@@ -351,7 +404,7 @@ public sealed class CliApp
             req.AddDirectory(inst, src);
         }
         using var key = SigningKey(a);
-        var res = UpdatePackageBuilder.Build(req, key, a.Require("out"));
+        var res = UpdatePackageBuilder.Build(req, key, outPath);
         if (res.Impact is not null) _out.Write(ImpactAnalyzer.Format(res.Impact));
         foreach (var w in res.Warnings) _err.WriteLine($"警告:{w}");
         _out.WriteLine($"已產生更新包 {res.OutputPath}");
@@ -484,9 +537,11 @@ public sealed class CliApp
     private int RecordsCmd(CliArgs a)
     {
         var sub = a.Pos(0, "子指令(pack|list|accept-report)");
+        // accept-report 會刪除 recordsDir 內已備份的紀錄:packaging.json recordsDir 也是寫入位置
+        var layout = sub == "accept-report" ? ShipRecordsLayout(a) : Layout(a);
         var mgr = a.Get("media-max-mb") is { } mm
-            ? new ShipRecordManager(Layout(a)) { MediaMaxBytes = (long.TryParse(mm, out var mmv) && mmv >= 0 ? mmv : throw new CliUsageException("--media-max-mb 須為非負整數(MB)")) * 1024L * 1024L }
-            : new ShipRecordManager(Layout(a));
+            ? new ShipRecordManager(layout) { MediaMaxBytes = (long.TryParse(mm, out var mmv) && mmv >= 0 ? mmv : throw new CliUsageException("--media-max-mb 須為非負整數(MB)")) * 1024L * 1024L }
+            : new ShipRecordManager(layout);
         switch (sub)
         {
             case "pack":
@@ -516,6 +571,9 @@ public sealed class CliApp
     private int Store(CliArgs a)
     {
         var sub = a.Pos(0, "子指令");
+        // 寫入位置先檢查(被拒絕時不先建立紀錄庫資料夾)
+        var backupTo = sub == "backup" ? WritePath(a, "--to", a.Require("to")) : null;
+        var reportOut = sub == "report" ? WritePath(a, "--out", a.Require("out")) : null;
         var store = StoreOf(a);
         switch (sub)
         {
@@ -543,12 +601,13 @@ public sealed class CliApp
             }
             case "backup":
             {
-                var (target, marked) = store.Backup(a.Require("to"));
+                var (target, marked) = store.Backup(backupTo!);
                 _out.WriteLine($"已備份紀錄庫到 {target},標記 {marked.Count} 個紀錄包完成岸上備份");
                 return 0;
             }
             case "report":
             {
+                var outPath = reportOut!;
                 using var key = SigningKey(a);
                 var c = store.CreateBackupReport(a.Require("ship"), key);
                 if (c is null)
@@ -556,7 +615,6 @@ public sealed class CliApp
                     _out.WriteLine("沒有已備份且待船上清理的紀錄包");
                     return 0;
                 }
-                var outPath = a.Require("out");
                 File.WriteAllBytes(outPath, c.Value.Document.ToBytes());
                 _out.WriteLine($"已產生已備份回報 {outPath}({c.Value.Report.Packages.Count} 個紀錄包)");
                 return 0;
@@ -589,8 +647,9 @@ public sealed class CliApp
                     if (parts.Length < 2 || parts[0].Length == 0 || parts[1].Length == 0) throw new CliUsageException($"--component 格式為 <名稱>=<版本>[=<相對路徑>[=<狀態>]]:{spec}");
                     components[parts[0]] = new ReleaseComponent { Version = parts[1], Path = parts.Length > 2 && parts[2].Length > 0 ? parts[2] : null, Status = parts.Length > 3 ? parts[3] : null };
                 }
-                var m = ReleaseManifestBuilder.Build(dir, a.Require("version"), a.Get("git"), a.Get("branch"), a.Get("runtime"), components, a.All("note"));
-                var path = ReleaseManifestBuilder.Save(m, dir);
+                var outDir = WritePath(a, "--dir", dir);   // manifest.json 寫進此目錄
+                var m = ReleaseManifestBuilder.Build(outDir, a.Require("version"), a.Get("git"), a.Get("branch"), a.Get("runtime"), components, a.All("note"));
+                var path = ReleaseManifestBuilder.Save(m, outDir);
                 _out.WriteLine($"已寫入發行清單 {path}");
                 _out.WriteLine($"  版本 {m.Version}{(m.GitRevision is { } g ? $",git {KeyFiles.Short(g)}" : "")},{m.FileCount} 個檔案,{m.TotalSize / 1024.0 / 1024.0:F1} MiB,{m.Components.Count} 個元件");
                 foreach (var n in m.Notes) _out.WriteLine($"  註記:{n}");
@@ -644,7 +703,7 @@ public sealed class CliApp
 
     private int Serve(CliArgs a)
     {
-        var layout = Layout(a);
+        var layout = ShipRecordsLayout(a);   // 同步時依已備份回報刪除 recordsDir 內的舊紀錄
         var listen = a.Get("listen") ?? layout.Config.Listen;
         if (listen is null) _err.WriteLine("警告:未指定直連介面 IP(--listen 或 packaging.json listen),將綁定所有介面");
         var ip = listen is null ? IPAddress.Any : IPAddress.Parse(listen);
@@ -667,8 +726,8 @@ public sealed class CliApp
         var target = a.Require("ship");
         var layout = Layout(a);
         var host = layout.Config.Ships.TryGetValue(target, out var ip) ? ip : target;
+        var store = StoreOf(a);   // 先檢查紀錄庫的寫入位置,再載入簽章金鑰
         using var key = SigningKey(a);
-        var store = StoreOf(a);
         var report = SyncClient.SyncAsync(new SyncOptions
         {
             Host = host, Port = a.Int("port", layout.Config.Port), InstructorKey = key, Store = store, PushPackages = a.All("push"),
@@ -684,7 +743,7 @@ public sealed class CliApp
 
     private int Export(CliArgs a)
     {
-        var to = a.Require("to");
+        var to = WritePath(a, "--to", a.Require("to"));   // 隨身碟(E: 等)照常;根目錄外的系統磁碟拒絕
         UsbReport r;
         if (Role(a) == "ship") r = UsbTransfer.ShipExport(new ShipNode(Layout(a)), to);
         else
@@ -701,11 +760,11 @@ public sealed class CliApp
 
     private int Import(CliArgs a)
     {
-        var from = a.Require("from");
+        var from = WritePath(a, "--from", a.Require("from"));   // 匯入時也寫回隨身碟(清理通知、待回傳紀錄包)並刪除已處理的檔案
         UsbReport r;
         if (Role(a) == "ship")
         {
-            r = UsbTransfer.ShipImport(new ShipNode(Layout(a)), from);
+            r = UsbTransfer.ShipImport(new ShipNode(ShipRecordsLayout(a)), from);   // 處理已備份回報時刪除 recordsDir 內的舊紀錄
             foreach (var u in r.Updates) PrintApply(u);
             if (r.Cleanup is { Ok: true } c) _out.WriteLine($"已備份回報 {c.ReportId}:刪除 {c.Deleted.Count} 個紀錄包");
         }

@@ -34,13 +34,25 @@ internal static class Program
             return 0;
         }
 
-        var installRoot = ShellPaths.FindInstallRoot(AppContext.BaseDirectory);
+        var foundRoot = ShellPaths.TryFindInstallRoot(AppContext.BaseDirectory);
+        var installRoot = foundRoot ?? Path.GetFullPath(AppContext.BaseDirectory);   // 同 ShellPaths.FindInstallRoot 找不到時的回傳值
         var log = new ShellLog(ShellPaths.LogFile(installRoot, options.ProfileName));
         Application.ThreadException += (_, e) => log.Write($"未處理的例外:{e.Exception}");
         AppDomain.CurrentDomain.UnhandledException += (_, e) => log.Write($"未處理的例外(非 UI 執行緒):{e.ExceptionObject}");
 
-        log.Write($"啟動 {string.Join(' ', args)} → {options.BuildUrl()};安裝根目錄 {installRoot}");
-        using var form = new ShellForm(options, installRoot, log);
+        log.Write($"啟動 {string.Join(' ', args)} → {options.BuildUrl()};安裝根目錄 {installRoot}{(foundRoot is null ? "(找不到含 data\\ 的上層,以程式所在資料夾代替;--profile 的相對路徑以目前目錄為準)" : "")}");
+        // 使用者資料夾(--profile 的相對路徑以安裝根目錄為準):在安裝根目錄外而且位於系統磁碟時拒絕(本機資料守則;經同意設 SIMOSA_ALLOW_SYSTEM_DRIVE=1)
+        var profile = ShellPaths.ProfileDirectory(options.Profile, foundRoot, installRoot, options.ProfileName, SimosaBRM.SimCore.Ship.LocalDataEnvironment.FromProcess());
+        if (!profile.Allowed)
+        {
+            var message = SimosaBRM.SimCore.Ship.LocalDataGuard.RejectionMessage("--profile(WebView2 使用者資料夾)", profile);
+            log.Write($"拒絕啟動:{message}");
+            MessageBox.Show(message, "Simosa BRM 操船台外殼", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 2;
+        }
+        if (profile.Verdict == SimosaBRM.SimCore.Ship.LocalDataVerdict.AllowedBySwitch)
+            log.Write(SimosaBRM.SimCore.Ship.LocalDataGuard.ConsentNotice("--profile(WebView2 使用者資料夾)", profile));
+        using var form = new ShellForm(options, installRoot, profile.Path, log);
         Application.Run(form);
         log.Write("結束");
         return 0;

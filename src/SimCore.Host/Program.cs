@@ -30,6 +30,15 @@ if (options.Help)
 }
 
 var root = RepositoryPaths.FindRoot();
+// --record <路徑>:相對路徑以專案根目錄為準;在根目錄外的 Windows 系統磁碟時拒絕(本機資料守則;經同意設 SIMOSA_ALLOW_SYSTEM_DRIVE=1)。
+// 與 --nmea-file 相同,在建立任何伺服器/紀錄之前驗證
+string? recordPathFull;
+try { recordPathFull = options.ResolveRecordPath(root, LocalDataEnvironment.FromProcess(), msg => Console.WriteLine(msg)); }
+catch (LocalDataRejectedException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    return 2;
+}
 // --nmea-file 路徑在建立任何伺服器/紀錄之前驗證(否則失敗時已開的 listener 與紀錄無法優雅收尾;審查第二十三輪)
 if (options.NmeaFile is { } nmeaFileArg)
 {
@@ -226,8 +235,8 @@ router.Log += msg => Console.WriteLine($"  [host] {msg}");
 // 紀錄器由 router 擁有:開檔/換檔(SwapRecorder,帶入目前的 sessionInfo 寫 header)與 sessionInfo 寫 session 行在同一把鎖內。
 // 第一份紀錄不在此開檔,而在下方狀態 WebSocket 成功監聽之後(--no-ws 時亦在同一處):--port 被占用時以結束碼 2 結束,
 // 不會留下只有 header+footer、tick 0 的空紀錄(第二十五輪審查第 4 項;R13 紀錄包不收無內容紀錄)
-string RecordPathFor(string scenarioId) => options.RecordPath is { } rp && router.Recorder is null
-    ? (Path.IsPathRooted(rp) ? rp : Path.Combine(root, rp))
+string RecordPathFor(string scenarioId) => recordPathFull is { } rp && router.Recorder is null
+    ? rp
     : RecordWriter.DefaultPath(RepositoryPaths.RecordsDirectory(root), scenarioId);
 // 情境切換(檔案路徑或內嵌情境物件共用;交接紀錄待辦第 1 項):載入結果 → TryApplyScenarioLoad(驗證錯誤/船舶/動力學失敗 → 拒絕,
 // 引擎狀態不變、紀錄不切換,引擎發 scenarioLoadRejected 由下方訂閱者印出並轉給教官站)→ 成功才列印檢查、紀錄另開新檔

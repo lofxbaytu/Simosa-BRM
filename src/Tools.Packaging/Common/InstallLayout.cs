@@ -107,17 +107,7 @@ public sealed class InstallLayout
 
     /// <summary>自 <paramref name="start"/> 往上找發行版的安裝根目錄(同時含 data/ 與 app/ 的目錄);找不到回傳 null。</summary>
     public static string? FindInstalledRoot(string start, Func<string, bool> directoryExists)
-    {
-        var dir = Path.GetFullPath(start).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        while (!string.IsNullOrEmpty(dir))
-        {
-            if (directoryExists(Path.Combine(dir, "data")) && directoryExists(Path.Combine(dir, "app"))) return dir;
-            var parent = Path.GetDirectoryName(dir);
-            if (parent is null || parent == dir) break;
-            dir = parent;
-        }
-        return null;
-    }
+        => RepositoryPaths.FindInstalledRoot(start, directoryExists);   // 與 Console.Serial 等共用同一份(SimCore)
 
     /// <summary>取得排他鎖(同時只允許一個套用/打包/清理程序);釋放即解鎖。</summary>
     public IDisposable AcquireLock()

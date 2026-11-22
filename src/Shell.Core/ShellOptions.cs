@@ -57,7 +57,7 @@ public sealed record ShellOptions
     public string? Radar { get; init; }
     /// <summary>--kiosk:無邊框全螢幕、最上層、關閉需確認。</summary>
     public bool Kiosk { get; init; }
-    /// <summary>--profile:WebView2 使用者資料夾(未給時 &lt;安裝根目錄&gt;/build/webview2/&lt;page&gt;;不寫 C:\ 使用者目錄)。</summary>
+    /// <summary>--profile:WebView2 使用者資料夾(未給時 &lt;安裝根目錄&gt;/build/webview2/&lt;page&gt;;相對路徑以安裝根目錄為準;不寫 C:\ 使用者目錄 — <see cref="ShellPaths.ProfileDirectory"/>)。</summary>
     public string? Profile { get; init; }
     /// <summary>--allow-devtools:允許 DevTools 與右鍵選單(預設關閉)。</summary>
     public bool AllowDevTools { get; init; }
@@ -84,7 +84,8 @@ public sealed record ShellOptions
         "  --radar          雷達頁選台(?radar=;預設 x)\n" +
         "  --kiosk          無邊框全螢幕、最上層;F11 切換全螢幕、Esc 不離開、Alt+F4 需確認\n" +
         "  --monitor        顯示在第 n 個螢幕(0 起算;規劃書 D6 兩螢幕配置:視景在 1、操船台在 0)\n" +
-        "  --profile        WebView2 使用者資料夾(預設 <安裝根目錄>\\build\\webview2\\<page>;不寫 C:\\)\n" +
+        "  --profile        WebView2 使用者資料夾(預設 <安裝根目錄>\\build\\webview2\\<page>;相對路徑以安裝根目錄為準;不寫 C:\\ —\n" +
+        "                   在安裝根目錄外而且位於系統磁碟 C: 時拒絕並以結束碼 2 離開,經同意後設環境變數 SIMOSA_ALLOW_SYSTEM_DRIVE=1 才照做)\n" +
         "  --allow-devtools 允許 DevTools 與右鍵選單(預設關閉)\n" +
         "  --no-close-confirm 關閉視窗不詢問(啟動腳本/stop-all.ps1 結束外殼用)\n" +
         "  參數可寫成 --key value 或 --key=value(旗標亦接受 --kiosk true|false);WebView2 Runtime 未安裝時顯示離線安裝說明(docs/ops/安裝與啟動.md 第 4.5 節)";
