@@ -163,3 +163,28 @@ ws_check() {
           -H 'Sec-WebSocket-Key: c2ltb3NhLWJybS1zbW9rZQ==' "http://$1:$2$3" 2>/dev/null || true)"
   [[ "$code" == "101" ]]
 }
+
+# launch_git_info <根目錄>:版本資訊(soak 報告的 meta.json;第三十輪審查 S-F4)→ LAUNCH_GIT_REV(HEAD 的提交,可能為空)、
+# LAUNCH_GIT_DIRTY(true = 工作樹有未提交的修改(含未追蹤檔)、false、unknown)。有 git 時以 git 取(git worktree 的 .git 是檔案也可);
+# 沒有 git(船上筆電)或 LAUNCH_GIT_NO_GIT=1(測試用)時讀 .git/HEAD 與 refs(.git 是檔案時跟到 gitdir、worktree 的 commondir、packed-refs),
+# 有沒有未提交的修改無法得知(unknown)。不會失敗。
+launch_git_info() {
+  local root="$1" gd head ref common
+  LAUNCH_GIT_REV=""; LAUNCH_GIT_DIRTY="unknown"
+  if [[ "${LAUNCH_GIT_NO_GIT:-0}" != 1 ]] && command -v git >/dev/null 2>&1 && LAUNCH_GIT_REV="$(git -C "$root" rev-parse HEAD 2>/dev/null)"; then
+    if [[ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]]; then LAUNCH_GIT_DIRTY=true; else LAUNCH_GIT_DIRTY=false; fi
+    return 0
+  fi
+  LAUNCH_GIT_REV=""
+  gd="$root/.git"
+  if [[ -f "$gd" ]]; then gd="$(sed -n 's/^gitdir: //p' "$gd" | head -1)"; [[ "$gd" == /* ]] || gd="$root/$gd"; fi
+  [[ -f "$gd/HEAD" ]] || return 0
+  head="$(head -1 "$gd/HEAD")"
+  if [[ "$head" != ref:* ]]; then LAUNCH_GIT_REV="$head"; return 0; fi
+  ref="${head#ref: }"; common="$gd"
+  if [[ -f "$gd/commondir" ]]; then common="$(head -1 "$gd/commondir")"; [[ "$common" == /* ]] || common="$gd/$common"; fi
+  if [[ -f "$gd/$ref" ]]; then LAUNCH_GIT_REV="$(head -1 "$gd/$ref")"
+  elif [[ -f "$common/$ref" ]]; then LAUNCH_GIT_REV="$(head -1 "$common/$ref")"
+  elif [[ -f "$common/packed-refs" ]]; then LAUNCH_GIT_REV="$(awk -v r="$ref" '$2 == r { print $1; exit }' "$common/packed-refs")"; fi
+  return 0
+}

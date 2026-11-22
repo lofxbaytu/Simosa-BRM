@@ -216,6 +216,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         }
         catch (Exception) { }
         socket.Dispose();
+        HttpListenerStarter.ReleaseWebSocketConnection(ctx);   // Linux 受控 HttpListener 只 Dispose WebSocket 不關 socket(每條連線留 1 個 fd)
         Log?.Invoke(replay ? "重播接收端離線" : $"雷達 {radarId.ToUpperInvariant()} 客戶端離線(共 {ClientCount(radarId)})");
     }
 

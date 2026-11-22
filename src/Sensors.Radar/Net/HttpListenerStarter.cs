@@ -85,6 +85,17 @@ internal static class HttpListenerStarter
         catch (Exception) { /* 已釋放或 Start 失敗的 listener */ }
     }
 
+    /// <summary>
+    /// WebSocket 連線結束後釋放 HttpListener 的連線(在 <c>WebSocket.Dispose()</c> 之後呼叫;與 src/SimCore.Host/HttpListenerStarter.cs 相同,說明見該處):
+    /// Linux / macOS 的受控 HttpListener 只 Dispose WebSocket 不會關 socket,連線一直留在 listener 的連線表(每條 1 個 fd);Windows 未驗證,不呼叫。不拋例外。
+    /// </summary>
+    public static void ReleaseWebSocketConnection(HttpListenerContext ctx)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try { ctx.Response.Abort(); }
+        catch (Exception) { /* 已關閉 */ }
+    }
+
     /// <summary>等背景迴圈結束,但不超過 <paramref name="timeout"/>(關機流程不可被卡住:之後還要寫紀錄 footer);逾時回傳 false。</summary>
     public static async Task<bool> WaitBoundedAsync(Task? task, TimeSpan timeout)
     {

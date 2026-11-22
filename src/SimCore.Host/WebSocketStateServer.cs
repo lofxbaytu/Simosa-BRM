@@ -179,6 +179,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         }
         catch (Exception) { /* 對方已斷線 */ }
         socket.Dispose();
+        HttpListenerStarter.ReleaseWebSocketConnection(ctx);   // Linux 受控 HttpListener 只 Dispose WebSocket 不關 socket(每條連線留 1 個 fd)
         Log?.Invoke($"WebSocket 客戶端離線(共 {_clients.Count})");
     }
 

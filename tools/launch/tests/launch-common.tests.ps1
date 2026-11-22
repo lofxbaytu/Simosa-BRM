@@ -471,5 +471,39 @@ Invoke-Test 'Get-LaunchNmeaArgs:nmeaTargets/nmeaBind/nmeaFile → Host 參數;�
     Assert-LaunchPortsFree @{ 'VHF ws' = $port; '錄影 HTTP' = ($PortBase + 5) }
 }
 
+Invoke-Test 'Get-LaunchGitInfo:有 git 時乾淨 / 修改 / 未追蹤檔;-NoGit 時讀 .git(鬆散 ref、packed-refs、worktree 的 .git 檔與 commondir、不是儲存庫)' {
+    . (Join-Path $launch 'launch-common.ps1')
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Write-Host '    略過:沒有 git'; return }
+    $d = Join-Path $tmp 'gitinfo'
+    Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+    $repo = Join-Path $d 'repo'; $wt = Join-Path $d 'wt'; $plain = Join-Path $d 'plain'
+    New-Item -ItemType Directory -Force -Path $repo, $plain | Out-Null
+    $g = @('-c', 'user.name=test', '-c', 'user.email=test@example.invalid', '-c', 'init.defaultBranch=main', '-c', 'core.hooksPath=/dev/null')
+    & git @g -C $repo init -q; Set-Content -Path (Join-Path $repo 'a.txt') -Value 'a'; & git @g -C $repo add a.txt; & git @g -C $repo commit -q -m init
+    $head = (& git -C $repo rev-parse HEAD).Trim()
+    $i = Get-LaunchGitInfo $repo
+    Assert-True ($i.Rev -eq $head -and $i.Dirty -eq $false) "乾淨:$($i.Rev) / $($i.Dirty)"
+    Add-Content -Path (Join-Path $repo 'a.txt') -Value 'b'
+    Assert-True ((Get-LaunchGitInfo $repo).Dirty -eq $true) '修改追蹤檔應為 Dirty'
+    & git -C $repo checkout -q -- a.txt; Set-Content -Path (Join-Path $repo 'new.txt') -Value 'n'
+    Assert-True ((Get-LaunchGitInfo $repo).Dirty -eq $true) '未追蹤檔應為 Dirty'
+    Remove-Item (Join-Path $repo 'new.txt')
+    $i = Get-LaunchGitInfo $repo -NoGit
+    Assert-True ($i.Rev -eq $head -and $null -eq $i.Dirty) "-NoGit(鬆散 ref):$($i.Rev) / $($i.Dirty)"
+    & git -C $repo pack-refs --all
+    Assert-True (-not (Test-Path (Join-Path $repo '.git/refs/heads/main'))) 'pack-refs 後鬆散 ref 應已移除'
+    Assert-True ((Get-LaunchGitInfo $repo -NoGit).Rev -eq $head) '-NoGit(packed-refs)應讀到 HEAD'
+    & git -C $repo worktree add -q -b wt $wt 2>$null
+    Assert-True (Test-Path (Join-Path $wt '.git') -PathType Leaf) 'worktree 的 .git 應是檔案'
+    $i = Get-LaunchGitInfo $wt
+    Assert-True ($i.Rev -eq $head -and $i.Dirty -eq $false) "worktree(git):$($i.Rev) / $($i.Dirty)"
+    $i = Get-LaunchGitInfo $wt -NoGit
+    Assert-True ($i.Rev -eq $head -and $null -eq $i.Dirty) "worktree(-NoGit):$($i.Rev) / $($i.Dirty)"
+    $i = Get-LaunchGitInfo $plain -NoGit
+    Assert-True ($null -eq $i.Rev -and $null -eq $i.Dirty) "不是儲存庫:$($i.Rev) / $($i.Dirty)"
+    & git -C $repo worktree remove --force $wt 2>$null
+    Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+}
+
 Write-Host "通過 $pass,失敗 $fail$(if ($failed) { '(' + ($failed -join '、') + ')' })"
 if ($fail -gt 0) { exit 1 }

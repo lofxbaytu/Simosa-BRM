@@ -19,13 +19,13 @@
   容器沒有 Windows 實機時本腳本只經 pwsh 解析與 -WhatIf 驗證,實跑結果以 soak-test.sh 為準)。
 .EXAMPLE
   .\tools\soak-test.ps1 -Minutes 120 -Clients 3 -Note "船上內顯筆電"
-  .\tools\soak-test.ps1 -Minutes 10 -Clients 3 -SkipBuild
+  .\tools\soak-test.ps1 -Clients 3 -SkipBuild   # 預設 25 分鐘(RSS 準則的穩定段 720 s 起、至少 600 s;較短的執行該項無法判定)
   .\tools\soak-test.ps1 -Minutes 120 -Clients 3 -Gen0BudgetMb 0 -Note "執行階段預設的 gen0 預算"
   .\tools\soak-test.ps1 -WhatIf -Minutes 1 -Clients 2
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [double]$Minutes = 10,
+    [double]$Minutes = 25,
     [int]$Clients = 3,
     [string]$Scenario = 'E05_pilot_traffic',
     [int]$PortBase = 18800,
@@ -57,11 +57,11 @@ if (-not $Run) { $Run = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
 $outRel = "build\soak\$Run"; $outDir = Join-Path $root $outRel; $logsRel = "$outRel\logs"; $stats = Join-Path $outDir 'stats'
 $reportMd = Join-Path $root "build\soak\report-$Run.md"; $reportJson = Join-Path $root "build\soak\report-$Run.json"
 $wsPort = $PortBase; $radarPort = $PortBase + 1; $webPort = $PortBase + 2; $vhfPort = $PortBase + 3; $mediaPort = $PortBase + 4
-$gitRev = $null
-if (Test-Path '.git\HEAD') {
-    $head = (Get-Content '.git\HEAD' -Raw).Trim()
-    if ($head.StartsWith('ref: ')) { $refFile = Join-Path '.git' ($head.Substring(5) -replace '/', '\'); if (Test-Path $refFile) { $gitRev = (Get-Content $refFile -Raw).Trim() } } else { $gitRev = $head }
-}
+# 版本:HEAD 的提交與工作樹是否有未提交的修改(Get-LaunchGitInfo;沒有 git 時讀 .git,是否修改為 $null);實際執行的程式另記 bin\ 複本的 SHA-256(Write-Meta)
+$gitInfo = Get-LaunchGitInfo $root
+$gitRev = $gitInfo.Rev
+$gitText = if ($gitRev) { "$($gitRev.Substring(0, [Math]::Min(12, $gitRev.Length)))$(if ($gitInfo.Dirty -eq $true) { '(工作樹有未提交的修改)' } elseif ($gitInfo.Dirty -eq $false) { '(無未提交的修改)' } else { '(是否有未提交的修改:未知)' })" } else { '未知' }
+$hostSha = $null
 function Step([string]$m) { Write-Host ''; Write-Host "=== [soak] $m" }
 function Find-DotnetCounters {
     foreach ($c in @((Join-Path $root '.cache\dotnet-tools\dotnet-counters.exe'), (Join-Path $root '.cache\dotnet-tools\dotnet-counters'))) { if (Test-Path $c) { return $c } }
@@ -91,11 +91,12 @@ if ($WhatIfPreference) {
     Write-Host "WhatIf:Simosa BRM soak 測試 ${Run}:情境 $scenId、客戶端 $Clients、$Minutes 分鐘 → $outRel\"
     Write-Host "  dotnet $(& dotnet --version)(執行階段 ${dotnetRuntimes})、node $(& node --version)、dotnet-counters $(if ($dc) { $dc } else { '無(GC 計數器略過)' })"
     Write-Host "  gen0 預算:${gen0Text}"
+    Write-Host "  git ${gitText}(meta.json 另記實際執行的 SimCore.Host.dll 的 SHA-256)"
     Write-Host "  1/5 建置:$(if ($SkipBuild) { '略過(-SkipBuild)' } else { 'SimCore.Host、Sensors.Radar.Host、StaticWeb(Release)' + $(if (-not $NoWeb -and -not $webDir) { ';網頁 pnpm build' } else { '' }) })"
     Write-Host "  2/5 SimCore.Host(ws $wsPort、VHF $vhfPort、錄影 $mediaPort;紀錄 $outRel\records\)$(if ($NoRadar) { '' } else { "、雷達 x+s(ws $radarPort)" })$(if ($NoWeb) { '' } else { "、網頁(http $webPort ← $(if ($webDir) { $webDir } else { '缺 build\web\instruments' }))" })"
     Write-Host "  3/5 tests\soak\clients.mjs ×$Clients + tests\soak\student.mjs($Minutes 分鐘)"
     Write-Host "  4/5 每 $SampleSeconds s 取樣 CPU%/RSS/執行緒/steps\/s/掉拍 → stats\host.jsonl"
-    Write-Host "  5/5 stop-all.ps1 → tests\soak\report.mjs(延遲 p95 < $MaxLatencyMs ms;RSS:有 dotnet-counters 時 GC ≥ 3 次、受控堆積 / GC 已提交量 / 非 GC 斜率 ≤ $MaxRssSlopeMbPerMin MB/min,否則 RSS 斜率;增量 ≤ $MaxRssGrowthMb MB;暖機 $WarmupSeconds s)→ build\soak\report-$Run.md/.json"
+    Write-Host "  5/5 stop-all.ps1 → tests\soak\report.mjs(延遲 p95 < $MaxLatencyMs ms;RSS:有 dotnet-counters 時 GC ≥ 3 次、受控堆積 / GC 已提交量斜率與穩定段(720 s 起、至少 600 s)非 GC / RSS 斜率 ≤ $MaxRssSlopeMbPerMin MB/min,否則 RSS 斜率;增量 ≤ $MaxRssGrowthMb MB;暖機 $WarmupSeconds s)→ build\soak\report-$Run.md/.json"
     foreach ($p in @($wsPort, $radarPort, $webPort, $vhfPort, $mediaPort)) { if (-not (Test-LaunchPortFree '127.0.0.1' $p)) { Write-Host "  注意:埠 $p 目前被占用" } }
     return
 }
@@ -131,6 +132,7 @@ if ($webDll) { $ports['網頁'] = $webPort }
 Assert-LaunchPortsFree $ports
 foreach ($d in @('records', 'media', 'stats', 'logs')) { New-Item -ItemType Directory -Force -Path (Join-Path $outDir $d) | Out-Null }
 $hostDll = Copy-BinSnapshot $hostDll 'simcore'
+$hostSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $hostDll).Hash.ToLowerInvariant()   # 實際執行的核心(bin\ 複本)
 if ($radarDll) { $radarDll = Copy-BinSnapshot $radarDll 'radar' }
 if ($webDll) { $webDll = Copy-BinSnapshot $webDll 'web-server' }
 Initialize-LaunchLogs $root $logsRel
@@ -146,7 +148,7 @@ function Write-Meta {
         startedUtc = $startedUtc; endedUtc = $script:endedUtc
         platform = "$([System.Runtime.InteropServices.RuntimeInformation]::OSDescription) $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
         cpuCount = [Environment]::ProcessorCount; machineNote = $(if ($Note) { $Note } else { 'Windows 開發機/船上筆電(以 -Note 註明)' })
-        dotnet = (& dotnet --version); dotnetRuntimes = $dotnetRuntimes; node = (& node --version); gitRev = $gitRev
+        dotnet = (& dotnet --version); dotnetRuntimes = $dotnetRuntimes; node = (& node --version); gitRev = $gitRev; gitDirty = $gitInfo.Dirty; hostDllSha256 = $hostSha
         recordPath = "$outRel\records\soak-$scenId.jsonl" -replace '\\', '/'
         hostPid = $(if ($script:hostProc) { $script:hostProc.Id } else { 0 }); hostExit = $script:hostExit; footer = $script:footer; aborted = $script:aborted
         counters = [bool]$dc

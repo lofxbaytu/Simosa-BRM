@@ -133,6 +133,16 @@ step_soak() {
   grep -q 'gen0 預算:執行階段預設' "$TMP/soak-test.whatif-gen0.out" || { echo "    -Gen0BudgetMb 0 應顯示「執行階段預設」"; return 1; }
   if "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Gen0BudgetMb -1 > "$TMP/soak-test.whatif-gen0-bad.out" 2>&1; then echo "    -Gen0BudgetMb 為負數時應失敗"; return 1; fi
   grep -q 'Gen0BudgetMb' "$TMP/soak-test.whatif-gen0-bad.out" || return 1
+  # 版本資訊(第三十輪審查 S-F4):-WhatIf 列出 HEAD 的提交與工作樹是否有未提交的修改,與 git status 一致
+  if command -v git >/dev/null 2>&1; then
+    local rev; rev="$(git rev-parse HEAD | cut -c1-12)"
+    local dirty='(無未提交的修改)'; [[ -n "$(git status --porcelain)" ]] && dirty='(工作樹有未提交的修改)'
+    grep -qF "git ${rev}${dirty}" "$out" || { echo "    -WhatIf 應列出 git ${rev}${dirty}"; return 1; }
+  fi
+  # 預設時長 25 分鐘(兩支腳本一致;RSS 準則的穩定段 720 s 起、至少 600 s,docs/design/testing.md 第 6.3 節)
+  "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Clients 2 -SkipBuild -Run ps-whatif > "$TMP/soak-test.whatif-default.out" 2>&1 || { sed 's/^/    /' "$TMP/soak-test.whatif-default.out"; return 1; }
+  grep -q '、25 分鐘 →' "$TMP/soak-test.whatif-default.out" || { echo "    soak-test.ps1 預設應為 25 分鐘"; return 1; }
+  grep -q '^MINUTES=25;' tools/soak-test.sh || { echo "    soak-test.sh 預設應為 25 分鐘(與 soak-test.ps1 一致)"; return 1; }
   # 參數錯誤仍須以非 0 結束(情境不存在)
   if "$PWSH" -NoProfile -File tools/soak-test.ps1 -WhatIf -Scenario does-not-exist > "$TMP/soak-test.whatif-bad.out" 2>&1; then echo "    情境不存在時應失敗"; return 1; fi
   grep -q '找不到' "$TMP/soak-test.whatif-bad.out"

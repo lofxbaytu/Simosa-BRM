@@ -4,13 +4,15 @@
 // 第三十輪(docs/design/testing.md 第 6.6 節):dotnet-counters 10.x 的計數器名稱帶單位與區間(前綴比對、MiB 換算);有 counters 時 RSS 準則的
 // 各項(GC 次數、受控堆積、GC 已提交量、RSS − 已提交量、增量)——以懷疑者的 GC 簡化模型產生合成資料(洩漏有 / 無 counters、大預算、只 1 次 GC、
 // 已提交量持續成長而受控堆積持平),以及 tests/soak/fixtures/ 的真實資料摘錄(實驗 B、e01 截取、e08)。
+// 第三十輪審查:非 GC 與 RSS 總斜率只看穩定段、逐項的無法判定(S-F1:修正後 10 分鐘 → 無法判定而非不通過)、分攤洩漏(S-F2)、
+// counters 第一次刷新拆成兩段時依時間戳分組(S-F3)、報告列出 gitDirty 與 SimCore.Host.dll 雜湊(S-F4)。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LatencyEstimator, MsHistogram, quantileOf } from './lib.mjs';
-import { findCounter, gen0SettingText, loadRun, readCounters, renderMarkdown, slope, summarise } from './report.mjs';
+import { findCounter, gen0SettingText, gitRevText, loadRun, parseCounterTimeOfDay, readCounters, renderMarkdown, slope, summarise } from './report.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TMP = path.join(ROOT, 'build', 'test-tmp', 'soak');
@@ -238,11 +240,48 @@ test('dotnet-counters 10.x 的名稱帶單位與區間:前綴比對、MB(10^6 B)
   assert.equal(c.gen0, 3);
   assert.equal(c.firstGcS, 20);
   assert.equal(c.gen0BudgetMb.max, 129.7);              // 136 × 10^6 B = 129.7 MiB
-  assert.equal(c.committedMb.first, 134.23);            // 140.75904 × 10^6 B = 134.23 MiB(第一次 GC 前的 0 不算首值)
+  assert.equal(c.committedMb.first, 134.24);            // 140.75904 × 10^6 B = 134.24 MiB(第一次 GC 前的 0 不算首值)
   assert.deepEqual(c.timeline.map((x) => x.managedMb), [0, 5, 6]);
   assert.deepEqual(c.timeline.map((x) => x.t), [10, 20, 30]);
   // 修正前的程式以完整名稱「Gen 0 GC Count」比對,10.x 的名稱帶區間 → 一直是 null
   assert.notEqual(c.gen0, null);
+});
+
+test('審查 S-F3:dotnet-counters 把第一次刷新拆成兩段(後半段寫在第二次刷新之後)→ 依時間戳分組,時間軸不晚一個間隔;跨午夜、上午/下午、解析不了的時間戳', () => {
+  fs.mkdirSync(TMP, { recursive: true });
+  const row = (ts, name, v) => `${ts},System.Runtime,${name},${name.includes('Count') ? 'Rate' : 'Metric'},${v}`;
+  const file = path.join(TMP, 'counters-split.csv');
+  // 與 build/soak/r30-fix-default/stats/counters.csv 開頭相同的順序:17:59:30 先寫 3 列 → 17:59:40 整批 → 17:59:30 其餘各列 → 17:59:50 整批
+  const full = (ts, gc, committed, gen2) => [row(ts, 'CPU Usage (%)', 3), row(ts, 'Working Set (MB)', 100), row(ts, 'GC Heap Size (MB)', 12),
+    row(ts, 'Gen 0 GC Count (Count / 10 sec)', gc), row(ts, 'GC Committed Bytes (MB)', committed), row(ts, 'Gen 2 Size (B)', gen2)];
+  const first = full('11/22/2026 17:59:30', 2, 14.2336, MIB);
+  fs.writeFileSync(file, ['Timestamp,Provider,Counter Name,Counter Type,Mean/Increment', ...first.slice(0, 3),
+    ...full('11/22/2026 17:59:40', 1, 14.41792, 2 * MIB), ...first.slice(3), ...full('11/22/2026 17:59:50', 0, 20, 3 * MIB)].join('\n') + '\n');
+  const c = readCounters(file, 10);
+  // 修正前(依名稱重複分組):第 1 組只有 3 列(沒有 GC 值),17:59:30 的 GC 值落到第 3 組 → 之後每次刷新晚 10 s
+  assert.deepEqual(c.timeline.map((x) => x.gc), [2, 1, 0]);
+  assert.deepEqual(c.timeline.map((x) => x.managedMb), [1, 2, 3]);
+  assert.deepEqual(c.timeline.map((x) => x.t), [10, 20, 30]);
+  assert.equal(c.refreshes, 3);
+  assert.equal(c.firstGcS, 10);
+  assert.equal(c.gen0, 3);
+  assert.equal(c.grouping, 'timestamp');
+  // 時刻解析:24 小時制、上午/下午(zh-TW)、AM/PM;解析不了回 null
+  assert.equal(parseCounterTimeOfDay('11/22/2026 17:59:30'), 17 * 3600 + 59 * 60 + 30);
+  assert.equal(parseCounterTimeOfDay('2026/11/22 下午 05:59:30'), 17 * 3600 + 59 * 60 + 30);
+  assert.equal(parseCounterTimeOfDay('11/22/2026 12:00:05 AM'), 5);
+  assert.equal(parseCounterTimeOfDay('11/22/2026 12:00:05 PM'), 12 * 3600 + 5);
+  assert.equal(parseCounterTimeOfDay('—'), null);
+  // 跨午夜:23:59:50 → 00:00:00 → 00:00:10 仍是 10 / 20 / 30 s
+  const night = path.join(TMP, 'counters-midnight.csv');
+  fs.writeFileSync(night, ['Timestamp,Provider,Counter Name,Counter Type,Mean/Increment', ...full('11/22/2026 23:59:50', 1, 14, MIB), ...full('11/23/2026 00:00:00', 1, 14, MIB), ...full('11/23/2026 00:00:10', 1, 14, MIB)].join('\n') + '\n');
+  assert.deepEqual(readCounters(night, 10).timeline.map((x) => x.t), [10, 20, 30]);
+  // 時間戳解析不了:退回檔案順序、同一名稱再出現即下一次刷新
+  const bad = path.join(TMP, 'counters-badts.csv');
+  fs.writeFileSync(bad, ['Timestamp,Provider,Counter Name,Counter Type,Mean/Increment', ...full('x', 1, 14, MIB), ...full('y', 0, 14, MIB)].join('\n') + '\n');
+  const cb = readCounters(bad, 10);
+  assert.equal(cb.grouping, 'name');
+  assert.deepEqual(cb.timeline.map((x) => [x.t, x.gc]), [[10, 1], [20, 0]]);
 });
 
 test('懷疑者合成資料:2 小時每分鐘 5 MB 存活洩漏(gen0 預算 6 MB)有 counters → 不合格(受控堆積);無 counters → 不合格並註明無法分辨 gen0 預算填充', () => {
@@ -292,34 +331,66 @@ test('整段未發生 GC(gen0 預算未用完)→ 無法判定', () => {
   assert.match(r.note, /整段未發生 GC/);
 });
 
-test('GC 已提交量持續成長而受控堆積持平(碎片)→ 不合格;非 GC(原生)記憶體成長 → 不合格', () => {
+test('GC 已提交量持續成長而受控堆積持平(碎片)→ 不合格(10 分鐘就判得出);非 GC(原生)記憶體成長 → 25 分鐘不合格、10 分鐘無法判定', () => {
   // 懷疑者 S10:10 分鐘、gen0 預算 6 MB、已提交量每分鐘 +4 MB、存活不變 → RSS 增量約 40 MB 未超過 64 MB,只靠已提交量的斜率攔下
   const s = summarise(loadRun(writeGcRun('gc-committed-grows', { minutes: 10, B: 6, F: 4, commitStep: 1 })));
   const r = rssOf(s);
   assert.equal(r.pass, false, r.measured);
-  assert.equal(r.undetermined, false);
-  assert.equal(checkOf(s, 'managed').pass, true);
-  assert.equal(checkOf(s, 'nonGc').pass, true);
-  assert.equal(checkOf(s, 'growth').pass, true);
-  assert.equal(checkOf(s, 'committed').pass, false);
+  assert.equal(r.undetermined, false);   // 有一項確定不通過 → 不通過(不是「無法判定」),即使穩定段的兩項資料不足
+  assert.equal(checkOf(s, 'managed').status, 'pass');
+  assert.equal(checkOf(s, 'growth').status, 'pass');
+  assert.equal(checkOf(s, 'committed').status, 'fail');
+  assert.equal(checkOf(s, 'nonGc').status, 'undetermined');
+  assert.equal(checkOf(s, 'rss').status, 'undetermined');
   assert.ok(checkOf(s, 'committed').value > 3, `已提交量斜率應約 4:${checkOf(s, 'committed').value}`);
-  const nat = summarise(loadRun(writeGcRun('gc-native-grows', { minutes: 10, B: 6, N: 2 })));
+  assert.match(r.note, /另有無法判定的項目/);
+  const nat = summarise(loadRun(writeGcRun('gc-native-grows', { minutes: 25, B: 6, N: 2 })));
   assert.equal(rssOf(nat).pass, false);
-  assert.equal(checkOf(nat, 'nonGc').pass, false);
-  assert.equal(checkOf(nat, 'managed').pass, true);
-  assert.equal(checkOf(nat, 'committed').pass, true);
+  assert.equal(rssOf(nat).undetermined, false);
+  assert.equal(checkOf(nat, 'nonGc').status, 'fail');
+  assert.equal(checkOf(nat, 'rss').status, 'fail');
+  assert.equal(checkOf(nat, 'managed').status, 'pass');
+  assert.equal(checkOf(nat, 'committed').status, 'pass');
+  // 原生洩漏只反映在 RSS − 已提交量:10 分鐘的執行沒有穩定段 → 無法判定(仍不合格),不會合格
+  const nat10 = summarise(loadRun(writeGcRun('gc-native-grows-10m', { minutes: 10, B: 6, N: 2 })));
+  assert.equal(rssOf(nat10).pass, false);
+  assert.equal(rssOf(nat10).undetermined, true);
 });
 
-test('沒有洩漏:小預算 10 分鐘合格;大預算 2 小時合格(暖機延到第一次 GC 之後,gen0 預算填充不算成長)', () => {
-  const small = summarise(loadRun(writeGcRun('gc-ok-10m-6mb', { minutes: 10, B: 6, gc: { gen0BudgetMb: 6, env: { DOTNET_GCgen0size: '0x600000' }, appliesTo: ['simcore', 'radar'], inherited: {} } })));
+test('審查 S-F2:分攤洩漏(受控 0.9 + 原生 0.9 MB/min,各分量都在門檻內)→ 由穩定段 RSS 總斜率判不合格;10 分鐘不合格(無法判定)', () => {
+  // 修正前的規則(沒有 RSS 總斜率):30 分鐘合格(增量約 50 MB 未超過 64 MB),要約 35 分鐘以上才因增量攔下
+  const s = summarise(loadRun(writeGcRun('gc-split-leak-30m', { minutes: 30, B: 6, L: 0.9, N: 0.9, commitStep: 1 })));
+  const r = rssOf(s);
+  assert.equal(r.pass, false, r.measured);
+  assert.equal(r.undetermined, false);
+  for (const id of ['gcCount', 'managed', 'committed', 'nonGc', 'growth']) assert.equal(checkOf(s, id).status, 'pass', `${id}:${checkOf(s, id).value}`);
+  assert.equal(checkOf(s, 'rss').status, 'fail');
+  assert.ok(checkOf(s, 'rss').value > 1.6, `RSS 穩定段斜率應約 1.8:${checkOf(s, 'rss').value}`);
+  assert.ok(checkOf(s, 'growth').value < 64);
+  const short = summarise(loadRun(writeGcRun('gc-split-leak-10m', { minutes: 10, B: 6, L: 0.9, N: 0.9, commitStep: 1 })));
+  assert.equal(rssOf(short).pass, false);
+});
+
+test('沒有洩漏:小預算 25 分鐘合格、10 分鐘無法判定(穩定段不夠長);大預算 2 小時合格(暖機延到第一次 GC 之後,gen0 預算填充不算成長)', () => {
+  const small = summarise(loadRun(writeGcRun('gc-ok-25m-6mb', { minutes: 25, B: 6, gc: { gen0BudgetMb: 6, env: { DOTNET_GCgen0size: '0x600000' }, appliesTo: ['simcore', 'radar'], inherited: {} } })));
   const r = rssOf(small);
   assert.equal(r.pass, true, `${r.measured} / ${r.note}`);
   assert.equal(small.host.warmup_s, 120);
+  assert.equal(small.rssEval.steadyFromS, 720);
   assert.ok(small.rssEval.gcCount > 50);
+  // 10 分鐘:受控堆積、已提交量、增量都通過,穩定段(720 s 起)沒有資料 → 無法判定(不是不通過),並說明要跑 25 分鐘以上
+  const ten = summarise(loadRun(writeGcRun('gc-ok-10m-6mb', { minutes: 10, B: 6 })));
+  const r10 = rssOf(ten);
+  assert.equal(r10.pass, false);
+  assert.equal(r10.undetermined, true);
+  assert.deepEqual(ten.rssEval.checks.filter((c) => c.status === 'fail'), []);
+  assert.match(r10.note, /穩定段\(720 s 起\)/);
+  assert.match(r10.note, /--minutes 25/);
+  assert.match(renderMarkdown(ten), /\| \*\*無法判定\*\* \|/);
   const md = renderMarkdown(small);
-  assert.match(md, /gen0 預算設定:6 MB(simcore、radar 以 DOTNET_GCgen0size=0x600000 啟動/);
+  assert.ok(md.includes('gen0 預算設定:6 MB(simcore、radar 以 DOTNET_GCgen0size=0x600000 啟動'), 'Markdown 應列出 gen0 預算設定');
   assert.match(md, /RSS 準則逐項/);
-  assert.match(md, /受控堆積(上次 GC 後 gen1\+gen2\+LOH\+POH)/);
+  assert.ok(md.includes('受控堆積(上次 GC 後 gen1+gen2+LOH+POH)'), 'Markdown 應列出受控堆積');
   assert.match(md, /GC 已提交量/);
   assert.match(md, /第一次 GC:counters 開始後 \d+ s 內/);
   const big = summarise(loadRun(writeGcRun('gc-ok-2h-264mb', { minutes: 120, B: 264 })));
@@ -357,13 +428,64 @@ test('真實資料摘錄(tests/soak/fixtures/):實驗 B 無法判定、e01 截�
   assert.ok(checkOf(e01, 'managed').value > 4, `受控堆積斜率:${checkOf(e01, 'managed').value}`);
   const e01at600 = summarise(loadRun(writeFixtureRun('e01-orig-default-720s.json', { untilS: 600 }).dir));
   assert.equal(rssOf(e01at600).undetermined, true);
-  // e08:修正後程式、gen0 預算 10 MB;全段與 4 / 8 / 12 分鐘截取點皆合格
-  for (const untilS of [Infinity, 240, 480, 720]) {
+  // e08:修正後程式、gen0 預算 10 MB;全段與 22.5 分鐘截取點合格(穩定段 720 s 起至少 600 s:取樣對齊後最早約 1330 s 可判定);
+  // 4 / 8 / 12 分鐘截取點穩定段不夠長 → 無法判定,沒有一項不通過(4 分鐘的受控堆積擬合時段也不到 300 s;8、12 分鐘受控堆積通過)
+  for (const untilS of [Infinity, 1350]) {
     const s = summarise(loadRun(writeFixtureRun('e08-fix-hard100mb.json', { untilS }).dir));
     const r = rssOf(s);
     assert.equal(r.pass, true, `e08 截到 ${untilS} s:${r.measured} / ${r.note}`);
     assert.ok(Math.abs(checkOf(s, 'managed').value) < 0.3);
   }
+  for (const untilS of [240, 480, 720]) {
+    const s = summarise(loadRun(writeFixtureRun('e08-fix-hard100mb.json', { untilS }).dir));
+    assert.equal(rssOf(s).undetermined, true, `e08 截到 ${untilS} s:${rssOf(s).note}`);
+    assert.deepEqual(s.rssEval.checks.filter((c) => c.status === 'fail').map((c) => c.id), [], `e08 截到 ${untilS} s 不應有不通過的項目`);
+    assert.equal(checkOf(s, 'managed').status, untilS >= 480 ? 'pass' : 'undetermined');
+  }
+});
+
+test('審查 S-F1(真實資料):修正後 10 分鐘(soak 預設 6 MB)→ 無法判定而非不通過;修正後 25 分鐘合格;修正前 10 分鐘不通過(受控堆積、已提交量)', () => {
+  // 修正前的規則把 r30-v-fixed 判「RSS − GC 已提交量 1.443 MB/min 不通過」:10–12 分鐘的非 GC 一次性階梯與洩漏分不開(修正前 1.241)
+  const fixed10 = summarise(loadRun(writeFixtureRun('r30-fix-6mb-10min.json').dir));
+  const r10 = rssOf(fixed10);
+  assert.equal(r10.pass, false);
+  assert.equal(r10.undetermined, true, r10.note);
+  assert.deepEqual(fixed10.rssEval.checks.filter((c) => c.status === 'fail').map((c) => c.id), []);
+  assert.equal(checkOf(fixed10, 'nonGc').status, 'undetermined');
+  assert.ok(Math.abs(checkOf(fixed10, 'managed').value) < 0.2);
+  // 同一次執行截到 150 s(2.5 分鐘):GC 已提交量的前段階梯(斜率約 1.8)不再判「不通過」——擬合時段不到 300 s → 無法判定
+  const fixed150 = summarise(loadRun(writeFixtureRun('r30-fix-6mb-10min.json', { untilS: 150 }).dir));
+  assert.equal(rssOf(fixed150).undetermined, true, rssOf(fixed150).note);
+  assert.equal(checkOf(fixed150, 'committed').status, 'undetermined');
+  // 修正後 25 分鐘:六項全通過
+  const fixed25 = summarise(loadRun(writeFixtureRun('r30-fix-6mb-25min.json').dir));
+  assert.equal(rssOf(fixed25).pass, true, `${rssOf(fixed25).measured} / ${rssOf(fixed25).note}`);
+  assert.ok(checkOf(fixed25, 'rss').value < 1 && checkOf(fixed25, 'nonGc').value < 1);
+  // 截到 1050 s:穩定段只有 330 s,約 860–930 s 一次 +4 MB 的階梯讓 RSS 斜率 > 1 → 穩定段至少 600 s,這裡是無法判定而非不通過
+  const fixed1050 = summarise(loadRun(writeFixtureRun('r30-fix-6mb-25min.json', { untilS: 1050 }).dir));
+  assert.equal(rssOf(fixed1050).undetermined, true, rssOf(fixed1050).note);
+  assert.equal(checkOf(fixed1050, 'rss').status, 'undetermined');
+  // 修正前 10 分鐘:受控堆積與已提交量在 10 分鐘內就確定不通過(不是「無法判定」)
+  const orig10 = summarise(loadRun(writeFixtureRun('r30-orig-6mb-10min.json').dir));
+  const ro = rssOf(orig10);
+  assert.equal(ro.pass, false);
+  assert.equal(ro.undetermined, false, ro.note);
+  assert.equal(checkOf(orig10, 'managed').status, 'fail');
+  assert.equal(checkOf(orig10, 'committed').status, 'fail');
+  assert.ok(checkOf(orig10, 'growth').value < 64, '修正前 10 分鐘的增量未超過 64 MB:判出洩漏靠斜率');
+  assert.match(ro.note, /存活物件累積/);
+});
+
+test('審查 S-F4:報告列出 git 提交、工作樹是否有未提交的修改與實際執行的 SimCore.Host.dll 雜湊(舊版 meta 沒有這些欄位)', () => {
+  const sha = 'ab'.repeat(32);
+  assert.equal(gitRevText({ gitRev: '0a47ca1'.padEnd(40, '0'), gitDirty: true, hostDllSha256: sha }), '0a47ca100000(工作樹有未提交的修改:實際執行的程式以 SimCore.Host.dll 的雜湊為準);SimCore.Host.dll SHA-256 abababababababab…');
+  assert.equal(gitRevText({ gitRev: '1c51c98fbb50aaaa', gitDirty: false, hostDllSha256: null }), '1c51c98fbb50(無未提交的修改)');
+  assert.equal(gitRevText({ gitRev: '1c51c98fbb50aaaa', gitDirty: null }), '1c51c98fbb50(是否有未提交的修改:未知)');
+  assert.equal(gitRevText({ gitRev: '0a47ca1' }), '0a47ca1(舊版 soak 腳本:未記錄是否有未提交的修改)');
+  const dir = writeRun('git-dirty');
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ ...meta, gitRev: '1c51c98fbb50ffff', gitDirty: true, hostDllSha256: sha }));
+  assert.ok(renderMarkdown(summarise(loadRun(dir))).includes('git 1c51c98fbb50(工作樹有未提交的修改'), '報告開頭應註明工作樹有未提交的修改');
 });
 
 test('客戶端斷線 → 連線準則不合格', () => {

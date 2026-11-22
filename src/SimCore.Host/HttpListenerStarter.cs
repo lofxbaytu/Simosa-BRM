@@ -96,6 +96,20 @@ internal static class HttpListenerStarter
         catch (Exception) { /* 已釋放或 Start 失敗的 listener */ }
     }
 
+    /// <summary>
+    /// WebSocket 連線結束後釋放 HttpListener 的連線(在 <c>WebSocket.Dispose()</c> 之後呼叫;第三十輪審查 C-F1,docs/design/testing.md 第 6.6 節)。
+    /// Linux / macOS 的受控 HttpListener:<c>AcceptWebSocketAsync</c> 的 WebSocket 建在不擁有 socket 的 NetworkStream 上,<c>WebSocket.Dispose()</c>
+    /// 不關 socket,HttpConnection / HttpListenerContext / Socket 一直留在 listener 的連線表(每條關閉的連線 1 個檔案描述元與約 15 KB 受控記憶體,
+    /// 伺服端也不關 TCP);<c>Response.Abort()</c> 才關閉 socket 並從連線表移除。Windows(http.sys)是另一套實作,是否有同樣問題、Abort() 有無副作用
+    /// 都未實機驗證,所以不呼叫。不拋例外。
+    /// </summary>
+    public static void ReleaseWebSocketConnection(HttpListenerContext ctx)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try { ctx.Response.Abort(); }
+        catch (Exception) { /* 已關閉 */ }
+    }
+
     /// <summary>等背景迴圈結束,但不超過 <paramref name="timeout"/>(關機流程不可被卡住:之後還要寫紀錄 footer);逾時回傳 false。</summary>
     public static async Task<bool> WaitBoundedAsync(Task? task, TimeSpan timeout)
     {

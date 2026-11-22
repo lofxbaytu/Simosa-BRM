@@ -233,6 +233,7 @@ public sealed class VhfRelayServer : IAsyncDisposable
         }
         catch (Exception) { }
         socket.Dispose();
+        HttpListenerStarter.ReleaseWebSocketConnection(ctx);   // Linux 受控 HttpListener 只 Dispose WebSocket 不關 socket(每條連線留 1 個 fd)
         if (st.Joined) BroadcastRoster();
         Log?.Invoke($"VHF 客戶端離線 {st.Name}(id {id},共 {_stations.Count})");
     }

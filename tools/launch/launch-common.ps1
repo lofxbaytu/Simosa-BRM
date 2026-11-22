@@ -401,3 +401,49 @@ function Start-LaunchShellPages([string]$Exe, [string]$BaseUrl, $Pages, [hashtab
         $i++
     }
 }
+
+# 版本資訊(soak 報告的 meta.json;第三十輪審查 S-F4):Rev = HEAD 的提交(可能為 $null)、Dirty = $true(工作樹有未提交的修改,含未追蹤檔)/ $false / $null(無法得知)。
+# 有 git 時以 git 取(git worktree 的 .git 是檔案也可);沒有 git(船上筆電)或 -NoGit(測試用)時讀 .git\HEAD 與 refs
+# (.git 是檔案時跟到 gitdir、worktree 的 commondir、packed-refs),Dirty 為 $null。不拋例外。與 launch-common.sh 的 launch_git_info 相同。
+function Get-LaunchGitInfo([string]$Root, [switch]$NoGit) {
+    if (-not $NoGit -and (Get-Command git -ErrorAction SilentlyContinue)) {
+        # try:Windows PowerShell 5.1 在 $ErrorActionPreference = 'Stop' 下,原生程式寫 stderr(不是 git 儲存庫)即使 2>$null 也會變成終止錯誤
+        try {
+            $rev = (& git -C $Root rev-parse HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $rev) {
+                $status = @(& git -C $Root status --porcelain 2>$null)
+                return [pscustomobject]@{ Rev = "$rev".Trim(); Dirty = [bool]($LASTEXITCODE -eq 0 -and $status.Count -gt 0) }
+            }
+        } catch { }
+    }
+    $info = [pscustomobject]@{ Rev = $null; Dirty = $null }
+    try {
+        $gd = Join-Path $Root '.git'
+        if (Test-Path $gd -PathType Leaf) {
+            $line = @(Get-Content $gd | Where-Object { $_ -like 'gitdir: *' })[0]
+            if (-not $line) { return $info }
+            $gd = $line.Substring(8).Trim()
+            if (-not [System.IO.Path]::IsPathRooted($gd)) { $gd = Join-Path $Root $gd }
+        }
+        $headFile = Join-Path $gd 'HEAD'
+        if (-not (Test-Path $headFile -PathType Leaf)) { return $info }
+        $head = (Get-Content $headFile -TotalCount 1).Trim()
+        if (-not $head.StartsWith('ref: ')) { $info.Rev = $head; return $info }
+        $ref = $head.Substring(5).Trim()
+        $common = $gd
+        $commonFile = Join-Path $gd 'commondir'
+        if (Test-Path $commonFile -PathType Leaf) {
+            $common = (Get-Content $commonFile -TotalCount 1).Trim()
+            if (-not [System.IO.Path]::IsPathRooted($common)) { $common = Join-Path $gd $common }
+        }
+        foreach ($dir in @($gd, $common)) {
+            $refFile = Join-Path $dir ($ref -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            if (Test-Path $refFile -PathType Leaf) { $info.Rev = (Get-Content $refFile -TotalCount 1).Trim(); return $info }
+        }
+        $packed = Join-Path $common 'packed-refs'
+        if (Test-Path $packed -PathType Leaf) {
+            foreach ($l in Get-Content $packed) { $p = $l -split ' '; if ($p.Count -ge 2 -and $p[1] -eq $ref) { $info.Rev = $p[0]; break } }
+        }
+    } catch { }
+    return $info
+}

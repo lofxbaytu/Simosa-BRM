@@ -6,6 +6,7 @@
 // 用法:node tests/soak/fixtures/extract.mjs <執行目錄> <輸出.json> [--until-s T] [--note 說明] [--expect pass|fail|undetermined]
 import fs from 'node:fs';
 import path from 'node:path';
+import { groupCounterRows } from '../report.mjs';
 
 const [runDir, outFile, ...rest] = process.argv.slice(2);
 if (!runDir || !outFile) { console.error('用法:extract.mjs <執行目錄> <輸出.json> [--until-s T] [--note 說明] [--expect …]'); process.exit(2); }
@@ -19,20 +20,20 @@ const lastWall = Date.parse(samples[samples.length - 1].wall);
 const tsMs = (s) => { const m = s.match(/^(\d+)\/(\d+)\/(\d+) (\d+):(\d+):(\d+)/); return m ? Date.UTC(+m[3], +m[1] - 1, +m[2], +m[4], +m[5], +m[6]) : NaN; };
 const want = { 'Gen 0 GC Count': 'gc', 'GC Committed Bytes': 'committedMB', 'Gen 0 GC Budget': 'budgetMB', 'Gen 1 Size': 'gen1KiB', 'Gen 2 Size': 'gen2KiB', 'LOH Size': 'lohKiB', 'POH (Pinned Object Heap) Size': 'pohKiB' };
 const fields = Object.values(want);
-const rows = [];
-let cur = null;
-let seen = new Set();
-for (const line of fs.readFileSync(path.join(runDir, 'stats/counters.csv'), 'utf8').split('\n').slice(1)) {
-  const r = line.split(',');
-  if (r.length < 5 || !(tsMs(r[0]) <= lastWall)) continue;
-  const name = r[2].trim();
-  if (!cur || seen.has(name)) { cur = Object.fromEntries(fields.map((f) => [f, null])); rows.push(cur); seen = new Set(); }
-  seen.add(name);
-  const base = Object.keys(want).find((b) => name === b || name.startsWith(`${b} (`));
-  if (!base) continue;
-  const v = Number(r[4]);
-  cur[want[base]] = want[base].endsWith('KiB') ? Math.round(v / 1024) : Math.round(v * 1000) / 1000;
-}
+// 刷新分組與 report.mjs 相同(時間戳排序;dotnet-counters 偶爾把第一次刷新拆成兩段寫,見 groupCounterRows)
+const csvRows = fs.readFileSync(path.join(runDir, 'stats/counters.csv'), 'utf8').split('\n').slice(1).map((l) => l.split(','))
+  .filter((r) => r.length >= 5 && tsMs(r[0]) <= lastWall);
+const rows = groupCounterRows(csvRows, meta.sample_s ?? 10).map((g) => {
+  const cur = Object.fromEntries(fields.map((f) => [f, null]));
+  for (const r of g.rows) {
+    const name = r[2].trim();
+    const base = Object.keys(want).find((b) => name === b || name.startsWith(`${b} (`));
+    if (!base) continue;
+    const v = Number(r[4]);
+    cur[want[base]] = want[base].endsWith('KiB') ? Math.round(v / 1024) : Math.round(v * 1000) / 1000;
+  }
+  return cur;
+});
 const out = {
   source: `${path.relative(process.cwd(), runDir)}${Number.isFinite(T) ? `(截到前 ${T} s)` : ''}`,
   note: opt.note ?? '',

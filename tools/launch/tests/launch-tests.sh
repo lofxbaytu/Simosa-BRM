@@ -327,7 +327,33 @@ test_traceability_numbers() {
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers)
+# 第三十輪審查 S-F4:launch_git_info(soak 報告的 gitRev / gitDirty)— 有 git:乾淨 / 修改 / 未追蹤檔;沒有 git(LAUNCH_GIT_NO_GIT=1):
+# 鬆散 ref、packed-refs、git worktree(.git 是檔案 + commondir)、不是儲存庫。暫存儲存庫在 build/test-tmp/launch/gitinfo/(不動本儲存庫)
+test_git_info() {
+  command -v git >/dev/null || { echo "    略過:沒有 git"; return 0; }
+  local d="$TMP/gitinfo" g=(git -c user.name=test -c user.email=test@example.invalid -c init.defaultBranch=main -c core.hooksPath=/dev/null)
+  rm -rf "$d"; mkdir -p "$d/repo" "$d/plain"
+  "${g[@]}" -C "$d/repo" init -q && echo a > "$d/repo/a.txt" && "${g[@]}" -C "$d/repo" add a.txt && "${g[@]}" -C "$d/repo" commit -q -m init || fail "建立暫存儲存庫失敗" || return 1
+  local head; head="$(git -C "$d/repo" rev-parse HEAD)"
+  ( . "$LAUNCH/launch-common.sh"
+    launch_git_info "$d/repo"; [[ "$LAUNCH_GIT_REV" == "$head" && "$LAUNCH_GIT_DIRTY" == false ]] || { echo "    乾淨:$LAUNCH_GIT_REV / $LAUNCH_GIT_DIRTY"; exit 1; }
+    echo b >> "$d/repo/a.txt"; launch_git_info "$d/repo"; [[ "$LAUNCH_GIT_DIRTY" == true ]] || { echo "    修改追蹤檔應為 dirty:$LAUNCH_GIT_DIRTY"; exit 1; }
+    git -C "$d/repo" checkout -q -- a.txt; echo n > "$d/repo/new.txt"; launch_git_info "$d/repo"; [[ "$LAUNCH_GIT_DIRTY" == true ]] || { echo "    未追蹤檔應為 dirty:$LAUNCH_GIT_DIRTY"; exit 1; }
+    rm -f "$d/repo/new.txt"
+    LAUNCH_GIT_NO_GIT=1 launch_git_info "$d/repo"; [[ "$LAUNCH_GIT_REV" == "$head" && "$LAUNCH_GIT_DIRTY" == unknown ]] || { echo "    沒有 git(鬆散 ref):$LAUNCH_GIT_REV / $LAUNCH_GIT_DIRTY"; exit 1; }
+    git -C "$d/repo" pack-refs --all; [[ ! -f "$d/repo/.git/refs/heads/main" ]] || { echo "    pack-refs 後鬆散 ref 應已移除"; exit 1; }
+    LAUNCH_GIT_NO_GIT=1 launch_git_info "$d/repo"; [[ "$LAUNCH_GIT_REV" == "$head" ]] || { echo "    沒有 git(packed-refs):$LAUNCH_GIT_REV"; exit 1; }
+    git -C "$d/repo" worktree add -q -b wt "$d/wt" >/dev/null 2>&1 || { echo "    git worktree add 失敗"; exit 1; }
+    [[ -f "$d/wt/.git" ]] || { echo "    worktree 的 .git 應是檔案"; exit 1; }
+    launch_git_info "$d/wt"; [[ "$LAUNCH_GIT_REV" == "$head" && "$LAUNCH_GIT_DIRTY" == false ]] || { echo "    worktree(git):$LAUNCH_GIT_REV / $LAUNCH_GIT_DIRTY"; exit 1; }
+    LAUNCH_GIT_NO_GIT=1 launch_git_info "$d/wt"; [[ "$LAUNCH_GIT_REV" == "$head" && "$LAUNCH_GIT_DIRTY" == unknown ]] || { echo "    worktree(沒有 git):$LAUNCH_GIT_REV / $LAUNCH_GIT_DIRTY"; exit 1; }
+    LAUNCH_GIT_NO_GIT=1 launch_git_info "$d/plain"; [[ -z "$LAUNCH_GIT_REV" && "$LAUNCH_GIT_DIRTY" == unknown ]] || { echo "    不是儲存庫:$LAUNCH_GIT_REV / $LAUNCH_GIT_DIRTY"; exit 1; }
+    exit 0 ) || return 1
+  git -C "$d/repo" worktree remove --force "$d/wt" >/dev/null 2>&1; rm -rf "$d"
+  return 0
+}
+
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers

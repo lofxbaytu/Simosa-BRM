@@ -10,13 +10,15 @@
 #      客戶端與學員都已結束(時間到)後取到的那一筆不寫(客戶端斷線時核心釋放連線常有 RSS 尖峰;report.mjs 另排除 elapsed 超過設定時長或 clients.alive=false 的樣本);
 #      dotnet-counters(PATH 或 .cache/dotnet-tools)可用時另收 System.Runtime GC 計數器到 stats/counters.csv,否則略過並註記
 #   5) 時間到(客戶端自行結束)→ tools/launch/stop-all.sh(停止檔讓核心寫完紀錄 footer)→ tests/soak/report.mjs 寫 build/soak/report-<run>.md 與 .json 並判定
-#      (掉拍 0 且 tick 率 50 ± 0.5;延遲 p95 < 50 ms;RSS 不持續成長(有 counters 時看 GC 次數、受控堆積、GC 已提交量與非 GC 記憶體);無斷線/錯誤、學員指令皆生效、核心寫完 footer)
+#      (掉拍 0 且 tick 率 50 ± 0.5;延遲 p95 < 50 ms;RSS 不持續成長(有 counters 時看 GC 次數、受控堆積、GC 已提交量,與穩定段(720 s 起)的非 GC 記憶體與 RSS);無斷線/錯誤、學員指令皆生效、核心寫完 footer)
 # gen0 預算:--gen0-budget-mb <MB>(預設 6;0 = 不設、用執行階段預設)以 DOTNET_GCgen0size(十六進位位元組)傳給核心與雷達,模擬船上內顯筆電的小 L3 快取:
 #   .NET 8 工作站 GC 的 gen0 預算約 L3 / 2,雲端大快取機器可達 136–264 MB,10 分鐘內只 GC 一兩次,第一次 GC 前 RSS 依配置速率上升,RSS 判定分辨不出洩漏
 #   (docs/design/testing.md 第 6.6 節);設定值寫進 meta.json 的 gc 欄位與報告
 # 全部輸出在 build/soak/:<run>/(bin/ 建置輸出複本、logs/、stats/、records/、media/、meta.json)與 report-<run>.{md,json};<run> 預設為 UTC 時間戳(--run 指定)。
 # 結束碼:0 合格、1 不合格(含中途 Ctrl+C 中止、核心提前結束)、2 前置條件/參數錯誤。需獨佔 CPU:不要與整套測試或端對端併行。
-# 用法:tools/soak-test.sh [--minutes 10] [--clients 3] [--scenario E05_pilot_traffic|<path.yaml>] [--port-base 18800] [--no-radar] [--no-web] [--skip-build]
+# 預設 25 分鐘:前約 12 分鐘有一次性的非 GC 記憶體階梯(學員第一輪故障注入、情境事件、新程式路徑第一次執行),RSS 準則的穩定段從 720 s 起、至少 600 s,
+#   短於約 22 分鐘的執行該項只能判「無法判定」(docs/design/testing.md 第 6.3、6.7 節);實機 2 小時用 --minutes 120
+# 用法:tools/soak-test.sh [--minutes 25] [--clients 3] [--scenario E05_pilot_traffic|<path.yaml>] [--port-base 18800] [--no-radar] [--no-web] [--skip-build]
 #       [--sample-s 10] [--max-latency-ms 50] [--max-rss-slope-mb-per-min 1] [--max-rss-growth-mb 64] [--warmup-s 120] [--gen0-budget-mb 6] [--run <名稱>] [--note <機器說明>]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,7 +26,7 @@ cd "$ROOT"
 # 啟動腳本共用函式:find_dll(缺少時建置)、start_bg(PID 記入 simosa.pids)、wait_tcp、check_ports_free、launch_init_logs、launch_stop_file、process_alive
 source "$ROOT/tools/launch/launch-common.sh"
 
-MINUTES=10; CLIENTS=3; SCENARIO="E05_pilot_traffic"; BASE=18800; RADAR_ON=1; WEB_ON=1; SKIP_BUILD=0; SAMPLE=10
+MINUTES=25; CLIENTS=3; SCENARIO="E05_pilot_traffic"; BASE=18800; RADAR_ON=1; WEB_ON=1; SKIP_BUILD=0; SAMPLE=10
 MAX_LAT=50; MAX_SLOPE=1; MAX_GROWTH=64; WARMUP=120; GEN0_MB=6; RUN=""; NOTE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     --gen0-budget-mb) GEN0_MB="$2"; shift 2 ;;
     --run) RUN="$2"; shift 2 ;;
     --note) NOTE="$2"; shift 2 ;;
-    -h|--help) sed -n 2,20p "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n 2,22p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
@@ -71,7 +73,8 @@ mkdir -p "$OUT/records" "$OUT/media" "$STATS" "$ROOT/$LOGS_REL"
 REPORT_MD="$ROOT/build/soak/report-$RUN.md"; REPORT_JSON="$ROOT/build/soak/report-$RUN.json"
 WS=$BASE; RADAR=$((BASE + 1)); WEB=$((BASE + 2)); VHF=$((BASE + 3)); MEDIA=$((BASE + 4))
 CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
-GIT_REV=""; if [[ -f .git/HEAD ]]; then head="$(cat .git/HEAD)"; if [[ "$head" == ref:* ]]; then ref="${head#ref: }"; [[ -f ".git/$ref" ]] && GIT_REV="$(cat ".git/$ref")"; else GIT_REV="$head"; fi; fi
+# 版本:HEAD 的提交與工作樹是否有未提交的修改(launch_git_info;沒有 git 時讀 .git,是否修改為 unknown);實際執行的程式另記 bin/ 複本的 SHA-256(write_meta)
+launch_git_info "$ROOT"; GIT_REV="$LAUNCH_GIT_REV"; GIT_DIRTY="$LAUNCH_GIT_DIRTY"
 step() { echo; echo "=== [soak] $1"; }
 now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
 
@@ -103,6 +106,7 @@ snapshot_bin() { # <dll 路徑> <名稱> → 複本中的 dll 路徑
 }
 HOST_DLL="$(snapshot_bin "$HOST_DLL" simcore)"
 [[ -n "$RADAR_DLL" ]] && RADAR_DLL="$(snapshot_bin "$RADAR_DLL" radar)"
+HOST_SHA="$(sha256sum "$HOST_DLL" 2>/dev/null | awk '{ print $1 }' || true)"   # 實際執行的核心(bin/ 複本);工作樹有未提交的修改時 gitRev 對不到它
 [[ -n "$WEB_DLL" ]] && WEB_DLL="$(snapshot_bin "$WEB_DLL" web-server)"
 # dotnet-counters(選配):PATH 或 .cache/dotnet-tools
 DC=""; for c in "$ROOT/.cache/dotnet-tools/dotnet-counters" "$(command -v dotnet-counters 2>/dev/null || true)"; do [[ -n "$c" && -x "$c" ]] && { DC="$c"; break; }; done
@@ -133,6 +137,7 @@ write_meta() {
   "startedUtc": "$STARTED_UTC", "endedUtc": $([[ -n "$ENDED_UTC" ]] && echo "\"$ENDED_UTC\"" || echo null),
   "platform": "$(json_str "$(uname -srm 2>/dev/null || echo unknown)")", "cpuCount": $(nproc 2>/dev/null || echo 0), "machineNote": "$(json_str "${NOTE:-容器/開發機,非內顯基準筆電}")",
   "dotnet": "$(dotnet --version 2>/dev/null || echo ?)", "dotnetRuntimes": "$(dotnet --list-runtimes 2>/dev/null | awk '$1 == "Microsoft.NETCore.App" { print $2 }' | paste -sd, -)", "node": "$(node --version)", "gitRev": $([[ -n "$GIT_REV" ]] && echo "\"$GIT_REV\"" || echo null),
+  "gitDirty": $([[ "$GIT_DIRTY" == true || "$GIT_DIRTY" == false ]] && echo "$GIT_DIRTY" || echo null), "hostDllSha256": $([[ -n "${HOST_SHA:-}" ]] && echo "\"$HOST_SHA\"" || echo null),
   "recordPath": "$(json_str "$OUT_REL/records/soak-$SCEN_ID.jsonl")", "hostPid": ${HOST_PID:-0}, "hostExit": $HOST_EXIT, "footer": $FOOTER, "aborted": $([[ $ABORTED == 1 ]] && echo true || echo false),
   "counters": $([[ -n "$DC" ]] && echo true || echo false),
   "gc": { "gen0BudgetMb": $GEN0_MB, "env": $([[ -n "$GEN0_HEX" ]] && echo "{ \"DOTNET_GCgen0size\": \"$GEN0_HEX\" }" || echo "{}"), "appliesTo": ["simcore", "radar"], "inherited": $(gc_inherited_json) },
