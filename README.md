@@ -4,7 +4,7 @@
 
 - 規劃書:[docs/Simosa-BRM-操船模擬器規劃書.md](docs/Simosa-BRM-操船模擬器規劃書.md)(需求 R1–R14、決策 D1–D20)
 - 開發守則:[CLAUDE.md](CLAUDE.md)
-- 版本:`VERSION`(目前 2026.11.28(年.月.輪次);變更紀錄 [CHANGELOG.md](CHANGELOG.md),每輪一條;發行組裝 `tools/build-release.*` 無 `--version` 時讀此檔)
+- 版本:`VERSION`(目前 2026.11.29(年.月.輪次);變更紀錄 [CHANGELOG.md](CHANGELOG.md),每輪一條;發行組裝 `tools/build-release.*` 無 `--version` 時讀此檔)
 
 ## 目前狀態(第二十九輪,2026-11-22)
 
