@@ -62,8 +62,17 @@ def check(path):
             elif nxt and ord(nxt) > 127 and (nxt.isalnum() or nxt == '_'):
                 errs.append(f'{ln}: 字串中 ${name} 緊接「{nxt}」會被當成變數名稱的一部分(改寫 ${{{name}}}):{txt[:60]}')
     return errs
+# 沒有給檔案時檢查全部受版控(與未忽略)的 .ps1 — 不可默默什麼都不查(曾以「python3 tools/pscheck.py」當成檢查而實際上沒有檢查任何檔案)
+files = sys.argv[1:]
+if not files:
+    import os, subprocess
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = subprocess.run(['git', '-C', root, 'ls-files', '-co', '--exclude-standard', '*.ps1'], capture_output=True, text=True, check=True).stdout
+    files = [os.path.join(root, line) for line in out.splitlines() if line.strip()]
+    if not files:
+        print('pscheck: 找不到任何 .ps1'); sys.exit(2)
 bad = 0
-for p in sys.argv[1:]:
+for p in files:
     e = check(p)
     print(('FAIL ' if e else 'ok   ') + p)
     for x in e: print('   ', x)

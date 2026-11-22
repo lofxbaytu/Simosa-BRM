@@ -165,6 +165,65 @@ jobs:
           $setup = Get-ChildItem $out -Filter 'SimosaBRM-Setup-*.exe'
           if (-not $setup) { throw 'ISCC 未產生安裝程式' }
           Write-Host "已編譯:$($setup.Name)($([math]::Round($setup.Length / 1MB, 1)) MB)"
+  windows-install:
+    name: Windows 實機端到端(發行版 → 安裝 → 啟動 → 解除安裝)
+    # 容器(Linux)驗不到的 Windows 行為在這裡實跑:tools\ci\windows-e2e.ps1 以內建的 Windows PowerShell 5.1 執行
+    # build-release.ps1 -Installer、靜默安裝(預設位置、系統磁碟須同意)、從安裝位置啟動(核心、雷達、網頁、專屬 Edge 設定檔、
+    # WebView2 外殼)、stop-all.ps1、check-local-data.ps1、靜默解除安裝。各階段的檢查結果與 log 另存為 artifact。
+    needs: detect
+    if: needs.detect.outputs.dotnet == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 網頁相依套件
+        working-directory: src/Instruments.Web
+        run: pnpm install --frozen-lockfile
+      - name: 發行組裝與安裝程式(build-release.ps1 -Installer,Windows PowerShell 5.1)
+        id: build
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage build
+      - name: 靜默安裝(系統磁碟須同意、預設位置、捷徑、防火牆、-CheckOnly、release verify)
+        id: install
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage install
+      - name: 從安裝位置啟動(核心 / 雷達 / 網頁 / 專屬 Edge 設定檔 → stop-all → check-local-data)
+        if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage launch
+      - name: WebView2 外殼(-Shell)
+        if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage shell
+      - name: 靜默解除安裝(程式移除;紀錄、設定、瀏覽器端資料保留)
+        if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage uninstall
+      - name: 啟動腳本測試(pwsh 7,Windows;先觀察,失敗不讓工作失敗)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          & tools\launch\tests\launch-common.tests.ps1
+          exit $LASTEXITCODE
+      - name: 上傳檢查結果與 log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-e2e
+          path: |
+            build/tmp/windows-e2e/
+          if-no-files-found: ignore
+          retention-days: 14
   e2e:
     name: 端對端(Playwright + 真實核心)
     needs: detect

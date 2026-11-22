@@ -70,7 +70,7 @@ else
   echo "pwsh $PWSH_VER:$PWSH(.NET $(dotnet --version 2>/dev/null || echo ?),DOTNET_ROLL_FORWARD=$DOTNET_ROLL_FORWARD)"
 fi
 
-PS1_FILES=(tools/*.ps1 tools/launch/*.ps1 tools/launch/tests/*.ps1)
+PS1_FILES=(tools/*.ps1 tools/launch/*.ps1 tools/launch/tests/*.ps1 tools/ci/*.ps1)
 PASS=0; FAIL=0; SKIP=0; FAILED=()
 run_step() {  # run_step <名稱> <需要 pwsh 0|1> <指令…>
   local name="$1" need="$2"; shift 2
