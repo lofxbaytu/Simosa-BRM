@@ -81,7 +81,7 @@
 | 駕駛台 1366×768、1536×864 | `tests/e2e/specs/01-bridge.spec.ts`「操船台 1366×768 與 1536×864:控制項不被蓋住…」 |
 | 完整教官站 1536×864、1920×1080 | `tests/e2e/specs/02-instructor.spec.ts`「完整教官站 1536×864 與 1920×1080…」(第一個案例的「載入」改回真實點擊) |
 | 簡化教官模式簡報頁 1366×768 | `02-instructor.spec.ts`「簡化教官模式簡報頁…」 |
-| 情境編輯器 1366 / 1536 / 1920 × 4 範本 | `08-scenario-editor.spec.ts`「情境編輯器版面…」 |
+| 情境編輯器 1100(一欄)/ 1366 / 1536 / 1920 / 2560 × 4 範本 | `08-scenario-editor.spec.ts`「情境編輯器版面…」 |
 | 全部 | `E2E_CHROMIUM=/opt/pw-browsers/chromium bash tools/run-e2e.sh`(容器;CI 的端對端工作同) |
 
 第二十九輪的開發量測(5 解析度 × 駕駛台 / 完整教官站 / 簡化 / 重播 × E13、E09:40 組全部通過)用的是 `tests/e2e/support/layout.ts` 的同一份判定。

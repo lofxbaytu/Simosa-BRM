@@ -1,7 +1,7 @@
 // 情境編輯器(教官站完整模式「情境編輯」分頁;規劃書第 9.1 節):套用範本 E05 → 環境進階勾選浪並改 Hs → 結構檢查通過 → YAML 預覽含 waves。
 // 第二案例:啟用 ship.seakeeping → 沒有浪的提醒 → 加浪 → 載入核心 → 狀態幀出現 waveMotion(編輯器到核心的整條路徑)。
-// 版面案例(第二十九輪 L1;每個範本一案):教官筆電常見的有效寬度 1366 / 1536 / 1920 下,套用範本並把各區段展開後量測——
-// 面板/欄不水平溢出、標籤不被擠成逐字換行、輸入框不被擠壓或裁切、頁面沒有水平捲軸(判定見 probeEditorLayout)。
+// 版面案例(第二十九輪 L1;每個範本一案):教官筆電常見的有效寬度 1100(一欄)/ 1366 / 1536 / 1920 / 2560 下,套用範本並把各區段展開後量測——
+// 面板/欄不水平溢出、面板不重疊、控制項點得到、標籤不被擠成逐字換行、輸入框不被擠壓或裁切、頁面沒有水平捲軸(判定見 probeEditorLayout)。
 import { instructorUrl } from '../support/env.ts';
 import { ensureRunning, expect, test } from '../support/fixtures.ts';
 import { PageErrors, waitConnected } from '../support/pages.ts';
@@ -106,7 +106,7 @@ type LayoutVariant = 'A' | 'B';
 interface LayoutIssue {
   /** overflow 內容超出容器;label-squeezed / text-squeezed 逐字換行;control-narrow 輸入框太窄;control-outside 超出面板;
    *  control-clipped 被捲動/裁切容器切掉;value-clipped 數值顯示不完整;page-scroll 頁面水平捲軸 */
-  kind: 'overflow' | 'label-squeezed' | 'text-squeezed' | 'control-narrow' | 'control-outside' | 'control-clipped' | 'value-clipped' | 'page-scroll';
+  kind: 'overflow' | 'label-squeezed' | 'text-squeezed' | 'control-narrow' | 'control-outside' | 'control-clipped' | 'value-clipped' | 'page-scroll' | 'panel-overlap' | 'control-covered';
   /** 面板 › 元素 */
   where: string;
   /** 量測值 */
@@ -323,7 +323,43 @@ function probeEditorLayout(host: Element): LayoutReport {
     }
   }
 
-  // 4) 頁面沒有水平捲軸;編輯器本身也在視窗內
+  // 4) 面板之間的外框不相交(一欄時兩個隱含列曾被壓成容器高度的一半,乙丙組畫在甲組上面;第二十九輪審查)
+  const visiblePanels = Array.from(root.querySelectorAll('.panel')).filter(visible);
+  for (let i = 0; i < visiblePanels.length; i++) {
+    const a = visiblePanels[i]!.getBoundingClientRect();
+    for (let j = i + 1; j < visiblePanels.length; j++) {
+      const pj = visiblePanels[j]!;
+      if (visiblePanels[i]!.contains(pj) || pj.contains(visiblePanels[i]!)) continue;
+      const b = pj.getBoundingClientRect();
+      const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      if (w > 1 && h > 1) issues.push({ kind: 'panel-overlap', where: `${describe(visiblePanels[i]!)} ↔ ${describe(pj)}`, detail: `重疊 ${px(w)} × ${px(h)} px` });
+    }
+  }
+
+  // 5) 每個可見的控制項(含按鈕、勾選框)捲到可見範圍後,中心點的最上層元素(穿過 shadow DOM)是自己或自己的後代 —
+  //    與 Playwright 點擊前的攔截檢查相同;海圖點選編輯的畫布元件(brm-track-plot)內部不算
+  const deepAt = (x: number, y: number): Element | null => {
+    let e = document.elementFromPoint(x, y);
+    while (e && e.shadowRoot) {
+      const inner = e.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === e) break;
+      e = inner;
+    }
+    return e;
+  };
+  for (const el of Array.from(root.querySelectorAll<HTMLElement>('input, select, textarea, button'))) {
+    if (el.closest('brm-track-plot') || (el instanceof HTMLInputElement && el.type === 'hidden') || !visible(el)) continue;
+    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const r = el.getBoundingClientRect();
+    const top = deepAt(r.left + r.width / 2, r.top + r.height / 2);
+    if (!top || (top !== el && !el.contains(top))) {
+      const blocker = top ? (top.closest('.panel') ? describe(top.closest('.panel')!) + ' › ' : '') + describe(top) : '(視窗外)';
+      issues.push({ kind: 'control-covered', where: where(el), detail: `中心點被 ${blocker} 蓋住` });
+    }
+  }
+
+  // 6) 頁面沒有水平捲軸;編輯器本身也在視窗內
   const doc = document.documentElement;
   if (doc.scrollWidth > doc.clientWidth) issues.push({ kind: 'page-scroll', where: 'html', detail: `scrollWidth ${doc.scrollWidth} > clientWidth ${doc.clientWidth}` });
   if (hostRect.left < -EDGE_TOLERANCE_PX || hostRect.right > doc.clientWidth + EDGE_TOLERANCE_PX) {
@@ -360,15 +396,17 @@ function probeEditorLayout(host: Element): LayoutReport {
 const LAYOUT_TEMPLATES = ['E17b_typhoon_seakeeping', 'E13_tug_berthing_mailiao', 'E20_comprehensive_assessment_kaohsiung', 'E08_gyro_failure'] as const;
 /** [視窗寬 px, 預期欄數];視窗高 = 寬 × 9/16。1366 = 1366×768、1536 = 1920×1080 在 Windows 125 % 縮放、1920 = 1920×1080 */
 const LAYOUT_WIDTHS: ReadonlyArray<readonly [width: number, columns: number]> = [
+  [1100, 1], // 一欄:1366×768 在 125 % 縮放(1093 px)、視窗沒有最大化
   [1366, 2],
   [1536, 2],
   [1920, 3],
+  [2560, 3],
 ];
 /** 每欄面板的最小寬度 px(欄數切換的門檻保證不低於此值;scenario-editor.ts 樣式的註解) */
 const LAYOUT_MIN_COLUMN_PX = 560;
 
 for (const template of LAYOUT_TEMPLATES) {
-  test(`情境編輯器版面:範本 ${template} 在 1366 / 1536 / 1920 寬不溢出、標籤不逐字換行、輸入框不被擠壓或裁切`, async ({ page, env }) => {
+  test(`情境編輯器版面:範本 ${template} 在 1100 / 1366 / 1536 / 1920 / 2560 寬不溢出、面板不重疊、控制項點得到、標籤不逐字換行、輸入框不被擠壓或裁切`, async ({ page, env }) => {
     const errors = new PageErrors(page);
     await page.goto(instructorUrl(env));
     await waitConnected(page);

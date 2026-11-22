@@ -146,6 +146,9 @@ export class ScenarioEditor extends LitElement {
       .editor {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
+        /* 一欄時甲、乙丙兩組是兩個隱含列:列高取內容高度、整個編輯器一起捲動。沒有這行時兩列被壓成容器高度的一半
+           (.col / .col-rest 的 min-height: 0),乙丙組畫在甲組上面、甲組的控制項點不到(第二十九輪審查;1366×768 在 125 % 縮放 = 1093 px 寬就會進入一欄) */
+        grid-auto-rows: max-content;
         align-content: start;
         gap: 6px;
         height: 100%;
