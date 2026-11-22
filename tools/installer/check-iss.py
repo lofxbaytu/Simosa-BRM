@@ -2,7 +2,7 @@
 抓結構性錯誤與本專案的部署規則(規劃書第 5.5 節、第 11.2 節;docs/ops/安裝與啟動.md 第 2.8 節):
   - 區段:[Setup]、[Tasks]、[Dirs]、[InstallDelete]、[Files]、[Icons]、[Run]、[UninstallDelete]、[Code] 皆須存在;[Setup] 必要鍵齊全、每行為 鍵=值
   - 參數式區段([Files]、[Icons]、[Run]…)每行為 參數: 值; …,引號成對
-  - 預設安裝位置由 GetDefaultDir 決定:D:\\Simosa BRM,其次 G:\\Simosa BRM;裝在系統磁碟須明確確認(/ALLOWSYSTEMDRIVE=1 或對話框);
+  - 預設安裝位置由 GetDefaultDir 決定:固定磁碟的 D:\\Simosa BRM → G:\\Simosa BRM → 抽取式的 D: → G:(不是安裝程式所在的磁碟;光碟機不用);裝在系統磁碟須明確確認(/ALLOWSYSTEMDRIVE=1 或對話框);
     腳本中(註解外)不得出現 C:\\;UninstallFilesDir 在 {app} 內
   - [Files] 來源皆為 {#SourceDir}、目的地皆在 {app};config\\ 以 onlyifdoesntexist 安裝;主項目 Excludes 的檔名樣式(\\config\\* 以外)
     必須與 simosa-pkg 的 ReleaseManifestBuilder.InstallerExcludedPatterns(src/Tools.Packaging/Release/ReleaseManifest.cs;本檢查直接讀該原始碼)
@@ -204,7 +204,7 @@ def check(path):
     if setup.get('PrivilegesRequired', '').lower() != 'admin':
         errs.append('[Setup] PrivilegesRequired 應為 admin(防火牆規則與 Runtime 安裝)')
     if setup.get('DefaultDirName') != '{code:GetDefaultDir}':
-        errs.append('[Setup] DefaultDirName 應為 {code:GetDefaultDir}(有 D: 時 D:\\Simosa BRM,其次 G:\\Simosa BRM,可改)')
+        errs.append('[Setup] DefaultDirName 應為 {code:GetDefaultDir}(固定磁碟的 D: → G: → 抽取式 → 系統磁碟,可改)')
     if not setup.get('UninstallFilesDir', '').startswith('{app}'):
         errs.append('[Setup] UninstallFilesDir 應在 {app} 內')
     if not re.match(r'^\{\{[0-9A-Fa-f-]{36}\}$', setup.get('AppId', '')):
@@ -348,7 +348,7 @@ def check(path):
         for o, c in [('(', ')'), ('[', ']')]:
             if stripped.count(o) != stripped.count(c):
                 errs.append(f'[Code] {o}{c} 不成對')
-        for fn in ['GetDefaultDir', 'WebView2RuntimeInstalled', 'AddFirewallRules', 'RemoveFirewallRules', 'NextButtonClick', 'CurStepChanged', 'CurUninstallStepChanged']:
+        for fn in ['GetDefaultDir', 'UsableDrive', 'WebView2RuntimeInstalled', 'AddFirewallRules', 'RemoveFirewallRules', 'NextButtonClick', 'CurStepChanged', 'CurUninstallStepChanged']:
             if not re.search(r'\b(function|procedure)\s+' + fn + r'\b', stripped):
                 errs.append(f'[Code] 缺少 {fn}')
         for kw in ['label', 'goto', 'type', 'object', 'class', 'interface']:
@@ -362,10 +362,22 @@ def check(path):
         return m.group(0) if m else ''
 
     default_dir = body_of('GetDefaultDir')
-    if not re.search(r"if\s+DirExists\('D:\\'\)\s+then\s+Result\s*:=\s*'D:\\Simosa BRM'\s+"
-                     r"else\s+if\s+DirExists\('G:\\'\)\s+then\s+Result\s*:=\s*'G:\\Simosa BRM'\s+"
+    if not re.search(r"if\s+UsableDrive\('D:\\',\s*False\)\s+then\s+Result\s*:=\s*'D:\\Simosa BRM'\s+"
+                     r"else\s+if\s+UsableDrive\('G:\\',\s*False\)\s+then\s+Result\s*:=\s*'G:\\Simosa BRM'\s+"
+                     r"else\s+if\s+UsableDrive\('D:\\',\s*True\)\s+then\s+Result\s*:=\s*'D:\\Simosa BRM'\s+"
+                     r"else\s+if\s+UsableDrive\('G:\\',\s*True\)\s+then\s+Result\s*:=\s*'G:\\Simosa BRM'\s+"
                      r"else\s+Result\s*:=\s*ExpandConstant\('\{sd\}\\Simosa BRM'\)\s*;", default_dir):
-        errs.append('[Code] GetDefaultDir 的結構應為:有 D:\\ → D:\\Simosa BRM;否則有 G:\\ → G:\\Simosa BRM;否則 {sd}\\Simosa BRM')
+        errs.append('[Code] GetDefaultDir 的結構應為:固定磁碟 D: → G: → 抽取式 D: → G:(UsableDrive(…, False/True))→ {sd}\\Simosa BRM')
+    # 磁碟種類:固定磁碟優先;抽取式只在不是安裝程式所在的磁碟時;光碟機不用(GetDriveTypeW)
+    usable = body_of('UsableDrive')
+    if "external 'GetDriveTypeW@kernel32.dll stdcall'" not in code:
+        errs.append("[Code] 應以 external 'GetDriveTypeW@kernel32.dll stdcall' 宣告 GetDriveType")
+    if not (re.search(r"if\s+T\s*=\s*DRIVE_FIXED\s+then\s+Result\s*:=\s*True", usable)
+            and re.search(r"AllowRemovable\s+and\s+\(T\s*=\s*DRIVE_REMOVABLE\)", usable)
+            and "ExpandConstant('{src}')" in usable):
+        errs.append('[Code] UsableDrive 應:固定磁碟 → True;AllowRemovable 且抽取式 → 不是安裝程式所在({src})的磁碟才 True;其他(光碟機等)False')
+    if not re.search(r"DRIVE_REMOVABLE\s*=\s*2\s*;", code) or not re.search(r"DRIVE_FIXED\s*=\s*3\s*;", code):
+        errs.append('[Code] DRIVE_REMOVABLE = 2、DRIVE_FIXED = 3(Win32 GetDriveType 的回傳值)')
     next_click = body_of('NextButtonClick')
     if not re.search(r"else\s+if\s+Pos\(AddBackslash\(Lowercase\(ExpandConstant\('\{sd\}'\)\)\),\s*Dir\)\s*=\s*1\s+then\s+begin\s+"
                      r"if\s+ExpandConstant\('\{param:ALLOWSYSTEMDRIVE\|0\}'\)\s*<>\s*'1'\s+then\s+begin\s+"

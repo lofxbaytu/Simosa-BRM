@@ -41,7 +41,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
-; 預設安裝位置由 [Code] GetDefaultDir 決定:有 D: 時 D:\Simosa BRM,其次 G:\Simosa BRM,兩者皆無才是系統磁碟根目錄下的 Simosa BRM(須明確確認);使用者可改(DisableDirPage=no)
+; 預設安裝位置由 [Code] GetDefaultDir 決定:固定磁碟的 D: → G: → 抽取式的 D: → G:(不是安裝程式所在的磁碟;光碟機不用)→ 系統磁碟根目錄下的 Simosa BRM(須明確確認);使用者可改(DisableDirPage=no)
 DefaultDirName={code:GetDefaultDir}
 DefaultGroupName=Simosa BRM
 DisableDirPage=no
@@ -147,14 +147,42 @@ const
   DirectLinkSubnet = '{#DirectLinkSubnet}';
   RulePrefix = 'Simosa BRM ';
   RuleCount = 9;
+  // GetDriveType 的回傳值(Win32 DRIVE_*)
+  DRIVE_REMOVABLE = 2;
+  DRIVE_FIXED = 3;
 
-// 預設安裝位置:有 D: 磁碟時 D:\Simosa BRM(規劃書第 11.2 節),其次 G:\Simosa BRM(守則:本機資料放 D: 或 G:);
-// 兩者皆無時才是系統磁碟根目錄下的 Simosa BRM(仍不在使用者資料夾之下)— 此時與使用者自行改選系統磁碟時,NextButtonClick 會要求明確確認
+// Win32 GetDriveTypeW:磁碟種類(固定磁碟 / 抽取式 / 光碟機 / 網路磁碟…)
+function GetDriveType(lpRootPathName: string): Cardinal;
+  external 'GetDriveTypeW@kernel32.dll stdcall';
+
+// 可當預設安裝位置的磁碟:固定磁碟(本機硬碟 / SSD;外接 USB 硬碟多數也回報為固定磁碟)。AllowRemovable 時另接受抽取式磁碟
+//(隨身碟、記憶卡),但不接受安裝程式本身所在的磁碟(放安裝檔的隨身碟通常裝完就拔走)。光碟機、讀卡機的空槽、網路磁碟、RAM 磁碟一律不用
+function UsableDrive(Root: string; AllowRemovable: Boolean): Boolean;
+var
+  T: Cardinal;
+begin
+  Result := False;
+  if not DirExists(Root) then
+    Exit;
+  T := GetDriveType(Root);
+  if T = DRIVE_FIXED then
+    Result := True
+  else if AllowRemovable and (T = DRIVE_REMOVABLE) then
+    Result := CompareText(ExtractFileDrive(ExpandConstant('{src}')), Copy(Root, 1, 2)) <> 0;
+end;
+
+// 預設安裝位置(規劃書第 11.2 節;守則:本機資料放 D: 或 G:):先找固定磁碟的 D:、G:,其次抽取式的 D:、G:(不是安裝程式所在的那一個),
+// 都沒有才是系統磁碟根目錄下的 Simosa BRM(仍不在使用者資料夾之下)— 此時與使用者自行改選系統磁碟時,NextButtonClick 會要求明確確認。
+// 原本只看磁碟是否存在:D: 是光碟機或放安裝檔的隨身碟時也會被選為預設位置(第二十八輪審查建議)。重新安裝時沿用上次的位置(UsePreviousAppDir)
 function GetDefaultDir(Param: string): string;
 begin
-  if DirExists('D:\') then
+  if UsableDrive('D:\', False) then
     Result := 'D:\Simosa BRM'
-  else if DirExists('G:\') then
+  else if UsableDrive('G:\', False) then
+    Result := 'G:\Simosa BRM'
+  else if UsableDrive('D:\', True) then
+    Result := 'D:\Simosa BRM'
+  else if UsableDrive('G:\', True) then
     Result := 'G:\Simosa BRM'
   else
     Result := ExpandConstant('{sd}\Simosa BRM');

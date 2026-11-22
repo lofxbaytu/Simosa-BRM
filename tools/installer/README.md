@@ -20,7 +20,7 @@
 
 | 項目 | 行為 |
 |---|---|
-| 安裝位置 | 預設 `D:\Simosa BRM`,沒有 D: 時 `G:\Simosa BRM`,兩者皆無才是系統磁碟根目錄下的 `Simosa BRM`;可改。**裝在系統磁碟(通常 C:)須明確確認**(守則:本機資料放 D: 或 G:;放 C: 須經訓練負責人同意;確認對話框預設「否」,靜默安裝須加 `/ALLOWSYSTEMDRIVE=1`:未加時,同時帶 `/SUPPRESSMSGBOXES` 會中止,否則仍會跳出確認框;預設位置只以「磁碟是否存在」判斷,D: 或 G: 若是光碟機、讀卡機或放安裝檔的隨身碟,請在選擇目錄頁改選)。**拒絕** `C:\Users\…` 與 Program Files 之下(程式會寫入自己的資料夾:log、紀錄、`state\`,同步服務需替換 `app\`)。整個安裝根目錄授與 Users 修改權限(船上帶領者為標準使用者)。 |
+| 安裝位置 | 預設 `D:\Simosa BRM`,沒有 D: 時 `G:\Simosa BRM`(先找固定磁碟;其次不是安裝程式所在的抽取式磁碟;光碟機不用),都沒有才是系統磁碟根目錄下的 `Simosa BRM`;可改。**裝在系統磁碟(通常 C:)須明確確認**(守則:本機資料放 D: 或 G:;放 C: 須經訓練負責人同意;確認對話框預設「否」,靜默安裝須加 `/ALLOWSYSTEMDRIVE=1`:未加時,同時帶 `/SUPPRESSMSGBOXES` 會中止,否則仍會跳出確認框;預設位置只以「磁碟是否存在」判斷,D: 或 G: 若是光碟機、讀卡機或放安裝檔的隨身碟,請在選擇目錄頁改選)。**拒絕** `C:\Users\…` 與 Program Files 之下(程式會寫入自己的資料夾:log、紀錄、`state\`,同步服務需替換 `app\`)。整個安裝根目錄授與 Users 修改權限(船上帶領者為標準使用者)。 |
 | 內容 | 發行版目錄原樣(`manifest.json`、`app\`、`tools\`、`data\`、`contracts\`、`docs\`、`packages\`、`README.txt`),不含 `*.pdb`、`Thumbs.db`(`[Files]` 的 `Excludes`;這份清單必須與 simosa-pkg 的 `ReleaseManifestBuilder.InstallerExcludedPatterns` 相同,`release manifest` 遇到 `*.pdb` 會失敗,兩邊要一起改);`config\*.json` 已存在者不覆寫、解除安裝不刪;另建 `build\logs`、`build\records`、`build\webview2`、`data\records`、`state\`、`store\`、`config\trusted-keys`、`config\device` |
 | 重新安裝 / 升級 | `[InstallDelete]`:安裝前先清空程式目錄 `app\` 與 `tools\updater\`(只這兩項),舊版留下而新版沒有的程式檔(檔名帶雜湊的網頁資產、先前更新包新增的檔案)不會殘留,安裝後這兩個資料夾與發行版完全一致,`release verify --installed` 不需手動清理即通過;`config\`、`data\`、`state\`、`store\`、`build\` 不動。安裝前先以 `stop-all.ps1` 結束全部程序(執行中的檔案刪不掉) |
 | 捷徑 | 開始功能表「Simosa BRM」與(可選)桌面:操船台(`start-ship-laptop.ps1 -Shell`,WebView2 外殼)、教官站(`start-instructor-laptop.ps1 -CheckWifi`)、停止(`stop-all.ps1`)、安裝與啟動說明、解除安裝;皆以 `powershell.exe -ExecutionPolicy Bypass -File` 啟動 |
