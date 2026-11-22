@@ -149,7 +149,7 @@ public class ScenarioLibraryLateCourseTests
         // 設計規則:交班與書面計畫開場、三步升級各一個項目
         Assert.Equal("handover", sc.Timeline[0].Id);
         Assert.Contains("交班", sc.Briefing!.Text);
-        Assert.Contains(sc.Briefing.Attachments!, a => a.Title.Contains("計畫"));
+        Assert.Contains(sc.Briefing.Attachments!, a => a.Title?.Contains("計畫") == true);
         Assert.Contains(sc.Assessment.Required, r => r.Id == "handoverChecklist" && r.After.ItemId == "handover");
         Assert.Single(sc.Timeline, t => t.Phase == "degraded");
         Assert.Single(sc.Timeline, t => t.Phase == "emergency");
@@ -187,7 +187,8 @@ public class ScenarioLibraryLateCourseTests
         var e15 = Load(E15);
         Assert.Equal(khh.GetProperty("route").EnumerateArray().Select(LL), e15.Route!.Waypoints.Select(W));
         Assert.Equal(anch, e15.Zones.Single(z => z.Id == "anchorage").Polygon.Select(P));
-        Assert.Equal(LL(khh.GetProperty("route")[0]), (e15.Initial.Position.Lat!.Value, e15.Initial.Position.Lon!.Value));
+        var e15Pos = e15.Initial.Position!;
+        Assert.Equal(LL(khh.GetProperty("route")[0]), (e15Pos.Lat!.Value, e15Pos.Lon!.Value));
 
         var kel = Area("keelung-approach.json");
         var e16 = Load(E16);
@@ -488,7 +489,7 @@ public class ScenarioLibraryLateCourseTests
         Assert.Equal(40.0, Units.MpsToKn(e.Environment.WindTrueSpeedMps), 6);
         Assert.All(s.Assessment.Required, r => Assert.Equal("missed", r.State));
         Assert.DoesNotContain(ev, x => x.Kind == SimEventKinds.TimelineTriggered && x.ItemId == "clearOfBerth");
-        Assert.Empty(s.Berthing!.Tugs.Where(t => t.WorkingTimeS > 0));
+        Assert.DoesNotContain(s.Berthing!.Tugs, t => t.WorkingTimeS > 0);
         AssertReplays(path!);
     }
 

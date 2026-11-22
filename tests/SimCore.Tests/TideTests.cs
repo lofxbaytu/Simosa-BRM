@@ -242,7 +242,7 @@ public class TideTests
         var table = e18b.Environment.Tide!.Table!;
         Assert.Equal(new[] { 1.9, 1.85, 1.6, 1.5, 1.4, 1.2 }, table.Select(p => p.HeightM));
         Assert.DoesNotContain(e18b.Timeline.SelectMany(t => t.Actions), a => a.Kind == "setEnvironment");
-        Assert.Empty(ScenarioValidator.Check(e18b, TestData.Fsb2(), null).Where(i => i.Severity == ScenarioIssueSeverity.Error));
+        Assert.DoesNotContain(ScenarioValidator.Check(e18b, TestData.Fsb2(), null), i => i.Severity == ScenarioIssueSeverity.Error);
     }
 
     /// <summary>

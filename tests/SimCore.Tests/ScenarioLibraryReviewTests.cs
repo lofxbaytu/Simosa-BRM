@@ -407,7 +407,7 @@ public class ScenarioLibraryReviewTests
         }), record: leeOffset == -30);
         var s = e.Assessment!.BuildSummary(e.Tick, final: true);
         Dump(ev, s);
-        Assert.DoesNotContain(ev, x => x.Kind == SimEventKinds.TimelineManual && x.Message.Contains("已觸發過"));
+        Assert.DoesNotContain(ev, x => x.Kind == SimEventKinds.TimelineManual && x.Message?.Contains("已觸發過") == true);
         Assert.Equal("met", Req(s, "boardingLee").State);
         Assert.Equal(100.0, s.Assessment.Score);
         if (path is not null) AssertReplays(path);

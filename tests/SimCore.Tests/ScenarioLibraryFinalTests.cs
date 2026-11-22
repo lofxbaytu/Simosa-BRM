@@ -184,8 +184,8 @@ public class ScenarioLibraryFinalTests
         Assert.Equal("handover", sc.Timeline[0].Id);
         Assert.Equal(1.0, sc.Timeline[0].When!.AtLeast);
         Assert.StartsWith("交班", sc.Briefing!.Text);
-        Assert.Contains(sc.Briefing.Attachments!, a => a.Title.Contains("計畫"));
-        Assert.Contains(sc.Briefing.Attachments!, a => a.Title.Contains("交班檢查表"));
+        Assert.Contains(sc.Briefing.Attachments!, a => a.Title?.Contains("計畫") == true);
+        Assert.Contains(sc.Briefing.Attachments!, a => a.Title?.Contains("交班檢查表") == true);
         Assert.Contains(sc.Assessment.Required, r => r.Id == "handoverChecklist" && r.After.ItemId == "handover");
         if (MiniIds.Contains(id))
         {
@@ -196,7 +196,7 @@ public class ScenarioLibraryFinalTests
             Assert.Empty(sc.Assessment.Bands);
             Assert.InRange(sc.Briefing.DurationS!.Value, 600, 900);
             Assert.Contains("1.39", sc.Briefing.Text);
-            Assert.Contains(sc.Briefing.Attachments!, a => a.Title.Contains("1.39") || a.Title.Contains("SMCP"));
+            Assert.Contains(sc.Briefing.Attachments!, a => a.Title?.Contains("1.39") == true || a.Title?.Contains("SMCP") == true);
         }
         else
         {
@@ -525,7 +525,7 @@ public class ScenarioLibraryFinalTests
         Assert.All(s.Assessment.Required, r => Assert.Equal("missed", r.State));
         Assert.False(s.Assessment.HardFailed);
         Assert.False(s.Assessment.Passed);
-        Assert.Empty(e.BuildState().Faults);
+        var faults = e.BuildState().Faults; Assert.NotNull(faults); Assert.Empty(faults);
         AssertReplays(path!);
     }
 

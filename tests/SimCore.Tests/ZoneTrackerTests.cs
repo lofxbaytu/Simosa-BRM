@@ -89,7 +89,7 @@ public class ZoneTrackerTests
         Assert.True(m.TimeOverSpeedLimitS > 50, $"{m.TimeOverSpeedLimitS}");
         Assert.Equal("zone:slow", m.SpeedLimitSource);
         Assert.True(m.MaxOverSpeedKn > 2);
-        Assert.Equal(e.Assessment.LatestSummary!.Ukc.LimitSource, "zones.shallow");
+        Assert.Equal("zones.shallow", e.Assessment.LatestSummary!.Ukc.LimitSource);
         Assert.True(e.Assessment.LatestSummary.Ukc.MinM < 7 - maxDraft + 0.01);
     }
 }

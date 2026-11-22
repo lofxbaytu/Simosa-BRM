@@ -59,7 +59,7 @@ public class WaveEnvironmentCommandTests
         Assert.NotNull(byCommand.WaveSettings);
         var change = Assert.Single(events, x => x.Kind == SimEventKinds.EnvironmentChange);
         var waves = change.Data!.Value.GetProperty("changes").GetProperty("waves");
-        Assert.Equal(JsonValueKindOf(waves, "from"), System.Text.Json.JsonValueKind.Null);
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, JsonValueKindOf(waves, "from"));
         Assert.Equal(2.0, waves.GetProperty("to").GetProperty("significantHeight_m").GetDouble());
         Assert.Equal("pm", waves.GetProperty("to").GetProperty("spectrum").GetString());
         for (var i = 0; i < 500; i++) { byScenario.Step(); byCommand.Step(); }

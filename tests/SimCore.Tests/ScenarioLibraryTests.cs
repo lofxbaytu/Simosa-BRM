@@ -118,7 +118,7 @@ public class ScenarioLibraryTests
         // 設計規則:交班與書面航程計畫開場(第一個時間表項目、必要事件 handoverChecklist、簡報附航程計畫)
         Assert.Equal("handover", sc.Timeline[0].Id);
         Assert.Contains("交班", sc.Briefing!.Text);
-        Assert.Contains(sc.Briefing.Attachments!, a => a.Title.Contains("航程計畫"));
+        Assert.Contains(sc.Briefing.Attachments!, a => a.Title?.Contains("航程計畫") == true);
         Assert.Contains(sc.Assessment.Required, r => r.Id == "handoverChecklist" && r.After.ItemId == "handover");
         Assert.NotNull(sc.Route);
         // 三步升級各一個項目;課程前段:不注入技術故障
@@ -229,7 +229,7 @@ public class ScenarioLibraryTests
         Assert.Equal(new[] { "F1", "F2", "F3", "F4" }, ev.Where(x => x.Kind == TrafficEventKinds.Activated).Select(x => x.TargetId).ToArray());
         Assert.All(ev.Where(x => x.Kind == TrafficEventKinds.Activated), x => Assert.Equal(1500.0, x.T));
         Assert.Equal(1.0, ev.First(x => x.Kind == SimEventKinds.EncounterStarted && x.TargetId == "X2").T);
-        Assert.Contains(ev, x => x.Kind == TrafficEventKinds.Colreg && x.TargetId == "X1" && x.Message.Contains("ignored"));
+        Assert.Contains(ev, x => x.Kind == TrafficEventKinds.Colreg && x.TargetId == "X1" && x.Message?.Contains("ignored") == true);
         Assert.Equal(6.0, e.VisibilityNm);
         Assert.All(s.Assessment.Required, r => Assert.Equal("missed", r.State));
         Assert.Contains(s.Assessment.HardFails, h => h.Id == "cpaHard");
@@ -332,7 +332,7 @@ public class ScenarioLibraryTests
         Assert.All(horns.Zip(horns.Skip(1)), p => Assert.Equal(120.0, p.Second - p.First));
         Assert.All(ev.Where(x => x.Kind == TrafficEventKinds.Sound && x.TargetId == "R2"), x => Assert.Equal("prolonged", x.Message));
         Assert.Contains(ev, x => x.Kind == TrafficEventKinds.Sound && x.TargetId == "R1" && x.Message == "prolongedTwoShort");
-        Assert.Equal(r2 + 120, ev.Single(x => x.Kind == TrafficEventKinds.Script && x.TargetId == "R2" && x.Message.Contains("275")).T);
+        Assert.Equal(r2 + 120, ev.Single(x => x.Kind == TrafficEventKinds.Script && x.TargetId == "R2" && x.Message?.Contains("275") == true).T);
         // 能見度漸變:2 → 0.5(fog + 300 s)→ 0.2(dense + 240 s)
         var done = ev.Where(x => x.Kind == SimEventKinds.EnvironmentRampDone).Select(x => x.T).ToList();
         Assert.Equal(new[] { fog + 300, dense + 240 }, done);
@@ -448,7 +448,7 @@ public class ScenarioLibraryTests
         Dump(ev, s);
         // 教官指令於 boardAt − 1 s 套用,延遲項目自下一個評估步(整秒)起算
         Assert.Equal(boardAt + 660.0, ev.Single(x => x.Kind == SimEventKinds.ExerciseEnded).T);
-        Assert.Equal(boardAt + 30.0, ev.Single(x => x.Kind == TrafficEventKinds.Control && x.TargetId == "PILOT" && x.Message.Contains("刪除")).T);
+        Assert.Equal(boardAt + 30.0, ev.Single(x => x.Kind == TrafficEventKinds.Control && x.TargetId == "PILOT" && x.Message?.Contains("刪除") == true).T);
         foreach (var id in new[] { "handoverChecklist", "vtsReport", "revisedEta", "holdSpeed", "boardingChallenge", "boardingLee", "mpx" })
             Assert.Equal("met", Req(s, id).State);
         Assert.Equal(slowDown ? "met" : "missed", Req(s, "boardingSpeed").State);

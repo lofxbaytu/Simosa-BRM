@@ -72,7 +72,7 @@ public class ShipFamiliarisationScenarioTests
         Assert.Equal(!id.StartsWith("E10", StringComparison.Ordinal), ManoeuvreTracker.IsReferenced(sc));
         if (id.StartsWith("F", StringComparison.Ordinal))
         {
-            Assert.Empty(sc.Assessment.HardFail.Where(h => h.Rule is not ("grounding" or "ukc")));   // 船舶熟悉不設操作類硬性失敗
+            Assert.DoesNotContain(sc.Assessment.HardFail, h => h.Rule is not ("grounding" or "ukc"));   // 船舶熟悉不設操作類硬性失敗
             Assert.All(sc.Assessment.Required, r => Assert.Equal(0.0, r.Penalty));                   // 只記錄
             Assert.Contains(sc.Assessment.Required, r => r.Expect.Leaves().Any(l => l.Acknowledge?.Kind == "prediction"));
         }

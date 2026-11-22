@@ -907,7 +907,7 @@ public class SeakeepingModelTests
         Assert.Equal(0.8, Hs(b, "tugReduced"));
         Assert.Equal(1.2, Hs(b, "outerBands"));
         Assert.Empty(b.StructuralIssues());
-        Assert.Empty(ScenarioValidator.Check(b, TestData.Fsb1(), null).Where(i => i.Severity == ScenarioIssueSeverity.Error));
+        Assert.DoesNotContain(ScenarioValidator.Check(b, TestData.Fsb1(), null), i => i.Severity == ScenarioIssueSeverity.Error);
     }
 
     /// <summary>

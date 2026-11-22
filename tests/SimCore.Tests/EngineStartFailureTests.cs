@@ -258,6 +258,6 @@ public class EngineStartFailureTests
         Assert.False(e.Actuators.HasStartFailureState);
         Assert.DoesNotContain("startFailure", e.CreateSnapshot().ToJson(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("StartBlocked", e.CreateSnapshot().ToJson(), StringComparison.OrdinalIgnoreCase);
-        Assert.True(FaultNames.Modelled.Contains(FaultNames.EngineStartFailure));
+        Assert.Contains(FaultNames.EngineStartFailure, FaultNames.Modelled);
     }
 }

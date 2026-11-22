@@ -28,7 +28,7 @@ if (options.Help)
     return 0;
 }
 
-var root = RepositoryPaths.TryFindRoot() ?? Directory.GetCurrentDirectory();
+string root = RepositoryPaths.TryFindRoot() ?? Directory.GetCurrentDirectory();
 string? Resolve(string? p) => p is null ? null : Path.IsPathRooted(p) ? p : Path.Combine(root, p);
 
 // 情境種子與起始 UTC(讀 data/scenarios/<id>.yaml;讀不到時以代號雜湊)

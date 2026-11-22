@@ -10,6 +10,10 @@ using SimosaBRM.SimCore.Physics;
 using SimosaBRM.SimCore.Recording;
 using Xunit;
 
+// xUnit1031(測試方法內不要阻塞等待 Task):這裡讀 stdout/stderr 的 Task.Result 都在子程序已結束(或判定失敗、要附上輸出)之後,
+// 讀取管線已到檔尾、不會阻塞;改成 async 只為了消警告而不改變行為,故在本檔關閉此分析器規則。
+#pragma warning disable xUnit1031
+
 namespace SimosaBRM.SimCore.Tests;
 
 /// <summary>

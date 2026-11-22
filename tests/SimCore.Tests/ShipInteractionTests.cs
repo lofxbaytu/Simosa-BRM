@@ -490,7 +490,7 @@ public class ShipInteractionTests
         // 動力學不接受外力時不啟用(不施力、不輸出、不追加雜湊)
         var unsupported = new ShipInteractionModel(TestData.Fsb1(), LoadingCondition.Full, Config(), supported: false);
         Assert.False(unsupported.Active);
-        Assert.Equal(0, unsupported.Targets.Count);
+        Assert.Empty(unsupported.Targets);
     }
 
     // ------------------------------------------------------------------ 跨語言夾具

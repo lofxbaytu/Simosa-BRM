@@ -403,7 +403,7 @@ public class TidalStreamTests
         Assert.Contains(f.Timeline.SelectMany(t => t.Actions), a => a.Kind == "setEnvironment");
         Assert.Equal("tideTurning", b.Timeline.Single(t => t.Phase == "degraded").Id);
         Assert.Empty(b.StructuralIssues());
-        Assert.Empty(ScenarioValidator.Check(b, TestData.Fsb1(), null).Where(i => i.Severity == ScenarioIssueSeverity.Error));
+        Assert.DoesNotContain(ScenarioValidator.Check(b, TestData.Fsb1(), null), i => i.Severity == ScenarioIssueSeverity.Error);
     }
 
     /// <summary>
