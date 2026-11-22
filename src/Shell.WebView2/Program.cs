@@ -9,8 +9,14 @@ internal static class Program
     private static int Main(string[] args)
     {
         // 重導向的標準輸出 / 錯誤(啟動腳本收成 shell-*.log / .err.log)以 UTF-8 寫出,不用系統的 OEM 字碼頁
-        try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
-        catch (Exception) { /* 沒有主控台(一般啟動方式)時維持預設 */ }
+        // (WinExe 沒有主控台:設定 Console.OutputEncoding 會失敗而維持 OEM 字碼頁,所以對「已重導向」的串流直接換成 UTF-8 寫入器)
+        try
+        {
+            var utf8 = new System.Text.UTF8Encoding(false);
+            if (Console.IsErrorRedirected) Console.SetError(new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true });
+            if (Console.IsOutputRedirected) Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true });
+        }
+        catch (Exception) { /* 沒有可用的標準串流時維持預設 */ }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);

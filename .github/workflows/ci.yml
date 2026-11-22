@@ -169,7 +169,8 @@ jobs:
     name: Windows 實機端到端(發行版 → 安裝 → 啟動 → 解除安裝)
     # 容器(Linux)驗不到的 Windows 行為在這裡實跑:tools\ci\windows-e2e.ps1 以內建的 Windows PowerShell 5.1 執行
     # build-release.ps1 -Installer、靜默安裝(預設位置、系統磁碟須同意)、從安裝位置啟動(核心、雷達、網頁、專屬 Edge 設定檔、
-    # WebView2 外殼)、stop-all.ps1、check-local-data.ps1、靜默解除安裝。各階段的檢查結果與 log 另存為 artifact。
+    # WebView2 外殼)、stop-all.ps1、check-local-data.ps1、simosa-pkg(更新包 / 紀錄包 / 直連同步)、教官筆電單機模式、靜默解除安裝。
+    # 各階段的檢查結果與 log 另存為 artifact;最後一步印出總表。
     needs: detect
     if: needs.detect.outputs.dotnet == 'true'
     runs-on: windows-latest
@@ -204,10 +205,22 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
         shell: cmd
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage shell
+      - name: 簽章更新包 / 紀錄包 / 直連同步(simosa-pkg:信任金鑰、DPAPI 裝置金鑰、verify / apply / rollback、records pack、serve + sync)
+        if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage packaging
+      - name: 教官筆電單機模式(start-instructor-laptop.ps1 -Standalone → stop-all)
+        if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage instructor
       - name: 靜默解除安裝(程式移除;紀錄、設定、瀏覽器端資料保留)
         if: ${{ !cancelled() && steps.install.outcome != 'skipped' }}
         shell: cmd
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage uninstall
+      - name: 各階段結果總表
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage summary
       - name: 啟動腳本測試(pwsh 7,Windows;先觀察,失敗不讓工作失敗)
         if: ${{ !cancelled() }}
         continue-on-error: true

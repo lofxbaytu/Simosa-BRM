@@ -9,11 +9,15 @@
     launch    :從安裝位置啟動 — (a) -Duration 短跑(核心 50 Hz、紀錄 footer);(b) -NoWait + 專屬 Edge 設定檔(各埠、網頁 200、Edge 設定檔與下載位置)
                → stop-all.ps1(核心經停止檔寫完 footer、Edge 視窗關閉)→ check-local-data.ps1(安裝版模式)
     shell     :-Shell(WebView2 外殼)啟動 → 使用者資料夾在 build\webview2 → stop-all.ps1 關閉
+    packaging :simosa-pkg(安裝位置):信任金鑰、裝置金鑰(Windows 以 DPAPI 保護)、status、更新包 verify / apply / rollback(app\ 的檔案替換)、
+               紀錄包 records pack / inspect、教官端 store import、直連同步 serve + sync(本機回送)
+    instructor:start-instructor-laptop.ps1 -Standalone(本機核心 + 雷達 + 網頁 + 專屬 Edge 設定檔)→ stop-all.ps1
     uninstall :靜默解除安裝 → app\ 移除、紀錄 / 設定 / 瀏覽器端資料保留、捷徑與防火牆規則移除
+    summary   :把各階段的結果(build\tmp\windows-e2e\results-*.json)印成一張總表(CI log 的最後一段)
   每個檢查獨立記錄 PASS / FAIL / WARN / INFO,不在第一個失敗就中止(一次 CI 執行取得最多資訊);最後有 FAIL 即結束碼 1。
   WARN:尚未確定 Windows 實際行為的項目(先觀察,不讓工作失敗)。所有暫存與輸出在 <專案>\build\tmp\windows-e2e\。
 .PARAMETER Stage
-  要執行的階段,逗號分隔(build,install,launch,shell,uninstall);all = 全部依序。
+  要執行的階段,逗號分隔(build,install,launch,shell,packaging,instructor,uninstall,summary);all = 全部依序。
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows-e2e.ps1 -Stage build,install,launch,shell,uninstall
 #>
@@ -24,7 +28,7 @@ param(
 )
 # -File 呼叫時「build,install」是單一字串(不會被解析成陣列),所以自行以逗號 / 空白切開
 $Stage = @("$Stage" -split '[,;\s]+' | Where-Object { $_ })
-$validStages = @('build', 'install', 'launch', 'shell', 'uninstall', 'all')
+$validStages = @('build', 'install', 'launch', 'shell', 'packaging', 'instructor', 'uninstall', 'summary', 'all')
 foreach ($s in $Stage) { if ($validStages -notcontains $s) { throw "未知的階段 $s(可用:$($validStages -join '、'))" } }
 $ErrorActionPreference = 'Continue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -34,7 +38,7 @@ $work = Join-Path $root 'build\tmp\windows-e2e'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $stateFile = Join-Path $work 'state.json'
 $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-if ($Stage -contains 'all') { $Stage = @('build', 'install', 'launch', 'shell', 'uninstall') }
+if ($Stage -contains 'all') { $Stage = @('build', 'install', 'launch', 'shell', 'packaging', 'instructor', 'uninstall', 'summary') }
 
 $script:results = New-Object System.Collections.Generic.List[object]
 function Add-Result([string]$Level, [string]$Name, [string]$Detail = '') {
@@ -444,6 +448,156 @@ if ($Stage -contains 'shell') {
 }
 
 # ======================================================================================================================
+if ($Stage -contains 'packaging') {
+    Write-Host ''; Write-Host '==== packaging:simosa-pkg(信任金鑰、裝置金鑰、更新包、紀錄包、直連同步)===='
+    $inst = Get-InstallDir
+    $keys = Join-Path $root 'build\release\dev-keys'
+    $relPkg = Join-Path $root "build\release\$version\packages\simosa-$version-software.sbupd"
+    if (-not $inst) { Add-Result 'FAIL' '安裝位置' '找不到(先執行 install 階段)' }
+    elseif (-not (Test-Path (Join-Path $keys 'dev-primary.key.pem'))) { Add-Result 'FAIL' '開發金鑰' "找不到 $keys\dev-primary.key.pem(先執行 build 階段)" }
+    else {
+        $pkgDll = Join-Path $inst 'tools\updater\simosa-pkg.dll'
+        $script:pkgSeq = 0
+        # 執行 simosa-pkg 並把輸出印出來(每個指令的最後幾行);回傳 Invoke-Proc 的結果
+        function Invoke-Pkg([string[]]$a, [int]$TimeoutSec = 300, [int]$Show = 8) {
+            $r = Invoke-Proc 'dotnet' (@($pkgDll) + $a) $TimeoutSec $inst
+            Show-Tail ("simosa-pkg " + ($a -join ' ')) $r.Output $Show
+            return $r
+        }
+        # 1) 信任金鑰(公鑰)
+        $r1 = Invoke-Pkg @('trust', 'add', '--root', $inst, '--file', (Join-Path $keys 'dev-primary.pub.pem'), '--admin', 'CI')
+        $r2 = Invoke-Pkg @('trust', 'add', '--root', $inst, '--file', (Join-Path $keys 'dev-backup.pub.pem'), '--admin', 'CI')
+        [void](Check 'trust add(主金鑰與備援金鑰的公鑰)' { if ($r1.ExitCode -ne 0 -or $r2.ExitCode -ne 0) { throw "結束碼 $($r1.ExitCode) / $($r2.ExitCode)" }; return ((Get-ChildItem -LiteralPath (Join-Path $inst 'config\trusted-keys') | ForEach-Object { $_.Name }) -join '、') })
+        # 2) 裝置金鑰(Windows:DPAPI 綁定本機帳號)
+        $r3 = Invoke-Pkg @('device', 'init', '--root', $inst, '--ship', 'FSB1', '--device-id', 'FSB1-CI')
+        [void](Check 'device init(裝置金鑰;Windows 以 DPAPI 保護)' {
+            if ($r3.ExitCode -ne 0) { throw "結束碼 $($r3.ExitCode)" }
+            $files = @(Get-ChildItem -LiteralPath (Join-Path $inst 'config\device') -File)
+            if ($files.Count -eq 0) { throw 'config\device 沒有檔案' }
+            $plain = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match 'BEGIN (EC |RSA )?PRIVATE KEY' })
+            if ($plain) { throw "私鑰以明文 PEM 存放:$(($plain | ForEach-Object { $_.Name }) -join '、')" }
+            if (-not (Test-Path (Join-Path $inst 'config\packaging.json'))) { throw '沒有產生 config\packaging.json' }
+            return (($files | ForEach-Object { "$($_.Name)($($_.Length))" }) -join '、')
+        })
+        $r4 = Invoke-Pkg @('device', 'show', '--root', $inst)
+        [void](Check 'device show' { if ($r4.ExitCode -ne 0) { throw "結束碼 $($r4.ExitCode)" } })
+        $r5 = Invoke-Pkg @('status', '--root', $inst, '--json') 300 40
+        $status0 = $null
+        [void](Check 'status --json(初始安裝)' {
+            if ($r5.ExitCode -ne 0) { throw "結束碼 $($r5.ExitCode)" }
+            $script:st = $r5.Output | ConvertFrom-Json
+            return "環境:$(($script:st.environment | ConvertTo-Json -Compress -Depth 3))"
+        })
+        # 3) 更新包:驗證 → 套用(app\ 整個替換)→ 核對 → 回復
+        $haveRelPkg = Check '發行版的軟體更新包存在' { if (-not (Test-Path $relPkg)) { throw "沒有 $relPkg" }; return "$([math]::Round((Get-Item $relPkg).Length / 1MB, 1)) MB" }
+        if ($haveRelPkg) {
+            $rv = Invoke-Pkg @('verify', $relPkg, '--root', $inst)
+            $verified = Check '更新包 verify(簽章、信任金鑰、版本)' { if ($rv.ExitCode -ne 0) { throw "結束碼 $($rv.ExitCode)" } }
+            $before = (Get-Item (Join-Path $inst 'app\simcore\SimosaBRM.SimCore.Host.dll')).LastWriteTimeUtc
+            $ra = Invoke-Pkg @('apply', $relPkg, '--root', $inst, '--operator', 'CI') 600 12
+            $applied = Check '更新包 apply(Windows 上替換 app\)' {
+                if ($ra.TimedOut) { throw '逾時' }
+                if ($ra.ExitCode -ne 0) { throw "結束碼 $($ra.ExitCode)" }
+                foreach ($rel in @('app\simcore\SimosaBRM.SimCore.Host.dll', 'app\launch\start-ship-laptop.ps1', 'app\shell\SimosaBRM.Shell.exe', 'app\web\index.html')) {
+                    if (-not (Test-Path (Join-Path $inst $rel))) { throw "套用後缺 $rel" }
+                }
+                if (-not (Test-Path (Join-Path $inst 'state\installed.json'))) { throw '沒有 state\installed.json' }
+            }
+            if ($applied) {
+                $rs2 = Invoke-Pkg @('status', '--root', $inst)
+                [void](Check '套用後 status 顯示版本與可回復' { if ($rs2.ExitCode -ne 0) { throw "結束碼 $($rs2.ExitCode)" }; if ($rs2.Output.IndexOf($version) -lt 0) { throw "輸出沒有版本 $version" } })
+                $rc2 = Invoke-Ps51 (Join-Path $inst 'app\launch\start-ship-laptop.ps1') @('-CheckOnly') 300 $inst
+                [void](Check '套用後 start-ship-laptop.ps1 -CheckOnly' { if ($rc2.ExitCode -ne 0) { throw "結束碼 $($rc2.ExitCode):$($rc2.Output)" } })
+                $rr = Invoke-Pkg @('release', 'verify', '--dir', $inst)
+                [void](Check '套用後 release verify(檔案雜湊與清單相符)' { if ($rr.ExitCode -ne 0) { throw "結束碼 $($rr.ExitCode)" } } -Soft)
+                # 第二次套用同一版本應被拒絕(版本須遞增)
+                $ra2 = Invoke-Pkg @('apply', $relPkg, '--root', $inst, '--operator', 'CI') 600 6
+                [void](Check '同一版本再次套用被拒絕(版本須遞增)' { if ($ra2.ExitCode -eq 0) { throw '結束碼 0(應拒絕)' }; return "結束碼 $($ra2.ExitCode)" } -Soft)
+                $rb = Invoke-Pkg @('rollback', '--root', $inst, '--operator', 'CI') 600 10
+                [void](Check 'rollback(回復到套用前的 app\)' {
+                    if ($rb.ExitCode -ne 0) { throw "結束碼 $($rb.ExitCode)" }
+                    if (-not (Test-Path (Join-Path $inst 'app\simcore\SimosaBRM.SimCore.Host.dll'))) { throw '回復後缺 app\simcore\SimosaBRM.SimCore.Host.dll' }
+                })
+                $rc3 = Invoke-Ps51 (Join-Path $inst 'app\launch\start-ship-laptop.ps1') @('-CheckOnly') 300 $inst
+                [void](Check '回復後 start-ship-laptop.ps1 -CheckOnly' { if ($rc3.ExitCode -ne 0) { throw "結束碼 $($rc3.ExitCode)" } })
+            }
+        }
+        # 4) 紀錄包:打包(裝置金鑰簽章)→ 檢視 → 教官端匯入
+        $rp = Invoke-Pkg @('records', 'pack', '--root', $inst) 600 10
+        $sbrec = $null
+        $packed = Check 'records pack(以裝置金鑰簽章的紀錄包)' {
+            if ($rp.ExitCode -ne 0) { throw "結束碼 $($rp.ExitCode)" }
+            $script:sbrec = Get-ChildItem -LiteralPath (Join-Path $inst 'state\outbox') -Filter '*.sbrec' -ErrorAction Stop | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $script:sbrec) { throw 'state\outbox 沒有 .sbrec' }
+            return "$($script:sbrec.Name)($([math]::Round($script:sbrec.Length / 1KB)) KB)"
+        }
+        if ($packed) {
+            $ri = Invoke-Pkg @('inspect', $script:sbrec.FullName) 300 14
+            [void](Check 'inspect 紀錄包' { if ($ri.ExitCode -ne 0) { throw "結束碼 $($ri.ExitCode)" } })
+            $store1 = Join-Path $work 'store-import'
+            if (Test-Path $store1) { Remove-Item -Recurse -Force $store1 }
+            $rim = Invoke-Pkg @('store', 'import', $script:sbrec.FullName, '--store', $store1, '--enroll-device') 300 10
+            [void](Check '教官端 store import(--enroll-device)' { if ($rim.ExitCode -ne 0) { throw "結束碼 $($rim.ExitCode)" }; if (-not (Test-Path $store1)) { throw "沒有建立 $store1" } })
+            $rl = Invoke-Pkg @('store', 'list', '--store', $store1) 300 10
+            [void](Check 'store list' { if ($rl.ExitCode -ne 0) { throw "結束碼 $($rl.ExitCode)" } })
+        }
+        # 5) 直連同步:船端 serve(本機回送)+ 教官端 sync(取回紀錄、回報)
+        $serveOut = Join-Path $work 'serve.out.txt'; $serveErr = Join-Path $work 'serve.err.txt'
+        $serve = Start-Process -FilePath 'dotnet' -ArgumentList ('"' + $pkgDll + '" serve --root "' + $inst + '" --listen 127.0.0.1 --port 7300') -WorkingDirectory $inst -PassThru -WindowStyle Hidden -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr
+        try {
+            $up = Check 'serve 監聽 127.0.0.1:7300' { if (-not (Wait-Until { Test-Tcp '127.0.0.1' 7300 } 20)) { throw "20 秒內未開啟;程序已結束 = $($serve.HasExited)" } }
+            if ($up) {
+                $store2 = Join-Path $work 'store-sync'
+                if (Test-Path $store2) { Remove-Item -Recurse -Force $store2 }
+                $rsync = Invoke-Pkg @('sync', '--ship', '127.0.0.1', '--port', '7300', '--key', (Join-Path $keys 'dev-primary.key.pem'), '--store', $store2, '--enroll-device') 300 16
+                [void](Check 'sync(教官端經直連取回紀錄包)' { if ($rsync.TimedOut) { throw '逾時' }; if ($rsync.ExitCode -ne 0) { throw "結束碼 $($rsync.ExitCode)" } } -Soft)
+            }
+        } finally {
+            if (-not $serve.HasExited) { & taskkill.exe /PID $serve.Id /T /F 2>&1 | Out-Null }
+            Show-File $serveOut 12
+            if ((Test-Path $serveErr) -and (Get-Item $serveErr).Length -gt 0) { Show-File $serveErr 12 }
+        }
+        $rs3 = Invoke-Pkg @('status', '--root', $inst) 300 14
+        [void](Check '最後 status' { if ($rs3.ExitCode -ne 0) { throw "結束碼 $($rs3.ExitCode)" } })
+    }
+}
+
+# ======================================================================================================================
+if ($Stage -contains 'instructor') {
+    Write-Host ''; Write-Host '==== instructor:教官筆電單機模式(-Standalone)===='
+    $inst = Get-InstallDir
+    if (-not $inst) { Add-Result 'FAIL' '安裝位置' '找不到(先執行 install 階段)' }
+    else {
+        $launch = Join-Path $inst 'app\launch'
+        $logs = Join-Path $inst 'build\logs'
+        $rb = Invoke-Ps51 (Join-Path $launch 'start-instructor-laptop.ps1') @('-Standalone', '-NoWait') 240 $inst
+        Show-Tail 'start-instructor-laptop.ps1 -Standalone -NoWait' $rb.Output 30
+        [void](Check '教官筆電 -Standalone 啟動結束碼 0' { if ($rb.TimedOut) { throw '逾時' }; if ($rb.ExitCode -ne 0) { throw "結束碼 $($rb.ExitCode)" } })
+        [void](Check '本機核心 8765 與雷達 8766 開啟' { if (-not (Wait-Until { (Test-Tcp '127.0.0.1' 8765) -and (Test-Tcp '127.0.0.1' 8766) } 40)) { throw '40 秒內未開啟' } })
+        foreach ($page in @('instructor.html', 'radar.html', 'ecdis.html', 'report.html')) {
+            [void](Check "教官筆電網頁 http://127.0.0.1:8080/$page 回 200" {
+                $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/$page" -TimeoutSec 10
+                if ($resp.StatusCode -ne 200) { throw "狀態碼 $($resp.StatusCode)" }
+            })
+        }
+        $profileDir = Join-Path $inst 'build\browser\edge'
+        [void](Check '教官站以專屬 Edge 設定檔開啟' {
+            if (-not (Wait-Until { @(Get-ProcByCommandLine 'msedge.exe' $profileDir).Count -gt 0 } 40)) { throw "40 秒內沒有命令列含 $profileDir 的 msedge.exe" }
+        } -Soft)
+        Start-Sleep -Seconds 5
+        $rs = Invoke-Ps51 (Join-Path $launch 'stop-all.ps1') @() 120 $inst
+        Show-Tail 'stop-all.ps1' $rs.Output 14
+        [void](Check 'stop-all.ps1(教官筆電)結束碼 0、未強制結束核心' { if ($rs.ExitCode -ne 0) { throw "結束碼 $($rs.ExitCode)" }; if ($rs.Output -match '強制結束') { throw '輸出含「強制結束」' } })
+        [void](Check 'stop-all(教官筆電):各埠已關閉、Edge 已關閉' {
+            if (-not (Wait-Until { -not ((Test-Tcp '127.0.0.1' 8765 300) -or (Test-Tcp '127.0.0.1' 8766 300) -or (Test-Tcp '127.0.0.1' 8080 300)) } 15)) { throw '15 秒後仍有埠開著' }
+            if (-not (Wait-Until { @(Get-ProcByCommandLine 'msedge.exe' $profileDir).Count -eq 0 } 15)) { throw '15 秒後仍有專屬設定檔的 msedge' }
+        })
+        foreach ($e in @(Get-ProcByCommandLine 'msedge.exe' $profileDir | Where-Object { $_.CommandLine -notmatch '--type=' })) { & taskkill.exe /PID $e.ProcessId /T /F 2>&1 | Out-Null }
+        Save-InstalledLogs $inst 'instructor'
+    }
+}
+
+# ======================================================================================================================
 if ($Stage -contains 'uninstall') {
     Write-Host ''; Write-Host '==== uninstall:靜默解除安裝 ===='
     $inst = Get-InstallDir
@@ -490,6 +644,23 @@ if ($Stage -contains 'uninstall') {
 }
 
 # ======================================================================================================================
+if ($Stage -contains 'summary') {
+    Write-Host ''; Write-Host '==== summary:各階段結果總表 ===='
+    $total = @{ PASS = 0; FAIL = 0; WARN = 0; INFO = 0 }
+    foreach ($f in @(Get-ChildItem -LiteralPath $work -Filter 'results-*.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)) {
+        if ($f.Name -eq 'results-summary.json') { continue }
+        Write-Host "-- $($f.BaseName -replace '^results-', '')"
+        foreach ($r in @(Get-Content -Raw -Encoding UTF8 $f.FullName | ConvertFrom-Json)) {
+            $total[$r.level]++
+            $d = "$($r.detail)"
+            if ($d.Length -gt 150) { $d = $d.Substring(0, 150) + '…' }
+            if ($d) { Write-Host "   [$($r.level)] $($r.name) — $d" } else { Write-Host "   [$($r.level)] $($r.name)" }
+        }
+    }
+    Write-Host "總計:通過 $($total.PASS),失敗 $($total.FAIL),待確認 $($total.WARN)"
+}
+
+# ======================================================================================================================
 Write-Host ''
 Write-Host '==== 摘要 ===='
 foreach ($lvl in @('FAIL', 'WARN')) {
@@ -499,6 +670,6 @@ $pass = @($script:results | Where-Object { $_.level -eq 'PASS' }).Count
 $fail = @($script:results | Where-Object { $_.level -eq 'FAIL' }).Count
 $warn = @($script:results | Where-Object { $_.level -eq 'WARN' }).Count
 Write-Host "通過 $pass,失敗 $fail,待確認 $warn"
-[System.IO.File]::WriteAllText((Join-Path $work ("results-" + ($Stage -join '-') + ".json")), ($script:results | ConvertTo-Json -Depth 3), (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText((Join-Path $work ("results-" + ($Stage -join '-') + ".json")), (ConvertTo-Json -InputObject @($script:results) -Depth 3), (New-Object System.Text.UTF8Encoding($false)))
 if ($fail -gt 0) { exit 1 }
 exit 0
