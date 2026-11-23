@@ -115,7 +115,8 @@ export class ReleaseStatusBadge extends LitElement {
         display: flex;
         flex-direction: column;
         gap: 4px;
-        padding: 8px 12px;
+        /* 下方的 8 px 內距放在最後一列(.foot)上:見 .foot 的說明 */
+        padding: 8px 12px 0;
         border: 1px solid var(--ob-warning);
         border-radius: 6px;
         background: var(--ob-bg-surface);
@@ -159,14 +160,17 @@ export class ReleaseStatusBadge extends LitElement {
         padding-top: 4px;
       }
       /* 最後一列(資料來源、「收合」鈕)貼在說明的底邊:內容超過最大高度而要捲動時,不必捲到底才找得到「收合」。
-         負邊界把這一列延伸到說明的左右與下方內距上(底色蓋住捲過去的文字),貼底與捲到底時的位置相同、不捲動時高度與原本相同 */
+         左右的負邊界把這一列延伸到說明的左右內距上(底色蓋住捲過去的文字);說明下方的 8 px 內距由這一列自己的 padding-bottom 提供
+         (說明本身的下方內距是 0)—— 不可以用「說明留下方內距、這一列再以負的 margin-bottom 伸進去」的寫法:Chromium 把貼底的位置算在說明的
+         內容區底邊,這一列會被往上推 8 px,不捲動時也蓋住上一段最後一行的下半(第三十一輪主控程序量測:上一段底邊 249、這一列上緣 245)。
+         上緣的柔邊只有 2 px(小於與上一段之間的 4 px 間隔),不蓋到文字 */
       .detail .foot {
         position: sticky;
         bottom: 0;
-        margin: 0 -12px -8px;
+        margin: 0 -12px;
         padding: 0 12px 8px;
         background: var(--ob-bg-surface);
-        box-shadow: 0 -4px 4px var(--ob-bg-surface);
+        box-shadow: 0 -2px 2px var(--ob-bg-surface);
         display: flex;
         flex-wrap: wrap;
         align-items: center;

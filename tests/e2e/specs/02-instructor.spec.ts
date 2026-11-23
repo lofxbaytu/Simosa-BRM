@@ -1093,6 +1093,13 @@ test('既有安裝的教官站網址(沒有 shipWeb 參數):由 ?ws= 的主機�
       const { d, c, f } = await boxes();
       expect(d.y + d.height, `${what}:說明的底邊(${d.y + d.height})在「凍結」鈕的上緣(${f.y})之上`).toBeLessThanOrEqual(f.y);
       expect(c.y >= d.y && c.y + c.height <= d.y + d.height + 0.5, `${what}:「收合」鈕在說明的可見範圍內(說明 ${JSON.stringify(d)}、收合 ${JSON.stringify(c)})`).toBe(true);
+      // 不必捲動時,底列(來源與「收合」)不可往上蓋住上一段的最後一行(第三十一輪:貼底的寫法曾把底列往上推 8 px,蓋住最後一行的下半)
+      const foot = await detail.evaluate((el) => {
+        const last = el.lastElementChild as HTMLElement;
+        const prev = last.previousElementSibling as HTMLElement;
+        return { scrolls: el.scrollHeight > el.clientHeight + 1, gap: last.getBoundingClientRect().top - prev.getBoundingClientRect().bottom };
+      });
+      if (!foot.scrolls) expect(foot.gap, `${what}:底列與上一段之間的間隔(px;負值 = 蓋住上一段的最後一行)`).toBeGreaterThanOrEqual(0);
       const open = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
       expect(runKeys(open), `${what}:執行控制(凍結 / 恢復 / 重設 / 結束練習)沒有被說明蓋住`).toEqual([]);
       expect([...open.page, ...open.overflow, ...open.clipped], `${what}:說明不把版面推出視窗`).toEqual([]);
