@@ -374,6 +374,29 @@ if ($Stage -contains 'launch') {
             foreach ($leak in @('deviceId', 'trustedKeys', 'environment', 'warnings')) { if ($body.IndexOf($leak) -ge 0) { throw "回應含 status 的其他欄位 $leak" } }
             return "$body"
         })
+        # 跨來源(第三十一輪):教官筆電的教官站(頁面由教官筆電自己的 simosa-web 提供:http://127.0.0.1:<埠>)向船上筆電的這個網址取船上的版本。
+        # 只有本機迴路位址的頁面拿得到 CORS 標頭;其他來源、沒有 Origin、靜態檔都沒有(Windows PowerShell 5.1 的 Invoke-WebRequest 可以自訂 Origin 標頭)
+        [void](Check '網頁 /_status/release.json 的 CORS 標頭:只給 http://127.0.0.1[:埠] 與 http://localhost[:埠] 的頁面' {
+            $statusUrl = 'http://127.0.0.1:8080/_status/release.json'
+            $hdr = { param($resp, [string]$name) $v = $resp.Headers[$name]; if ($null -eq $v) { '' } else { (@($v) -join ',') } }
+            foreach ($origin in @('http://127.0.0.1:8080', 'http://localhost:8080', 'http://127.0.0.1', 'http://localhost')) {
+                $resp = Invoke-WebRequest -UseBasicParsing -Uri $statusUrl -Headers @{ Origin = $origin } -TimeoutSec 10
+                $acao = & $hdr $resp 'Access-Control-Allow-Origin'
+                if ($resp.StatusCode -ne 200 -or $acao -cne $origin) { throw "Origin ${origin}:狀態碼 $($resp.StatusCode)、Access-Control-Allow-Origin =「${acao}」(預期原樣帶回)" }
+                if ((& $hdr $resp 'Vary') -ne 'Origin') { throw "Origin ${origin}:Vary =「$(& $hdr $resp 'Vary')」(預期 Origin)" }
+                if ("$(("$($resp.Content)" | ConvertFrom-Json).releaseVersion)" -ne $version) { throw "Origin ${origin}:內容的 releaseVersion 不是 $version" }
+            }
+            foreach ($origin in @('http://192.168.77.21:8080', 'https://127.0.0.1:8080', 'null', 'http://[::1]:8080', 'http://127.0.0.1.evil.example', 'http://localhost.evil.example:8080', 'http://LOCALHOST:8080', 'http://127.0.0.1:8080/', 'http://localhost:65536')) {
+                $resp = Invoke-WebRequest -UseBasicParsing -Uri $statusUrl -Headers @{ Origin = $origin } -TimeoutSec 10
+                $acao = & $hdr $resp 'Access-Control-Allow-Origin'
+                if ($resp.StatusCode -ne 200 -or $acao -ne '') { throw "Origin ${origin}:狀態碼 $($resp.StatusCode)、Access-Control-Allow-Origin =「${acao}」(預期沒有 CORS 標頭)" }
+            }
+            $plain = Invoke-WebRequest -UseBasicParsing -Uri $statusUrl -TimeoutSec 10
+            if ((& $hdr $plain 'Access-Control-Allow-Origin') -ne '' -or (& $hdr $plain 'Vary') -ne '') { throw '沒有 Origin 的請求不應有 CORS 標頭' }
+            $page = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8080/instructor.html' -Headers @{ Origin = 'http://127.0.0.1:8080' } -TimeoutSec 10
+            if ((& $hdr $page 'Access-Control-Allow-Origin') -ne '') { throw '靜態檔不應有 CORS 標頭' }
+            return '4 個本機迴路位址的來源有、9 個其他來源與沒有 Origin、靜態檔沒有'
+        })
         [void](Check '網頁 /_status/ 之下其他路徑回 404' {
             foreach ($u in @('/_status/', '/_status/other.json', '/_STATUS/release.json')) {
                 $code = 0
@@ -695,7 +718,12 @@ if ($Stage -contains 'instructor') {
                 if ($resp.StatusCode -ne 200) { throw "狀態碼 $($resp.StatusCode)" }
             })
         }
-        # 教官筆電的教官站頁面由本機的 simosa-web 提供:頁首顯示的是這台(教官筆電)的發行版
+        # -Standalone:核心在本機,教官站不另外取船上筆電的版本(網址沒有 shipWeb 參數、啟動輸出沒有「船上筆電的版本」的提示)
+        [void](Check '教官筆電 -Standalone:教官站網址沒有 shipWeb 參數、不提示船上版本的來源' {
+            if ($rb.Output -match 'shipWeb=') { throw '啟動輸出含 shipWeb=' }
+            if ($rb.Output -match '船上筆電的版本') { throw '啟動輸出含「船上筆電的版本」(standalone 沒有另一台電腦)' }
+        })
+        # 教官筆電的教官站頁面由本機的 simosa-web 提供:同源取到的是這台(教官筆電)的發行版(直連模式另外向船上筆電取,頁首寫「船上 <版本>」)
         [void](Check '教官筆電網頁 /_status/release.json:發行版本等於安裝的版本' {
             $resp = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8080/_status/release.json' -TimeoutSec 10
             $j = "$($resp.Content)" | ConvertFrom-Json

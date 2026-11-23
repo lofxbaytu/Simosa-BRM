@@ -5,7 +5,10 @@
   依 config\instructor-laptop.json:本機 simosa-web 提供 app\web(教官站 instructor.html、雷達 radar.html、簡化 ECDIS ecdis.html、講評 report.html),
   頁面的 ws 參數指向船上筆電(直連 IP);-Standalone(或 standalone.enabled)時改啟動本機 SimCore.Host 與雷達供岸上備課、審閱紀錄。
   啟動網頁伺服前先執行一次 simosa-pkg status --json 存成 build\run\release-status.json:教官站頁首顯示「發行版 <版本>」與降版提醒 —
-  這是教官筆電本機(提供教官站頁面的這一台)的發行版,不是船上筆電的;逾時或失敗不擋住啟動。
+  這是教官筆電本機(提供教官站頁面的這一台)的發行版;逾時或失敗不擋住啟動。
+  船上筆電的版本(直連模式):教官站連上船上的核心後,另外向船上筆電的 simosa-web(http://<船上 IP>:8080/_status/release.json)取,
+  頁首改寫「船上 <版本>」,船上降版 / 本機降版 / 兩台版本不同時是警示徽章。船上的網頁埠不是 8080 時在設定檔設 ports.shipWeb,
+  本腳本會在教官站的網址加上 shipWeb=http://<船上 IP>:<埠>(openPages 不必改);docs\design\packaging-sync.md 第 5.1 節。
   直連前檢查 Wi-Fi/藍牙(第 5.4 節:直連期間停用;-CheckWifi 時 Wi-Fi 開啟則拒絕繼續)。同步不自動執行:顯示 simosa-pkg sync 指令
   (需硬體金鑰 --cert,且更新包產生前須完成受影響情境驗證;docs\design\packaging-sync.md 第 6.2–6.3 節)。
   網頁以專屬設定檔啟動 Microsoft Edge(build\browser\edge):教官站的情境草稿、參與者資料與講評報告站的訓練紀錄(瀏覽器端儲存)留在安裝根目錄內,不寫 C:\Users。
@@ -39,6 +42,9 @@ if ($standalone) { $shipIp = '127.0.0.1' }
 $wsPort = Get-Cfg $cfg 'ports.stateWs' 8765
 $radarPort = Get-Cfg $cfg 'ports.radarWs' 8766
 $webPort = Get-Cfg $cfg 'ports.web' 8080
+# 船上筆電 simosa-web 的埠(船上 config\ship-laptop.json 的 ports.web);0 = 沒設或不是埠:教官站由 ws 的主機推得 http://<船上 IP>:8080
+$shipWebCfg = Get-LaunchShipWebPort $cfg
+$shipWebPort = $shipWebCfg.Port
 
 Write-Host "Simosa BRM 教官筆電 — 目標船 $Ship($shipIp);安裝根目錄 $root"
 if (-not $standalone) {
@@ -81,6 +87,15 @@ try {
             Start-LaunchProcess -Name 'web' -Log (Join-Path $logDir 'web.log') -File 'dotnet' -Arguments @($webDll, '--root', $webDir, '--port', $webPort, '--bind', (Get-Cfg $cfg 'web.bind' '127.0.0.1'), '--status-file', (Get-LaunchReleaseStatusPath $root)) -WorkDir $root | Out-Null
             Wait-LaunchTcp '127.0.0.1' $webPort 10 | Out-Null
             $pages = Get-Cfg $cfg 'web.openPages' @()
+            # 船上筆電的網頁位址(直連模式而且有設 ports.shipWeb 才有;加到教官站頁面的網址,見 launch-common.ps1 的 Get-LaunchShipWebUrl / Add-LaunchShipWebParam)
+            $shipWebUrl = Get-LaunchShipWebUrl ([bool]$standalone) $shipIp $shipWebPort
+            if (-not $standalone) {
+                $shipWebInvalid = $shipWebCfg.Invalid
+                if ($shipWebInvalid) { Write-Warning "設定檔的 ports.shipWeb(${shipWebInvalid})不是 1–65535 的埠,略過(教官站以預設的 8080 取船上筆電的版本)" }
+                $pages = @(@($pages) | ForEach-Object { Add-LaunchShipWebParam ([string]$_) $shipWebUrl })
+                $shipStatusFrom = if ($shipWebUrl) { $shipWebUrl } else { "http://${shipIp}:8080" }
+                Write-Host "  船上筆電的版本:教官站連上船上的核心後,頁首向 ${shipStatusFrom}/_status/release.json 取船上筆電的發行版本與降版提醒(船上的網頁埠不是 8080 時設 ports.shipWeb)"
+            }
             if ($NoBrowser) { foreach ($p in @($pages)) { Write-Host "  http://127.0.0.1:$webPort/$p" } }
             else { Open-LaunchPages "http://127.0.0.1:$webPort" $pages @{ ship = $shipIp; stateWs = $wsPort; radarWs = $radarPort } $browserProfile }
         }

@@ -5,10 +5,18 @@
 // 與簡化模式「開始練習」後(1366×768)事件串流篩選鈕、PTT 等不被蓋住或裁切(版面;判定在 support/layout.ts);
 // E14(開始即繫妥、吹攏風)碰墊的反覆接觸在事件串流合併成一列(次數與核心送出的事件數相符、文字不截斷),講評報告的時間軸顯示同一列;
 // 頁首的發行版本、軟體更新包版次與降版提醒(simosa-web 的 /_status/release.json;降版時警示徽章與可展開的說明,版面判定通過;
-// 沒有狀態檔時不顯示、也沒有 console error;駕駛台頁不顯示)。
+// 沒有狀態檔時不顯示、也沒有 console error;駕駛台頁不顯示);
+// 教官筆電的教官站顯示船上筆電的版本(第三十一輪;頁面由「教官筆電」的 simosa-web 提供,跨來源向另一個當作「船上筆電」的 simosa-web 取
+// /_status/release.json:版本相同、版本不同、船上降版、船上沒有發行版狀態、取不到;頁面與核心在同一台時不發跨來源請求;沒有 preflight、沒有 console error);
+// 既有安裝的網址形式(沒有 shipWeb 參數,由 ?ws= 的主機推得 http://<主機>:8080;另開一個帶 --host-resolver-rules 的 Chromium)與
+// 1093×614 展開船上降版的說明時執行控制不被蓋住、點得到(審查後修正)。
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { ROOT, bridgeUrl, instructorUrl, webBase } from '../support/env.ts';
+import { chromium } from '@playwright/test';
+import { ROOT, bridgeUrl, instructorUrl, shipWebBase, webBase, type E2eEnv } from '../support/env.ts';
+import { freePort } from '../support/processes.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
 import { INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, probeLayout } from '../support/layout.ts';
 import { PageErrors, scenarioLoadButton, waitConnected } from '../support/pages.ts';
@@ -750,6 +758,369 @@ test('發行版本與降版提醒:頁首顯示發行版與軟體更新包版次(
     expect(statusRequests, '駕駛台頁不應請求 /_status/').toBe(0);
     errors.expectNone();
   } finally {
+    await ensureRunning(core);
+  }
+});
+
+/** 改寫「船上筆電」的發行版狀態檔(與 simosa-pkg status --json 相同形式;另帶網頁用不到、simosa-web 不得送出的欄位) */
+function writeShipStatus(env: E2eEnv, st: { releaseVersion: string; softwareVersion?: string | null; releaseDowngrade?: unknown }): void {
+  fs.writeFileSync(
+    env.shipStatusFile,
+    JSON.stringify({
+      type: 'statusResult',
+      shipId: 'FSB1',
+      deviceId: 'E2E-SECRET-SHIP-DEVICE',
+      components: st.softwareVersion ? { software: { version: st.softwareVersion, summary: 'E2E-SECRET-SHIP-SUMMARY' } } : {},
+      warnings: ['E2E-SECRET-SHIP-WARNING'],
+      releaseVersion: st.releaseVersion,
+      ...(st.releaseDowngrade ? { releaseDowngrade: st.releaseDowngrade } : {}),
+    }),
+  );
+}
+
+test('教官筆電的教官站顯示船上筆電的版本:跨來源取船上的 /_status/release.json(沒有 preflight);版本相同「船上 <版本>」、版本不同與船上降版是警示徽章(展開先寫船上、再寫本機),版面判定通過;取不到時與只有本機時相同;頁面與核心在同一台時不發跨來源請求', async ({ page, env, core, context }) => {
+  // 第三十一輪:教官筆電以 start-instructor-laptop 開的教官站,頁面是教官筆電自己的 simosa-web 提供的(只有核心的 WebSocket 指向船上),
+  // 原本頁首只有教官筆電的版本。這裡的「教官筆電」是 global-setup 的 simosa-web(http://127.0.0.1:<埠>),「船上筆電」是第二個 simosa-web,
+  // 以 ?shipWeb=http://localhost:<埠> 指過去 —— 127.0.0.1 與 localhost 在瀏覽器是不同來源,所以是真的跨來源請求(CORS 由真實的 simosa-web 回應)。
+  const errors = new PageErrors(page);
+  const id = 'E13_tug_berthing_mailiao';
+  const ship = shipWebBase(env);
+  const shipLog = path.join(env.logsDir, 'ship-web.log');
+  // 「船上」simosa-web 的請求紀錄(ship-web.log)裡 /_status/ 的各行。simosa-web 先送出回應、後寫 log:收到回應不代表那一行已經落檔,
+  // 所以「到目前為止有幾行」與「之後收到哪些請求」都以 expect.poll 等到位,不做一次性讀取(審查 e2e-ship-log-race:log 晚 300 ms 落檔時,
+  // 步驟 0 自己的請求會被算進步驟 1 的「不應收到請求」)
+  const shipStatusLog = (): string[] => fs.readFileSync(shipLog, 'utf8').split('\n').filter((l) => l.includes(' /_status/'));
+  let logSeen = shipStatusLog().length; // 已經核對過的行數(本案例開始時沒有進行中的請求)
+  const originalShipStatus = fs.readFileSync(env.shipStatusFile, 'utf8');
+  const status = page.locator('header brm-release-status');
+  const badge = status.locator('button.badge');
+  const detail = status.locator('.detail');
+  const statusRequests: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/_status/')) statusRequests.push(`${r.method()} ${r.url()}`);
+  });
+  await ensureRunning(core);
+  await ensureScenario(core, id);
+  try {
+    // 0) 真實的 simosa-web:只有本機迴路位址的頁面拿得到 CORS 標頭(完整的各種 Origin 在 tools/launch/tests/launch-tests.sh 的 test_web_status_cors)
+    const allowed = await page.request.get(`${ship}/_status/release.json`, { headers: { Origin: webBase(env) } });
+    expect(allowed.status()).toBe(200);
+    expect(allowed.headers()['access-control-allow-origin']).toBe(webBase(env));
+    expect(allowed.headers()['vary']).toBe('Origin');
+    for (const origin of ['http://192.168.77.21:8080', 'https://127.0.0.1:8080', 'null', 'http://127.0.0.1.evil.example', `http://localhost.evil.example:${env.webPort}`]) {
+      const denied = await page.request.get(`${ship}/_status/release.json`, { headers: { Origin: origin } });
+      expect(denied.status(), origin).toBe(200);
+      expect(denied.headers()['access-control-allow-origin'], origin).toBeUndefined();
+    }
+    const text = await allowed.text();
+    expect(text).not.toContain('SECRET');
+    // 上面 6 個請求的 log 都落檔之後,才開始看「之後」的請求
+    await expect.poll(() => shipStatusLog().length, { message: '步驟 0 的 6 個請求都已寫進 ship-web.log' }).toBe(logSeen + 6);
+    logSeen += 6;
+
+    // 1) 頁面與核心在同一台電腦(ws 的主機 = 頁面的主機;其他案例都是這樣):只取同源的狀態,不發跨來源請求;頁首與原本相同
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await page.goto(instructorUrl(env, { scenario: id }));
+    await waitConnected(page);
+    await expect(status.locator('.version')).toHaveText(`軟體更新 ${env.softwareVersion}`);
+    await expect(status.locator('.version')).not.toHaveAttribute('title', /船上/);
+    await page.waitForTimeout(500);
+    expect(statusRequests, '同一台電腦:只有同源的一次請求').toEqual([`GET ${webBase(env)}/_status/release.json`]);
+    expect(shipStatusLog().slice(logSeen), '「船上」的 simosa-web 不應收到請求').toEqual([]);
+
+    // 2) 頁面由「教官筆電」提供、船上位址指向另一個伺服器,兩台同一版:頁首小字「船上 <版本>」(不是按鈕),本機的在 title;
+    //    跨來源請求是簡單請求:瀏覽器沒有送 OPTIONS(preflight),伺服器看到的 Origin 是教官站頁面的來源
+    statusRequests.length = 0;
+    await page.goto(instructorUrl(env, { scenario: id, shipWeb: ship }));
+    await waitConnected(page);
+    const label = status.locator('.version.onboard');
+    await expect(label).toHaveText(`船上 ${env.softwareVersion}`);
+    const esc = (v: string): string => v.replace(/\./g, '\\.');
+    await expect(label).toHaveAttribute('title', new RegExp(`船上筆電實際執行的是軟體更新包 ${esc(env.softwareVersion)} 的程式\\(套用在發行版 ${esc(env.releaseVersion)} 之上\\);這台電腦\\(本機\\)相同\\(軟體更新 ${esc(env.softwareVersion)}\\)`));
+    await expect(label).toHaveAttribute('title', new RegExp(`船上筆電:${esc(ship)}.*本機:提供本頁面的電腦\\(127\\.0\\.0\\.1:${env.webPort},即這台電腦\\)`));
+    await expect(status.locator('button')).toHaveCount(0);
+    await expect(page.locator('header .ship')).toContainText(id);
+    expect([...statusRequests].sort(), '一次同源、一次跨來源,都是 GET(沒有 OPTIONS)').toEqual([`GET ${webBase(env)}/_status/release.json`, `GET ${ship}/_status/release.json`].sort());
+    // 步驟 1 之後到現在只有這一行(步驟 1 若有晚落檔的請求,這裡會多出來)
+    await expect
+      .poll(() => shipStatusLog().slice(logSeen).map((l) => l.replace(/^\S+ /, '')), { message: '「船上」的 simosa-web 收到的請求(沒有 OPTIONS;Origin 是教官站頁面的來源)' })
+      .toEqual([`200 GET /_status/release.json HTTP/1.1(跨來源 ${webBase(env)})`]);
+    expect(layoutFailures(await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT)), '完整教官站 1366×768(頁首「船上 <版本>」)的版面問題').toEqual([]);
+    // 簡化模式也一樣
+    await page.goto(instructorUrl(env, { mode: 'simple', shipWeb: ship }));
+    await waitConnected(page);
+    await expect(label).toHaveText(`船上 ${env.softwareVersion}`);
+    expect(layoutFailures(await page.evaluate(probeLayout, { keys: [], lists: [] })), '簡化模式選情境頁(頁首「船上 <版本>」)的版面問題').toEqual([]);
+
+    // 3) 兩台實際執行的版本不同(船上沒有套用軟體更新包,比本機舊):警示徽章「船上 <版本> · 版本不同」,展開說明哪一台較舊與處理
+    writeShipStatus(env, { releaseVersion: env.releaseVersion });
+    for (const size of [{ width: 1366, height: 768 }, { width: 1536, height: 864 }]) {
+      await test.step(`版本不同:完整教官站 ${size.width}×${size.height}`, async () => {
+        await page.setViewportSize(size);
+        await page.goto(instructorUrl(env, { scenario: id, shipWeb: ship }));
+        await waitConnected(page);
+        await expect(badge).toHaveText(`船上 ${env.releaseVersion} · 版本不同`);
+        await expect(badge).toHaveAttribute('aria-expanded', 'false');
+        await expect(detail).toHaveCount(0); // 預設收合:不佔版面
+        await expect(status.locator('.version')).toHaveCount(0);
+        expect(layoutFailures(await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT)), `版本不同徽章(收合)時完整教官站 ${size.width}×${size.height} 的版面問題`).toEqual([]);
+        const b = (await badge.boundingBox())!;
+        expect(b.x >= 0 && b.y >= 0 && b.x + b.width <= size.width && b.y + b.height <= size.height, `徽章外框 ${JSON.stringify(b)}`).toBe(true);
+        await badge.click();
+        await expect(badge).toHaveAttribute('aria-expanded', 'true');
+        await expect(detail.locator('.machine.onboard .line')).toHaveText(`船上筆電:實際執行的是發行版 ${env.releaseVersion}。`);
+        await expect(detail.locator('.machine.local .line')).toContainText(`這台電腦(本機):實際執行的是軟體更新包 ${env.softwareVersion} 的程式`);
+        await expect(detail.locator('.mismatch .lead')).toContainText(`版本不同:船上筆電執行的是發行版 ${env.releaseVersion},這台電腦(本機)執行的是軟體更新 ${env.softwareVersion} — 船上筆電較舊`);
+        await expect(detail.locator('.mismatch .advice')).toContainText('更新較舊的那一台(船上筆電)');
+        await expect(detail.locator('.mismatch .advice')).toContainText('docs/design/packaging-sync.md 第 6 節');
+        await expect(detail.locator('.foot .source')).toContainText(`船上筆電:${ship}`);
+        // 展開的說明浮貼在頁首下方:整個在視窗內、不把版面推出視窗,頁首高度不變
+        const d = (await detail.boundingBox())!;
+        expect(d.x >= 0 && d.y >= 0 && d.x + d.width <= size.width && d.y + d.height <= size.height, `說明外框 ${JSON.stringify(d)}`).toBe(true);
+        const header = (await page.locator('header').first().boundingBox())!;
+        expect(d.y, '說明在頁首下方').toBeGreaterThanOrEqual(header.y + header.height);
+        const expanded = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
+        expect([...expanded.page, ...expanded.overflow, ...expanded.offscreen, ...expanded.clipped, ...expanded.text], '展開說明時的版面問題(被說明蓋住的控制項不計)').toEqual([]);
+        await detail.locator('button.collapse').click();
+        await expect(detail).toHaveCount(0);
+        expect(layoutFailures(await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT)), '收合後的版面問題').toEqual([]);
+      });
+    }
+
+    // 4) 船上有降版提醒(真實 simosa-pkg status 的降版輸出):與本機降版同樣醒目的徽章、寫明是船上;展開先寫船上的,再寫本機的
+    const downgrade = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/release-status-downgrade.json'), 'utf8')) as { releaseVersion: string; softwareVersion: string; releaseDowngrade: unknown };
+    writeShipStatus(env, { releaseVersion: downgrade.releaseVersion, softwareVersion: downgrade.softwareVersion, releaseDowngrade: downgrade.releaseDowngrade });
+    await test.step('船上降版:完整教官站 1366×768', async () => {
+      await page.setViewportSize({ width: 1366, height: 768 });
+      await page.goto(instructorUrl(env, { scenario: id, shipWeb: ship }));
+      await waitConnected(page);
+      await expect(badge).toHaveText('船上 2026.11.1 · 船上降版');
+      await expect(badge).toHaveClass(/downgrade/);
+      await expect(badge).toHaveAttribute('title', /船上筆電目前執行的是較舊的發行版 2026\.11\.1/);
+      expect(layoutFailures(await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT)), '船上降版徽章(收合)時完整教官站 1366×768 的版面問題').toEqual([]);
+      await badge.click();
+      const blocks = await detail.evaluate((el) => [...el.children].map((c) => c.className));
+      expect(blocks, '展開的說明:船上 → 本機 → 版本不同 → 資料來源').toEqual(['machine onboard down', 'machine local', 'mismatch', 'foot']);
+      await expect(detail.locator('.machine.onboard .lead')).toContainText('船上筆電 · 降版提醒:船上筆電目前執行的是較舊的發行版 2026.11.1;先前安裝的發行版 2026.12.1、曾套用的軟體更新包 2026.12.2 比它新');
+      await expect(detail.locator('.machine.onboard .advice')).toContainText('版本不低於 2026.12.2 的安裝程式重新安裝');
+      // 船上的 status 完整訊息預設收合(重點與處理在上面);點標題列才展開
+      const full = detail.locator('.machine.onboard details.full');
+      await expect(full.locator('summary')).toHaveText('完整訊息(船上筆電的 simosa-pkg status)');
+      await expect(full.locator('.message')).toBeHidden();
+      await full.locator('summary').click();
+      await expect(full.locator('.message')).toBeVisible();
+      await expect(full.locator('.message')).toContainText('這則提醒會一直保留');
+      await full.locator('summary').click();
+      await expect(full.locator('.message')).toBeHidden();
+      await expect(detail.locator('.machine.local .line')).toContainText(`這台電腦(本機):實際執行的是軟體更新包 ${env.softwareVersion} 的程式`);
+      await expect(detail.locator('.mismatch .lead')).toContainText('船上筆電較舊');
+      // 較舊的船上筆電有降版提醒:「版本不同」的處理指向上面的降版提醒,不叫人「更新較舊的那一台」(與「刻意回到舊版時不必處理」矛盾)
+      await expect(detail.locator('.mismatch .advice')).toContainText('較舊的是有降版提醒的那一台(船上筆電),依上面降版提醒的處理');
+      await expect(detail.locator('.mismatch .advice')).not.toContainText('更新較舊的那一台');
+      await expect(detail).not.toContainText('SECRET');
+      const d = (await detail.boundingBox())!;
+      expect(d.x >= 0 && d.y >= 0 && d.x + d.width <= 1366 && d.y + d.height <= 768, `說明外框 ${JSON.stringify(d)}`).toBe(true);
+      const expanded = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
+      expect([...expanded.page, ...expanded.overflow, ...expanded.offscreen, ...expanded.clipped, ...expanded.text], '展開說明時的版面問題(被說明蓋住的控制項不計)').toEqual([]);
+      await page.keyboard.press('Escape');
+      await expect(detail).toHaveCount(0);
+    });
+    await test.step('船上降版:簡化教官模式 1366×768', async () => {
+      await page.goto(instructorUrl(env, { mode: 'simple', shipWeb: ship }));
+      await waitConnected(page);
+      await expect(badge).toHaveText('船上 2026.11.1 · 船上降版');
+      expect(layoutFailures(await page.evaluate(probeLayout, { keys: [], lists: [] })), '簡化模式選情境頁(船上降版徽章)的版面問題').toEqual([]);
+      await badge.click();
+      await expect(detail.locator('.machine.onboard .lead')).toContainText('船上筆電 · 降版提醒');
+      // 點說明以外的地方收合
+      const box = (await detail.boundingBox())!;
+      await page.mouse.click(box.x + box.width / 2, Math.min(760, box.y + box.height + 40));
+      await expect(detail).toHaveCount(0);
+    });
+    // 4b) 船上連得到、但沒有發行版狀態(船上從儲存庫啟動的開發模式,或船上啟動時沒有取到 simosa-pkg status:狀態檔不存在 → 200、CORS 標頭、各欄 null):
+    //     頁首與只有本機時相同;title 寫「船上筆電沒有發行版狀態」而不是「未取得 / 船上是較舊的版本」;不重試(取不到時第一次重試在 4 秒後)
+    await test.step('船上沒有發行版狀態', async () => {
+      fs.rmSync(env.shipStatusFile);
+      statusRequests.length = 0;
+      await page.goto(instructorUrl(env, { scenario: id, shipWeb: ship }));
+      await waitConnected(page);
+      await expect(status.locator('.version')).toHaveText(`軟體更新 ${env.softwareVersion}`);
+      await expect(status.locator('.version')).toHaveAttribute('title', new RegExp(`船上筆電沒有發行版狀態\\(已向 ${esc(ship)} 取到回應`));
+      await expect(status.locator('.version')).not.toHaveAttribute('title', /未取得|較舊的版本/);
+      await expect(status.locator('.version.onboard, button')).toHaveCount(0);
+      await page.waitForTimeout(4600);
+      expect(statusRequests.filter((r) => r.includes(ship)), '對船上只有一次請求(沒有發行版狀態不重試)').toEqual([`GET ${ship}/_status/release.json`]);
+      fs.writeFileSync(env.shipStatusFile, originalShipStatus);
+    });
+    // 到這裡為止(同一台、版本相同、版本不同、船上降版、船上沒有發行版狀態)主控台沒有任何錯誤
+    errors.expectNone();
+
+    // 5) 取不到船上的狀態:畫面與只有本機時相同、不顯示錯誤;title 註明「船上筆電的版本:未取得」。
+    //    另開一頁收集主控台:跨來源請求失敗的紀錄是瀏覽器記的,網頁端消不掉 —— 只容許「對船上那個網址的請求失敗」這一種,其他錯誤照樣不行
+    const closedPort = await freePort();
+    // 舊版的船上網頁伺服:以測試程序內的 HTTP 伺服器重現(真的跨來源請求、真的沒有 CORS 標頭;page.route 的 fulfill 會自動補 CORS 標頭,做不出來)。
+    //   第三十輪的 simosa-web 有 /_status/release.json 但不回 Access-Control-Allow-Origin(200);更舊的版本沒有這個網址(404)
+    let oldStatus = 200;
+    const oldShip = http.createServer((_req, res) => {
+      res.writeHead(oldStatus, { 'Content-Type': oldStatus === 200 ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'close' });
+      // 200 的本體是合格的發行版狀態(版本 2026.1.1):沒有 CORS 標頭時網頁讀不到,頁首不可以出現這個版本
+      res.end(oldStatus === 200 ? JSON.stringify({ format: 'simosa-release-status/1', generatedUtc: null, releaseVersion: '2026.1.1', softwareVersion: null, releaseDowngrade: null }) : 'not found\n');
+    });
+    await new Promise<void>((resolve) => oldShip.listen(0, '127.0.0.1', resolve));
+    const oldPort = (oldShip.address() as AddressInfo).port;
+    const cases = [
+      { name: '連不上(船上的網頁伺服沒有啟動)', shipWeb: `http://localhost:${closedPort}`, allow: /net::ERR_CONNECTION_REFUSED/, status: 0 },
+      { name: '船上是第三十輪的版本(有 /_status/,沒有 CORS 標頭)', shipWeb: `http://localhost:${oldPort}`, allow: /blocked by CORS policy|net::ERR_FAILED/, status: 200 },
+      { name: '船上是更舊的版本(沒有 /_status/:404)', shipWeb: `http://localhost:${oldPort}`, allow: /blocked by CORS policy|net::ERR_FAILED/, status: 404 },
+    ];
+    try {
+      for (const c of cases) {
+        await test.step(`取不到:${c.name}`, async () => {
+          if (c.status) oldStatus = c.status;
+          const p2 = await context.newPage();
+          const target = `${c.shipWeb}/_status/release.json`;
+          const seen: Array<{ text: string; url: string }> = [];
+          const other: string[] = [];
+          p2.on('pageerror', (e) => other.push(`pageerror: ${e.message}`));
+          p2.on('console', (m) => {
+            if (m.type() !== 'error') return;
+            if ((m.location().url === target || m.text().includes(target)) && c.allow.test(m.text())) seen.push({ text: m.text(), url: m.location().url });
+            else other.push(`console.error: ${m.text()}`);
+          });
+          await p2.setViewportSize({ width: 1366, height: 768 });
+          await p2.goto(instructorUrl(env, { scenario: id, shipWeb: c.shipWeb }));
+          await waitConnected(p2);
+          const st = p2.locator('header brm-release-status');
+          await expect.poll(() => seen.length, { message: '瀏覽器記下對船上那個網址的請求失敗' }).toBeGreaterThanOrEqual(1);
+          await expect(st.locator('.version')).toHaveText(`軟體更新 ${env.softwareVersion}`);
+          await expect(st.locator('.version.onboard')).toHaveCount(0);
+          await expect(st.locator('.version')).toHaveAttribute('title', new RegExp(`船上筆電的版本:未取得\\(連上船上的核心後向 ${esc(c.shipWeb)} 取`));
+          await expect(st.locator('button')).toHaveCount(0);
+          await expect(p2.locator('header').first()).not.toContainText(/未取得|錯誤|失敗|2026\.1\.1/);
+          expect(layoutFailures(await p2.evaluate(probeLayout, INSTRUCTOR_LAYOUT)), `取不到船上的狀態時完整教官站 1366×768 的版面問題`).toEqual([]);
+          expect(other, '除了「對船上那個網址的請求失敗」以外不應有其他錯誤').toEqual([]);
+          // 一次失敗的跨來源請求瀏覽器記 1–2 筆(CORS 被擋時是兩筆);元件在連上後約 4、19、49、109、169 秒重試,這裡只會看到第一次(最多第二次)
+          expect(seen.length, `主控台的紀錄:${JSON.stringify(seen)}`).toBeLessThanOrEqual(4);
+          await p2.close();
+        });
+      }
+    } finally {
+      await new Promise((resolve) => oldShip.close(resolve));
+    }
+  } finally {
+    fs.writeFileSync(env.shipStatusFile, originalShipStatus);
+    await ensureRunning(core);
+  }
+});
+
+test('既有安裝的教官站網址(沒有 shipWeb 參數):由 ?ws= 的主機推得 http://<主機>:8080 向船上取版本;1093×614 展開船上降版的說明時執行控制不被蓋住、點得到,「收合」不必捲動', async ({ env, core }) => {
+  // 審查 e2e-no-derived-path:config/instructor-laptop.json 的 openPages 只有 ws 參數(ports.shipWeb 預設 null),實船走的是「由 ws 的主機推導」
+  // 這條路,上一個案例每一步都帶明確的 ?shipWeb=。這裡另開一個 Chromium,以 --host-resolver-rules 把假的船上位址 192.168.77.11 對到本機:
+  // ws://192.168.77.11:<核心埠> → 核心、http://192.168.77.11:8080 → 「船上」simosa-web;頁面仍由「教官筆電」的 simosa-web(http://127.0.0.1:<埠>)提供。
+  // 審查 popover-covers-run-controls:船上降版的說明在 1093×614 高 320 px,蓋住執行控制的「凍結 / 恢復 / 重設 / 結束練習」而點不到。
+  const id = 'E13_tug_berthing_mailiao';
+  const fakeShip = '192.168.77.11';
+  const shipLog = path.join(env.logsDir, 'ship-web.log');
+  const shipStatusLog = (): string[] => fs.readFileSync(shipLog, 'utf8').split('\n').filter((l) => l.includes(' /_status/'));
+  const originalShipStatus = fs.readFileSync(env.shipStatusFile, 'utf8');
+  const use = test.info().project.use;
+  const rules = [`MAP ${fakeShip}:${env.wsPort} 127.0.0.1:${env.wsPort}`, `MAP ${fakeShip}:8080 127.0.0.1:${env.shipWebPort}`].join(', ');
+  const browser = await chromium.launch({
+    ...(use.launchOptions ?? {}),
+    ...(use.channel ? { channel: use.channel } : {}),
+    headless: use.headless ?? true,
+    // --no-proxy-server:環境變數設了代理的機器上,非迴路位址的 ws:// 會被送進代理(對應規則只改連線的位址,不改「要不要走代理」)
+    args: [...(use.launchOptions?.args ?? []), '--no-proxy-server', `--host-resolver-rules=${rules}`],
+  });
+  await ensureRunning(core);
+  await ensureScenario(core, id);
+  try {
+    const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, locale: 'zh-TW', timezoneId: 'Asia/Taipei', permissions: ['microphone'] });
+    const page = await context.newPage();
+    const errors = new PageErrors(page);
+    const statusRequests: string[] = [];
+    page.on('request', (r) => {
+      if (r.url().includes('/_status/') || r.method() === 'OPTIONS') statusRequests.push(`${r.method()} ${r.url()}`);
+    });
+    // 與 start-instructor-laptop 開的網址相同的形式:ws 指向船上的 IP,沒有 shipWeb 參數
+    const derivedUrl = (opts: Parameters<typeof instructorUrl>[1] = {}): string => {
+      const u = new URL(instructorUrl(env, opts));
+      u.searchParams.set('ws', `ws://${fakeShip}:${env.wsPort}`);
+      expect(u.searchParams.has('shipWeb')).toBe(false);
+      return u.toString();
+    };
+    const status = page.locator('header brm-release-status');
+    const badge = status.locator('button.badge');
+    const detail = status.locator('.detail');
+    const esc = (v: string): string => v.replace(/\./g, '\\.');
+
+    // 1) 兩台同一版:頁首「船上 <版本>」;請求送往 http://<ws 主機>:8080,簡單請求(沒有 OPTIONS),伺服器看到的 Origin 是教官站頁面的來源
+    const logSeen = shipStatusLog().length;
+    await page.goto(derivedUrl({ scenario: id }));
+    await waitConnected(page);
+    const label = status.locator('.version.onboard');
+    await expect(label).toHaveText(`船上 ${env.softwareVersion}`);
+    await expect(label).toHaveAttribute('title', new RegExp(`船上筆電:http://${esc(fakeShip)}:8080.*本機:提供本頁面的電腦\\(127\\.0\\.0\\.1:${env.webPort},即這台電腦\\)`));
+    expect([...statusRequests].sort(), '一次同源、一次送往 http://<ws 主機>:8080,都是 GET(沒有 OPTIONS)').toEqual([`GET ${webBase(env)}/_status/release.json`, `GET http://${fakeShip}:8080/_status/release.json`].sort());
+    await expect
+      .poll(() => shipStatusLog().slice(logSeen).map((l) => l.replace(/^\S+ /, '')), { message: '「船上」的 simosa-web 收到的請求' })
+      .toEqual([`200 GET /_status/release.json HTTP/1.1(跨來源 ${webBase(env)})`]);
+    // 簡化模式相同
+    await page.goto(derivedUrl({ mode: 'simple' }));
+    await waitConnected(page);
+    await expect(label).toHaveText(`船上 ${env.softwareVersion}`);
+    errors.expectNone();
+
+    // 2) 船上降版、1093×614(1366×768 的筆電以 125% 縮放;頁首下方到執行控制只有 264 px):展開的說明不蓋住執行控制
+    const downgrade = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/release-status-downgrade.json'), 'utf8')) as { releaseVersion: string; softwareVersion: string; releaseDowngrade: unknown };
+    writeShipStatus(env, { releaseVersion: downgrade.releaseVersion, softwareVersion: downgrade.softwareVersion, releaseDowngrade: downgrade.releaseDowngrade });
+    await page.setViewportSize({ width: 1093, height: 614 });
+    await page.goto(derivedUrl({ scenario: id }));
+    await waitConnected(page);
+    await expect(badge).toHaveText('船上 2026.11.1 · 船上降版');
+    const run = page.locator('brm-run-control');
+    const runKeys = (r: { key: string[] }): string[] => r.key.filter((k) => /執行控制|brm-release-status/.test(k));
+    expect(runKeys(await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT)), '收合時執行控制點得到').toEqual([]);
+    await badge.click();
+    await expect(detail).toBeVisible();
+    /** 說明、「收合」鈕、「凍結」鈕的外框:說明的底邊在「凍結」鈕之上;「收合」整個在說明的可見範圍內(不必在說明裡捲動) */
+    const boxes = async (): Promise<{ d: { y: number; height: number }; c: { y: number; height: number }; f: { y: number } }> => ({
+      d: (await detail.boundingBox())!,
+      c: (await detail.locator('button.collapse').boundingBox())!,
+      f: (await run.locator('button.freeze').boundingBox())!,
+    });
+    const check = async (what: string): Promise<void> => {
+      const { d, c, f } = await boxes();
+      expect(d.y + d.height, `${what}:說明的底邊(${d.y + d.height})在「凍結」鈕的上緣(${f.y})之上`).toBeLessThanOrEqual(f.y);
+      expect(c.y >= d.y && c.y + c.height <= d.y + d.height + 0.5, `${what}:「收合」鈕在說明的可見範圍內(說明 ${JSON.stringify(d)}、收合 ${JSON.stringify(c)})`).toBe(true);
+      const open = await page.evaluate(probeLayout, INSTRUCTOR_LAYOUT);
+      expect(runKeys(open), `${what}:執行控制(凍結 / 恢復 / 重設 / 結束練習)沒有被說明蓋住`).toEqual([]);
+      expect([...open.page, ...open.overflow, ...open.clipped], `${what}:說明不把版面推出視窗`).toEqual([]);
+    };
+    await check('展開(完整訊息收合)');
+    // 把船上的完整訊息也展開:內容變高,說明在自己裡面捲動,仍不蓋住執行控制,「收合」貼在底邊
+    await detail.locator('.machine.onboard details.full summary').click();
+    await expect(detail.locator('.machine.onboard details.full .message')).toBeVisible();
+    await check('展開(完整訊息也展開)');
+    expect(await detail.evaluate((el) => el.scrollHeight > el.clientHeight), '完整訊息展開後內容比說明高(在說明裡捲動)').toBe(true);
+    // 說明展開著,直接按「凍結」(真實點擊;被蓋住的話 Playwright 會回報被 <brm-release-status> 攔截):核心凍結,說明因為點在外面而收合
+    const frozenEvent = core.waitEvent('frozen', 10_000);
+    await run.locator('button.freeze').click();
+    try {
+      await frozenEvent;
+      await expect(page.locator('header .alarms .caution', { hasText: '已凍結' })).toBeVisible({ timeout: 3000 });
+      await expect(detail).toHaveCount(0);
+      const resumedEvent = core.waitEvent('resumed', 10_000);
+      await run.locator('button.resume').click();
+      await resumedEvent;
+    } finally {
+      await ensureRunning(core);
+    }
+    errors.expectNone();
+    await context.close();
+  } finally {
+    fs.writeFileSync(env.shipStatusFile, originalShipStatus);
+    await browser.close();
     await ensureRunning(core);
   }
 });

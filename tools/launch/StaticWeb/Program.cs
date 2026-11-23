@@ -8,6 +8,11 @@
 // 原因記在 log):教官站每次載入都會取這個網址,回 404 的話瀏覽器每次都記一筆 console error(Failed to load resource),網頁端無法消掉。
 // 沒有 --status-file 時回 404(這個伺服器不提供發行版狀態);/_status/ 之下的其他路徑一律 404。
 // 網址是固定的(請求內容不影響讀哪個檔),輸出只含白名單欄位,所以不會變成任意讀檔,也不會把 status 的其他內容(裝置、金鑰名稱、環境版次、警告)送出去。
+// 跨來源(CORS;第三十一輪):教官筆電的教官站由教官筆電自己的 simosa-web 提供(http://127.0.0.1:<埠>),它要向**船上筆電**的 simosa-web 取這個網址,
+// 才看得到船上的版本與降版提醒。所以 /_status/release.json 的 200 回應在請求的 Origin 是 http://127.0.0.1[:埠] 或 http://localhost[:埠]
+// (本機迴路位址的頁面;完全相符、小寫)時加上 Access-Control-Allow-Origin: <該 Origin> 與 Vary: Origin;其他 Origin(別的主機、https、null、
+// [::1]、看起來像迴路位址的主機名)與沒有 Origin 的請求(同源、curl)不加任何 CORS 標頭。只有這個網址有:靜態檔、/_status/ 之下其他路徑、404 / 405 都沒有。
+// 教官站的請求是簡單請求(GET、沒有自訂標頭、不帶認證),瀏覽器不送 preflight;OPTIONS 照舊回 405。
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -35,6 +40,8 @@ for (var i = 0; i < args.Length; i++)
         case "-h": case "--help":
             Console.WriteLine("用法:simosa-web --root <網頁目錄> [--port 8080] [--bind 0.0.0.0] [--status-file <simosa-pkg status --json 的輸出檔.json>] [--quiet]");
             Console.WriteLine($"  --status-file:以固定網址 {ReleaseStatusFile.Url} 提供該檔的發行版本、軟體更新包版次與降版資訊(只含教官站需要的欄位;檔案不存在或不是 status 的輸出時各欄為 null)");
+            Console.WriteLine($"                 跨來源:只有 Origin 是 http://127.0.0.1[:埠] 或 http://localhost[:埠] 的頁面(教官筆電自己的 simosa-web 提供的教官站)讀得到這個網址");
+            Console.WriteLine("                 (回應帶 Access-Control-Allow-Origin 與 Vary: Origin);其他來源的頁面沒有 CORS 標頭,瀏覽器會擋下。靜態檔一律沒有 CORS 標頭。");
             return 0;
         default:
             Console.Error.WriteLine($"未知參數:{args[i]}");
@@ -152,10 +159,17 @@ async Task Serve(TcpClient client)
                 }
                 // 狀態檔不存在或不合格:照樣回 200,內容是「沒有發行版狀態」(各欄 null;網頁端不顯示任何東西),原因記在 log
                 var json = ReleaseStatusFile.TryBuild(statusFile, out var why) ?? ReleaseStatusFile.Empty();
-                var statusHead = $"HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {json.Length}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
+                // 跨來源:只有本機迴路位址的頁面(教官筆電自己的 simosa-web 提供的教官站)讀得到;其他 Origin 與沒有 Origin 的請求不加 CORS 標頭
+                var origin = ReleaseStatusFile.RequestOrigin(text);
+                var allowed = origin is not null && ReleaseStatusFile.IsLoopbackPageOrigin(origin);
+                var cors = allowed ? $"Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n" : "";
+                var statusHead = $"HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {json.Length}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{cors}Connection: close\r\n\r\n";
                 await stream.WriteAsync(Encoding.ASCII.GetBytes(statusHead));
                 if (parts[0] == "GET") await stream.WriteAsync(json);
-                Log(why.Length == 0 ? requestLine : $"{requestLine}({why};回覆「沒有發行版狀態」)", 200);
+                // log 只記「允許的 Origin」(形式固定:迴路位址與埠);不允許的 Origin 不記內容(任意字串)
+                var note = origin is null ? "" : allowed ? $"跨來源 {origin}" : "跨來源的 Origin 不是本機迴路位址的頁面,不加 CORS 標頭";
+                if (why.Length > 0) note = note.Length > 0 ? $"{why};回覆「沒有發行版狀態」;{note}" : $"{why};回覆「沒有發行版狀態」";
+                Log(note.Length == 0 ? requestLine : $"{requestLine}({note})", 200);
                 return;
             }
             var file = Path.GetFullPath(Path.Combine(rootFull, Path.Combine(segments)));
@@ -313,6 +327,55 @@ static class ReleaseStatusFile
         if (IsVersion(value)) w.WriteString(name, value);
         else w.WriteNull(name);
     }
+
+    /// <summary>
+    /// 請求標頭裡的 Origin(標頭名稱不分大小寫;值去掉前後空白)。沒有、是空的、或出現超過一次時回傳 null(瀏覽器只送一個;
+    /// 多個時不猜哪一個才算)。<paramref name="requestText"/> 是整個請求的文字(請求行 + 標頭;本體不看)。
+    /// </summary>
+    public static string? RequestOrigin(string requestText)
+    {
+        var end = requestText.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        var head = end >= 0 ? requestText[..end] : requestText;
+        string? origin = null;
+        var count = 0;
+        foreach (var line in head.Split("\r\n").Skip(1))
+        {
+            var colon = line.IndexOf(':');
+            if (colon <= 0 || !line.AsSpan(0, colon).Trim().Equals("origin", StringComparison.OrdinalIgnoreCase)) continue;
+            count++;
+            origin = line[(colon + 1)..].Trim();
+        }
+        return count == 1 && origin!.Length > 0 ? origin : null;
+    }
+
+    /// <summary>
+    /// Origin 是不是「本機迴路位址的頁面」:<c>http://127.0.0.1</c> 或 <c>http://localhost</c>,後面可以有 <c>:埠</c>(1–65535,沒有前導 0)。
+    /// 教官筆電的教官站由它自己的 simosa-web 提供(start-instructor-laptop 開 http://127.0.0.1:&lt;埠&gt;/instructor.html),只有這種頁面
+    /// 需要跨來源讀船上的發行版狀態。**完全相符、區分大小寫**:瀏覽器送出的 Origin 一律是小寫的 scheme 與主機、沒有路徑與結尾斜線;
+    /// 其他寫法(HTTP://、LOCALHOST、結尾斜線、https、null、[::1]、127.0.0.2、127.0.0.1.evil.example、localhost.evil.example、帶帳號)
+    /// 都不是。不接受 [::1]:simosa-web 只聽 IPv4,啟動腳本開的也是 127.0.0.1,沒有頁面會是這個來源。
+    /// 通過檢查的字串只含固定的字首與數字,原樣放進回應標頭不會帶進換行或其他標頭。
+    /// </summary>
+    public static bool IsLoopbackPageOrigin(string origin)
+    {
+        const string scheme = "http://";
+        if (!origin.StartsWith(scheme, StringComparison.Ordinal)) return false;
+        var rest = origin.AsSpan(scheme.Length);
+        foreach (var host in LoopbackHosts)
+        {
+            if (!rest.StartsWith(host, StringComparison.Ordinal)) continue;
+            var tail = rest[host.Length..];
+            if (tail.Length == 0) return true;
+            if (tail[0] != ':') continue;
+            var port = tail[1..];
+            if (port.Length is < 1 or > 5 || port[0] == '0') return false;
+            foreach (var c in port) if (!char.IsAsciiDigit(c)) return false;
+            return int.Parse(port, System.Globalization.CultureInfo.InvariantCulture) <= 65535;
+        }
+        return false;
+    }
+
+    private static readonly string[] LoopbackHosts = { "127.0.0.1", "localhost" };
 
     /// <summary>1 至 4 段、每段 1 至 9 位數字(例:2026.11.30);與 Tools.Packaging 的 PackageVersion 相同的形式</summary>
     public static bool IsVersion(string? text)

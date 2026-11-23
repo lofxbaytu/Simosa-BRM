@@ -6,7 +6,9 @@
 #   VHF 8767/錄影 8768 埠預檢(第二十四輪),以及 docs/驗收/需求追溯表.md 的數字;
 #   發行版狀態(第三十輪;教官站頁首的「發行版 <版本>」與降版提醒):simosa-web --status-file 與 /_status/release.json(只含白名單欄位、
 #   路徑安全、狀態檔不存在 / 不是 status 的輸出時各欄 null)、write_release_status(開發模式不產生、逾時與失敗不擋住啟動並刪掉舊檔)、
-#   以真實的 simosa-pkg 做出降版後從「安裝版」資料夾啟動教官筆電腳本(狀態檔 → simosa-web → 降版資訊)。
+#   以真實的 simosa-pkg 做出降版後從「安裝版」資料夾啟動教官筆電腳本(狀態檔 → simosa-web → 降版資訊);
+#   船上筆電的版本(第三十一輪;教官筆電的教官站跨來源向船上的 simosa-web 取):/_status/release.json 的 CORS 標頭只給本機迴路位址的頁面
+#   (各種 Origin、只有這個網址有、HEAD)、ports.shipWeb → 教官站網址的 shipWeb 參數(ship_web_url / ship_web_page 與啟動腳本的輸出)。
 # 用法:tools/launch/tests/launch-tests.sh [--only <測試名>] [--list]
 #   所有輸出留在專案內:build/test-tmp/launch/(設定檔、假 PID 檔)、build/logs-test*/(各測試的 log);埠自 LAUNCH_TEST_PORT_BASE(預設 18760)起。
 #   Windows 版(launch-common.ps1、stop-all.ps1)另見 launch-common.tests.ps1(pwsh 7 於 Linux 亦可執行)。
@@ -531,6 +533,243 @@ PY
   return 0
 }
 
+# raw_headers <方法> <路徑> <額外的標頭行…>:以原始 TCP 送請求(標頭行原樣送出:可以送重複的、大小寫不同的、前後有空白的 Origin),
+#   把回應的狀態行與標頭印成「小寫名稱: 值」一行一個(本體不印)。環境變數 RAW_BODY 有值時接在標頭結尾的空行之後一起送出(請求的本體;同一次寫入)
+raw_headers() {
+  python3 -I - "$WEB" "$@" <<'PY'
+import os, socket, sys
+port, method, path, extra = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
+s = socket.create_connection(("127.0.0.1", port), timeout=5)
+s.sendall(("\r\n".join([f"{method} {path} HTTP/1.1", "Host: 127.0.0.1", *extra, "Connection: close", "", ""]) + os.environ.get("RAW_BODY", "")).encode("latin-1"))
+buf = b""
+while True:
+    chunk = s.recv(65536)
+    if not chunk: break
+    buf += chunk
+head = buf.partition(b"\r\n\r\n")[0].decode("latin-1").split("\r\n")
+print(head[0])
+for line in head[1:]:
+    k, _, v = line.partition(":")
+    print(f"{k.strip().lower()}: {v.strip()}")
+PY
+}
+
+# 第三十一輪:教官筆電的教官站(頁面由教官筆電自己的 simosa-web 提供:http://127.0.0.1:<埠>)要跨來源讀「船上筆電」的 /_status/release.json。
+# simosa-web 只在 Origin 是 http://127.0.0.1[:埠] 或 http://localhost[:埠](完全相符)時回 Access-Control-Allow-Origin: <該 Origin> 與 Vary: Origin;
+# 其他 Origin(別的主機、https、null、[::1]、大小寫不同、結尾斜線、看起來像迴路位址的主機名、不合法的埠、重複的 Origin)與沒有 Origin 都不加 CORS 標頭。
+# 只有這個網址有:靜態檔、/_status/ 之下其他路徑(404)、POST / OPTIONS(405)、沒有 --status-file(404)都沒有;HEAD 與 GET 相同。
+test_web_status_cors() {
+  local d="$TMP/statuscors"; rm -rf "$d"; mkdir -p "$d/web"
+  echo '<html>ok</html>' > "$d/web/index.html"
+  local st="$d/release-status.json" h="$d/h.txt" b="$d/b.txt" code o out
+  status_fixture "$st" '"2026.11.30"'
+  start_web "$d/web.log" --root "$d/web" --status-file "$st" || fail "simosa-web 未啟動:$(cat "$d/web.log")" || return 1
+  local url="http://127.0.0.1:$WEB/_status/release.json"
+  # (1) 允許:本機迴路位址的頁面(帶 / 不帶埠);回應原樣帶回該 Origin 與 Vary: Origin,內容與沒有 Origin 時相同
+  for o in "http://127.0.0.1:8080" "http://127.0.0.1" "http://localhost:8080" "http://localhost" "http://127.0.0.1:1" "http://localhost:65535"; do
+    code="$(http_get "$url" "$h" "$b" -H "Origin: $o")"
+    [[ "$code" == 200 ]] || fail "Origin $o 應為 200,實際 $code" || return 1
+    [[ "$(grep -ci '^access-control-allow-origin:' "$h")" == 1 ]] && grep -qi "^access-control-allow-origin: $o"$'\r''$' "$h" || fail "Origin $o 應回 Access-Control-Allow-Origin: $o(只有一個):$(tr -d '\r' < "$h")" || return 1
+    grep -qi $'^vary: Origin\r$' "$h" || fail "Origin $o 應回 Vary: Origin:$(tr -d '\r' < "$h")" || return 1
+    grep -qi '^access-control-allow-credentials\|^access-control-allow-headers\|^access-control-allow-methods' "$h" && { fail "不應有其他 Access-Control-* 標頭(簡單請求、不帶認證):$(tr -d '\r' < "$h")"; return 1; }
+    grep -qi '^cache-control: no-store' "$h" && grep -q '"releaseVersion":"2026.11.30"' "$b" || fail "Origin $o 的回應內容應與同源相同(no-store、版本 2026.11.30)" || return 1
+  done
+  # (2) 不允許:沒有任何 CORS 標頭(瀏覽器會擋下;內容仍是 200,同源 / curl 照舊)
+  for o in "http://192.168.77.21:8080" "http://192.168.77.21" "http://example.com" "https://127.0.0.1:8080" "https://localhost" "null" "http://[::1]:8080" "http://[::1]" \
+           "HTTP://127.0.0.1:8080" "http://LOCALHOST:8080" "http://Localhost" "http://127.0.0.1:8080/" "http://localhost/" "http://127.0.0.1.evil.example" "http://127.0.0.1.evil.example:8080" \
+           "http://localhost.evil.example" "http://localhost.evil.example:8080" "http://evil.example/http://127.0.0.1:8080" "http://127.0.0.1:8080.evil.example" "http://127.0.0.1:8080@evil.example" \
+           "http://user@127.0.0.1:8080" "http://127.0.0.2:8080" "http://127.0.0.10" "http://0.0.0.0:8080" "http://localhost:0" "http://localhost:08080" "http://localhost:65536" "http://localhost:123456" \
+           "http://localhost:" "http://localhost:80a" "http://localhost:-1" "http://127.0.0.1:8080 http://evil.example" "http://127.0.0.1:8080, http://evil.example" "ws://127.0.0.1:8080" "127.0.0.1:8080" "localhost" "*"; do
+    code="$(http_get "$url" "$h" "$b" -H "Origin: $o")"
+    [[ "$code" == 200 ]] || fail "Origin $o:內容仍應為 200,實際 $code" || return 1
+    grep -qi '^access-control-\|^vary:' "$h" && { fail "Origin「$o」不應有 CORS 標頭:$(tr -d '\r' < "$h")"; return 1; }
+    grep -q '"releaseVersion":"2026.11.30"' "$b" || fail "Origin $o:內容不變" || return 1
+  done
+  # (3) 沒有 Origin(同源的頁面、curl、啟動腳本的檢查):照舊,沒有 CORS 標頭
+  code="$(http_get "$url" "$h" "$b")"
+  [[ "$code" == 200 ]] || fail "沒有 Origin 應為 200" || return 1
+  grep -qi '^access-control-\|^vary:' "$h" && { fail "沒有 Origin 時不應有 CORS 標頭:$(tr -d '\r' < "$h")"; return 1; }
+  # (4) 標頭名稱不分大小寫、值的前後空白不計;重複的 Origin(瀏覽器不會送)不猜哪一個:不加
+  for o in "origin: http://127.0.0.1:8080" "ORIGIN:http://127.0.0.1:8080" "Origin:   http://127.0.0.1:8080  "; do
+    out="$(raw_headers GET /_status/release.json "$o")"
+    grep -q '^access-control-allow-origin: http://127.0.0.1:8080$' <<<"$out" && grep -q '^vary: Origin$' <<<"$out" || fail "標頭行「$o」應允許:$out" || return 1
+  done
+  out="$(raw_headers GET /_status/release.json "Origin: http://127.0.0.1:8080" "Origin: http://evil.example")"
+  grep -q '^HTTP/1.1 200' <<<"$out" || fail "重複的 Origin:內容仍應為 200:$out" || return 1
+  grep -qi '^access-control-\|^vary:' <<<"$out" && { fail "重複的 Origin 不應有 CORS 標頭:$out"; return 1; }
+  out="$(raw_headers GET /_status/release.json "Origin: http://127.0.0.1:8080" "Origin: http://127.0.0.1:8080")"
+  grep -qi '^access-control-' <<<"$out" && { fail "重複的 Origin(即使相同)不應有 CORS 標頭:$out"; return 1; }
+  out="$(raw_headers GET /_status/release.json "Origin:")"
+  grep -qi '^access-control-' <<<"$out" && { fail "空的 Origin 不應有 CORS 標頭:$out"; return 1; }
+  out="$(raw_headers GET /_status/release.json "X-Origin: http://127.0.0.1:8080" "Referer: http://127.0.0.1:8080/")"
+  grep -qi '^access-control-' <<<"$out" && { fail "不是 Origin 的標頭不算:$out"; return 1; }
+  # 審查 S-2:名稱以 Origin 開頭的其他標頭(Origin-Agent-Cluster 等)不是 Origin —— 不可以讓真正的 Origin 變成「重複」而不給 CORS 標頭,自己也不算 Origin
+  out="$(raw_headers GET /_status/release.json "Origin: http://127.0.0.1:8080" "Origin-Agent-Cluster: ?1")"
+  grep -q '^access-control-allow-origin: http://127.0.0.1:8080$' <<<"$out" && grep -q '^vary: Origin$' <<<"$out" || fail "Origin 與 Origin-Agent-Cluster 並存時仍應允許:$out" || return 1
+  out="$(raw_headers GET /_status/release.json "Origin-Agent-Cluster: http://127.0.0.1:8080" "Origin: http://localhost:8080" "OriginX: http://127.0.0.1:8080")"
+  grep -q '^access-control-allow-origin: http://localhost:8080$' <<<"$out" || fail "名稱以 Origin 開頭的其他標頭不算 Origin(應允許真正的 Origin):$out" || return 1
+  out="$(raw_headers GET /_status/release.json "Origin-Agent-Cluster: http://127.0.0.1:8080")"
+  grep -qi '^access-control-\|^vary:' <<<"$out" && { fail "只有 Origin-Agent-Cluster(沒有 Origin)不應有 CORS 標頭:$out"; return 1; }
+  # 審查 S-2:只看標頭 —— 空行之後的本體裡的「Origin:」不算(沒有 Origin 標頭的請求不加;有 Origin 標頭的不因為本體而變成「重複」)
+  out="$(RAW_BODY=$'Origin: http://127.0.0.1:8080\r\n\r\n' raw_headers GET /_status/release.json "Content-Length: 33")"
+  grep -q '^HTTP/1.1 200' <<<"$out" || fail "帶本體的 GET 仍應為 200:$out" || return 1
+  grep -qi '^access-control-\|^vary:' <<<"$out" && { fail "本體裡的 Origin 不算(不應有 CORS 標頭):$out"; return 1; }
+  out="$(RAW_BODY=$'Origin: http://evil.example\r\n\r\n' raw_headers GET /_status/release.json "Origin: http://127.0.0.1:8080" "Content-Length: 31")"
+  grep -q '^access-control-allow-origin: http://127.0.0.1:8080$' <<<"$out" || fail "本體裡的 Origin 不影響標頭的 Origin(仍應允許):$out" || return 1
+  # (5) HEAD:與 GET 相同的標頭(含 CORS)、沒有本體
+  out="$(raw_headers HEAD /_status/release.json "Origin: http://localhost:8080")"
+  [[ "$out" == "$(raw_headers GET /_status/release.json "Origin: http://localhost:8080")" ]] || fail "HEAD 的標頭應與 GET 相同:$out" || return 1
+  grep -q '^access-control-allow-origin: http://localhost:8080$' <<<"$out" || fail "HEAD 也應有 CORS 標頭:$out" || return 1
+  # (6) 只有這個網址有:靜態檔(200)、/_status/ 之下其他路徑(404)、查無此檔(404)、POST / OPTIONS(405;簡單請求不需要 preflight)都沒有
+  local req
+  for req in "GET /index.html 200" "GET / 200" "GET /_status/other.json 404" "GET /_STATUS/release.json 404" "GET /_status/ 404" "GET /nope.json 404" \
+             "POST /_status/release.json 405" "OPTIONS /_status/release.json 405" "OPTIONS /index.html 405"; do
+    set -- $req
+    out="$(raw_headers "$1" "$2" "Origin: http://127.0.0.1:8080" "Access-Control-Request-Method: GET")"
+    grep -q "^HTTP/1.1 $3 " <<<"$out" || fail "$1 $2 應為 $3:$out" || return 1
+    grep -qi '^access-control-\|^vary:' <<<"$out" && { fail "$1 $2 不應有 CORS 標頭:$out"; return 1; }
+  done
+  # (7) log:允許的 Origin 記下來(形式固定);不允許的只記「不是本機迴路位址的頁面」,不記內容
+  code="$(http_get "$url" "$h" "$b" -H "Origin: http://SECRET-ORIGIN.example")"
+  grep -q "200 GET /_status/release.json HTTP/1.1(跨來源 http://127.0.0.1:8080)" "$d/web.log" || fail "log 應記下允許的 Origin:$(tail -3 "$d/web.log")" || return 1
+  grep -q "跨來源的 Origin 不是本機迴路位址的頁面,不加 CORS 標頭" "$d/web.log" || fail "log 應記下不允許的跨來源請求" || return 1
+  grep -q "SECRET-ORIGIN\|evil.example" "$d/web.log" && { fail "log 不得記下不允許的 Origin 內容"; return 1; }
+  grep -q "內部錯誤" "$d/web.log" && { fail "不應有未預期的內部錯誤:$(grep "內部錯誤" "$d/web.log" | head -3)"; return 1; }
+  # (8) 狀態檔不存在(船上是開發模式、status 逾時):「沒有發行版狀態」也照樣帶 CORS 標頭 —— 教官筆電讀得到各欄 null(不顯示),瀏覽器不記錯誤
+  rm -f "$st"
+  code="$(http_get "$url" "$h" "$b" -H "Origin: http://127.0.0.1:8080")"
+  [[ "$code" == 200 ]] && grep -q '"releaseVersion":null' "$b" && grep -qi $'^access-control-allow-origin: http://127.0.0.1:8080\r$' "$h" || fail "狀態檔不存在時也應帶 CORS 標頭(200、各欄 null):$(tr -d '\r' < "$h")" || return 1
+  kill -INT "$WEB_PID"; local wcode=0; wait "$WEB_PID" || wcode=$?
+  [[ $wcode == 0 ]] || fail "simosa-web 應正常結束(結束碼 $wcode)" || return 1
+  # (9) 沒有 --status-file(這個伺服器不提供發行版狀態):404,沒有 CORS 標頭
+  start_web "$d/web2.log" --root "$d/web" || fail "simosa-web(沒有 --status-file)未啟動" || return 1
+  out="$(raw_headers GET /_status/release.json "Origin: http://127.0.0.1:8080")"
+  grep -q '^HTTP/1.1 404 ' <<<"$out" || fail "沒有 --status-file 應為 404:$out" || return 1
+  grep -qi '^access-control-\|^vary:' <<<"$out" && { fail "404 不應有 CORS 標頭:$out"; return 1; }
+  kill -INT "$WEB_PID"; wait "$WEB_PID" 2>/dev/null
+  # --help 說明跨來源的規則
+  local dll; dll="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll web-server StaticWeb simosa-web.dll '$ROOT'")"
+  dotnet "$dll" --help | grep -q "http://127.0.0.1\[:埠\] 或 http://localhost\[:埠\]" || fail "--help 應說明哪些來源讀得到 /_status/release.json" || return 1
+  return 0
+}
+
+# 第三十一輪:船上筆電的網頁位址。ship_web_url / ship_web_page(launch-common.sh)的規則,與教官筆電腳本的輸出:
+# 沒設 ports.shipWeb → 教官站網址不加參數(網頁由 ws 的主機推得 http://<船上 IP>:8080),提示寫 8080;設了 → 只有教官站頁面加上 shipWeb=http://<船上 IP>:<埠>;
+# 不是埠的值 → 警告並略過。standalone(核心在本機)不取船上的版本:ship_web_url 不印任何東西
+test_instructor_ship_web() {
+  local out
+  # 各組以空白分詞成 <standalone> <IP> <埠>;'false  8081' 分詞後只有兩個值(IP = 8081、沒有埠)
+  out="$(bash -c "source '$LAUNCH/launch-common.sh'
+    for a in 'false 192.168.77.11 8081' 'true 192.168.77.11 8081' '1 192.168.77.11 8081' 'false 192.168.77.11 ' 'false 192.168.77.11 abc' 'false 192.168.77.11 0' \
+             'false 192.168.77.11 65535' 'false 192.168.77.11 65536' 'false 192.168.77.11 08081' 'false  8081' 'false 192.168.77.11 80;x'; do
+      set -- \$a; echo \"[\$a]=[\$(ship_web_url \"\$1\" \"\${2:-}\" \"\${3:-}\")]\"; done" 2>&1)" || fail "ship_web_url 出錯:$out" || return 1
+  local want='[false 192.168.77.11 8081]=[http://192.168.77.11:8081]
+[true 192.168.77.11 8081]=[]
+[1 192.168.77.11 8081]=[]
+[false 192.168.77.11 ]=[]
+[false 192.168.77.11 abc]=[]
+[false 192.168.77.11 0]=[]
+[false 192.168.77.11 65535]=[http://192.168.77.11:65535]
+[false 192.168.77.11 65536]=[]
+[false 192.168.77.11 08081]=[]
+[false  8081]=[]
+[false 192.168.77.11 80;x]=[]'
+  [[ "$out" == "$want" ]] || fail "ship_web_url 的輸出不符:$out" || return 1
+  out="$(bash -c "source '$LAUNCH/launch-common.sh'; ship_web_url false '' 8081; echo \"[\$(ship_web_url false '' 8081)]\"")"
+  [[ "$out" == "[]" ]] || fail "沒有船上 IP 時不應印出位址:$out" || return 1
+  out="$(bash -c "source '$LAUNCH/launch-common.sh'
+    for p in 'instructor.html?ws=ws://192.168.77.11:8765' 'instructor.html' 'instructor.html?mode=simple&shipWeb=http://x:1' 'instructor.html?shipWeb=0&ws=ws://a:1' \
+             'radar.html?radar=x&ws=ws://192.168.77.11:8766' 'report.html' 'xinstructor.html?a=1' 'instructor.htmlx' 'index.html?next=instructor.html' \
+             'instructor.html?ws=ws://192.168.77.11:8765#frag' 'instructor.html#frag' 'instructor.html?a=1#x&shipWeb=1' 'instructor.html?shipWeb=0#f' 'radar.html#instructor.html' 'instructor.html?xshipWeb=1'; do
+      echo \"\$(ship_web_page \"\$p\" http://192.168.77.11:8081)|\$(ship_web_page \"\$p\" '')\"; done" 2>&1)" || fail "ship_web_page 出錯:$out" || return 1
+  want='instructor.html?ws=ws://192.168.77.11:8765&shipWeb=http://192.168.77.11:8081|instructor.html?ws=ws://192.168.77.11:8765
+instructor.html?shipWeb=http://192.168.77.11:8081|instructor.html
+instructor.html?mode=simple&shipWeb=http://x:1|instructor.html?mode=simple&shipWeb=http://x:1
+instructor.html?shipWeb=0&ws=ws://a:1|instructor.html?shipWeb=0&ws=ws://a:1
+radar.html?radar=x&ws=ws://192.168.77.11:8766|radar.html?radar=x&ws=ws://192.168.77.11:8766
+report.html|report.html
+xinstructor.html?a=1|xinstructor.html?a=1
+instructor.htmlx|instructor.htmlx
+index.html?next=instructor.html|index.html?next=instructor.html
+instructor.html?ws=ws://192.168.77.11:8765&shipWeb=http://192.168.77.11:8081#frag|instructor.html?ws=ws://192.168.77.11:8765#frag
+instructor.html?shipWeb=http://192.168.77.11:8081#frag|instructor.html#frag
+instructor.html?a=1&shipWeb=http://192.168.77.11:8081#x&shipWeb=1|instructor.html?a=1#x&shipWeb=1
+instructor.html?shipWeb=0#f|instructor.html?shipWeb=0#f
+radar.html#instructor.html|radar.html#instructor.html
+instructor.html?xshipWeb=1&shipWeb=http://192.168.77.11:8081|instructor.html?xshipWeb=1'
+  # 第 10–14 列(審查 S-4):頁面帶 # 片段時參數加在片段之前(加在後面會落在片段裡,網頁讀不到);片段裡的 shipWeb= 不算已經寫了。
+  # 最後一列:名稱只是以 shipWeb 結尾的其他參數(xshipWeb=)不算已經寫了
+  [[ "$out" == "$want" ]] || fail "ship_web_page 的輸出不符:$out" || return 1
+  # 啟動腳本(直連模式;船上 IP 用 127.0.0.2,沒有船上筆電也照常啟動)
+  local cfg; cfg="$(instructor_cfg instructor-shipweb0.json 'web.enabled=true' 'web.bind="127.0.0.1"')"
+  run_launch "$TMP/shipweb0.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg" --ship 127.0.0.2
+  "$LAUNCH/stop-all.sh" --logs "$LOGS" >/dev/null 2>&1
+  [[ $CODE == 0 ]] || fail "教官筆電腳本結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "^  http://127.0.0.1:$WEB/instructor.html?ws=ws://127.0.0.2:$WS\$" <<<"$OUT" || fail "沒設 ports.shipWeb 時教官站網址不變(沒有 shipWeb 參數);輸出:$OUT" || return 1
+  grep -q "shipWeb=" <<<"$OUT" && { fail "沒設 ports.shipWeb 時不應出現 shipWeb=;輸出:$OUT"; return 1; }
+  grep -q "船上筆電的版本:教官站連上船上的核心後,頁首向 http://127.0.0.2:8080/_status/release.json 取" <<<"$OUT" || fail "應提示船上版本的來源(預設埠 8080);輸出:$OUT" || return 1
+  python3 -I -c 'import json,sys; assert json.load(open(sys.argv[1],encoding="utf-8"))["ports"]["shipWeb"] is None' "$ROOT/config/instructor-laptop.json" || fail "config/instructor-laptop.json 的 ports.shipWeb 預設應為 null" || return 1
+  grep -q "shipWeb 是「船上筆電」的網頁埠" "$ROOT/config/instructor-laptop.json" || fail "config 的註解應說明 ports.shipWeb" || return 1
+  cfg="$(instructor_cfg instructor-shipweb1.json 'web.enabled=true' 'web.bind="127.0.0.1"' 'ports.shipWeb=18081')"
+  run_launch "$TMP/shipweb1.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg" --ship 127.0.0.2
+  "$LAUNCH/stop-all.sh" --logs "$LOGS" >/dev/null 2>&1
+  [[ $CODE == 0 ]] || fail "教官筆電腳本(ports.shipWeb)結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "^  http://127.0.0.1:$WEB/instructor.html?ws=ws://127.0.0.2:$WS&shipWeb=http://127.0.0.2:18081\$" <<<"$OUT" || fail "設了 ports.shipWeb 時教官站網址應加上 shipWeb=http://<船上 IP>:<埠>;輸出:$OUT" || return 1
+  [[ "$(grep -c "shipWeb=" <<<"$OUT")" == 1 ]] || fail "只有教官站頁面加 shipWeb(雷達、ECDIS、講評頁不加);輸出:$OUT" || return 1
+  grep -q "頁首向 http://127.0.0.2:18081/_status/release.json 取" <<<"$OUT" || fail "提示應寫設定的埠;輸出:$OUT" || return 1
+  cfg="$(instructor_cfg instructor-shipweb2.json 'web.enabled=true' 'web.bind="127.0.0.1"' 'ports.shipWeb="abc"')"
+  run_launch "$TMP/shipweb2.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg" --ship 127.0.0.2
+  "$LAUNCH/stop-all.sh" --logs "$LOGS" >/dev/null 2>&1
+  [[ $CODE == 0 ]] && grep -q "ports.shipWeb(abc)不是 1–65535 的埠,略過" <<<"$OUT" || fail "ports.shipWeb 不是埠時應警告、照常啟動(結束碼 $CODE);輸出:$OUT" || return 1
+  grep -q "shipWeb=" <<<"$OUT" && { fail "ports.shipWeb 不是埠時不應加參數;輸出:$OUT"; return 1; }
+  # 不是整數的 JSON 值(審查 S-5;與 start-instructor-laptop.ps1 的 Get-LaunchShipWebPort 相同):8081.0、陣列、物件、true 都不是埠;
+  #   ship_web_port_cfg 印出設定值的文字(陣列或物件 →「陣列或物件」),ship_web_url 不給位址;沒有這個鍵、null、"" = 沒設
+  local v
+  for v in '8081|[8081] [http://127.0.0.2:8081]' '"8081"|[8081] [http://127.0.0.2:8081]' '8081.0|[8081.0] []' '[8081]|[陣列或物件] []' '[]|[陣列或物件] []' '{"port":8081}|[陣列或物件] []' \
+           'true|[true] []' '0|[0] []' '65536|[65536] []' '-1|[-1] []' '" 8081"|[ 8081] []' 'null|[] []' '""|[] []'; do
+    cfg="$(instructor_cfg instructor-shipweb3.json "ports.shipWeb=${v%%|*}")"
+    out="$(bash -c "source '$LAUNCH/launch-common.sh'; load_config '$cfg'; p=\"\$(ship_web_port_cfg)\"; echo \"[\$p] [\$(ship_web_url false 127.0.0.2 \"\$p\")]\"" 2>&1)"
+    [[ "$out" == "${v#*|}" ]] || fail "ports.shipWeb = ${v%%|*}:ship_web_port_cfg / ship_web_url 應為「${v#*|}」,實際「$out」" || return 1
+  done
+  python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1],encoding="utf-8")); del c["ports"]["shipWeb"]; json.dump(c,open(sys.argv[1],"w",encoding="utf-8"))' "$cfg"
+  out="$(bash -c "source '$LAUNCH/launch-common.sh'; load_config '$cfg'; echo \"[\$(ship_web_port_cfg)]\"" 2>&1)"
+  [[ "$out" == "[]" ]] || fail "沒有 ports.shipWeb 這個鍵(舊的設定檔)= 沒設,實際「$out」" || return 1
+  cfg="$(instructor_cfg instructor-shipweb3.json 'web.enabled=true' 'web.bind="127.0.0.1"' 'ports.shipWeb=[8081]')"
+  run_launch "$TMP/shipweb3.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg" --ship 127.0.0.2
+  "$LAUNCH/stop-all.sh" --logs "$LOGS" >/dev/null 2>&1
+  [[ $CODE == 0 ]] && grep -q "ports.shipWeb(陣列或物件)不是 1–65535 的埠,略過" <<<"$OUT" || fail "ports.shipWeb = [8081] 應警告「(陣列或物件)不是 1–65535 的埠」並照常啟動(結束碼 $CODE);輸出:$OUT" || return 1
+  grep -q "shipWeb=" <<<"$OUT" && { fail "ports.shipWeb = [8081] 不應加參數;輸出:$OUT"; return 1; }
+  grep -q "頁首向 http://127.0.0.2:8080/_status/release.json 取" <<<"$OUT" || fail "ports.shipWeb = [8081] 時提示應寫預設的 8080;輸出:$OUT" || return 1
+  # 頁面帶 # 片段(審查 S-4):啟動腳本印出的網址把 shipWeb 放在片段之前
+  cfg="$(instructor_cfg instructor-shipweb4.json 'web.enabled=true' 'web.bind="127.0.0.1"' 'ports.shipWeb=18081' 'web.openPages=["instructor.html?ws=ws://{ship}:{stateWs}#frag","instructor.html#top","report.html#instructor.html"]')"
+  run_launch "$TMP/shipweb4.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg" --ship 127.0.0.2
+  "$LAUNCH/stop-all.sh" --logs "$LOGS" >/dev/null 2>&1
+  [[ $CODE == 0 ]] || fail "教官筆電腳本(openPages 帶片段)結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "^  http://127.0.0.1:$WEB/instructor.html?ws=ws://127.0.0.2:$WS&shipWeb=http://127.0.0.2:18081#frag\$" <<<"$OUT" && grep -q "^  http://127.0.0.1:$WEB/instructor.html?shipWeb=http://127.0.0.2:18081#top\$" <<<"$OUT" \
+    && grep -q "^  http://127.0.0.1:$WEB/report.html#instructor.html\$" <<<"$OUT" || fail "頁面帶 # 片段時 shipWeb 應加在片段之前(其他頁面不加);輸出:$OUT" || return 1
+  # standalone(核心在本機,沒有另一台電腦;審查 S-1:實際啟動,不只比對原始碼):即使設了 ports.shipWeb 也不加參數、不提示船上版本的來源
+  cfg="$(instructor_cfg instructor-shipweb5.json 'web.enabled=true' 'web.bind="127.0.0.1"' 'ports.shipWeb=18081')"
+  local via
+  for via in flag config; do
+    if [[ $via == flag ]]; then run_launch "$TMP/shipweb5.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg" --standalone
+    else cfg="$(instructor_cfg instructor-shipweb6.json 'web.enabled=true' 'web.bind="127.0.0.1"' 'ports.shipWeb=18081' 'standalone.enabled=true')"; run_launch "$TMP/shipweb6.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg"; fi
+    "$LAUNCH/stop-all.sh" --logs "$LOGS" >/dev/null 2>&1
+    [[ $CODE == 0 ]] || fail "教官筆電腳本(standalone:$via)結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+    grep -q "^  http://127.0.0.1:$WEB/instructor.html?ws=ws://127.0.0.1:$WS\$" <<<"$OUT" || fail "standalone($via)的教官站網址應指向本機核心、沒有 shipWeb 參數;輸出:$OUT" || return 1
+    grep -q "shipWeb=\|船上筆電的版本" <<<"$OUT" && { fail "standalone($via)不應加 shipWeb 參數、不應提示船上版本的來源;輸出:$OUT"; return 1; }
+    grep -q "SimCore.Host 未開啟" <<<"$OUT" && { fail "standalone($via)的本機核心應已啟動;輸出:$OUT"; return 1; }
+  done
+  # --help 只印檔頭的註解(審查 S-3:原本多印一行程式碼 source …)
+  out="$(bash "$LAUNCH/start-instructor-laptop.sh" --help)"
+  grep -q "^#   --check-wifi:" <<<"$(tail -n 1 <<<"$out")" && ! grep -qv '^#' <<<"$out" || fail "--help 應只印檔頭的註解(最後一行是 --check-wifi 的說明):$(tail -n 2 <<<"$out")" || return 1
+  grep -q "ports.shipWeb" <<<"$out" || fail "--help 應說明 ports.shipWeb" || return 1
+  # Windows 版的同一套規則(實際啟動在 launch-common.tests.ps1)
+  grep -q 'SHIP_WEB_URL="$(ship_web_url "$STANDALONE" "$SHIP_IP" "$SHIP_WEB_PORT")"' "$LAUNCH/start-instructor-laptop.sh" || fail "start-instructor-laptop.sh 應以 ship_web_url 決定船上網頁位址(standalone 不取)" || return 1
+  grep -q 'Get-LaunchShipWebUrl (\[bool\]$standalone) $shipIp $shipWebPort' "$LAUNCH/start-instructor-laptop.ps1" && grep -q 'Add-LaunchShipWebParam (\[string\]$_) $shipWebUrl' "$LAUNCH/start-instructor-laptop.ps1" \
+    || fail "start-instructor-laptop.ps1 應以 Get-LaunchShipWebUrl / Add-LaunchShipWebParam 處理教官站網址" || return 1
+  return 0
+}
+
 # write_release_status(launch-common.sh):開發模式(沒有 manifest.json)不產生、不警告、不建置;安裝版以 simosa-pkg status --json 寫出狀態檔並記 launch.log;
 # 逾時、結束碼非 0、輸出不是 JSON 都只警告、回傳 0(不擋住啟動),而且刪掉上一次的狀態檔(不顯示過期的版本)
 test_release_status_write() {
@@ -677,7 +916,7 @@ PY
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info test_web_status_file test_release_status_write test_release_status_launch)
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info test_web_status_file test_web_status_cors test_instructor_ship_web test_release_status_write test_release_status_launch)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers

@@ -10,7 +10,10 @@
   NMEA 選項 Get-LaunchNmeaArgs(ports.nmeaTargets/nmeaBind/nmeaFile → --nmea-target/--nmea-bind/--nmea-file;空/null 不加)與
   Assert-LaunchPortsFree 對 VHF 8767 / 錄影 8768 埠名稱的回報(第二十四輪)、
   發行版狀態(第三十輪;教官站頁首的「發行版 <版本>」與降版提醒):Get-LaunchReleaseStatusPath、Find-LaunchReleaseStatusTool(安裝版才有、不建置)、
-  Write-LaunchReleaseStatus(以真實的 simosa-pkg status --json 寫出狀態檔;失敗、逾時、輸出不是 JSON 都不丟例外並刪掉舊檔)與啟動腳本的 -CheckOnly 輸出。
+  Write-LaunchReleaseStatus(以真實的 simosa-pkg status --json 寫出狀態檔;失敗、逾時、輸出不是 JSON 都不丟例外並刪掉舊檔)與啟動腳本的 -CheckOnly 輸出、
+  船上筆電的網頁位址(第三十一輪;教官筆電的教官站向船上取發行版狀態):Get-LaunchShipWebUrl(直連而且有設 ports.shipWeb 才有)、
+  Get-LaunchShipWebPort(只有整數是埠;8081.0、陣列、物件、true 警告並略過)、Add-LaunchShipWebParam(只有教官站頁面加 shipWeb 參數;
+  帶 # 片段時加在片段之前)與 start-instructor-laptop.ps1 的接法(Linux 的 pwsh 另外實際啟動:直連模式與 -Standalone)。
   所有輸出留在 build\test-tmp\launch-ps\。
   用法:pwsh -NoProfile -File tools\launch\tests\launch-common.tests.ps1(tools\launch\tests\launch-tests.sh 為 .sh 版測試;
   容器/開發機沒有 pwsh 時以 tools\run-ps-tests.sh 自 .cache\dotnet-tools 取用 dotnet 全域工具版 PowerShell)
@@ -598,6 +601,141 @@ Invoke-Test '發行版狀態:狀態檔位置、安裝版才取(不建置)、Writ
     finally { Set-Location $savedLocation; foreach ($n in $envNames) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) } }
     Assert-True ($checkOut.Contains('SimCore.Host:')) "-CheckOnly 應列出找到的元件:$checkOut"
     Assert-True ($checkOut.Contains('發行版狀態:略過(開發模式')) "-CheckOnly 在開發模式應印「發行版狀態:略過」:$checkOut"
+}
+
+Invoke-Test '船上筆電的網頁位址:Get-LaunchShipWebUrl 與 Add-LaunchShipWebParam(教官站網址的 shipWeb 參數)' {
+    . (Join-Path $launch 'launch-common.ps1')
+    # 直連模式而且有設船上網頁埠(1–65535)才有位址;standalone(核心在本機)、沒設、不是埠 → 空字串(教官站由 ws 的主機推得 http://<船上 IP>:8080)
+    Assert-True ((Get-LaunchShipWebUrl $false '192.168.77.11' 8081) -eq 'http://192.168.77.11:8081') '直連 + 埠 8081'
+    Assert-True ((Get-LaunchShipWebUrl $false '192.168.77.11' '8081') -eq 'http://192.168.77.11:8081') '埠是字串也可以'
+    Assert-True ((Get-LaunchShipWebUrl $false '192.168.77.11' 65535) -eq 'http://192.168.77.11:65535') '埠 65535'
+    foreach ($bad in @($null, '', 'abc', 0, 65536, '08081', '80;x', -1, 8081.5, [double]8081.0, [decimal]8081.0, $true)) {
+        $r = Get-LaunchShipWebUrl $false '192.168.77.11' $bad
+        Assert-True ($r -eq '') "埠「${bad}」不是 1–65535:應為空字串,實際 $r"
+    }
+    # 審查 S-5:JSON 的 8081.0(pwsh 7 是 Double、Windows PowerShell 5.1 是 Decimal;"$值" 會變成「8081」)、陣列、物件都不是埠 —— 與 launch-common.sh 相同
+    Assert-True ((Get-LaunchShipWebUrl $false '192.168.77.11' @(8081)) -eq '') '埠是陣列 [8081]:應為空字串'
+    Assert-True ((Get-LaunchShipWebUrl $false '192.168.77.11' ([pscustomobject]@{ port = 8081 })) -eq '') '埠是物件:應為空字串'
+    # Get-LaunchShipWebPort:設定檔的 ports.shipWeb → Port(合格的整數,否則 0)與 Invalid(不合格時原值的文字;啟動腳本據此警告)
+    $portCases = [ordered]@{
+        '{"ports":{"shipWeb":8081}}'            = '8081|'
+        '{"ports":{"shipWeb":"8081"}}'          = '8081|'
+        '{"ports":{"shipWeb":65535}}'           = '65535|'
+        '{"ports":{"shipWeb":null}}'            = '0|'
+        '{"ports":{"shipWeb":""}}'              = '0|'
+        '{"ports":{"web":8080}}'                = '0|'
+        '{}'                                    = '0|'
+        '{"ports":{"shipWeb":8081.0}}'          = '0|8081.0'
+        '{"ports":{"shipWeb":[8081]}}'          = '0|陣列或物件'
+        '{"ports":{"shipWeb":[]}}'              = '0|陣列或物件'
+        '{"ports":{"shipWeb":{"port":8081}}}'   = '0|陣列或物件'
+        '{"ports":{"shipWeb":true}}'            = '0|true'
+        '{"ports":{"shipWeb":"abc"}}'           = '0|abc'
+        '{"ports":{"shipWeb":0}}'               = '0|0'
+        '{"ports":{"shipWeb":65536}}'           = '0|65536'
+        '{"ports":{"shipWeb":-1}}'              = '0|-1'
+        '{"ports":{"shipWeb":" 8081"}}'         = '0| 8081'
+    }
+    foreach ($json in $portCases.Keys) {
+        $r = Get-LaunchShipWebPort ($json | ConvertFrom-Json)
+        Assert-True ("$($r.Port)|$($r.Invalid)" -ceq $portCases[$json]) "Get-LaunchShipWebPort ${json} 應為「$($portCases[$json])」,實際「$($r.Port)|$($r.Invalid)」"
+        Assert-True ((Get-LaunchShipWebUrl $false '192.168.77.11' $r.Port) -eq $(if ($r.Port) { "http://192.168.77.11:$($r.Port)" } else { '' })) "Get-LaunchShipWebUrl 對 ${json} 的 Port"
+    }
+    Assert-True ((Get-LaunchShipWebUrl $true '192.168.77.11' 8081) -eq '') 'standalone 不取船上的版本'
+    Assert-True ((Get-LaunchShipWebUrl $false '' 8081) -eq '') '沒有船上 IP'
+    # 只有教官站頁面、而且還沒有 shipWeb 參數時才加;其他頁面、位址是空的原樣回傳
+    $u = 'http://192.168.77.11:8081'
+    $cases = [ordered]@{
+        'instructor.html?ws=ws://{ship}:{stateWs}'          = 'instructor.html?ws=ws://{ship}:{stateWs}&shipWeb=http://192.168.77.11:8081'
+        'instructor.html'                                    = 'instructor.html?shipWeb=http://192.168.77.11:8081'
+        'instructor.html?mode=simple&shipWeb=http://x:1'     = 'instructor.html?mode=simple&shipWeb=http://x:1'
+        'instructor.html?shipWeb=0&ws=ws://a:1'              = 'instructor.html?shipWeb=0&ws=ws://a:1'
+        'radar.html?radar=x&ws=ws://{ship}:{radarWs}'        = 'radar.html?radar=x&ws=ws://{ship}:{radarWs}'
+        'report.html'                                        = 'report.html'
+        'xinstructor.html?a=1'                               = 'xinstructor.html?a=1'
+        'instructor.htmlx'                                   = 'instructor.htmlx'
+        'index.html?next=instructor.html'                    = 'index.html?next=instructor.html'
+        # 審查 S-4:頁面帶 # 片段時加在片段之前(加在後面會落在片段裡,網頁讀不到);片段裡的 shipWeb= 不算已經寫了
+        'instructor.html?ws=ws://{ship}:{stateWs}#frag'      = 'instructor.html?ws=ws://{ship}:{stateWs}&shipWeb=http://192.168.77.11:8081#frag'
+        'instructor.html#frag'                               = 'instructor.html?shipWeb=http://192.168.77.11:8081#frag'
+        'instructor.html?a=1#x&shipWeb=1'                    = 'instructor.html?a=1&shipWeb=http://192.168.77.11:8081#x&shipWeb=1'
+        'instructor.html?shipWeb=0#f'                        = 'instructor.html?shipWeb=0#f'
+        'radar.html#instructor.html'                         = 'radar.html#instructor.html'
+        # 名稱只是以 shipWeb 結尾的其他參數不算已經寫了
+        'instructor.html?xshipWeb=1'                         = 'instructor.html?xshipWeb=1&shipWeb=http://192.168.77.11:8081'
+    }
+    foreach ($page in $cases.Keys) {
+        $got = Add-LaunchShipWebParam $page $u
+        Assert-True ($got -ceq $cases[$page]) "Add-LaunchShipWebParam「${page}」應為「$($cases[$page])」,實際「${got}」"
+        Assert-True ((Add-LaunchShipWebParam $page '') -ceq $page) "位址是空的時「${page}」應原樣回傳"
+    }
+    # 設定檔範例:ports.shipWeb 預設 null(不必設;註解說明用途)
+    $instr = Read-LaunchConfig (Join-Path $root 'config\instructor-laptop.json')
+    Assert-True ($null -eq (Get-Cfg $instr 'ports.shipWeb')) 'config\instructor-laptop.json 的 ports.shipWeb 預設應為 null'
+    Assert-True ((Get-LaunchShipWebUrl $false '192.168.77.11' (Get-Cfg $instr 'ports.shipWeb')) -eq '') '預設設定不加 shipWeb 參數'
+    $pages = @(@(Get-Cfg $instr 'web.openPages' @()) | ForEach-Object { Add-LaunchShipWebParam ([string]$_) $u })
+    Assert-True (@($pages | Where-Object { $_ -cmatch 'shipWeb=' }).Count -eq 1 -and $pages[0] -ceq 'instructor.html?ws=ws://{ship}:{stateWs}&shipWeb=http://192.168.77.11:8081') "範例設定的 openPages 只有教官站頁面加 shipWeb:$($pages -join '、')"
+    # 啟動腳本的接法:讀 ports.shipWeb、直連模式才處理網址並提示船上版本的來源
+    $ps1 = (Get-Content -Raw -Encoding UTF8 (Join-Path $launch 'start-instructor-laptop.ps1')) -replace "`r`n", "`n"
+    Assert-True ($ps1.Contains('$shipWebCfg = Get-LaunchShipWebPort $cfg') -and $ps1.Contains('$shipWebPort = $shipWebCfg.Port')) 'start-instructor-laptop.ps1 應以 Get-LaunchShipWebPort 讀 ports.shipWeb'
+    $iUrl = $ps1.IndexOf('$shipWebUrl = Get-LaunchShipWebUrl ([bool]$standalone) $shipIp $shipWebPort')
+    $iAdd = $ps1.IndexOf('Add-LaunchShipWebParam ([string]$_) $shipWebUrl')
+    $iOpen = $ps1.IndexOf('Open-LaunchPages "http://127.0.0.1:$webPort" $pages')
+    Assert-True ($iUrl -gt 0 -and $iAdd -gt $iUrl -and $iOpen -gt $iAdd) 'start-instructor-laptop.ps1 應先算船上網頁位址、加到教官站頁面,再開啟網頁'
+    Assert-True ($ps1.Contains('/_status/release.json 取船上筆電的發行版本與降版提醒')) 'start-instructor-laptop.ps1 應提示船上版本的來源'
+    # 審查 S-1:警告、加參數、提示都在 if (-not $standalone) { … } 區塊內(standalone 沒有另一台電腦:不加參數、不提示)
+    $m = [regex]::Match($ps1, '(?s)\$shipWebUrl = Get-LaunchShipWebUrl[^\n]*\n {12}if \(-not \$standalone\) \{\n(.*?)\n {12}\}\n {12}if \(\$NoBrowser\)')
+    Assert-True $m.Success 'start-instructor-laptop.ps1:算出船上網頁位址之後應緊接 if (-not $standalone) { … } 區塊,再開啟網頁'
+    foreach ($inside in @('Write-Warning "設定檔的 ports.shipWeb(', 'Add-LaunchShipWebParam ([string]$_) $shipWebUrl', 'Write-Host "  船上筆電的版本:')) {
+        Assert-True ($m.Groups[1].Value.Contains($inside)) "start-instructor-laptop.ps1:「${inside}」應在 if (-not `$standalone) 區塊內"
+        Assert-True (([regex]::Matches($ps1, [regex]::Escape($inside))).Count -eq 1) "start-instructor-laptop.ps1:「${inside}」應只出現一次(不在區塊外)"
+    }
+}
+
+# 審查 S-1:實際啟動 start-instructor-laptop.ps1(-NoBrowser -NoWait),不只比對原始碼。只在 Linux / macOS 的 pwsh 執行:Windows 上直連模式會動到
+# 真的網路介面檢查(Get-NetAdapter、Set-DirectLinkIp),Windows 的實際啟動由 tools\ci\windows-e2e.ps1 的 instructor 階段(-Standalone)涵蓋。
+# 直連模式(船上 IP 用 127.0.0.2,沒有船上筆電也照常啟動)以空的 Get-NetAdapter 取代 Windows 專用的 cmdlet。
+Invoke-Test '船上筆電的網頁位址:實際啟動 start-instructor-laptop.ps1(直連:加 shipWeb 與提示;不是埠:警告;-Standalone:不加、不提示)' {
+    if ($IsWindows) { Write-Host '    (Windows:略過實際啟動;見 tools\ci\windows-e2e.ps1)'; return }
+    . (Join-Path $launch 'launch-common.ps1')
+    function Get-NetAdapter { }
+    $logs = 'build/test-tmp/launch-ps/logs8'
+    $web = $PortBase + 14
+    $envNames = @('SIMOSA_BRM_ROOT', 'SIMOSA_INSTALL_ROOT', 'DOTNET_CLI_TELEMETRY_OPTOUT', 'DOTNET_NOLOGO', 'DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH', 'NUGET_PLUGINS_CACHE_PATH', 'NUGET_SCRATCH', 'TEMP', 'TMP')
+    # 以範例設定檔為底(改埠與 log 位置);回傳啟動腳本的全部輸出(含警告),結束時 stop-all 並還原目前目錄與環境變數
+    function Invoke-Instructor([string]$Name, $ShipWeb, [hashtable]$Params) {
+        $c = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'config\instructor-laptop.json') | ConvertFrom-Json
+        $c.ports.stateWs = $PortBase + 12; $c.ports.radarWs = $PortBase + 13; $c.ports.web = $web; $c.ports.sync = $PortBase + 15
+        $c.ports.shipWeb = $ShipWeb
+        $c.network.adapterName = ''
+        $c.logs = $logs
+        $file = Join-Path $tmp "instructor-$Name.json"
+        Set-Content -Path $file -Value ($c | ConvertTo-Json -Depth 8) -Encoding UTF8
+        $savedEnv = @{}; foreach ($n in $envNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n) }
+        $savedLocation = Get-Location
+        try { return (& (Join-Path $launch 'start-instructor-laptop.ps1') -Config $file -NoBrowser -NoWait @Params 3>&1 6>&1 | Out-String) }
+        finally {
+            & (Join-Path $launch 'stop-all.ps1') -Logs $logs -KeepBrowser *>&1 | Out-Null
+            Set-Location $savedLocation; foreach ($n in $envNames) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) }
+        }
+    }
+    $hint = '船上筆電的版本:教官站連上船上的核心後,頁首向 '
+    # 直連模式 + ports.shipWeb:只有教官站頁面加 shipWeb(-NoBrowser 印出的是代換 {ship} 之前的頁面),提示寫設定的埠
+    $out = Invoke-Instructor 'shipweb-direct' 18081 @{ Ship = '127.0.0.2' }
+    Assert-True ($out.Contains("http://127.0.0.1:$web/instructor.html?ws=ws://{ship}:{stateWs}&shipWeb=http://127.0.0.2:18081")) "直連模式設了 ports.shipWeb:教官站網址應加 shipWeb=http://<船上 IP>:<埠>:$out"
+    Assert-True (([regex]::Matches($out, 'shipWeb=')).Count -eq 1) "只有教官站頁面加 shipWeb(雷達、ECDIS、講評頁不加):$out"
+    Assert-True ($out.Contains("${hint}http://127.0.0.2:18081/_status/release.json 取")) "直連模式應提示船上版本的來源(設定的埠):$out"
+    Assert-True (-not $out.Contains('不是 1–65535 的埠')) "合格的埠不應警告:$out"
+    # 直連模式 + 不是埠的值(陣列):警告、不加參數、提示寫預設的 8080
+    $out = Invoke-Instructor 'shipweb-array' @(8081) @{ Ship = '127.0.0.2' }
+    Assert-True ($out.Contains('設定檔的 ports.shipWeb(陣列或物件)不是 1–65535 的埠,略過')) "ports.shipWeb = [8081] 應警告:$out"
+    Assert-True (-not $out.Contains('shipWeb=')) "ports.shipWeb = [8081] 不應加參數:$out"
+    Assert-True ($out.Contains("${hint}http://127.0.0.2:8080/_status/release.json 取")) "ports.shipWeb 不是埠時提示應寫預設的 8080:$out"
+    # -Standalone(核心在本機,沒有另一台電腦):即使設了 ports.shipWeb 也不加參數、不提示
+    $out = Invoke-Instructor 'shipweb-standalone' 18081 @{ Standalone = $true }
+    Assert-True ($out.Contains("http://127.0.0.1:$web/instructor.html?ws=ws://{ship}:{stateWs}")) "-Standalone 應照常印出教官站頁面:$out"
+    Assert-True (-not $out.Contains('shipWeb=') -and -not $out.Contains('船上筆電的版本')) "-Standalone 不應加 shipWeb 參數、不應提示船上版本的來源:$out"
+    Assert-True (-not $out.Contains('SimCore.Host 未開啟')) "-Standalone 的本機核心應已啟動:$out"
 }
 
 Write-Host "通過 $pass,失敗 $fail$(if ($failed) { '(' + ($failed -join '、') + ')' })"

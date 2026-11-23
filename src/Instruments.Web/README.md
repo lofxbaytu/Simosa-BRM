@@ -45,6 +45,7 @@ pnpm typecheck        # 只做 tsc --noEmit
 | `demo=1` | 啟動即進入示範模式(不連線) | `?demo=1` |
 | `ship` | 示範模式的船(`FSB1` / `FSB2`;即時模式由狀態訊息的 `shipId` 決定) | `?demo=1&ship=FSB2` |
 | `theme` | `day` / `dusk` / `night`(未指定時沿用上次選擇,預設 dusk;兩頁共用同一個 localStorage 鍵) | `?theme=night` |
+| `shipWeb` | **只有教官站**:船上筆電 `simosa-web` 的位址(頁首由它取船上筆電的發行版狀態;見下「發行版本與降版提醒」)。沒給時由 `ws` 的主機推得 `http://<主機>:8080`;只寫埠號(`8081` / `:8081`)= `ws` 的主機配這個埠;`0` / `off` = 不取。頁面與核心在同一台電腦(`ws` 是 localhost / 127.0.0.1)時不取 | `?ws=ws://192.168.77.11:8765&shipWeb=http://192.168.77.11:8081`、`…&shipWeb=8081` |
 
 例:`http://localhost:5173/?demo=1&ship=FSB2&theme=day`、`http://localhost:5173/instructor.html?ws=ws://192.168.10.2:8765`。
 
@@ -132,8 +133,13 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
   - 取不到(開發模式沒有狀態檔:`simosa-web` 回 200 與各欄 `null` — 不回 404,否則瀏覽器每次載入都記一筆 console error;不帶 `--status-file` 的伺服器是 404;Vite 開發伺服器回 HTML;格式不符;逾時 5 s)→ 什麼都不顯示,不報錯。
   - 正常 → 頁首右側小字「發行版 2026.11.30」(不是按鈕;title 寫明這是提供本頁面的電腦的發行版與取得時間)。發行版是**安裝程式的版本**,套用軟體更新包不會改它:套用過比發行版新的軟體更新包(沒有降版;實際執行的是更新包的程式)時改寫「**軟體更新 2026.12.2**」(title 寫「套用在發行版 2026.12.1 之上」)— 頁首寫的是實際執行的那一版。不把兩個版本並排:寬約 125 px 的差別會讓簡化模式簡報頁 1366×768 的頁首多折一行、把同儕評估提示擠出簡報框(端對端實測);「軟體更新 <版次>」只比「發行版 <版本>」寬一個字。
   - 降版(`releaseDowngrade`:套用更新包之後以較舊的安裝程式重新安裝過)→ 橙色徽章鈕「發行版 2026.11.1 · 降版提醒」,一直在頁首、不擋操作;按一下在頁首下方**浮貼**展開說明(不佔版面高度):目前執行的是較舊的發行版、比它新的各項(先前安裝的發行版 / 曾套用的軟體更新包 / 被安裝覆蓋的軟體更新包最高版本)、`simosa-pkg status` 顯示的軟體版次不是實際執行的程式、建議的處理、status 的完整訊息與資料來源;「收合」、再按一次徽章、Esc 或點說明以外的地方收起(那一下點按照常作用在被點的控制項上)。
-  - **顯示的是提供這個頁面的電腦的發行版**:船上筆電開的簡化教官站是船上筆電的;教官筆電以 `start-instructor-laptop` 開的教官站是教官筆電的(頁面由教官筆電自己的 `simosa-web` 提供,只有 `?ws=` 指向船上)。
-  - 只有教官站的進入點 `instructor-main.ts` 會發這個請求(`src/lib/release-status-enable.ts`,排在 `instructor-app` 之前匯入);`releaseStatusProvider` 預設不發請求,單元測試掛上 `<brm-instructor-app>` 時不會真的連線。
+  - **同源取到的是提供這個頁面的電腦(本機)的發行版**:船上筆電開的簡化教官站是船上筆電的;教官筆電以 `start-instructor-laptop` 開的教官站是教官筆電的(頁面由教官筆電自己的 `simosa-web` 提供,只有 `?ws=` 指向船上)。
+  - **船上筆電的版本**(第三十一輪):頁面由本機迴路位址提供(`http://127.0.0.1:<埠>` / `http://localhost:<埠>`)而核心在另一台電腦時,教官站連上核心後(`<brm-instructor-app>` 把 `shipWebUrl` 與 `shipLinked` 交給元件)另外**跨來源**取 `<船上網頁位址>/_status/release.json`(`shipWebBaseUrl`:`?shipWeb=` 優先,否則 `http://<ws 主機>:8080`;船上的 `simosa-web` 只對本機迴路位址的頁面回 CORS 標頭;簡單請求,沒有 preflight)。取到時頁首的主要資訊改成船上筆電實際執行的版本:
+    兩台同一版 → 小字「船上 2026.12.2」(本機的在 title);要提醒 → 警示徽章「船上 <版本> · <標記>」,標記取 `兩台降版` > `船上降版` > `本機降版` > `版本不同`(兩台各取「軟體更新包版次,否則發行版」比較),展開的說明依序寫船上筆電、這台電腦(本機)、版本不同(哪一台較舊;更新較舊的那一台 — 較舊的那一台有降版提醒時改成「依上面降版提醒的處理」)。各台 status 的完整訊息預設收合(`<details>`);最後一列(來源與「收合」)貼在說明的底邊。
+    **展開的說明不蓋住執行控制**:`<brm-instructor-app>` 把執行控制第一個鈕(「凍結」)的上緣交給元件的 `detailLimit`(回傳視窗座標 y 的函式;簡化模式沒有執行控制 → `null`),元件在展開與視窗大小改變時把說明的最大高度縮到底邊在它之上 `DETAIL_LIMIT_GAP_PX`(4 px;不小於 120 px、不大於 320 px 與視窗高度的 60%),放不下的內容在說明裡捲動。
+    取不到(船上是舊版、連不上、逾時、格式不符)時畫面與只有本機時相同、不顯示錯誤,title 寫「船上筆電的版本:未取得」;連上後約 4、19、49、109、169 秒重試(`SHIP_RETRY_DELAYS_MS`;船上的啟動腳本在核心就緒後最慢約 36 秒才啟動網頁伺服),每次重新連上核心重取;較早的請求晚回來一律丟棄。船上連得到、但沒有發行版狀態(各欄 `null`:`SHIP_NO_STATUS`)時不重試,title 寫「船上筆電沒有發行版狀態」。頁面與核心在同一台電腦(`ws` 的主機是本機迴路位址:開發模式、standalone、船上筆電自己開的)或頁面不是本機迴路位址提供的,不發這個請求。
+    class 名稱用 `onboard`(不用 `ship`:頁首的船名是 `header .ship`,端對端的選擇器會穿過 shadow root)。
+  - 只有教官站的進入點 `instructor-main.ts` 會發這兩種請求(`src/lib/release-status-enable.ts`,排在 `instructor-app` 之前匯入);`releaseStatusProvider`(`load` 本機、`loadShip` 船上)預設不發請求,單元測試掛上 `<brm-instructor-app>` 時不會真的連線。
 - **自船摘要**:與儀器頁相同的 conning 條(`<brm-conning-bar>`)。
 - **情境**:建置時以 `import.meta.glob` 匯入 `data/scenarios/*.yaml`(`yaml` 套件解析,`src/lib/scenario.ts`),列出 id、標題、船、裝載、環境摘要、初始狀態、種子與路徑,以及擴充欄位統計「時間表 n 項(手動 m)· 航線 n 航點 · 區域 n · 評估規則 n 條 · 參數引用 n 個 · 目標船 n」(`src/lib/timeline.ts`、`src/lib/assessment.ts` 解析設計文件第 1 節的 `timeline` / `route` / `zones` / `briefing` / `assessment`);`briefing` 物件版顯示角色(扮演者、必要)、最少人數與附件連結(`data/scenarios/<id>/<file>`);`${params:key}` 參數引用在教官站**不解析**,顯示為「參數 key」(核心載入時解析)。按「載入」送 `loadScenario`。示範模式下改以情境的船、初始位置(情境 origin 座標系)/航向/速度、風、流、水深、拖船與泊位重建示範運動學。
 - **情境編輯**(標題列「情境編輯」分頁;`src/components/instructor/scenario-editor.ts`、`src/lib/scenario-editor.ts`;`docs/design/scenario-engine.md` 第 6.1 節):依範本(任一情境的 YAML 原文或空白範本)組出新練習——基本資料與簡報文字、船與裝載、初始位置/航向/速度、環境(風/流/水深/能見度;開始時刻決定日夜)、目標船(新增/刪除/編輯)、時間表故障(故障目錄列舉、時間/手動/自訂條件觸發、`recordOnly`、參數)、評估(硬性失敗開關與規則、容許帶、通過分數);未涵蓋的欄位原樣保留。**海圖點選編輯**(`components/instructor/scenario-editor-plot.ts`;`docs/design/instructor-plot.md` 第 4 節):航線/區域的「在圖上編輯」、船與初始/目標船的「圖上」鈕開啟內嵌航跡圖(以 `data/areas` 示意幾何為底圖,非海圖),點擊新增航點/頂點或設定自船/目標船初始位置、拖曳移動、右鍵刪除、方向鍵微調(Shift ×10)、游標座標讀數(x/y 與經緯度),與表格雙向同步;環境進階的空間流場有「由均勻流產生網格」「由兩端流速線性內插」產生器與「網格預覽」。即時以 `parseScenario` 與編輯器檢查顯示問題清單;「下載 YAML」或「載入核心」(`loadScenario {args: {id, scenario}}` 內嵌,核心拒絕時顯示原因並還原);草稿存本機 localStorage,重新整理後還原。
@@ -386,7 +392,9 @@ src/Instruments.Web/
                               2 小時紀錄的報告與列印版 HTML 與全文解析相同、最近紀錄存 Blob、舊版文字仍可讀、壞檔與讀取失敗)、report-review-fixes(2026-10-17 審查發現:穩定紀錄鍵 startedUtc、
                               一致率需評完、未完成評估表不計分、未綁定評估表、評估員判定/備註、觀察時刻、損壞檔、CSS/CSV 注入、出席矩陣、本地日期)、
                               release-status(頁首的發行版本與降版提醒:無檔 / 正常 / 降版三種、版本比較、重點文字、訊息不當成 HTML、
-                              完整與簡化模式有而重播檢視與駕駛台頁沒有、預設不發請求;fixtures/release-status-downgrade.json 取自真實的 simosa-pkg status)
+                              完整與簡化模式有而重播檢視與駕駛台頁沒有、預設不發請求;fixtures/release-status-downgrade.json 取自真實的 simosa-pkg status;
+                              船上筆電的版本:位址推導(含只寫埠號)、同一台不發跨來源請求、兩台的比較、「船上 <版本>」與四種徽章、取不到、沒有發行版狀態、
+                              連上核心才取與重試、較早的請求晚回來要丟棄、完整訊息預設收合、展開的說明依 detailLimit 縮小)
 ```
 
 船舶參數(LPP、船寬、舵角上限、舵機速率、MCR 轉速、車鐘各段轉速與速度、側推參數、吃水)直接由 `data/ships/FSB1|FSB2/particulars.json` 在建置時匯入(`src/lib/ship-config.ts`),與核心共用同一份資料。

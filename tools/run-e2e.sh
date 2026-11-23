@@ -9,7 +9,7 @@
 # 環境變數:
 #   E2E_CHROMIUM              Chromium 執行檔(未設則用 Playwright 管理的 chromium:PLAYWRIGHT_BROWSERS_PATH 預設 /opt/pw-browsers 或 .cache/pw-browsers)
 #   PLAYWRIGHT_BROWSERS_PATH  Playwright 瀏覽器目錄(CI 以 npx playwright install chromium --with-deps 裝到 .cache/pw-browsers)
-#   E2E_PORT_BASE             固定埠(base..base+4);未設則取空埠
+#   E2E_PORT_BASE             固定埠(base..base+5);未設則取空埠
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

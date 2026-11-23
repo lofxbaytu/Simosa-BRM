@@ -2,7 +2,8 @@
 // simosa-web(提供 build/web/instruments 的 Vite 建置輸出;--status-file 指到本輪寫的發行版狀態檔,與安裝版相同:教官站頁首有「發行版 <版本>」),
 // 埠與路徑寫進 process.env 與 build/e2e/env.json 供各 worker 讀取。
 // 需先:pnpm build(src/Instruments.Web)與 dotnet build SimosaBRM.sln -c Release(tools/run-e2e.sh 一鍵完成)。
-// 埠:E2E_PORT_BASE 給定時依序使用 base..base+4(ws、radar、web、vhf、media),否則向作業系統取空埠。
+// 另啟動第二個 simosa-web 當作「船上筆電」的網頁伺服(不同的埠與狀態檔;第三十一輪:教官筆電的教官站跨來源向船上取發行版狀態)。
+// 埠:E2E_PORT_BASE 給定時依序使用 base..base+5(ws、radar、web、vhf、media、船上網頁),否則向作業系統取空埠。
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENV_FILE, OUT, ROOT, exportEnv, type E2eEnv } from './support/env.ts';
@@ -29,12 +30,12 @@ export default async function globalSetup(): Promise<void> {
     fs.mkdirSync(d, { recursive: true });
   }
   fs.mkdirSync(logsDir, { recursive: true });
-  for (const f of ['simcore.log', 'radar.log', 'web.log']) fs.rmSync(path.join(logsDir, f), { force: true });
+  for (const f of ['simcore.log', 'radar.log', 'web.log', 'ship-web.log']) fs.rmSync(path.join(logsDir, f), { force: true });
 
   const base = process.env['E2E_PORT_BASE'] ? Number(process.env['E2E_PORT_BASE']) : 0;
-  const [wsPort, radarPort, webPort, vhfPort, mediaPort] = base
-    ? [base, base + 1, base + 2, base + 3, base + 4]
-    : [await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
+  const [wsPort, radarPort, webPort, vhfPort, mediaPort, shipWebPort] = base
+    ? [base, base + 1, base + 2, base + 3, base + 4, base + 5]
+    : [await freePort(), await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
   const stopFile = path.join(OUT, 'simcore.stop');
   fs.rmSync(stopFile, { force: true });
   const recordPath = path.join(recordsDir, 'e2e-E05_pilot_traffic.jsonl');
@@ -103,6 +104,14 @@ export default async function globalSetup(): Promise<void> {
   const web = startBg('simosa-web', path.join(logsDir, 'web.log'), dotnet, [webDll!, '--root', webDir!, '--port', String(webPort!), '--bind', '127.0.0.1', '--status-file', statusFile, '--quiet']);
   await waitForPort(web, webPort!, 20_000);
 
+  // 3b) 第二個 simosa-web:當作「船上筆電」的網頁伺服(教官筆電的教官站跨來源向它取 /_status/release.json;02-instructor 的「教官筆電顯示船上筆電的版本…」)。
+  //   狀態檔一開始與上面那一份相同(兩台同一版);案例自己改寫、結束時還原。不加 --quiet:每個請求在 ship-web.log 留一行
+  //   (案例據此確認瀏覽器沒有送 preflight、伺服器看到的 Origin 是教官站頁面的來源)。其他案例不會連到它(頁面與核心同在 127.0.0.1,不發跨來源請求)
+  const shipStatusFile = path.join(OUT, 'ship-release-status.json');
+  fs.copyFileSync(statusFile, shipStatusFile);
+  const shipWeb = startBg('simosa-web(船上)', path.join(logsDir, 'ship-web.log'), dotnet, [webDll!, '--root', webDir!, '--port', String(shipWebPort!), '--bind', '127.0.0.1', '--status-file', shipStatusFile]);
+  await waitForPort(shipWeb, shipWebPort!, 20_000);
+
   const env: E2eEnv = {
     wsPort: wsPort!,
     vhfPort: vhfPort!,
@@ -117,13 +126,15 @@ export default async function globalSetup(): Promise<void> {
     statusFile,
     releaseVersion,
     softwareVersion,
+    shipWebPort: shipWebPort!,
+    shipStatusFile,
     startedUtc: new Date(t0).toISOString(),
-    pids: { host: host.child.pid ?? 0, radar: radar?.child.pid ?? 0, web: web.child.pid ?? 0 },
+    pids: { host: host.child.pid ?? 0, radar: radar?.child.pid ?? 0, web: web.child.pid ?? 0, shipWeb: shipWeb.child.pid ?? 0 },
   };
   fs.writeFileSync(ENV_FILE, JSON.stringify(env, null, 2));
   exportEnv(env);
   console.log(
-    `[e2e] 核心 ws://127.0.0.1:${wsPort}(VHF ${vhfPort}、錄影 ${mediaPort})、雷達 ${radarPortUsed || '略過'}、網頁 http://127.0.0.1:${webPort}/(${path.relative(ROOT, webDir!)});` +
+    `[e2e] 核心 ws://127.0.0.1:${wsPort}(VHF ${vhfPort}、錄影 ${mediaPort})、雷達 ${radarPortUsed || '略過'}、網頁 http://127.0.0.1:${webPort}/(${path.relative(ROOT, webDir!)})、「船上」網頁 ${shipWebPort};` +
       `啟動 ${((Date.now() - t0) / 1000).toFixed(1)} s;輸出 ${path.relative(ROOT, OUT)}/`,
   );
 }

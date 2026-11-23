@@ -207,6 +207,41 @@ PY
   return 0
 }
 
+# ---- 船上筆電的網頁位址(第三十一輪;教官筆電的教官站向船上筆電的 simosa-web 取 /_status/release.json,頁首顯示船上的版本與降版提醒;
+#      Windows 版為 launch-common.ps1 的 Get-LaunchShipWebUrl / Add-LaunchShipWebParam)----
+# ship_web_url <standalone:true|1|其他> <船上 IP> <船上網頁埠>:直連模式而且有設船上網頁埠(config/instructor-laptop.json 的 ports.shipWeb;1–65535)
+#   時印出 http://<IP>:<埠>,否則不印任何東西。沒設時不必帶參數:教官站自己由 ws 參數的主機推得 http://<主機>:8080(船上 simosa-web 的預設埠);
+#   standalone(核心在本機)沒有另一台電腦,不取。
+ship_web_url() {
+  local standalone="$1" ip="$2" port="$3"
+  [[ "$standalone" == true || "$standalone" == 1 || -z "$ip" ]] && return 0
+  [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] || return 0
+  (( port <= 65535 )) || return 0
+  echo "http://$ip:$port"
+}
+
+# ship_web_port_cfg:load_config 之後,印出設定檔 ports.shipWeb 的文字(空 = 沒設:沒有這個鍵、null、"")。只有整數(8081 或 "8081")是合格的埠
+#   (由 ship_web_url 判定);陣列或物件(load_config 把它攤成 CFG_ports_shipWeb_…,cfg ports_shipWeb 讀到空字串)印出「陣列或物件」——
+#   與 8081.0、true、文字一樣不是埠,啟動腳本據此警告並略過(Windows 版為 Get-LaunchShipWebPort;兩邊的警告文字相同)。
+ship_web_port_cfg() {
+  local v; v="$(cfg ports_shipWeb)"
+  [[ -z "$v" && -n "$(compgen -v CFG_ports_shipWeb_ || true)" ]] && v="陣列或物件"
+  echo "$v"
+}
+
+# ship_web_page <頁面> <船上網頁位址>:教官站頁面(instructor.html、instructor.html?… 或 instructor.html#…)而且查詢字串還沒有 shipWeb 參數時,
+#   在查詢字串加上 shipWeb=<位址>(既有的 openPages 設定不必改);其他頁面、位址是空的、已經寫了 shipWeb= 的原樣印出。
+#   頁面帶 # 片段時加在片段**之前**(加在後面的話參數落在片段裡,網頁讀不到,會改用預設的 8080);片段裡的 shipWeb= 不算已經寫了。
+ship_web_page() {
+  local page="$1" url="$2" base frag=""
+  base="${page%%#*}"
+  [[ "$page" == *"#"* ]] && frag="#${page#*#}"
+  if [[ -n "$url" && "$base" =~ ^instructor\.html(\?|$) && ! "$base" =~ [?\&]shipWeb= ]]; then
+    if [[ "$base" == *\?* ]]; then base="$base&shipWeb=$url"; else base="$base?shipWeb=$url"; fi
+  fi
+  echo "$base$frag"
+}
+
 # wait_tcp <host> <port> <秒> [PID]:等待埠開啟;給 PID 時程序已結束即回傳 2(不再等到逾時,也不會把別的程序的監聽當成自己的)
 wait_tcp() {
   local host="$1" port="$2" secs="${3:-20}" pid="${4:-}" i

@@ -327,6 +327,51 @@ function Write-LaunchReleaseStatus([string]$Root, [string]$LogDir, [int]$Timeout
     }
 }
 
+# ---- 船上筆電的網頁位址(第三十一輪;教官筆電的教官站向船上筆電的 simosa-web 取 /_status/release.json,頁首顯示船上的版本與降版提醒;
+#      與 launch-common.sh 的 ship_web_url / ship_web_page 相同規則)----
+# Get-LaunchShipWebUrl <是否 standalone> <船上 IP> <船上網頁埠>:直連模式而且有設船上網頁埠(config\instructor-laptop.json 的 ports.shipWeb;1–65535)
+#   時回傳 http://<IP>:<埠>,否則空字串。沒設時不必帶參數:教官站自己由 ws 參數的主機推得 http://<主機>:8080(船上 simosa-web 的預設埠);
+#   standalone(核心在本機)沒有另一台電腦,不取。
+#   埠只接受整數或純數字的字串(JSON 的 8081、"8081");8081.0(JSON 的小數)、陣列、物件、true / false 都不是埠 —— 與 launch-common.sh 相同
+#   (不做型別檢查的話 "$Port" 會把 8081.0 與 [8081] 都變成「8081」而被接受)。
+function Get-LaunchShipWebUrl([bool]$Standalone, [string]$ShipIp, $Port) {
+    if ($Standalone -or -not $ShipIp) { return '' }
+    if (-not ($Port -is [int] -or $Port -is [long] -or $Port -is [string])) { return '' }
+    $text = "$Port"
+    if ($text -notmatch '^[1-9][0-9]{0,4}$' -or [int]$text -gt 65535) { return '' }
+    return "http://${ShipIp}:${text}"
+}
+
+# Get-LaunchShipWebPort <設定>:config\instructor-laptop.json 的 ports.shipWeb → @{ Port = <1–65535 的整數;沒設或不合格時 0>; Invalid = <不合格時原值的文字,否則 ''> }。
+#   沒有這個鍵(舊的設定檔)、null、空字串 = 沒設(Port 0、Invalid '')。直接讀屬性而不經 Get-Cfg:函式的回傳值會把只有一個元素的陣列
+#   展開成那個元素([8081] 會變成 8081 而被當成合格的埠)。Invalid 的文字與 start-instructor-laptop.sh 的警告相同:字串原樣、陣列或物件寫「陣列或物件」、
+#   其餘(小數、true / false)是 JSON 的寫法。
+function Get-LaunchShipWebPort($Config) {
+    $value = $null
+    $ports = $null
+    if ($null -ne $Config) { $portsProp = $Config.PSObject.Properties['ports']; if ($null -ne $portsProp) { $ports = $portsProp.Value } }
+    if ($null -ne $ports) { $prop = $ports.PSObject.Properties['shipWeb']; if ($null -ne $prop) { $value = $prop.Value } }
+    if ($null -eq $value -or ($value -is [string] -and $value -eq '')) { return @{ Port = 0; Invalid = '' } }
+    if (($value -is [int] -or $value -is [long] -or $value -is [string]) -and "$value" -match '^[1-9][0-9]{0,4}$' -and [int]"$value" -le 65535) { return @{ Port = [int]"$value"; Invalid = '' } }
+    $text = '陣列或物件'
+    if ($value -is [string]) { $text = $value }
+    elseif (-not ($value -is [array] -or $value -is [System.Management.Automation.PSCustomObject] -or $value -is [System.Collections.IDictionary])) { $text = (ConvertTo-Json $value -Compress) }
+    return @{ Port = 0; Invalid = $text }
+}
+
+# Add-LaunchShipWebParam <頁面> <船上網頁位址>:教官站頁面(instructor.html、instructor.html?… 或 instructor.html#…)而且查詢字串還沒有 shipWeb 參數時,
+#   在查詢字串加上 shipWeb=<位址>(既有的 openPages 設定不必改);其他頁面、位址是空的、已經寫了 shipWeb= 的原樣回傳。區分大小寫(網頁端的參數名稱也是)。
+#   頁面帶 # 片段時加在片段**之前**(加在後面的話參數落在片段裡,網頁讀不到,會改用預設的 8080);片段裡的 shipWeb= 不算已經寫了。
+function Add-LaunchShipWebParam([string]$Page, [string]$ShipWebUrl) {
+    $hash = $Page.IndexOf('#')
+    $base = $Page
+    $frag = ''
+    if ($hash -ge 0) { $base = $Page.Substring(0, $hash); $frag = $Page.Substring($hash) }
+    if (-not $ShipWebUrl -or $base -cnotmatch '^instructor\.html(\?|$)' -or $base -cmatch '[?&]shipWeb=') { return $Page }
+    $sep = if ($base.Contains('?')) { '&' } else { '?' }
+    return "${base}${sep}shipWeb=${ShipWebUrl}${frag}"
+}
+
 # 設定直連介面固定 IP(需系統管理員;僅在介面存在且 IP 不同時變更)
 function Set-DirectLinkIp([string]$Adapter, [string]$Ip, [string]$Mask) {
     if (-not $Adapter -or -not $Ip) { return }

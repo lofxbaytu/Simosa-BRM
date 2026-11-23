@@ -3,7 +3,10 @@
 #   依 config/instructor-laptop.json 提供教官站網頁(本機 simosa-web,頁面的 ws 參數指向船上筆電)、雷達鏡像頁,並印出 simosa-pkg sync 指令說明;
 #   standalone.enabled=true 時另啟動本機 SimCore.Host(離船備課)。log 在 build/logs/;stop-all.sh 結束。
 #   啟動網頁伺服前先執行一次 simosa-pkg status --json 存成 build/run/release-status.json:教官站頁首顯示「發行版 <版本>」與降版提醒 —
-#   這是教官筆電本機(提供教官站頁面的這一台)的發行版,不是船上筆電的;逾時或失敗不擋住啟動。
+#   這是教官筆電本機(提供教官站頁面的這一台)的發行版;逾時或失敗不擋住啟動。
+#   船上筆電的版本(直連模式):教官站連上船上的核心後,另外向船上筆電的 simosa-web(http://<船上 IP>:8080/_status/release.json)取,
+#   頁首改寫「船上 <版本>」,船上降版 / 本機降版 / 兩台版本不同時是警示徽章。船上的網頁埠不是 8080 時在設定檔設 ports.shipWeb,
+#   本腳本會在教官站的網址加上 shipWeb=http://<船上 IP>:<埠>(openPages 不必改);docs/design/packaging-sync.md 第 5.1 節。
 # 用法:start-instructor-laptop.sh [--config config/instructor-laptop.json] [--ship FSB1|FSB2|<IP>] [--standalone] [--check-wifi] [--wait]
 #   --check-wifi:直連模式下以 nmcli/iw 檢查無線介面(與 ps1 的 -CheckWifi 相同),Wi-Fi 仍啟用時拒絕繼續(exit 1);沒有這些工具時只提示。
 source "$(dirname "${BASH_SOURCE[0]}")/launch-common.sh"
@@ -16,7 +19,7 @@ while [[ $# -gt 0 ]]; do
     --standalone) STANDALONE=1; shift ;;
     --check-wifi) CHECK_WIFI=1; shift ;;
     --wait) WAIT=1; shift ;;
-    -h|--help) sed -n 2,9p "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) awk 'NR > 1 { if (/^#/) print; else exit }' "${BASH_SOURCE[0]}"; exit 0 ;;  # 檔頭的註解(到第一個不是註解的行為止;不寫死行號)
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
@@ -34,6 +37,9 @@ if [[ "$SHIP" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then SHIP_IP="$SHIP"; else SHIP_IP="$
 [[ -z "$STANDALONE" ]] && STANDALONE="$(cfg standalone_enabled false)"
 WS_PORT="$(cfg ports_stateWs 8765)"; RADAR_PORT="$(cfg ports_radarWs 8766)"; WEB_PORT="$(cfg ports_web 8080)"; SYNC_PORT="$(cfg ports_sync 7300)"
 [[ "$STANDALONE" == true || "$STANDALONE" == 1 ]] && SHIP_IP="127.0.0.1"
+# 船上筆電 simosa-web 的埠(船上 config/ship-laptop.json 的 ports.web);空 = 沒設:教官站由 ws 的主機推得 http://<船上 IP>:8080。
+# 只接受整數(8081 或 "8081");8081.0、true、文字、陣列或物件都不是埠:下面警告並略過(launch-common.sh 的 ship_web_port_cfg / ship_web_url)
+SHIP_WEB_PORT="$(ship_web_port_cfg)"
 
 echo "Simosa BRM 教官筆電 — 目標船 $SHIP($SHIP_IP);安裝根目錄 $ROOT"
 launch_init_logs "$ROOT" "$LOGS"
@@ -82,11 +88,18 @@ if [[ "$(cfg web_enabled true)" == true && -n "$WEB_DIR" ]] && WEB_DLL="$(find_d
   write_release_status "$ROOT" "$ROOT/$LOGS"
   start_bg web "$ROOT/$LOGS/web.log" dotnet "$WEB_DLL" --root "$WEB_DIR" --port "$WEB_PORT" --bind "$(cfg web_bind 127.0.0.1)" --status-file "$(release_status_path "$ROOT")"
   n="$(cfg web_openPages__n 0)"
+  # 船上筆電的網頁位址(直連模式而且有設 ports.shipWeb 才有;加到教官站頁面的網址,見 launch-common.sh 的 ship_web_url / ship_web_page)
+  SHIP_WEB_URL="$(ship_web_url "$STANDALONE" "$SHIP_IP" "$SHIP_WEB_PORT")"
   echo "教官站頁面(以瀏覽器開啟):"
   for ((i = 0; i < n; i++)); do
     p="$(cfg web_openPages_$i)"; p="${p//\{ship\}/$SHIP_IP}"; p="${p//\{stateWs\}/$WS_PORT}"; p="${p//\{radarWs\}/$RADAR_PORT}"
+    p="$(ship_web_page "$p" "$SHIP_WEB_URL")"
     echo "  http://127.0.0.1:$WEB_PORT/$p"
   done
+  if [[ "$STANDALONE" != true && "$STANDALONE" != 1 ]]; then
+    [[ -n "$SHIP_WEB_PORT" && -z "$SHIP_WEB_URL" ]] && echo "警告:設定檔的 ports.shipWeb($SHIP_WEB_PORT)不是 1–65535 的埠,略過(教官站以預設的 8080 取船上筆電的版本)" >&2
+    echo "  船上筆電的版本:教官站連上船上的核心後,頁首向 ${SHIP_WEB_URL:-http://$SHIP_IP:8080}/_status/release.json 取船上筆電的發行版本與降版提醒(船上的網頁埠不是 8080 時設 ports.shipWeb)"
+  fi
 fi
 
 cat <<MSG

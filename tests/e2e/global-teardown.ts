@@ -20,7 +20,7 @@ export default async function globalTeardown(): Promise<void> {
       await stopPid(env.pids.host, 3000);
     }
   }
-  await Promise.all([stopPid(env.pids.radar, 3000), stopPid(env.pids.web, 3000)]);
+  await Promise.all([stopPid(env.pids.radar, 3000), stopPid(env.pids.web, 3000), stopPid(env.pids.shipWeb ?? 0, 3000)]);
   fs.rmSync(env.stopFile, { force: true });
 
   // 切換情境後的紀錄(build/records/<yyyyMMdd-HHmmss>-<scenario>.jsonl)→ build/e2e/records/

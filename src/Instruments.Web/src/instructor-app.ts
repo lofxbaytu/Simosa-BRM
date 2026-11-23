@@ -23,6 +23,7 @@ import { DemoSource } from './demo/demo-source.js';
 import type { DemoOptions } from './demo/demo-sim.js';
 import { demoOptionsFromScenario } from './demo/demo-scenario.js';
 import { defaultState } from './lib/state-parser.js';
+import { SHIP_WEB_PARAM, shipWebBaseUrl } from './lib/release-status.js';
 import { getShipConfig, isShipId, type ShipDisplayConfig } from './lib/ship-config.js';
 import { TrackHistory } from './lib/track-history.js';
 import { THEMES, applyTheme, isTheme, readTheme, type Theme } from './lib/theme.js';
@@ -578,6 +579,12 @@ export class InstructorApp extends LitElement {
   /** 內建 VHF 角色扮演頻道(docs/design/vhf-roleplay.md):轉送網址(?vhf=;未給時同核心主機埠 8767;?vhf=0、重播檢視與示範模式不顯示)與站名(?station=,預設 instructor) */
   @state() private vhfUrl: string | null = null;
   @state() private vhfStation = 'instructor';
+  /**
+   * 船上筆電 simosa-web 的位址(頁首的 <brm-release-status> 由此跨來源取船上的發行版狀態;lib/release-status.ts 的 shipWebBaseUrl):
+   * ?shipWeb= 明確指定,否則由 ?ws= 的主機推得 http://<主機>:8080;頁面與核心在同一台電腦(ws 的主機是本機迴路位址)、
+   * 頁面不是本機迴路位址提供的、或重播檢視時 null(不取)
+   */
+  @state() private shipWebUrl: string | null = null;
 
   @query('brm-replay-view') private replayView?: ReplayView;
 
@@ -631,6 +638,7 @@ export class InstructorApp extends LitElement {
     const vhf = params.get('vhf');
     this.vhfUrl = vhf === '0' || vhf === 'off' || this.pageMode === 'replay' ? null : vhf || defaultVhfUrl(this.wsUrl);
     this.vhfStation = params.get('station') || 'instructor';
+    this.shipWebUrl = this.pageMode === 'replay' ? null : shipWebBaseUrl(location, this.wsUrl, params.get(SHIP_WEB_PARAM));
     applyTheme(this.theme, false);
     this.scenarios = loadScenarioList();
     const preselect = params.get('scenario');
@@ -1317,8 +1325,21 @@ export class InstructorApp extends LitElement {
     `;
   }
 
+  /**
+   * <brm-release-status> 展開的說明底邊不可超過的位置:完整教官站執行控制第一個鈕的上緣(說明浮貼在頁首下方,太高時會蓋住
+   * 「凍結 / 恢復 / 重設 / 結束練習」而點不到 —— 1093×614 的頁首下方到這一列只有 264 px)。簡化模式沒有 <brm-run-control>:null(不限制)。
+   */
+  private releaseDetailLimit = (): number | null => {
+    const first = this.renderRoot.querySelector('brm-run-control')?.shadowRoot?.querySelector('button');
+    if (!first) return null;
+    const r = first.getBoundingClientRect();
+    return r.height > 0 ? r.top : null;
+  };
+
   // 頁首右側的 <brm-release-status>(完整與簡化模式):「發行版 <版本>」(套用過軟體更新包時「軟體更新 <版次>」)與降版提醒;沒有發行版狀態(開發模式)時不顯示。
-  // 顯示的是提供本頁面的電腦的發行版(lib/release-status.ts);駕駛台頁(app.ts)不放。
+  // 同源取到的是提供本頁面的電腦(本機)的發行版(lib/release-status.ts);頁面與核心不在同一台電腦(shipWebUrl 有值:教官筆電以
+  // start-instructor-laptop 開的教官站)時,連上核心後另外向船上筆電取,頁首改寫「船上 <版本>」,船上降版 / 本機降版 / 兩台版本不同時是警示徽章。
+  // 駕駛台頁(app.ts)不放。
   private renderHeader() {
     const s = this.shipState;
     const cfg = this.config;
@@ -1377,7 +1398,9 @@ export class InstructorApp extends LitElement {
           ${THEMES.map((t) => html`<button class=${this.theme === t.id ? 'active' : ''} @click=${() => this.setTheme(t.id)}>${t.label}</button>`)}
         </span>
         <button title="全螢幕" @click=${this.toggleFullscreen}>全螢幕</button>
-        ${live ? html`<brm-release-status></brm-release-status>` : nothing}
+        ${live
+          ? html`<brm-release-status .shipWebUrl=${this.shipWebUrl} .shipLinked=${this.sourceMode === 'live' && this.status === 'connected'} .detailLimit=${this.releaseDetailLimit}></brm-release-status>`
+          : nothing}
         <span class="notice">訓練模擬器,非航行設備</span>
       </header>
     `;

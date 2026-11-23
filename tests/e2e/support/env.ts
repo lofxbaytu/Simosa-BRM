@@ -37,9 +37,17 @@ export interface E2eEnv {
   releaseVersion: string;
   /** 發行版狀態檔裡的軟體更新包版次(比發行版新;教官站頁首顯示實際執行的這一版「軟體更新 <版次>」) */
   softwareVersion: string;
+  /**
+   * 第二個 simosa-web 的埠:當作「船上筆電」的網頁伺服(第三十一輪;教官筆電的教官站跨來源向它取 /_status/release.json)。
+   * 平常的案例不會用到它(頁面與核心都在 127.0.0.1 = 同一台電腦,不發跨來源請求);02-instructor 以 ?shipWeb=http://localhost:<埠> 指過去
+   * (127.0.0.1 與 localhost 在瀏覽器是不同來源)
+   */
+  shipWebPort: number;
+  /** 「船上筆電」的發行版狀態檔(第二個 simosa-web 的 --status-file;案例改寫它做出版本不同、船上降版) */
+  shipStatusFile: string;
   /** 啟動時刻(ISO;teardown 以此找本輪在 build/records 產生的紀錄) */
   startedUtc: string;
-  pids: { host: number; radar: number; web: number };
+  pids: { host: number; radar: number; web: number; shipWeb: number };
 }
 
 export function e2eEnv(): E2eEnv {
@@ -59,8 +67,10 @@ export function e2eEnv(): E2eEnv {
       statusFile: p['E2E_STATUS_FILE'] ?? '',
       releaseVersion: p['E2E_RELEASE_VERSION'] ?? '',
       softwareVersion: p['E2E_SOFTWARE_VERSION'] ?? '',
+      shipWebPort: Number(p['E2E_SHIP_WEB_PORT'] ?? 0),
+      shipStatusFile: p['E2E_SHIP_STATUS_FILE'] ?? '',
       startedUtc: p['E2E_STARTED_UTC'] ?? '',
-      pids: { host: 0, radar: 0, web: 0 },
+      pids: { host: 0, radar: 0, web: 0, shipWeb: 0 },
     };
   }
   if (!fs.existsSync(ENV_FILE)) throw new Error(`找不到 ${ENV_FILE}:global-setup 未執行(請以 playwright test 或 tools/run-e2e.sh 執行)`);
@@ -82,6 +92,8 @@ export function exportEnv(e: E2eEnv): void {
   process.env['E2E_STATUS_FILE'] = e.statusFile;
   process.env['E2E_RELEASE_VERSION'] = e.releaseVersion;
   process.env['E2E_SOFTWARE_VERSION'] = e.softwareVersion;
+  process.env['E2E_SHIP_WEB_PORT'] = String(e.shipWebPort);
+  process.env['E2E_SHIP_STATUS_FILE'] = e.shipStatusFile;
   process.env['E2E_STARTED_UTC'] = e.startedUtc;
 }
 
@@ -93,6 +105,8 @@ export const mediaHttpUrl = (e: E2eEnv): string => `http://${host}:${e.mediaPort
 // 雷達服務以 --localhost-only 啟動時 HttpListener 只接受 Host: localhost(RadarWebSocketServer.Start),故雷達頁用 localhost 而非 127.0.0.1
 export const radarWsUrl = (e: E2eEnv): string => `ws://localhost:${e.radarPort}`;
 export const webBase = (e: E2eEnv): string => `http://${host}:${e.webPort}`;
+/** 「船上筆電」的 simosa-web:用 localhost(與頁面的 127.0.0.1 不同來源 → 跨來源請求) */
+export const shipWebBase = (e: E2eEnv): string => `http://localhost:${e.shipWebPort}`;
 
 function withQuery(base: string, page: string, q: Record<string, string | undefined>): string {
   const u = new URL(`${base}/${page}`);
@@ -105,14 +119,19 @@ export function bridgeUrl(e: E2eEnv, opts: { station?: string; vhf?: boolean } =
   return withQuery(webBase(e), 'index.html', { ws: stateWsUrl(e), vhf: opts.vhf === false ? '0' : vhfWsUrl(e), station: opts.station ?? 'bridge' });
 }
 
-/** 教官站 instructor.html(完整模式預設;?mode=simple|replay) */
-export function instructorUrl(e: E2eEnv, opts: { mode?: 'simple' | 'replay'; station?: string; vhf?: boolean } = {}): string {
+/**
+ * 教官站 instructor.html(完整模式預設;?mode=simple|replay)。shipWeb:船上筆電 simosa-web 的位址(?shipWeb=;教官筆電的教官站跨來源取船上的
+ * 發行版狀態)—— 不給時頁面與核心都在 127.0.0.1(同一台電腦),不發跨來源請求;scenario:預選的情境 id(頁首帶情境 id)
+ */
+export function instructorUrl(e: E2eEnv, opts: { mode?: 'simple' | 'replay'; station?: string; vhf?: boolean; shipWeb?: string; scenario?: string } = {}): string {
   return withQuery(webBase(e), 'instructor.html', {
     ws: stateWsUrl(e),
     vhf: opts.vhf === false ? '0' : vhfWsUrl(e),
     media: mediaHttpUrl(e),
     ...(opts.mode ? { mode: opts.mode } : {}),
     ...(opts.station ? { station: opts.station } : {}),
+    ...(opts.shipWeb ? { shipWeb: opts.shipWeb } : {}),
+    ...(opts.scenario ? { scenario: opts.scenario } : {}),
   });
 }
 
