@@ -1,3 +1,4 @@
+using SimosaBRM.SimCore.Assessment;
 using SimosaBRM.SimCore.Contracts;
 using SimosaBRM.SimCore.Engine;
 using Xunit;
@@ -66,6 +67,64 @@ public class MetricsCollectorTests
         Assert.Equal(10.0, m.ThrusterTimeS);
         Assert.Equal(1, m.AutopilotSwitches);
         Assert.Equal(10.0, m.AutopilotTimeS);
+        // 未超過保留上限:不輸出段落總數與各車令累計(summary 格式不變)
+        Assert.Null(m.TelegraphOrdersTotal);
+        Assert.Null(m.TelegraphTotals);
+        Assert.DoesNotContain("telegraphOrdersTotal", ContractJson.Serialize(s));
+        Assert.DoesNotContain("telegraphDropped", e.CreateSnapshot().ToJson());
+    }
+
+    /// <summary>
+    /// 第三十輪 ENG-C4:車鐘段落只保留最近 <see cref="MetricsCollector.TelegraphSpanHistory"/> 段(最後一段 = 目前這段),
+    /// 移出的段落併入各車令累計;summary 附段落總數與各車令段數 / 累計時間(含移出者,合計 = 練習時間);telegraphChanges 指標不變;快照往返後相同。
+    /// </summary>
+    [Fact]
+    public void TelegraphSpansKeepRecentHistoryAndTotals()
+    {
+        var e = TestData.MinimalEngine();
+        const int changes = 250;
+        var spans = new List<(string Order, double From)> { ("HAH", 0.0) };
+        var t = 0.0;
+        for (var i = 0; i < changes; i++)
+        {
+            t += 2 + i % 3;
+            TestData.RunTo(e, t);
+            var order = i % 2 == 0 ? TelegraphOrder.SAH : TelegraphOrder.HAH;
+            e.Enqueue(SimCommand.Telegraph(order)); e.ProcessPendingCommands();
+            spans.Add((order.ToString(), t));
+        }
+        TestData.RunTo(e, t + 10);
+        var end = e.Time;
+        Assert.Equal(MetricsCollector.TelegraphSpanHistory, e.Assessment!.Metrics.State.TelegraphSpans.Count);
+        var s = e.Assessment.BuildSummary(e.Tick, final: false);
+        var m = s.Manoeuvring;
+        Assert.Equal(changes, m.TelegraphChanges);
+        Assert.Equal(changes, e.Assessment.MetricValue("manoeuvring.telegraphChanges", null!));
+        // 清單:最近 100 段,與完整序列的最後 100 段相同
+        Assert.Equal(MetricsCollector.TelegraphSpanHistory, m.TelegraphOrders.Count);
+        var recent = spans.Skip(spans.Count - MetricsCollector.TelegraphSpanHistory).ToList();
+        for (var i = 0; i < recent.Count; i++)
+        {
+            Assert.Equal(recent[i].Order, m.TelegraphOrders[i].Order);
+            Assert.Equal(recent[i].From, m.TelegraphOrders[i].FromS, 9);
+        }
+        Assert.Equal(end, m.TelegraphOrders[^1].ToS, 9);
+        // 段落總數與各車令累計(含移出清單者與目前這段)
+        Assert.Equal(changes + 1, m.TelegraphOrdersTotal);
+        var totals = m.TelegraphTotals!;
+        Assert.Equal(new[] { "HAH", "SAH" }, totals.Keys.ToArray());
+        for (var k = 0; k < 2; k++)
+        {
+            var o = k == 0 ? "HAH" : "SAH";
+            var expected = spans.Select((x, i) => (x.Order, Dur: (i + 1 < spans.Count ? spans[i + 1].From : end) - x.From)).Where(x => x.Order == o).ToList();
+            Assert.Equal(expected.Count, totals[o].Count);
+            Assert.Equal(expected.Sum(x => x.Dur), totals[o].DurationS, 6);
+        }
+        Assert.Equal(end, totals.Values.Sum(x => x.DurationS), 6);
+        // 快照 JSON 往返:還原後 summary 相同
+        var json = ContractJson.Serialize(s.Manoeuvring);
+        e.Restore(EngineSnapshot.FromJson(e.CreateSnapshot().ToJson()));
+        Assert.Equal(json, ContractJson.Serialize(e.Assessment.BuildSummary(e.Tick, final: false).Manoeuvring));
     }
 
     [Fact]

@@ -199,8 +199,8 @@ public class BerthingAssessmentTests
                                         + " { id: TB, bollardPull_t: 20, attach: midStbd, riseTime_s: 5, initial: { mode: pull, direction_deg: 90, power_pct: 0 } } ]";
 
     /// <summary>
-    /// 靠上的定義:拖船持續推靠時在碰墊上反彈再碰回(離開 &lt; 0.5 m)只是同一次靠上的再接觸(contacts[] 仍逐筆記錄、approach = false);
-    /// 拉離 ≥ 0.5 m 後再推回才是新的靠上。maxLateralSpeed = 接近接觸的接觸點法向速度最大值(第二次靠上較快)。
+    /// 靠上的定義:拖船持續推靠時在碰墊上反彈再碰回(離開 &lt; 0.5 m)只是同一次靠上的再接觸(approach = false;第三十輪起不逐筆記入 contacts[],
+    /// 只計入 heldContacts 與 fenderContacts 等彙總);拉離 ≥ 0.5 m 後再推回才是新的靠上。maxLateralSpeed = 接近接觸的接觸點法向速度最大值(第二次靠上較快)。
     /// </summary>
     [Fact]
     public void ReboundIsNotANewLandingButReapproachIs()
@@ -213,6 +213,7 @@ public class BerthingAssessmentTests
         Assert.True(b1.FenderContacts > 2, $"推靠中反覆碰回 {b1.FenderContacts}");
         Assert.Equal(2, b1.Contacts.Count(c => c.Approach));                        // F1、F2 第一次接觸
         Assert.All(b1.Contacts.Skip(2), c => Assert.False(c.Approach));
+        Assert.Equal(b1.FenderContacts, b1.Contacts.Count + b1.HeldContacts);       // 反彈再碰回只計數(heldContacts)
         Assert.Equal(b1.Contacts.Take(2).Max(c => c.NormalSpeedMps), b1.MaxLateralSpeedMps);
         Assert.Equal(b1.MaxLateralSpeedMps, first.ContactSpeedMps);
         // 拉離碼頭再推回
@@ -231,6 +232,141 @@ public class BerthingAssessmentTests
         Assert.Equal(second.ContactSpeedMps, b.MaxLateralSpeedMps);
         Assert.Equal(4, b.Contacts.Count(c => c.Approach));
         Assert.Null(b.AllFastAtS);                                                   // 無纜繩:不會繫妥
+    }
+
+    /// <summary>
+    /// 第三十輪 ENG-C1:同一碰墊未離開 ≥ 0.5 m 的再接觸(此處為拖船推靠中的反彈,與繫泊中在纜繩上的擺盪同類)不逐筆記入 contacts[],
+    /// 但 berthing.* 指標與 summary(次數、法向速度 / 能量 / 能量比最大值、過載數)仍等於「全部 fenderContact 事件」逐筆計算的值
+    /// (= 修正前 contacts[] 逐筆記錄時的定義);每碰墊次數合計 = heldContacts;快照 JSON 往返續跑後 summary 相同;
+    /// 舊格式狀態(每筆都在 contacts[]、無彙總欄位)還原時由清單重建彙總。
+    /// </summary>
+    [Fact]
+    public void HeldContactsAreCountedNotListedAndMetricsEqualAllContactEvents()
+    {
+        var e = PointMass(Sc(LinearBerthYaml() + PushPullTugs, x: 0, y: 19.8, headingDeg: 90));
+        var events = TestData.Capture(e);
+        RunTo(e, 40);
+        var snap = EngineSnapshot.FromJson(e.CreateSnapshot().ToJson());
+        RunTo(e, 120);
+        var a = e.Assessment!;
+        var summaryJson = ContractJson.Serialize(a.BuildSummary(e.Tick, final: true));
+        var b = a.BuildSummary(e.Tick, final: true).Berthing!;
+
+        var fc = events.Where(x => x.Kind == SimEventKinds.FenderContact).ToList();
+        Assert.True(fc.Count > 2, $"推靠中反覆碰回 {fc.Count}");
+        static double Speed(SimEvent x) => x.DataNumber("normalSpeed_mps") ?? 0.0;
+        static double Energy(SimEvent x) => x.DataNumber("energy_kNm") ?? 0.0;
+        static double? Ratio(SimEvent x) => x.DataNumber("ratedEnergy_kNm") is { } r && r > 0 ? Energy(x) / r : null;
+        static bool Overload(SimEvent x) => x.DataBool("overload") == true;
+        void AssertMetricsEqualEvents(BerthingTracker t)
+        {
+            Assert.Equal(fc.Count, t.Metric("berthing.fenderContacts", 0));
+            Assert.Equal(fc.Count(Overload), t.Metric("berthing.fenderOverloads", 0));
+            Assert.Equal(fc.Max(Speed), t.Metric("berthing.maxContactSpeed_mps", 0));
+            Assert.Equal(fc.Max(Energy), t.Metric("berthing.maxEnergy_kNm", 0));
+            Assert.Equal(fc.Select(Ratio).Max(), t.Metric("berthing.maxEnergyRatio", 0));
+        }
+        AssertMetricsEqualEvents(a.Berthing);
+        Assert.Equal(fc.Count, b.FenderContacts);
+        Assert.Equal(fc.Count(Overload), b.FenderOverloads);
+        Assert.Equal(fc.Max(Speed), b.MaxContactSpeedMps);
+        Assert.Equal(fc.Max(Energy), b.MaxEnergyKNm);
+        Assert.Equal(fc.Select(Ratio).Max(), b.MaxEnergyRatio);
+        // 逐筆清單只留 F1、F2 的接近接觸;其餘為反彈再碰回,只計數(每碰墊次數合計 = heldContacts)
+        Assert.Equal(2, b.Contacts.Count);
+        Assert.All(b.Contacts, c => Assert.True(c.Approach));
+        Assert.Equal(fc.Count - 2, b.HeldContacts);
+        Assert.Equal(b.HeldContacts, b.HeldContactsByFender!.Values.Sum());
+        Assert.Equal(new[] { "F1", "F2" }, b.HeldContactsByFender.Keys.ToArray());
+        Assert.Equal(b.HeldContacts, a.Berthing.State.HeldContacts);
+        Assert.Contains("\"heldContacts\":", ContractJson.Serialize(b));
+
+        // 快照 JSON 往返後續跑:summary 相同
+        var r = PointMass(Sc(LinearBerthYaml() + PushPullTugs, x: 0, y: 19.8, headingDeg: 90));
+        r.Restore(snap);
+        RunTo(r, 120);
+        Assert.Equal(e.StateHash, r.StateHash);
+        Assert.Equal(summaryJson, ContractJson.Serialize(r.Assessment!.BuildSummary(r.Tick, final: true)));
+
+        // 舊格式狀態(第三十輪以前:每筆接觸都在 contacts[]、無彙總欄位)還原時由清單重建彙總
+        var old = ContractJson.Deserialize<BerthingState>(ContractJson.Serialize(a.Berthing.State))!;
+        old.Contacts = fc.Select(x => new FenderContactMetric
+        {
+            FenderId = x.DataString("fenderId") ?? "", TS = x.T, NormalSpeedMps = Speed(x), EnergyKNm = Energy(x), EnergyRatio = Ratio(x), Overload = Overload(x),
+        }).ToList();
+        old.ContactCount = old.ContactOverloads = old.HeldContacts = 0;
+        old.MaxContactSpeedMps = old.MaxContactEnergyKNm = old.MaxContactEnergyRatio = null;
+        old.HeldContactsByFender = null;
+        var oldJson = ContractJson.Serialize(old);
+        Assert.DoesNotContain("contactCount", oldJson);
+        a.Berthing.Restore(ContractJson.Deserialize<BerthingState>(oldJson)!);
+        AssertMetricsEqualEvents(a.Berthing);
+    }
+
+    /// <summary>
+    /// 第三十輪審查 REV-ENG-C1:已離開泊位後被壓回碰墊並停在上面(沒有重新繫妥;E14 / E17 開艏時主機起動失敗、被吹攏風壓回碼頭)時,
+    /// 同一碰墊未離開 ≥ 0.5 m 的擺盪接觸也不逐筆記入 contacts[]:停在碰墊上的時間越久,contacts[] 與評估快照都不變長,只有 heldContacts 增加;
+    /// 每個碰墊第一次再碰回仍逐筆記錄(reContact),reContacts 與 berthing.maxReContactSpeed_mps 仍以「已離開泊位後的全部接觸事件」計算。
+    /// 以流把船帶離 &gt; departedDistance_m,再以拖船 TA 推回;擺盪以拖船出力週期切換模擬(TA 持續推靠、TB 每 40 s 短暫拉離,離開 &lt; 0.5 m);
+    /// 碰墊加阻尼,使推回時的反彈很快衰減。
+    /// </summary>
+    [Fact]
+    public void PinnedAfterDepartureReContactsAreCountedNotListed()
+    {
+        var e = PointMass(Sc(LinearBerthYaml(damping: 3000) + "\n  departedDistance_m: 15" + PushPullTugs, x: 0, y: 19.8, headingDeg: 90));
+        var events = TestData.Capture(e);
+        var st = () => e.Assessment!.Berthing.State;
+        RunTo(e, 40);                                                                // 推靠:F1、F2 靠上,反彈衰減後停在碰墊上
+        Apply(e, SimCommand.TugControl("TA", "push", 270, 0));
+        Apply(e, SimCommand.SetEnvironment(currentSetDeg: 180, currentDriftKn: 0.5));  // 流把船帶離碼頭(質點:對地速度 = 流速)
+        while (!st().Departed && e.Time < 400) RunTo(e, e.Time + 1);                 // 船體距碼頭線 > departedDistance_m(15 m)
+        Assert.True(st().Departed, $"未離開泊位 t={e.Time}");
+        var departedAt = st().DepartedAtS!.Value;
+        Assert.Empty(st().HeldFenders);
+        Apply(e, SimCommand.SetEnvironment(currentSetDeg: 180, currentDriftKn: 0));
+        Apply(e, SimCommand.TugControl("TA", "push", 270, 10));                      // 推回碼頭(沒有纜繩:不會繫妥)
+        var t0 = e.Time;
+        while (!st().Contacts.Any(c => c.ReContact) && e.Time < t0 + 600) RunTo(e, e.Time + 1);
+        Assert.True(st().Contacts.Any(c => c.ReContact), "未再碰回");
+        RunTo(e, e.Time + 120);                                                      // 停在碰墊上,反彈衰減
+        var c1 = st().Contacts.Count;
+        var h1 = st().HeldContacts;
+        var r1 = st().ReContacts;
+        var state1 = ContractJson.Serialize(st()).Length;
+        var summary1 = ContractJson.Serialize(e.Assessment!.BuildSummary(e.Tick, final: false).Berthing).Length;
+        Assert.True(st().Departed);                                                  // 沒有重新繫妥:仍是「已離開泊位」
+        Assert.All(new[] { "F1", "F2" }, f => Assert.Contains(st().Contacts, c => c.FenderId == f && c.ReContact && c.TS > departedAt));
+        // 停在碰墊上擺盪 20 個週期(每 40 s:TB 拉 25 % 8 s,離開 < 0.5 m 再被 TA 推回)
+        for (var k = 0; k < 20; k++)
+        {
+            Apply(e, SimCommand.TugControl("TB", "pull", 90, 25));
+            RunTo(e, e.Time + 8);
+            Apply(e, SimCommand.TugControl("TB", "pull", 90, 0));
+            RunTo(e, e.Time + 32);
+        }
+        var s = st();
+        Assert.True(s.Departed);
+        // 擺盪接觸只計數:contacts[] 筆數不變(修正前每筆都以 reContact 逐筆記錄,20 個週期 +40 筆)、評估狀態與 summary 不隨時間變長
+        Assert.True(s.HeldContacts - h1 >= 20, $"擺盪接觸 {s.HeldContacts - h1}");
+        Assert.Equal(c1, s.Contacts.Count);
+        Assert.InRange(ContractJson.Serialize(s).Length - state1, -64, 64);         // 逐筆記錄時每筆約 250 B
+        var summary = e.Assessment.BuildSummary(e.Tick, final: true);
+        var b = summary.Berthing!;
+        Assert.InRange(ContractJson.Serialize(b).Length - summary1, -64, 64);
+        // 已離開泊位後的擺盪接觸仍是再碰回:reContacts 與 maxReContactSpeed 以已離開泊位後的全部接觸事件計算
+        Assert.Equal(s.HeldContacts - h1, s.ReContacts - r1);
+        var fc = events.Where(x => x.Kind == SimEventKinds.FenderContact).ToList();
+        var after = fc.Where(x => x.T > departedAt).ToList();
+        Assert.Equal(0, b.QuayContacts);
+        Assert.Equal(after.Count, b.ReContacts);
+        Assert.Equal(after.Max(x => x.DataNumber("normalSpeed_mps")), b.MaxReContactSpeedMps);
+        Assert.Equal(b.MaxReContactSpeedMps, e.Assessment.MetricValue("berthing.maxReContactSpeed_mps", null!));
+        // 全部接觸的彙總不變:次數、最大法向速度 = 全部 fenderContact 事件;逐筆 + 只計數 = 全部
+        Assert.Equal(fc.Count, b.FenderContacts);
+        Assert.Equal(fc.Max(x => x.DataNumber("normalSpeed_mps")), b.MaxContactSpeedMps);
+        Assert.Equal(b.FenderContacts, b.Contacts.Count + b.HeldContacts);
+        Assert.Equal(b.HeldContacts, b.HeldContactsByFender!.Values.Sum());
+        Assert.Equal(s.ReContacts, b.ReContacts);
     }
 
     /// <summary>

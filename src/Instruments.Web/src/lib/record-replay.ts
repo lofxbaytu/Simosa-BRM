@@ -342,6 +342,12 @@ export function parseSessionJson(text: string): ReplayData {
     prev = parsed.state;
     pushState(data, parsed.state);
   });
+  // 版本 5:教官站已在倒帶當下截掉舊分支抽樣(states 的 t 不再倒退),倒帶點另存於 rewinds[](依發生順序)
+  for (const rw of Array.isArray(obj.rewinds) ? obj.rewinds : []) {
+    if (!isRecord(rw) || typeof rw['t'] !== 'number' || !Number.isFinite(rw['t'])) continue;
+    const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+    data.rewinds.push({ t: rw['t'], tick: num(rw['tick'], NaN), from: num(rw['from'], rw['t']), droppedStates: num(rw['droppedStates'], 0), droppedEvents: num(rw['droppedEvents'], 0) });
+  }
   // 損壞的檔案:commands 不是陣列或元素不是物件時略過(不丟例外)
   for (const c of Array.isArray(obj.commands) ? obj.commands : []) {
     if (!isRecord(c) || !isValidCommand(c.command)) continue;
@@ -392,8 +398,8 @@ export function eventIndexAt(events: readonly SimEvent[], t: number): number {
   return idx;
 }
 
-/** 二分搜尋:t 時刻(含)之前最後一筆狀態的索引;t 早於第一筆時回傳 0;沒有狀態回傳 -1。 */
-export function stateIndexAt(states: readonly OwnShipState[], t: number): number {
+/** 二分搜尋:t 時刻(含)之前最後一筆狀態的索引;t 早於第一筆時回傳 0;沒有狀態回傳 -1(狀態或教官站抽樣皆可)。 */
+export function stateIndexAt(states: readonly { readonly t: number }[], t: number): number {
   if (states.length === 0) return -1;
   let lo = 0;
   let hi = states.length - 1;
@@ -408,7 +414,7 @@ export function stateIndexAt(states: readonly OwnShipState[], t: number): number
 }
 
 /** 航跡點(每 interval 秒一點),供鳥瞰圖畫到任一時刻為止。 */
-export function trackPoints(states: readonly OwnShipState[], interval_s = 1): TrackPoint[] {
+export function trackPoints(states: readonly Pick<OwnShipState, 't' | 'pos'>[], interval_s = 1): TrackPoint[] {
   const pts: TrackPoint[] = [];
   let last = Number.NEGATIVE_INFINITY;
   for (const s of states) {

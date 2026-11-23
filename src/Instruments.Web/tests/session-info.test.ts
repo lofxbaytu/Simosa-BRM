@@ -10,7 +10,7 @@ import { serializeCommand } from '../src/lib/command.js';
 import { COMMAND_TYPES } from '../src/types/command.js';
 import { sessionInfoCommand } from '../src/lib/instructor-command.js';
 import { parseReplay } from '../src/lib/record-replay.js';
-import { buildSessionRecord } from '../src/lib/session-record.js';
+import { SESSION_RECORD_VERSION, buildSessionRecord } from '../src/lib/session-record.js';
 import { buildSessionInfo, confirmationTimeUtc, emptySessionInfoDraft, parseSessionInfo, restHoursSummary, SESSION_PARTICIPANT_ROLES, validateSessionInfoDraft, type SessionInfo } from '../src/lib/session-info.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import { applySessionInfoToMeta, buildDebriefReport, emptyReportMeta } from '../src/report/debrief-report.js';
@@ -100,7 +100,7 @@ describe('紀錄往返', () => {
   it('教官站紀錄版本 4(含 sessionInfo、recordings);parseReplay 讀回 header.sessionInfo;未送出時為 null', () => {
     const base = { mode: 'full' as const, source: 'ws://x', scenario: null, shipId: 'FSB1', sampleInterval_s: 1, states: [defaultState('FSB1')], operations: [], markers: [], commands: [], summary: null };
     const record = buildSessionRecord({ ...base, sessionInfo: INFO });
-    expect(record.version).toBe(4);
+    expect(record.version).toBe(SESSION_RECORD_VERSION);
     expect(record.sessionInfo).toEqual(INFO);
     expect(record.sessionInfo).not.toBe(INFO);
     const r = parseReplay(JSON.stringify(record));

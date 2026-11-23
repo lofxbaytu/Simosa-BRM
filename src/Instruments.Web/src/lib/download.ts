@@ -1,7 +1,11 @@
-// 下載工具:把文字內容以 Blob 交給瀏覽器儲存(BRM 標記、練習紀錄匯出;船上離線也可用)。
+// 下載工具:把文字或 Blob 交給瀏覽器儲存(BRM 標記、練習紀錄匯出;船上離線也可用)。
+// 大的內容(教官站練習紀錄)直接給 Blob(session-record.ts sessionRecordBlob 以 BlobPart[] 組成),不先組成單一字串。
 
 export function downloadText(filename: string, content: string, mime = 'application/json'): void {
-  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  downloadBlob(filename, new Blob([content], { type: `${mime};charset=utf-8` }));
+}
+
+export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

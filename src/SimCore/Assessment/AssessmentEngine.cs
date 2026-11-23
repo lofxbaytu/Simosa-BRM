@@ -486,8 +486,9 @@ public sealed class AssessmentEngine
             Manoeuvring = Metrics.Manoeuvring(tick),
             FaultResponses = Faults.State.Records.ToArray(),
             Alerts = Metrics.AlertSummary(),
-            Manoeuvres = Manoeuvres.Enabled ? Clone(Manoeuvres.Summary().ToList()) : null,
-            Berthing = Berthing.BerthingSummary() is { } bs ? Clone(bs) : null,
+            Manoeuvres = Manoeuvres.Enabled ? ManoeuvreSummary() : null,
+            // BerthingSummary 已逐項複製(記錄以 with { } 複製、纜繩/拖船新建),不再做 JSON 往返(第三十輪 ENG-C1)
+            Berthing = Berthing.BerthingSummary(),
             Anchoring = Berthing.AnchoringSummary(time) is { } an ? Clone(an) : null,
             Radar = Metrics.RadarSummary(),
             Events = new SummaryEvents { Total = byKind.Values.Sum(), ByKind = byKind },
@@ -498,6 +499,28 @@ public sealed class AssessmentEngine
             },
         };
     }
+
+    /// <summary>
+    /// summary.manoeuvres[]:與 <see cref="ManoeuvreTracker.Summary"/> 相同內容與順序的 JSON 深拷貝。已結束的紀錄(Records)加入後不再變動,
+    /// 其複本快取起來,每秒只複製新增的已結束紀錄與進行中者(第三十輪 ENG-C5:原本每秒對整個清單做 JSON 往返,筆數多時超過 85 KB 進 LOH)。
+    /// 還原快照時 Records 換成新的清單,快取隨之重建。
+    /// </summary>
+    private IReadOnlyList<ManoeuvreRecord> ManoeuvreSummary()
+    {
+        var records = Manoeuvres.State.Records;
+        if (!ReferenceEquals(records, _manoeuvreCacheSource) || records.Count < _manoeuvreCache.Count)
+        {
+            _manoeuvreCache.Clear();
+            _manoeuvreCacheSource = records;
+        }
+        for (var i = _manoeuvreCache.Count; i < records.Count; i++) _manoeuvreCache.Add(Clone(records[i]));
+        var list = new List<ManoeuvreRecord>(_manoeuvreCache);
+        foreach (var r in Manoeuvres.InProgress()) list.Add(Clone(r));
+        return list;
+    }
+
+    private List<ManoeuvreRecord>? _manoeuvreCacheSource;
+    private readonly List<ManoeuvreRecord> _manoeuvreCache = new();
 
     // ------------------------------------------------------------------ 快照
 

@@ -4,8 +4,8 @@
 # 時間表:T+1 s 注入 engineStartFailure {attempts: 2}(前 2 次起動失敗,遙控系統自動再試,第 3 次成功 = 主機起動延遲;教官可見);
 #         T+unberthing.e14.windShiftAt_s 風向於 2 分鐘內轉為東北 25 kn(陣風 0.3,自碼頭側吹來 = 吹開風);離開泊位區(船舯離碼頭 > 110 m)時結束。
 # 評估(summary.berthing:離泊時碰墊接觸(接近速度、能量比)、碼頭硬接觸、斷纜;summary.manoeuvring:側推使用次數與時間):
-#   開始即繫妥(4 纜受力、艏艉靠在碰墊上):繫泊中在纜繩上的擺盪(T+300 s 轉吹開風後離開碰墊再碰回)逐筆記入 contacts[] 但 approach = false,
-#   不計入 berthing.maxLateralSpeed;解纜後離開碰墊 ≥ 0.5 m 再碰回(離泊時艏/艉擺回碼頭)才是接近接觸。
+#   開始即繫妥(4 纜受力、艏艉靠在碰墊上):繫泊中在纜繩上的擺盪(碰墊未離開 ≥ 0.5 m 的再接觸)只計入 heldContacts 與 fenderContacts 等彙總、
+#   不逐筆記入 contacts[];T+300 s 轉吹開風後離開碰墊 ≥ 0.5 m 再碰回者逐筆記入但 approach = false;兩者都不計入 berthing.maxLateralSpeed;解纜後離開碰墊 ≥ 0.5 m 再碰回(離泊時艏/艉擺回碼頭)才是接近接觸。
 #   硬性失敗:擱淺、碼頭硬接觸、繫纜斷裂(纜未解完即動車);必要事件:離泊前簡報(檢查表)、起動失敗後通知機控室/船長、風向改變後首個操船反應。
 # 容許帶:離泊後再碰回速度 berthing.maxReContactSpeed_mps(已離開泊位 = 所有碰墊壓縮為 0 且船體距碼頭線 > berth.departedDistance_m 之後的接觸)、接觸能量比。
 id: E14_unberthing_no_tug

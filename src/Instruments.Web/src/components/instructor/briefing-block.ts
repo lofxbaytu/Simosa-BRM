@@ -16,6 +16,8 @@ import { PlanningTimer, formatCountdown } from '../../lib/planning-timer.js';
 export interface PlanningTimeEndedDetail {
   /** 規劃時間總長(分鐘) */
   planningTimeMin: number;
+  /** 這份簡報所屬的情境 id(宿主有給 scenarioId 時;教官站新練習清操作紀錄時據此保留本練習的規劃時間紀錄) */
+  scenarioId?: string;
 }
 export type PlanningTimeEndedEvent = CustomEvent<PlanningTimeEndedDetail>;
 
@@ -131,6 +133,8 @@ export class BriefingBlock extends LitElement {
   @property({ type: Boolean, reflect: true }) large = false;
   /** 毫秒時鐘(測試注入;預設 Date.now) */
   @property({ attribute: false }) now: () => number = () => Date.now();
+  /** 簡報所屬的情境 id(帶進 planning-time-ended 事件;空字串 = 未給) */
+  @property({ attribute: false }) scenarioId = '';
 
   @state() private timer: PlanningTimer | null = null;
   /** 每次 tick 遞增以觸發重繪 */
@@ -186,7 +190,7 @@ export class BriefingBlock extends LitElement {
     if (this.timer.tick(this.now())) {
       this.stopTicking();
       this.dispatchEvent(
-        new CustomEvent<PlanningTimeEndedDetail>('planning-time-ended', { detail: { planningTimeMin: this.timerMinutes }, bubbles: true, composed: true }),
+        new CustomEvent<PlanningTimeEndedDetail>('planning-time-ended', { detail: { planningTimeMin: this.timerMinutes, ...(this.scenarioId ? { scenarioId: this.scenarioId } : {}) }, bubbles: true, composed: true }),
       );
     }
     this.tickSeq++;

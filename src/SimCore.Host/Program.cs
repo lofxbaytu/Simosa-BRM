@@ -87,7 +87,8 @@ if (options.Replay is { } replayPath)
     var full = Path.IsPathRooted(replayPath) ? replayPath : Path.Combine(root, replayPath);
     Console.WriteLine($"重播:{full}");
     // 依紀錄標頭的模型名稱選擇動力學(紀錄用暫代模型時不會因預設 MMG 而雜湊不一致)
-    var recordedDynamics = RecordReader.Read(full).Header.Dynamics;
+    // 只讀標頭(第一行);完整讀取與雜湊檢查由 Replayer 負責(原本為此整份讀一次,大檔多花數秒與數十 MB)
+    var recordedDynamics = RecordReader.ReadHeader(full).Dynamics;
     var replayFactory = DynamicsFactory(recordedDynamics.StartsWith("mmg", StringComparison.OrdinalIgnoreCase) ? "mmg" : "placeholder");
     // 雷達重播(radar-arpa.md 第 5.2 節):雷達服務已連線時,紀錄的 radarControl 行在相同 tick 重放到雷達服務的重播接收端,
     // 並以狀態 WebSocket(唯讀)推送重播中的狀態幀、依 --timescale 即時步調,雷達畫面因此重現學員當時的量程/擷取;無連線則略過並記 note

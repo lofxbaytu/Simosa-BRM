@@ -110,6 +110,98 @@ internal static class HttpListenerStarter
         catch (Exception) { /* 已關閉 */ }
     }
 
+    /// <summary>
+    /// 接受迴圈(狀態 WebSocket、VHF、錄影上傳端共用;第三十輪 2 小時搜尋 host-accept-loop-death):只有權杖取消或 listener 已關閉才結束。
+    /// <para>
+    /// 修正前各伺服器在迴圈本體裡 <c>await</c> 健康檢查的回應:客戶端送出 <c>GET /</c> 後立刻 RST,寫出丟例外跳出迴圈,接受迴圈結束且沒有 log,
+    /// 之後所有站都連不上(Linux 實測:16 次嘗試 12 次觸發;死掉後每次重連都在受控 HttpListener 內部留下 1 條永遠沒人取走的連線)。
+    /// 現在 <paramref name="dispatch"/> 必須同步返回(單一請求的處理一律放到背景,例如 <see cref="RespondTextAsync"/> 或 <c>Task.Run</c>);
+    /// 取得 context 或 dispatch 時的任何其他例外記 log(有次數限制)後繼續接受,dispatch 失敗的那個請求以 Abort 收尾。
+    /// </para>
+    /// </summary>
+    /// <param name="listener">已 Start 的 listener</param>
+    /// <param name="ct">伺服器的權杖(取消 = 關機)</param>
+    /// <param name="dispatch">把一個請求交給背景處理(不可 await 該請求的 I/O)</param>
+    /// <param name="log">錯誤訊息</param>
+    /// <param name="name">伺服器名稱(log 用)</param>
+    public static async Task AcceptLoopAsync(HttpListener listener, CancellationToken ct, Action<HttpListenerContext> dispatch, Action<string>? log, string name)
+    {
+        long errors = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            HttpListenerContext ctx;
+            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
+            catch (Exception) when (ct.IsCancellationRequested || !listener.IsListening) { break; }
+            catch (ObjectDisposedException) { break; }
+            catch (HttpListenerException ex)
+            {
+                // 單一連線的錯誤(Windows:客戶端在請求送完前斷線等):照舊繼續接受
+                LogLimited(log, ++errors, $"{name} 接受連線失敗(HttpListenerException {ex.ErrorCode}:{ex.Message}),繼續接受");
+                continue;
+            }
+            catch (Exception ex)
+            {
+                // 其他非關機的例外:記 log 後繼續;稍候再接受,避免同一個錯誤空轉占滿 CPU 與 log
+                LogLimited(log, ++errors, $"{name} 接受連線失敗({ex.GetType().Name}:{ex.Message}),繼續接受");
+                try { await Task.Delay(50, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                continue;
+            }
+            try { dispatch(ctx); }
+            catch (Exception ex)
+            {
+                LogLimited(log, ++errors, $"{name} 處理請求失敗({ex.GetType().Name}:{ex.Message}),中止該連線後繼續接受");
+                AbortResponse(ctx.Response);
+            }
+        }
+    }
+
+    /// <summary>前 10 次與之後每 1000 次記一行(壞掉的客戶端反覆觸發時不灌爆 log)。</summary>
+    private static void LogLimited(Action<string>? log, long count, string message)
+    {
+        if (count <= 10 || count % 1000 == 0) log?.Invoke(count > 10 ? $"{message}(累計 {count} 次)" : message);
+    }
+
+    /// <summary>
+    /// 回一段純文字(健康檢查、404 等)並關閉回應;寫出失敗(客戶端已 RST、已斷線)時 Abort,**不拋例外**。
+    /// 以 <c>_ = RespondTextAsync(...)</c> 在背景執行,不在接受迴圈裡 await(見 <see cref="AcceptLoopAsync"/>)。
+    /// </summary>
+    public static async Task RespondTextAsync(HttpListenerContext ctx, int status, string text)
+    {
+        var res = ctx.Response;
+        try
+        {
+            var body = System.Text.Encoding.UTF8.GetBytes(text);
+            res.StatusCode = status;
+            res.ContentType = "text/plain; charset=utf-8";
+            res.ContentLength64 = body.Length;
+            await res.OutputStream.WriteAsync(body).ConfigureAwait(false);
+            res.Close();
+        }
+        catch (Exception) { AbortResponse(res); }
+    }
+
+    /// <summary>
+    /// 只回狀態碼(握手失敗 500、來源不允許 403)並關閉;設定狀態碼或關閉失敗(標頭已送出、連線已斷)時 Abort。不拋例外。
+    /// 修正前直接 <c>StatusCode = …; Close()</c>:Close 丟例外時這條連線既沒關也沒 Abort,留在 Linux 受控 HttpListener 的連線表。
+    /// </summary>
+    public static void CloseResponse(HttpListenerResponse res, int status)
+    {
+        try
+        {
+            res.StatusCode = status;
+            res.Close();
+        }
+        catch (Exception) { AbortResponse(res); }
+    }
+
+    /// <summary>中止回應並關閉連線(錯誤路徑的最後一步;已關閉或已中止時無作用)。不拋例外。</summary>
+    public static void AbortResponse(HttpListenerResponse res)
+    {
+        try { res.Abort(); }
+        catch (Exception) { /* 已關閉或已釋放 */ }
+    }
+
     /// <summary>等背景迴圈結束,但不超過 <paramref name="timeout"/>(關機流程不可被卡住:之後還要寫紀錄 footer);逾時回傳 false。</summary>
     public static async Task<bool> WaitBoundedAsync(Task? task, TimeSpan timeout)
     {

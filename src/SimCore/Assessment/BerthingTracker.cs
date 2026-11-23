@@ -15,12 +15,16 @@ namespace SimosaBRM.SimCore.Assessment;
 /// (靠妥後在碰墊上的反覆輕碰、繫泊中纜繩上的擺盪不是新的靠上)。艏(+LOA/2)、舯(0)、艉(−LOA/2)朝碼頭面的對地速度取接觸開始前最後一個
 /// 評估步(每秒)取樣,僅供講評(端點含偏擺分量 r·x,不作為容許帶指標);<c>contactSpeed</c> 為該次靠上的接近接觸點法向速度最大值。</item>
 /// <item>碰墊接觸(contacts[]):每個 fenderContact 事件一筆(接觸點法向接近速度、靜態曲線能量與額定能量比、過載);<c>approach</c> = 接近接觸:
-/// 未繫妥,且該碰墊自上次接觸(或情境開始)以來曾離開 ≥ <see cref="LandingClearanceM"/>。</item>
+/// 未繫妥,且該碰墊自上次接觸(或情境開始)以來曾離開 ≥ <see cref="LandingClearanceM"/>。例外:同一碰墊未離開 ≥ <see cref="LandingClearanceM"/>
+/// 的再接觸(繫泊中在纜繩上的擺盪、推靠中的反彈、已離開泊位後被壓回碰墊並停在上面的擺盪;不是接近、未過載)不逐筆記錄,只計入
+/// <c>heldContacts</c>(含每碰墊次數);次數、法向速度 / 能量 / 能量比最大值、過載數(berthing.fenderContacts 等指標)一律以全部接觸的彙總計算,
+/// 已離開泊位後的再碰回次數與速度(reContacts、berthing.maxReContactSpeed_mps)也以全部再碰回計算。</item>
 /// <item>繫妥(allFast):所有已設定的纜繩皆受力(fast / heaving / slacking)且本次靠泊船舯前、後的碰墊皆已接觸(每秒評估);記下時刻、船舯里程與泊位中心(碰墊列中點)的偏差。
 /// 繫妥期間的接觸不是接近接觸;全部纜繩解除(無纜受力)後解除。</item>
 /// <item>已離開泊位(departed;E14 離泊後再碰回):曾接觸過泊位後,於評估步(每秒)所有碰墊壓縮為 0、無碼頭硬接觸、未繫妥,且船體外形距碼頭線(有限線段)
 /// &gt; <see cref="DepartedDistanceM"/>(情境 <c>berth.departedDistance_m</c>,預設 <see cref="DefaultDepartedDistanceM"/>)時成立並鎖定(再次繫妥時解除)。
-/// 已離開泊位後的碰墊/碼頭接觸為再碰回(contacts[].reContact),其接觸點法向速度最大值為 <c>berthing.maxReContactSpeed_mps</c>
+/// 已離開泊位後的碰墊/碼頭接觸為再碰回(reContacts;每個碰墊離開 ≥ <see cref="LandingClearanceM"/> 後的第一次再碰回逐筆列入 contacts[] 並標
+/// reContact,之後停在碰墊上的擺盪只計數),其接觸點法向速度最大值為 <c>berthing.maxReContactSpeed_mps</c>
 /// (與 maxLateralSpeed 分開;離泊過程中艉擺碰墊不算再碰回)。</item>
 /// <item>碼頭硬接觸次數、斷纜次數、各纜最大張力 / MBL(每秒取樣與 mooringLineParted 事件張力)、各拖船工作時間(status working 的秒數)與最大出力、拖纜斷裂次數。</item>
 /// <item>錨泊:每次 letGo 時的對地速度、帶上(anchorBroughtUp)時鏈長與水深比(scope)、走錨次數與累計時間(每秒取樣 dragging)、
@@ -60,7 +64,11 @@ public sealed class BerthingTracker
     /// <summary>summary.anchoring 是否輸出(情境宣告 anchors,或錨曾被使用)。</summary>
     public bool AnchoringEnabled => AnchoringDeclared || State.AnchorsUsed || _engine.External.AnchorsUsed;
 
-    public void Restore(BerthingState s) => State = s;
+    public void Restore(BerthingState s)
+    {
+        s.EnsureContactStats();
+        State = s;
+    }
 
     // ------------------------------------------------------------------ 觀察
 
@@ -75,25 +83,40 @@ public sealed class BerthingTracker
                 EnsureFenderState();
                 var fid = e.DataString("fenderId") ?? e.ItemId ?? "";
                 // 接近接觸:未繫妥且此碰墊自上次接觸以來曾離開 ≥ LandingClearanceM(判斷用接觸前的狀態)
-                var approach = !st.AllFast && !st.HeldFenders.Contains(fid);
+                var held = st.HeldFenders.Contains(fid);
+                var approach = !st.AllFast && !held;
                 StartEpisode(e.T);
-                if (!st.HeldFenders.Contains(fid)) st.HeldFenders.Add(fid);
+                if (!held) st.HeldFenders.Add(fid);
                 MarkLanded(fid);
                 var speed = e.DataNumber("normalSpeed_mps") ?? 0.0;
                 var energy = e.DataNumber("energy_kNm") ?? 0.0;
                 var rated = e.DataNumber("ratedEnergy_kNm");
-                st.Contacts.Add(new FenderContactMetric
+                double? ratio = rated is > 0 ? energy / rated.Value : null;
+                var overload = e.DataBool("overload") == true;
+                st.AddContactStats(speed, energy, ratio, overload);
+                // 同一碰墊未離開 ≥ LandingClearanceM 的再接觸(繫泊中在纜繩上的擺盪、推靠中的反彈,以及已離開泊位後被壓回碰墊並停在上面的擺盪;
+                // 不是接近、未過載)只計入彙總與每碰墊次數,不逐筆記入 contacts[](第三十輪 ENG-C1:吹攏風 25 kn 繫泊 2 h 約 2000 筆、
+                // 離開泊位後被吹回碼頭 2 h 約 2400 筆,快照與每秒 summary 隨之成長)。已離開泊位後者仍是再碰回:下方 ReContacted 每筆都計入
+                // reContacts 與 maxReContactSpeed;成立「已離開泊位」時船體距碼頭線 > departedDistance_m,碰墊皆已離開 ≥ LandingClearanceM
+                // (HeldFenders 已清空;departedDistance_m ≥ 碰墊高度 + LandingClearanceM 時必然如此,預設 20 m),每個碰墊第一次再碰回仍逐筆記錄
+                if (held && !overload)
                 {
-                    FenderId = fid, TS = e.T, Approach = approach, NormalSpeedMps = speed, NormalSpeedKn = Units.MpsToKn(speed),
-                    EnergyKNm = energy, RatedEnergyKNm = rated, EnergyRatio = rated is > 0 ? energy / rated.Value : null,
-                    MaxReactionKN = e.DataNumber("maxReaction_kN"), DeflectionPct = e.DataNumber("deflection_pct"), Overload = e.DataBool("overload") == true,
-                });
-                if (approach) Approached(speed);
-                if (st.Departed)
-                {
-                    st.Contacts[^1] = st.Contacts[^1] with { ReContact = true };
-                    ReContacted(speed);
+                    st.HeldContacts++;
+                    st.HeldContactsByFender ??= new Dictionary<string, int>(StringComparer.Ordinal);
+                    st.HeldContactsByFender[fid] = st.HeldContactsByFender.GetValueOrDefault(fid) + 1;
                 }
+                else
+                {
+                    st.Contacts.Add(new FenderContactMetric
+                    {
+                        FenderId = fid, TS = e.T, Approach = approach, NormalSpeedMps = speed, NormalSpeedKn = Units.MpsToKn(speed),
+                        EnergyKNm = energy, RatedEnergyKNm = rated, EnergyRatio = ratio,
+                        MaxReactionKN = e.DataNumber("maxReaction_kN"), DeflectionPct = e.DataNumber("deflection_pct"), Overload = overload,
+                        ReContact = st.Departed,
+                    });
+                }
+                if (approach) Approached(speed);
+                if (st.Departed) ReContacted(speed);
                 break;
             }
             case SimEventKinds.QuayContact:
@@ -545,13 +568,14 @@ public sealed class BerthingTracker
         {
             case "berthing.maxLateralSpeed_mps": return MaxLateralSpeedMps();
             case "berthing.maxLateralSpeed_kn": return MaxLateralSpeedMps() is { } v ? Units.MpsToKn(v) : null;
-            case "berthing.maxContactSpeed_mps": return MaxOf(st.Contacts, c => c.NormalSpeedMps);
+            // 碰墊接觸彙總(含未逐筆列入 contacts[] 的繫泊擺盪;BerthingState.AddContactStats)
+            case "berthing.maxContactSpeed_mps": return st.MaxContactSpeedMps;
             // 已離開泊位後再碰回(碰墊/碼頭)的接觸點法向速度最大值;未再碰回時 null
             case "berthing.maxReContactSpeed_mps": return st.MaxReContactSpeedMps;
-            case "berthing.maxEnergy_kNm": return MaxOf(st.Contacts, c => c.EnergyKNm);
-            case "berthing.maxEnergyRatio": return MaxOf(st.Contacts, c => c.EnergyRatio);
-            case "berthing.fenderContacts": return st.Contacts.Count;
-            case "berthing.fenderOverloads": return st.Contacts.Count(c => c.Overload);
+            case "berthing.maxEnergy_kNm": return st.MaxContactEnergyKNm;
+            case "berthing.maxEnergyRatio": return st.MaxContactEnergyRatio;
+            case "berthing.fenderContacts": return st.ContactCount;
+            case "berthing.fenderOverloads": return st.ContactOverloads;
             case "berthing.quayContacts": return st.QuayContacts;
             case "berthing.lineBreaks": return st.LineBreaks;
             case "berthing.maxLineTensionRatio": return MaxOf(st.Lines, l => l.MblT > 0 ? l.MaxTensionT / l.MblT : null);
@@ -593,10 +617,13 @@ public sealed class BerthingTracker
         {
             BerthId = _scenario.Berth?.Definition?.Id ?? _scenario.Berth?.Id,
             MaxLateralSpeedMps = max, MaxLateralSpeedKn = max is { } m ? Units.MpsToKn(m) : null,
-            MaxContactSpeedMps = MaxOf(st.Contacts, c => c.NormalSpeedMps),
+            MaxContactSpeedMps = st.MaxContactSpeedMps,
             DepartedAtS = st.DepartedAtS, ReContacts = st.ReContacts > 0 ? st.ReContacts : null, MaxReContactSpeedMps = st.MaxReContactSpeedMps,
-            MaxEnergyKNm = MaxOf(st.Contacts, c => c.EnergyKNm), MaxEnergyRatio = MaxOf(st.Contacts, c => c.EnergyRatio),
-            FenderContacts = st.Contacts.Count, FenderOverloads = st.Contacts.Count(c => c.Overload),
+            MaxEnergyKNm = st.MaxContactEnergyKNm, MaxEnergyRatio = st.MaxContactEnergyRatio,
+            FenderContacts = st.ContactCount, FenderOverloads = st.ContactOverloads,
+            HeldContacts = st.HeldContacts > 0 ? st.HeldContacts : null,
+            HeldContactsByFender = st.HeldContactsByFender is { Count: > 0 } hf
+                ? hf.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal) : null,
             QuayContacts = st.QuayContacts, QuayMaxPenetrationM = st.QuayContacts > 0 ? st.QuayMaxPenetrationM : null, QuayMaxSpeedMps = st.QuayMaxSpeedMps,
             LineBreaks = st.LineBreaks, MaxLineTensionRatio = MaxOf(st.Lines, l => l.MblT > 0 ? l.MaxTensionT / l.MblT : null),
             TugLineBreaks = st.TugLineBreaks, TugWorkingTimeS = st.Tugs.Sum(t => t.WorkingTimeS), MaxTugForceT = MaxOf(st.Tugs, t => t.MaxForceT),
@@ -663,7 +690,23 @@ public sealed class BerthingState
     /// <summary>繫妥時船舯里程 − 泊位中心里程(m;正 = 沿碼頭線方向超前)</summary>
     public double? AllFastPositionErrorM { get; set; }
     public List<BerthingLanding> Landings { get; set; } = new();
+    /// <summary>
+    /// 逐筆記錄的碰墊接觸:該碰墊離開 ≥ LandingClearanceM 後的第一次接觸(接近接觸、繫妥中離開再碰回、已離開泊位後的第一次再碰回)與過載;
+    /// 同一碰墊未離開的再接觸(繫泊擺盪、推靠反彈、離開泊位後被壓回碰墊的擺盪)只計入 <see cref="HeldContacts"/> 與下列彙總,
+    /// 清單長度因此不隨停在碰墊上的時間成長
+    /// </summary>
     public List<FenderContactMetric> Contacts { get; set; } = new();
+    /// <summary>全部碰墊接觸(含未逐筆記錄者)的次數(berthing.fenderContacts)。預設值不寫出(無接觸時快照格式不變)</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int ContactCount { get; set; }
+    /// <summary>全部碰墊接觸的接觸點法向速度、靜態曲線能量、能量比最大值(berthing.maxContactSpeed_mps / maxEnergy_kNm / maxEnergyRatio;無接觸時 null)</summary>
+    public double? MaxContactSpeedMps { get; set; }
+    public double? MaxContactEnergyKNm { get; set; }
+    public double? MaxContactEnergyRatio { get; set; }
+    /// <summary>過載的碰墊接觸次數(berthing.fenderOverloads;過載者一律逐筆記錄)</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int ContactOverloads { get; set; }
+    /// <summary>未逐筆記錄的再接觸次數與每碰墊次數(繫泊擺盪、推靠反彈、離開泊位後被壓回碰墊的擺盪;後者同時計入 <see cref="ReContacts"/>)</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int HeldContacts { get; set; }
+    public Dictionary<string, int>? HeldContactsByFender { get; set; }
     public int QuayContacts { get; set; }
     public List<double> QuayContactTimes { get; set; } = new();
     public double QuayMaxPenetrationM { get; set; }
@@ -685,6 +728,30 @@ public sealed class BerthingState
     /// <summary>已離開泊位後的再碰回次數(碰墊 + 碼頭)與接觸點法向速度最大值(berthing.maxReContactSpeed_mps)</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int ReContacts { get; set; }
     public double? MaxReContactSpeedMps { get; set; }
+
+    /// <summary>一筆碰墊接觸計入彙總(與逐筆清單取最大值的結果相同:依事件順序,只有更大者才取代)。</summary>
+    public void AddContactStats(double speedMps, double energyKNm, double? energyRatio, bool overload)
+    {
+        ContactCount++;
+        if (MaxContactSpeedMps is null || speedMps > MaxContactSpeedMps) MaxContactSpeedMps = speedMps;
+        if (MaxContactEnergyKNm is null || energyKNm > MaxContactEnergyKNm) MaxContactEnergyKNm = energyKNm;
+        if (energyRatio is { } r && (MaxContactEnergyRatio is null || r > MaxContactEnergyRatio)) MaxContactEnergyRatio = r;
+        if (overload) ContactOverloads++;
+    }
+
+    /// <summary>
+    /// 沒有彙總欄位的舊格式狀態(第三十輪以前的快照:每筆接觸都在 <see cref="Contacts"/>、無 ContactCount):由清單重建彙總。
+    /// 新格式的 ContactCount ≥ 清單長度,不變。
+    /// </summary>
+    public void EnsureContactStats()
+    {
+        if (ContactCount >= Contacts.Count) return;
+        ContactCount = 0;
+        MaxContactSpeedMps = MaxContactEnergyKNm = MaxContactEnergyRatio = null;
+        ContactOverloads = 0;
+        foreach (var c in Contacts) AddContactStats(c.NormalSpeedMps, c.EnergyKNm, c.EnergyRatio, c.Overload);
+        ContactCount += HeldContacts;
+    }
 }
 
 public sealed record ApproachSample
@@ -721,7 +788,10 @@ public sealed record FenderContactMetric
 {
     [JsonPropertyName("fenderId")] public string FenderId { get; init; } = "";
     [JsonPropertyName("t_s")] public double TS { get; init; }
-    /// <summary>接近接觸(未繫妥,且此碰墊自上次接觸以來曾離開 ≥ 0.5 m);false = 靠妥後輕碰 / 繫泊中擺盪 / 反彈未離開</summary>
+    /// <summary>
+    /// 接近接觸(未繫妥,且此碰墊自上次接觸以來曾離開 ≥ 0.5 m);false = 繫妥中離開 ≥ 0.5 m 後再碰回,或未離開但過載的再接觸
+    /// (未離開且未過載的擺盪 / 反彈不逐筆記錄,已離開泊位後者亦同,見 summary.berthing.heldContacts)
+    /// </summary>
     [JsonPropertyName("approach")] public bool Approach { get; init; }
     [JsonPropertyName("normalSpeed_mps")] public double NormalSpeedMps { get; init; }
     [JsonPropertyName("normalSpeed_kn")] public double NormalSpeedKn { get; init; }
@@ -731,7 +801,10 @@ public sealed record FenderContactMetric
     [JsonPropertyName("maxReaction_kN")] public double? MaxReactionKN { get; init; }
     [JsonPropertyName("deflection_pct")] public double? DeflectionPct { get; init; }
     [JsonPropertyName("overload")] public bool Overload { get; init; }
-    /// <summary>已離開泊位後再碰回(berthing.maxReContactSpeed_mps;false 時不寫出)</summary>
+    /// <summary>
+    /// 已離開泊位後再碰回(berthing.maxReContactSpeed_mps;false 時不寫出)。逐筆清單只有每個碰墊離開 ≥ 0.5 m 後的第一次再碰回(與過載);
+    /// 之後停在碰墊上的擺盪只計入 summary.berthing.heldContacts 與 reContacts
+    /// </summary>
     [JsonPropertyName("reContact"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool ReContact { get; init; }
 }
 
@@ -797,8 +870,16 @@ public sealed record SummaryBerthing
     [JsonPropertyName("maxReContactSpeed_mps")] public double? MaxReContactSpeedMps { get; init; }
     [JsonPropertyName("maxEnergy_kNm")] public double? MaxEnergyKNm { get; init; }
     [JsonPropertyName("maxEnergyRatio")] public double? MaxEnergyRatio { get; init; }
+    /// <summary>全部碰墊接觸次數(含未逐筆列入 contacts[] 的 heldContacts)</summary>
     [JsonPropertyName("fenderContacts")] public int FenderContacts { get; init; }
     [JsonPropertyName("fenderOverloads")] public int FenderOverloads { get; init; }
+    /// <summary>
+    /// 未逐筆列入 contacts[] 的碰墊接觸次數與每碰墊次數(同一碰墊未離開 ≥ 0.5 m 的再接觸:繫泊中在纜繩上的擺盪、推靠中的反彈、
+    /// 已離開泊位後被壓回碰墊並停在上面的擺盪;不是接近接觸、未過載);已計入 fenderContacts 與 maxContactSpeed / maxEnergy / maxEnergyRatio,
+    /// 已離開泊位後者也計入 reContacts 與 maxReContactSpeed。無時 null(不寫出)
+    /// </summary>
+    [JsonPropertyName("heldContacts")] public int? HeldContacts { get; init; }
+    [JsonPropertyName("heldContactsByFender")] public IReadOnlyDictionary<string, int>? HeldContactsByFender { get; init; }
     [JsonPropertyName("quayContacts")] public int QuayContacts { get; init; }
     [JsonPropertyName("quayMaxPenetration_m")] public double? QuayMaxPenetrationM { get; init; }
     [JsonPropertyName("quayMaxSpeed_mps")] public double? QuayMaxSpeedMps { get; init; }

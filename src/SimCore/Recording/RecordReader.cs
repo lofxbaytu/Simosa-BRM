@@ -10,7 +10,10 @@ public sealed class RecordFile
 {
     public required RecordHeader Header { get; init; }
     public required IReadOnlyList<RecordInput> Inputs { get; init; }
+    /// <summary>快照行(<see cref="RecordReader.Read(string, bool)"/> 以 includeSnapshots: false 讀時為空,只計數於 <see cref="SnapshotLines"/>)</summary>
     public required IReadOnlyList<RecordSnapshot> Snapshots { get; init; }
+    /// <summary>快照行數(不論是否保留內容)</summary>
+    public long SnapshotLines { get; init; }
     /// <summary>核心事件(交通、時間表、評估、教官、引擎;講評站用)</summary>
     public required IReadOnlyList<RecordEvent> Events { get; init; }
     /// <summary>所有 summary 行(最後一行為定稿;舊檔無則空)</summary>
@@ -36,7 +39,11 @@ public sealed class RecordFile
 /// <summary>JSON Lines 紀錄讀取與完整性檢查。</summary>
 public static class RecordReader
 {
-    public static RecordFile Read(string path)
+    /// <summary>
+    /// 讀入整份紀錄並重算 SHA-256。<paramref name="includeSnapshots"/> = false 時快照行只計數與納入雜湊、不反序列化也不保留
+    /// (重播與打包工具不用快照;一份 2 h 紀錄有 720 份快照,第三十輪 ENG-C3 量到讀回常駐 8.7–133 MB)。
+    /// </summary>
+    public static RecordFile Read(string path, bool includeSnapshots = true)
     {
         RecordHeader? header = null;
         RecordFooter? footer = null;
@@ -47,6 +54,7 @@ public static class RecordReader
         var sessions = new List<RecordSession>();
         var vhf = new List<RecordVhf>();
         long stateLines = 0;
+        long snapshotLines = 0;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         foreach (var line in File.ReadLines(path, Encoding.UTF8))
@@ -64,7 +72,10 @@ public static class RecordReader
             {
                 case RecordKinds.Header: header = ContractJson.Deserialize<RecordHeader>(line); break;
                 case RecordKinds.Input: inputs.Add(ContractJson.Deserialize<RecordInput>(line)!); break;
-                case RecordKinds.Snapshot: snapshots.Add(ContractJson.Deserialize<RecordSnapshot>(line)!); break;
+                case RecordKinds.Snapshot:
+                    snapshotLines++;
+                    if (includeSnapshots) snapshots.Add(ContractJson.Deserialize<RecordSnapshot>(line)!);
+                    break;
                 case RecordKinds.Event: events.Add(ContractJson.Deserialize<RecordEvent>(line)!); break;
                 case RecordKinds.Summary: summaries.Add(ContractJson.Deserialize<RecordSummary>(line)!); break;
                 case RecordKinds.Session: sessions.Add(ContractJson.Deserialize<RecordSession>(line)!); break;
@@ -80,6 +91,7 @@ public static class RecordReader
             Header = header,
             Inputs = inputs,
             Snapshots = snapshots,
+            SnapshotLines = snapshotLines,
             Events = events,
             Summaries = summaries,
             Sessions = sessions,
@@ -88,6 +100,22 @@ public static class RecordReader
             Footer = footer,
             ComputedSha256 = Convert.ToHexString(hash.GetCurrentHash()),
         };
+    }
+
+    /// <summary>
+    /// 只讀標頭(第一個 header 行;正常紀錄即第一行),不讀其餘各行、不檢查完整性。用於只需標頭的地方(主控程序重播前選動力學模型);
+    /// 完整讀取與雜湊檢查仍由 <see cref="Read(string, bool)"/> 負責。
+    /// </summary>
+    public static RecordHeader ReadHeader(string path)
+    {
+        foreach (var line in File.ReadLines(path, Encoding.UTF8))
+        {
+            if (line.Length == 0) continue;
+            var kind = PeekKind(line);
+            if (kind == RecordKinds.Header) return ContractJson.Deserialize<RecordHeader>(line) ?? throw new InvalidDataException($"紀錄檔 header 無法解析:{path}");
+            if (kind == RecordKinds.Footer) break;
+        }
+        throw new InvalidDataException($"紀錄檔缺少 header:{path}");
     }
 
     /// <summary>逐行讀出 25 Hz 狀態(講評站航跡圖用)。</summary>

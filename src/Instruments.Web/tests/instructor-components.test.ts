@@ -199,6 +199,38 @@ describe('簡報結構區塊(規劃時間、同儕評估提示、講評引導問
     first.tick();
     expect(ended).toHaveLength(0);
   });
+  it('planning-time-ended 帶簡報所屬的情境 id(scenarioId;教官站新練習清操作紀錄時據此保留本練習的規劃時間紀錄;第三十輪 W3)', async () => {
+    let clock = 1_000_000;
+    const block = await mount<BriefingBlockEl>('brm-briefing-block', { briefing: E22X.briefingDoc, now: () => clock, scenarioId: 'E22x_test' });
+    const details: unknown[] = [];
+    block.addEventListener('planning-time-ended', (ev) => details.push((ev as CustomEvent).detail));
+    q<HTMLButtonElement>(block, 'button.start').click();
+    clock += 300_000;
+    block.tick();
+    expect(details).toEqual([{ planningTimeMin: 5, scenarioId: 'E22x_test' }]);
+  });
+  it('情境面板把所選情境的 id 傳給簡報區塊(.scenarioId):換情境跟著換,倒數到時的事件經面板冒出、帶該情境 id(審查 WR2)', async () => {
+    const other: ScenarioSummary = { ...E22X, id: 'E22y_mini', name: '迷你二' };
+    const el = await mount('brm-scenario-panel', { scenarios: [E22X, other] });
+    const block = () => el.shadowRoot!.querySelector('brm-briefing-block') as BriefingBlockEl & { scenarioId: string };
+    expect(block().scenarioId).toBe('E22x_mini');
+    (el.shadowRoot!.querySelectorAll('.item')[1] as HTMLElement).click();
+    await (el as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+    const second = block();
+    await second.updateComplete;
+    expect(second.scenarioId).toBe('E22y_mini');
+    // 由面板內的區塊跑完倒數:事件 composed 冒出面板,detail 帶面板所選的情境 id(不是宿主目前載入的情境)
+    let clock = 1_000_000;
+    second.now = () => clock;
+    const details: unknown[] = [];
+    const onEnded = (ev: Event) => details.push((ev as CustomEvent).detail);
+    document.body.addEventListener('planning-time-ended', onEnded);
+    q<HTMLButtonElement>(second, 'button.start').click();
+    clock += 300_000;
+    second.tick();
+    document.body.removeEventListener('planning-time-ended', onEnded);
+    expect(details).toEqual([{ planningTimeMin: 5, scenarioId: 'E22y_mini' }]);
+  });
   it('倒數:開始 → 剩 1 分鐘變色 → 到時顯示「規劃時間結束」並發 planning-time-ended;暫停/繼續/重設', async () => {
     let clock = 1_000_000;
     const block = await mount<BriefingBlockEl>('brm-briefing-block', { briefing: E22X.briefingDoc, now: () => clock });

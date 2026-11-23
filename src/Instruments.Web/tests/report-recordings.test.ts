@@ -10,7 +10,8 @@ import { render } from 'lit';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parseReplay } from '../src/lib/record-replay.js';
 import { loadScenarioList } from '../src/lib/scenario.js';
-import { buildSessionRecord, isSessionRecord } from '../src/lib/session-record.js';
+import { SESSION_RECORD_VERSION, buildSessionRecord, isSessionRecord } from '../src/lib/session-record.js';
+import { instructorRecordJson } from './support/instructor-record.js';
 import { recordingDepsProvider, RECORDING_SETTINGS_KEY, type MediaRecorderLike, type RecordingSummary, type ScreenRecordingDeps } from '../src/lib/screen-recording.js';
 import { buildDebriefReport } from '../src/report/debrief-report.js';
 import { renderReportDoc } from '../src/report/report-views.js';
@@ -32,7 +33,7 @@ function text(t: ReturnType<typeof renderReportDoc>): string {
 describe('錄影摘要進紀錄與講評報告', () => {
   it('教官站紀錄 version 4 recordings → 重播 header.recordings → 報告「畫面錄影」表', () => {
     const rec = buildSessionRecord({ mode: 'full', source: 'ws://192.168.77.11:8765', scenario: null, shipId: 'FSB1', sampleInterval_s: 1, states: [], operations: [], markers: [], commands: [], summary: null, recordings: RECORDINGS });
-    expect(rec.version).toBe(4);
+    expect(rec.version).toBe(SESSION_RECORD_VERSION);
     expect(rec.recordings).toEqual(RECORDINGS);
     expect(rec.recordings).not.toBe(RECORDINGS);
     expect(isSessionRecord(rec)).toBe(true);
@@ -150,8 +151,8 @@ describe('教官站錄影整合', () => {
     await vi.waitFor(() => expect(panel.status.state).toBe('idle'));
     await app.updateComplete;
     expect(app.shadowRoot!.querySelector('header .rec-badge')).toBeNull();
-    const record = JSON.parse((app as unknown as { sessionRecordJson(): string }).sessionRecordJson()) as { version: number; recordings: RecordingSummary[] };
-    expect(record.version).toBe(4);
+    const record = JSON.parse(instructorRecordJson(app)) as { version: number; recordings: RecordingSummary[] };
+    expect(record.version).toBe(SESSION_RECORD_VERSION);
     expect(record.recordings).toHaveLength(1);
     expect(record.recordings[0]).toMatchObject({ mediaId: 'M1', file: 'M1.webm', durationS: 12, uploadedBytes: 30, station: 'instructor' });
   });

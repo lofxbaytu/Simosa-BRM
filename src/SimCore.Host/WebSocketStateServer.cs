@@ -116,30 +116,17 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         foreach (var c in _clients.Values) c.Events.Writer.TryWrite(frame);
     }
 
-    private async Task AcceptLoopAsync(HttpListener listener)
+    /// <summary>
+    /// 接受迴圈:單一請求的處理都在背景(健康檢查的回應也是),任何單一請求的錯誤都不會讓迴圈結束(HttpListenerStarter.AcceptLoopAsync;
+    /// 第三十輪 2 小時搜尋 host-accept-loop-death:修正前 <c>GET /</c> 後立刻 RST 就讓迴圈結束,之後所有站都連不上)。
+    /// </summary>
+    private Task AcceptLoopAsync(HttpListener listener) => HttpListenerStarter.AcceptLoopAsync(listener, _cts.Token, ctx =>
     {
-        while (!_cts.IsCancellationRequested)
-        {
-            HttpListenerContext ctx;
-            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
-            catch (Exception) when (_cts.IsCancellationRequested) { break; }
-            catch (HttpListenerException) { continue; }
-            catch (ObjectDisposedException) { break; }
-
-            if (!ctx.Request.IsWebSocketRequest)
-            {
-                // 簡單健康檢查
-                var body = Encoding.UTF8.GetBytes("Simosa BRM SimCore WebSocket endpoint. Connect with a WebSocket client.\n");
-                ctx.Response.StatusCode = 200;
-                ctx.Response.ContentType = "text/plain; charset=utf-8";
-                ctx.Response.ContentLength64 = body.Length;
-                await ctx.Response.OutputStream.WriteAsync(body).ConfigureAwait(false);
-                ctx.Response.Close();
-                continue;
-            }
+        if (!ctx.Request.IsWebSocketRequest)
+            _ = HttpListenerStarter.RespondTextAsync(ctx, 200, "Simosa BRM SimCore WebSocket endpoint. Connect with a WebSocket client.\n");   // 簡單健康檢查
+        else
             _ = Task.Run(() => HandleClientAsync(ctx));
-        }
-    }
+    }, msg => Log?.Invoke(msg), "狀態 WebSocket");
 
     private async Task HandleClientAsync(HttpListenerContext ctx)
     {
@@ -152,8 +139,7 @@ public sealed class WebSocketStateServer : IAsyncDisposable
         catch (Exception ex)
         {
             Log?.Invoke($"WebSocket 握手失敗:{ex.Message}");
-            ctx.Response.StatusCode = 500;
-            ctx.Response.Close();
+            HttpListenerStarter.CloseResponse(ctx.Response, 500);
             return;
         }
 

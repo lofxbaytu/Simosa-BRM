@@ -351,10 +351,10 @@ lines:
 | 接觸段 | 船體與碰墊/碼頭由「無接觸」變為「接觸」到不再接觸;以每秒評估步取樣或 `fenderContact` / `quayContact` 事件開始,取樣不再接觸時結束 |
 | 靠上(landing) | 一次靠泊接近:**第一次接觸段**,或**未繫妥且所有碰墊都已離開碰墊面 ≥ 0.5 m**(`BerthingTracker.LandingClearanceM`,每秒取樣船體外形到碰墊面的距離)之後的接觸段。靠妥後在碰墊上的反覆輕碰、拖船推靠中的反彈、繫泊中在纜繩上的擺盪都不是新的靠上(2026-10-17 審查修正:E14 不操船 600 s 原本產生 24 筆 landing) |
 | 艏/舯/艉橫向接近速度 | 船體點 (+LOA/2, 0)、(0, 0)、(−LOA/2, 0) 的對地速度(含流)在最近碼頭線段法向(朝碼頭為正)的分量;取**接觸開始前最後一個無接觸的每秒取樣**(≤ 1 s 前,未受碰墊反力影響)。情境開始即接觸者 `initial: true`、速度為 null。**僅供講評**:端點含偏擺分量 r·x,比實際接觸點的法向速度大,不併入 `maxLateralSpeed` |
-| 碰墊接觸 | 每個 `fenderContact` 一筆:接觸點法向接近速度(接觸開始時,m/s 與 kn)、靜態曲線能量 E(δ_max)、額定能量與能量比 E/E_rated、最大反力、壓縮 %、過載;`approach` = **接近接觸**:未繫妥,且該碰墊自上次接觸(或情境開始)以來曾離開 ≥ 0.5 m(先靠上艏端、艉端後才擺靠者,艉端碰墊的第一次接觸仍是接近接觸)。情境開始即接觸的碰墊須先離開 ≥ 0.5 m |
-| 靠泊橫向接近速度 | `maxLateralSpeed` = 所有接近接觸(碰墊接觸 `approach: true` 與未繫妥時的碼頭硬接觸)**接觸點法向速度**的最大值;無接近接觸時 null。每次靠上另記 `contactSpeed`(該次靠上接近接觸的最大值)。`maxContactSpeed` 則為全部碰墊接觸(含繫泊中擺盪) |
+| 碰墊接觸 | 每個 `fenderContact` 一筆(`contacts[]`):接觸點法向接近速度(接觸開始時,m/s 與 kn)、靜態曲線能量 E(δ_max)、額定能量與能量比 E/E_rated、最大反力、壓縮 %、過載;`approach` = **接近接觸**:未繫妥,且該碰墊自上次接觸(或情境開始)以來曾離開 ≥ 0.5 m(先靠上艏端、艉端後才擺靠者,艉端碰墊的第一次接觸仍是接近接觸)。情境開始即接觸的碰墊須先離開 ≥ 0.5 m。**例外(第三十輪 ENG-C1)**:同一碰墊**未離開 ≥ 0.5 m 的再接觸**(繫泊中在纜繩上的擺盪、推靠中的反彈、已離開泊位後被壓回碰墊並停在上面的擺盪;不是接近接觸、未過載)不逐筆記入 `contacts[]`,只計入 `heldContacts` 與 `heldContactsByFender{<碰墊 id>: 次數}`(已離開泊位後者同時計入 `reContacts` 與 `maxReContactSpeed_mps`,見下方「已離開泊位與再碰回」);`fenderContacts`、`fenderOverloads`、`maxContactSpeed_mps`、`maxEnergy_kNm`、`maxEnergyRatio` 一律以**全部**接觸的彙總(評估狀態 `BerthingState.ContactCount` / `MaxContact*` / `ContactOverloads`)計算,指標值與逐筆記錄時相同(`BerthingAssessmentTests.HeldContactsAreCountedNotListedAndMetricsEqualAllContactEvents`)。理由:吹攏風 25 kn 繫泊不操作 2 h 約 2000 筆擺盪接觸(約 16 筆/min),逐筆記錄時每份評估快照與每秒 summary 都隨之成長(最後一份快照約 600 KB、受控堆積約 +11 MB/h、評估步 0.4 → 9 ms);離開泊位後被吹攏風壓回碼頭、沒有重新繫妥(E14 / E17 開艏時主機起動失敗、靠泊中途放棄再靠)2 h 約 2400 筆,量級相同(第三十輪審查 REV-ENG-C1:最初只排除「非再碰回」者,這條路徑仍逐筆記錄;`BerthingAssessmentTests.PinnedAfterDepartureReContactsAreCountedNotListed`) |
+| 靠泊橫向接近速度 | `maxLateralSpeed` = 所有接近接觸(碰墊接觸 `approach: true` 與未繫妥時的碼頭硬接觸)**接觸點法向速度**的最大值;無接近接觸時 null。每次靠上另記 `contactSpeed`(該次靠上接近接觸的最大值)。`maxContactSpeed` 則為全部碰墊接觸(含繫泊中擺盪,即含 `heldContacts`) |
 | 繫妥(allFast) | 每秒評估:所有已設定的纜繩皆受力(fast / heaving / slacking),且本次靠泊船舯前、後的碰墊都已有接觸事件(艏艉皆已靠上,不必同時接觸)。記下 `allFastAt_s`、船舯里程 `allFastMidshipChainage_m` 與泊位中心偏差 `allFastPositionError_m`(船舯里程 − 泊位中心,正 = 沿碼頭線方向超前);泊位中心 `berthCentreChainage_m` = 碰墊列首尾中點(無碰墊時為碼頭線中點)。繫妥期間的接觸不是接近接觸;無任何纜繩受力時解除。艏艉靠上旗標在離開所有碰墊 ≥ 0.5 m、未繫妥且纜繩未全部受力時清除(先繫纜再以纜繩/拖船靠攏時,離開再靠回仍屬同一次靠泊) |
-| 已離開泊位與再碰回 | 每秒評估:**曾接觸過泊位**(有 landing)後,所有碰墊壓縮為 0、無碼頭硬接觸、未繫妥,且**船體外形(艏艉含)至碼頭線(有限線段)的最近距離** > `berth.departedDistance_m`(情境選填,預設 20 m ≈ 1 B;`BerthingTracker.DefaultDepartedDistanceM`;給定時須為有限正數,0 或負值為結構錯誤 — 否則離泊中艉擺接觸會被誤判為再碰回而改變評分,`BerthTests.BerthDepartedDistanceMustBeFinitePositive`)→ 「已離開泊位」成立並鎖定(`departedAt_s` 記第一次;再次繫妥時解除)。之後的碰墊/碼頭接觸為**再碰回**(`contacts[].reContact: true`、`reContacts` 次數),接觸點法向速度最大值為 `maxReContactSpeed_mps`(與 `maxLateralSpeed` 分開)。以船體而非船舯判定:沿碼頭向前/向後駛離時船舯越過碼頭端而艉/艏仍在碰墊旁,不應視為已離開。離泊過程中的艉擺接觸、繫泊中擺盪都不是再碰回(E14 參考離泊腳本 T+269–359 s 的艉擺接觸 `maxLateralSpeed` 0.39 m/s,`departedAt_s` 486 s,其後無接觸 → 指標 null)。只用於評估,不影響物理與雜湊;新欄位為預設值時不寫出(舊 summary/快照格式不變) |
+| 已離開泊位與再碰回 | 每秒評估:**曾接觸過泊位**(有 landing)後,所有碰墊壓縮為 0、無碼頭硬接觸、未繫妥,且**船體外形(艏艉含)至碼頭線(有限線段)的最近距離** > `berth.departedDistance_m`(情境選填,預設 20 m ≈ 1 B;`BerthingTracker.DefaultDepartedDistanceM`;給定時須為有限正數,0 或負值為結構錯誤 — 否則離泊中艉擺接觸會被誤判為再碰回而改變評分,`BerthTests.BerthDepartedDistanceMustBeFinitePositive`)→ 「已離開泊位」成立並鎖定(`departedAt_s` 記第一次;再次繫妥時解除)。之後的碰墊/碼頭接觸為**再碰回**(`reContacts` 次數;每個碰墊離開 ≥ 0.5 m 後的第一次再碰回逐筆列入 `contacts[]` 並標 `reContact: true`,之後停在該碰墊上的擺盪只計入 `heldContacts`,仍計入 `reContacts`),接觸點法向速度最大值為 `maxReContactSpeed_mps`(以全部再碰回計算;與 `maxLateralSpeed` 分開)。以船體而非船舯判定:沿碼頭向前/向後駛離時船舯越過碼頭端而艉/艏仍在碰墊旁,不應視為已離開。離泊過程中的艉擺接觸、繫泊中擺盪都不是再碰回(E14 參考離泊腳本 T+269–359 s 的艉擺接觸 `maxLateralSpeed` 0.39 m/s,`departedAt_s` 486 s,其後無接觸 → 指標 null)。只用於評估,不影響物理與雜湊;新欄位為預設值時不寫出(舊 summary/快照格式不變) |
 | 碼頭硬接觸 | `quayContact` 次數、最大穿入、接觸時法向速度 |
 | 繫纜 | 每秒取樣的最大張力(t)與 MBL,比值 T/MBL;`mooringLineParted` 計斷纜次數(張力取事件值) |
 | 拖船 | status `working` 的累計秒數(每秒取樣)、最大出力(t)、繫柱拖力;`tugLineParted` 計拖纜斷裂次數與時刻 |
@@ -362,6 +362,12 @@ lines:
 | 帶上 | `anchorBroughtUp` 時鏈長、節數、水深與 **scope = 鏈長 / 水深**(鏈長選擇,與參數集 `anchoring.scopeMultiplier` 比較) |
 | 走錨 | `anchorDragging` 次數、首次時刻;累計走錨時間(每秒取樣 dragging);錨鏈孔最大張力(每秒取樣與事件值) |
 | 走錨偵測與反應 | 首次走錨後第一次 `acknowledge`(偵測/回報)時刻;第一個學員反應(舵令、車令、轉速、側推、操舵模式,或教官/學員送出的 `anchor` 指令 `anchorCommand`/`anchorLetGo`)的時刻、方式與反應時間 |
+
+**事件流量(第三十輪 ENG-C9,只記錄、未改)**:`BerthModel` 的碰墊接觸判定沒有滯後,繫泊中船在纜繩上隨陣風擺盪時,每離開碰墊再碰回就發一個 `fenderContact` 事件
+(E14 吹攏風 25 kn 不操作約 16 個/min、18 kn 約 3 個/min,2 h 約 2000 個)。評估狀態已不再逐筆保留(見上表「碰墊接觸」),但事件本身仍寫入紀錄的 event 行(每個約 450 B)、
+WebSocket 事件框與主控程序主控台,教官站事件清單(上限 2000 筆)約 2 h 會被它填滿而擠掉故障/警報等事件。在 `BerthModel` 加接觸滯後或繫泊擺盪不發事件會改變事件序列與時間表
+`when: event` 的觸發(= 改變訓練內容)並需重錄夾具,本輪不做;教官站可把這類大量事件合併顯示(Web 範圍)。CPA 警報(`TrafficManager`)與區域進出(`ZoneTracker`)
+在門檻附近同樣沒有滯後,屬同一類,亦未改。
 
 ### 9.2 指標(`MetricNames`;容許帶可引用,與 Python `scenario.py` METRIC_NAMES 一致)
 

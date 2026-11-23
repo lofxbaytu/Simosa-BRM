@@ -60,6 +60,22 @@ public class RecordReplayTests
         Assert.True(rec.StateLines > 0);
         Assert.Equal("E01_baseline", rec.Header.Scenario.Id);
         Assert.Contains(rec.Snapshots, s => s.Tick == 700);
+        Assert.Equal(rec.Snapshots.Count, rec.SnapshotLines);
+
+        // 略過快照(重播、打包工具;第三十輪 ENG-C3):快照行只計數,雜湊、完整性與其他各行相同;只讀標頭與完整讀取的標頭相同
+        var lean = RecordReader.Read(path, includeSnapshots: false);
+        Assert.Empty(lean.Snapshots);
+        Assert.Equal(rec.SnapshotLines, lean.SnapshotLines);
+        Assert.True(lean.IntegrityOk);
+        Assert.Equal(rec.ComputedSha256, lean.ComputedSha256);
+        Assert.Equal(rec.Inputs.Count, lean.Inputs.Count);
+        Assert.Equal(rec.Events.Count, lean.Events.Count);
+        Assert.Equal(rec.StateLines, lean.StateLines);
+        Assert.Equal(ContractJson.Serialize(rec.Header), ContractJson.Serialize(RecordReader.ReadHeader(path)));
+        var headerless = Path.Combine(TestData.TestRecordsDirectory, $"headerless-{Guid.NewGuid():N}.jsonl");
+        File.WriteAllLines(headerless, File.ReadLines(path).Skip(1));
+        Assert.Throws<InvalidDataException>(() => RecordReader.ReadHeader(headerless));
+        File.Delete(headerless);
 
         var result = Replayer.Replay(path, TestData.Ship);
         Assert.True(result.IntegrityOk);

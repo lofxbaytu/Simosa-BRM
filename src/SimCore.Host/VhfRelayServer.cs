@@ -168,28 +168,14 @@ public sealed class VhfRelayServer : IAsyncDisposable
     }
 
     // ---------------------------------------------------------------- 連線
-    private async Task AcceptLoopAsync(HttpListener listener)
+    /// <summary>接受迴圈:健康檢查與握手都在背景處理,單一請求的錯誤不會讓迴圈結束(同 WebSocketStateServer;HttpListenerStarter.AcceptLoopAsync)。</summary>
+    private Task AcceptLoopAsync(HttpListener listener) => HttpListenerStarter.AcceptLoopAsync(listener, _cts.Token, ctx =>
     {
-        while (!_cts.IsCancellationRequested)
-        {
-            HttpListenerContext ctx;
-            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
-            catch (Exception) when (_cts.IsCancellationRequested) { break; }
-            catch (HttpListenerException) { continue; }
-            catch (ObjectDisposedException) { break; }
-            if (!ctx.Request.IsWebSocketRequest)
-            {
-                var body = Encoding.UTF8.GetBytes("Simosa BRM VHF relay endpoint. Connect with a WebSocket client (see src/Contracts/vhf-protocol.md).\n");
-                ctx.Response.StatusCode = 200;
-                ctx.Response.ContentType = "text/plain; charset=utf-8";
-                ctx.Response.ContentLength64 = body.Length;
-                await ctx.Response.OutputStream.WriteAsync(body).ConfigureAwait(false);
-                ctx.Response.Close();
-                continue;
-            }
+        if (!ctx.Request.IsWebSocketRequest)
+            _ = HttpListenerStarter.RespondTextAsync(ctx, 200, "Simosa BRM VHF relay endpoint. Connect with a WebSocket client (see src/Contracts/vhf-protocol.md).\n");
+        else
             _ = Task.Run(() => HandleClientAsync(ctx));
-        }
-    }
+    }, msg => Log?.Invoke(msg), "VHF");
 
     /// <summary>來源過濾(預設 <see cref="HostCommandRouter.IsAllowedShutdownClient"/>:本機或直連私有網段;與 MediaUploadServer 同一信任模型),其餘 403。</summary>
     public Func<IPEndPoint?, bool> ClientFilter { get; set; } = HostCommandRouter.IsAllowedShutdownClient;
@@ -202,8 +188,7 @@ public sealed class VhfRelayServer : IAsyncDisposable
         if (!ClientFilter(ctx.Request.RemoteEndPoint))
         {
             Log?.Invoke($"VHF 拒絕來源 {ctx.Request.RemoteEndPoint}(只接受本機或直連網段)");
-            ctx.Response.StatusCode = 403;
-            ctx.Response.Close();
+            HttpListenerStarter.CloseResponse(ctx.Response, 403);
             return;
         }
         WebSocket socket;
@@ -211,8 +196,7 @@ public sealed class VhfRelayServer : IAsyncDisposable
         catch (Exception ex)
         {
             Log?.Invoke($"VHF 握手失敗:{ex.Message}");
-            ctx.Response.StatusCode = 500;
-            ctx.Response.Close();
+            HttpListenerStarter.CloseResponse(ctx.Response, 500);
             return;
         }
         var id = $"s{Interlocked.Increment(ref _nextId)}";

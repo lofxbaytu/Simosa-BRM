@@ -41,9 +41,10 @@ public sealed class MediaUploadTests : IDisposable
         return port;
     }
 
-    private MediaUploadServer NewServer(long maxBytes = 1024 * 1024, string? sub = "media")
+    private MediaUploadServer NewServer(long maxBytes = 1024 * 1024, string? sub = "media", Action<MediaUploadServer>? configure = null)
     {
         var s = new MediaUploadServer(sub is null ? _dir : Path.Combine(_dir, sub), FreePort(), maxBytes) { ProjectRoot = _root, MinFreeBytes = 0 };
+        configure?.Invoke(s);
         s.Start();
         return s;
     }
@@ -282,5 +283,268 @@ public sealed class MediaUploadTests : IDisposable
         Assert.Equal(Path.Combine(_root, "build", "tmp", "media-x"), MediaUploadServer.ResolveDir(_root, "build/tmp/media-x"));
         Assert.Throws<ArgumentException>(() => MediaUploadServer.ResolveDir(_root, TestData.OutsideOf(_root, "outside")));
         Assert.Throws<ArgumentException>(() => MediaUploadServer.ResolveDir(_root, "../outside"));
+    }
+
+    // ------------------------------------------------------------------ 第三十輪 2 小時搜尋:有上限的資源(host-media-*)
+
+    /// <summary>可手動前進的時鐘(閒置逾時的確定性測試)</summary>
+    private sealed class ManualClock : TimeProvider
+    {
+        public DateTimeOffset Now = new(2026, 11, 22, 8, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    /// <summary>
+    /// host-media-stalled-body(minor):上傳到一半對端消失(不送 FIN 也不送 RST)時,修正前 ReadBodyAsync 沒有逾時,永久持有片段大小的緩衝與連線
+    /// (Linux 受控 HttpListener 沒有 body 逾時;probeB 20 條 150 s 後仍在)。修正後 BodyIdleTimeout 內沒有進度就 Abort:伺服端關閉連線、連線表回到基準,
+    /// 該錄影不受影響(之後同一序號的片段照常寫入)。錯誤回應前的排空(未知端點)同樣有逾時。
+    /// </summary>
+    [Fact]
+    public async Task StalledBody_IsAbortedAfterIdleTimeout_AndTheRecordingContinues()
+    {
+        await using var server = NewServer(configure: s => s.BodyIdleTimeout = TimeSpan.FromMilliseconds(300));
+        using var c = Client(server);
+        using var start = await StartAsync(c, new { station = "instructor" });
+        var id = start.RootElement.GetProperty("mediaId").GetString()!;
+        var baseline = ListenerConnections.Count(server);
+        using var chunk = await RawHttp.SendThenHoldAsync(server.Port, RawHttp.PartialPost(server.Port, $"/media/chunk/{id}", 100_000, 1000));
+        using var drain = await RawHttp.SendThenHoldAsync(server.Port, RawHttp.PartialPost(server.Port, "/media/other", 100_000, 1000));
+        Assert.True(await RawHttp.ServerClosesAsync(chunk, TimeSpan.FromSeconds(10)), "卡住的片段:伺服端應在逾時後中止連線");
+        Assert.True(await RawHttp.ServerClosesAsync(drain, TimeSpan.FromSeconds(10)), "卡住的錯誤回應排空:伺服端應在逾時後中止連線");
+        Assert.True(Interlocked.Read(ref server.RequestsAborted) >= 2);
+        if (baseline is { } b) await ListenerConnections.WaitUntilAtMostAsync(server, b, "body 卡住的連線");
+        // 被中止的片段沒有寫入:同一序號照常接收
+        var res = await ChunkAsync(c, id, 0, Bytes(500, 3));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.DoesNotContain("duplicate", await res.Content.ReadAsStringAsync());
+        Assert.Equal(1, server.ActiveCount);
+    }
+
+    /// <summary>
+    /// host-media-rst-midbody-leak(nit):片段上傳中途 RST 時讀 body 丟例外、500 也寫不出去,修正前 Close/Abort 都沒執行,
+    /// 連線留在 Linux 受控 HttpListener 的連線表(probeB 100 次 socket +100、受控堆積 +8.7 MB)。修正後每個錯誤路徑最後一定 Close 或 Abort。
+    /// </summary>
+    [Fact]
+    public async Task ResetMidBody_ReleasesTheConnection_AndTheRecordingContinues()
+    {
+        await using var server = NewServer();
+        using var c = Client(server);
+        using var start = await StartAsync(c, new { station = "instructor" });
+        var id = start.RootElement.GetProperty("mediaId").GetString()!;
+        var baseline = ListenerConnections.Count(server);
+        for (var i = 0; i < 20; i++)
+            await RawHttp.SendThenResetAsync(server.Port, RawHttp.PartialPost(server.Port, $"/media/chunk/{id}", 200_000, 1000), delayMs: 30);
+        if (baseline is { } b) await ListenerConnections.WaitUntilAtMostAsync(server, b, "上傳中途 RST 的連線");
+        var res = await ChunkAsync(c, id, 0, Bytes(800, 5));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.DoesNotContain("duplicate", await res.Content.ReadAsStringAsync());
+        using var stop = await StopAsync(c, id);
+        Assert.Equal(800, stop.RootElement.GetProperty("sizeBytes").GetInt64());
+    }
+
+    /// <summary>
+    /// host-media-abandoned-sessions(nit)與第三十輪審查 REV-MEDIA:開始後沒有 stop 的錄影(教官站分頁重新整理或當機)修正前持有檔案代號
+    /// 到主控程序結束(probeE 200 次:active 200、fd +204)。修正後 SessionIdleTimeout 沒有任何片段請求就暫停寫檔(關閉 .part、釋放檔案代號),
+    /// 但不定稿:畫面靜止、沒有音訊時 MediaRecorder 可能數分鐘不吐片段(review/web/mr.mjs 實測 canvas 靜止 14 s 沒有 dataavailable),
+    /// 之後的片段必須接續寫入同一份錄影(審查前的版本在此定稿,下一片收到 410,教官站把 410 當成致命錯誤,這次訓練剩下的部分就沒有錄到)。
+    /// 接續後內容、片段數與 SHA-256 與沒有暫停時相同;片段正在上傳時不暫停;主控程序結束時暫停中的錄影以 idleTimeout 定稿(stoppedUtc = 最後一次活動)。
+    /// </summary>
+    [Fact]
+    public async Task IdleRecording_IsSuspended_ThenResumesOnTheNextChunk()
+    {
+        var clock = new ManualClock();
+        var server = NewServer(configure: s =>
+        {
+            s.Clock = clock;
+            s.IdleSweepInterval = TimeSpan.FromHours(1);   // 只由測試呼叫 SweepIdleSessions
+            s.BodyIdleTimeout = TimeSpan.FromMinutes(10);
+        });
+        try
+        {
+            using var c = Client(server);
+            using var startA = await StartAsync(c, new { station = "a" });
+            var a = startA.RootElement.GetProperty("mediaId").GetString()!;
+            var parts = new[] { Bytes(100, 1), Bytes(100, 2), Bytes(100, 3), Bytes(100, 4) };
+            Assert.Equal(HttpStatusCode.OK, (await ChunkAsync(c, a, 0, parts[0])).StatusCode);
+            using var startB = await StartAsync(c, new { station = "b" });
+            var b = startB.RootElement.GetProperty("mediaId").GetString()!;
+            var startedB = clock.Now.UtcDateTime;
+
+            clock.Now += TimeSpan.FromMinutes(4);
+            Assert.Equal(0, server.SweepIdleSessions());
+            Assert.Equal(HttpStatusCode.OK, (await ChunkAsync(c, a, 1, parts[1])).StatusCode);   // A 仍在錄
+            clock.Now += TimeSpan.FromMinutes(2);
+            Assert.Equal(1, server.SweepIdleSessions());   // B 已 6 分鐘沒有活動:暫停寫檔;A 才 2 分鐘
+            Assert.Equal(2, server.ActiveCount);
+            Assert.Equal(1, server.SuspendedCount);
+            Assert.False(HasOpenStream(server, b));
+            Assert.True(HasOpenStream(server, a));
+            Assert.True(File.Exists(Path.Combine(server.MediaDir, b + ".webm.part")));   // 不定稿
+            Assert.False(File.Exists(Path.Combine(server.MediaDir, b + ".json")));
+            if (OperatingSystem.IsLinux()) Assert.Equal(0, OpenHandles(Path.Combine(server.MediaDir, b + ".webm.part")));
+
+            // 畫面靜止 30 分鐘後 A 也暫停;再有變化時下一片接續寫入(修正前:A 在 5 分鐘時已定稿,這一片 410)
+            clock.Now += TimeSpan.FromMinutes(30);
+            Assert.Equal(1, server.SweepIdleSessions());
+            Assert.Equal(0, server.SweepIdleSessions());   // 已暫停者不重複計數
+            Assert.Equal(2, server.SuspendedCount);
+            Assert.False(HasOpenStream(server, a));
+            if (OperatingSystem.IsLinux()) Assert.Equal(0, OpenHandles(Path.Combine(server.MediaDir, a + ".webm.part")));
+            var res = await ChunkAsync(c, a, 2, parts[2]);
+            Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+            using (var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync())) Assert.Equal(300, doc.RootElement.GetProperty("bytes").GetInt64());
+            Assert.True(HasOpenStream(server, a));
+            Assert.Equal(1, server.SuspendedCount);
+            Assert.Equal(1, Interlocked.Read(ref server.SessionsResumed));
+            // 重送已收到的序號(上一個回應遺失)不重新開檔、不重複寫入
+            Assert.Equal(HttpStatusCode.OK, (await ChunkAsync(c, a, 2, parts[2])).StatusCode);
+
+            // 片段正在上傳(body 還沒收完)時不暫停,即使最後一次活動已超過逾時
+            using (var held = await RawHttp.SendThenHoldAsync(server.Port, RawHttp.PartialPost(server.Port, $"/media/chunk/{a}", 10_000, 100, seq: 3)))
+            {
+                await WaitForInFlightAsync(server, a, 1);
+                clock.Now += TimeSpan.FromMinutes(30);
+                Assert.Equal(0, server.SweepIdleSessions());
+                Assert.True(HasOpenStream(server, a));
+                held.Close();   // 上傳中斷:讀取失敗,活動時間更新為此刻、該片不寫入
+                await WaitForInFlightAsync(server, a, 0);
+            }
+            Assert.Equal(0, server.SweepIdleSessions());
+            Assert.Equal(HttpStatusCode.OK, (await ChunkAsync(c, a, 3, parts[3])).StatusCode);
+            using var stopA = await StopAsync(c, a);
+            var all = parts.SelectMany(x => x).ToArray();
+            Assert.Equal(all, File.ReadAllBytes(Path.Combine(server.MediaDir, a + ".webm")));
+            var scA = MediaSidecar.Load(Path.Combine(server.MediaDir, a + ".json"));
+            Assert.Equal("client", scA.StopReason);
+            Assert.Equal(4, scA.Chunks);
+            Assert.Equal(all.Length, scA.SizeBytes);
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(all)), scA.Sha256);
+            Assert.Equal(0, Interlocked.Read(ref server.SessionsTimedOut));
+
+            // 主控程序結束:暫停中的 B 以 idleTimeout 定稿,stoppedUtc = 最後一次活動(開始時刻)
+            await server.DisposeAsync();
+            var scB = MediaSidecar.Load(Path.Combine(server.MediaDir, b + ".json"));
+            Assert.Equal(MediaUploadServer.IdleTimeoutReason, scB.StopReason);
+            Assert.Equal(startedB, scB.StoppedUtc);
+            Assert.True(scB.DurationEstimated);
+            Assert.Equal(0.0, scB.DurationS);
+            Assert.True(File.Exists(Path.Combine(server.MediaDir, b + ".webm")));
+            Assert.False(File.Exists(Path.Combine(server.MediaDir, b + ".webm.part")));
+        }
+        finally { await server.DisposeAsync(); }
+    }
+
+    /// <summary>
+    /// 暫停中的錄影有上限(MediaUploadServer.MaxSuspendedSessions):超過時最後一次活動最早者定稿(stopReason idleTimeout、stoppedUtc = 最後一次活動,
+    /// .webm + 旁檔);之後的片段 410、stop 回同一份旁檔。正在錄的那份最後活動最晚,不受影響。200 份被放棄的錄影也只保留上限份數的工作階段。
+    /// </summary>
+    [Fact]
+    public async Task SuspendedRecordings_AreBounded_OldestIsFinalized()
+    {
+        var clock = new ManualClock();
+        await using var server = NewServer(configure: s =>
+        {
+            s.Clock = clock;
+            s.IdleSweepInterval = TimeSpan.FromHours(1);
+        });
+        using var c = Client(server);
+        var ids = new List<(string Id, DateTime Last)>();
+        for (var i = 0; i < MediaUploadServer.MaxSuspendedSessions + 2; i++)
+        {
+            using var start = await StartAsync(c, new { station = $"s{i}" });
+            var id = start.RootElement.GetProperty("mediaId").GetString()!;
+            Assert.Equal(HttpStatusCode.OK, (await ChunkAsync(c, id, 0, Bytes(50, (byte)i))).StatusCode);
+            ids.Add((id, clock.Now.UtcDateTime));
+            clock.Now += TimeSpan.FromSeconds(10);
+        }
+        clock.Now += TimeSpan.FromMinutes(6);
+        Assert.Equal(ids.Count, server.SweepIdleSessions());
+        Assert.Equal(MediaUploadServer.MaxSuspendedSessions, server.ActiveCount);
+        Assert.Equal(MediaUploadServer.MaxSuspendedSessions, server.SuspendedCount);
+        Assert.Equal(2, Interlocked.Read(ref server.SessionsTimedOut));
+        foreach (var (id, last) in ids.Take(2))
+        {
+            var sc = MediaSidecar.Load(Path.Combine(server.MediaDir, id + ".json"));
+            Assert.Equal(MediaUploadServer.IdleTimeoutReason, sc.StopReason);
+            Assert.Equal(last, sc.StoppedUtc);
+            Assert.Equal(1, sc.Chunks);
+            Assert.True(File.Exists(Path.Combine(server.MediaDir, id + ".webm")));
+            Assert.Equal(HttpStatusCode.Gone, (await ChunkAsync(c, id, 1, Bytes(10, 1))).StatusCode);
+            using var stop = await StopAsync(c, id);
+            Assert.Equal(MediaUploadServer.IdleTimeoutReason, stop.RootElement.GetProperty("stopReason").GetString());
+        }
+        // 最近的一份仍可接續
+        Assert.Equal(HttpStatusCode.OK, (await ChunkAsync(c, ids[^1].Id, 1, Bytes(10, 1))).StatusCode);
+        Assert.Equal(MediaUploadServer.MaxSuspendedSessions - 1, server.SuspendedCount);
+        // 被放棄的錄影一直增加:工作階段數仍有上限
+        for (var i = 0; i < 40; i++)
+        {
+            using var start = await StartAsync(c, new { station = $"x{i}" });
+            clock.Now += TimeSpan.FromMinutes(6);
+            server.SweepIdleSessions();
+        }
+        Assert.InRange(server.ActiveCount, 1, MediaUploadServer.MaxSuspendedSessions + 1);
+        Assert.InRange(server.SuspendedCount, 1, MediaUploadServer.MaxSuspendedSessions);
+    }
+
+    /// <summary>背景閒置檢查(真實時鐘、短逾時):沒有片段的錄影自動暫停(不定稿),之後的片段接續寫入。</summary>
+    [Fact]
+    public async Task IdleRecording_BackgroundSweep_SuspendsIt()
+    {
+        await using var server = NewServer(configure: s =>
+        {
+            s.SessionIdleTimeout = TimeSpan.FromMilliseconds(200);
+            s.IdleSweepInterval = TimeSpan.FromMilliseconds(50);
+        });
+        using var c = Client(server);
+        using var start = await StartAsync(c, new { station = "instructor" });
+        var id = start.RootElement.GetProperty("mediaId").GetString()!;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (server.SuspendedCount == 0)
+        {
+            if (DateTime.UtcNow > deadline) throw new Xunit.Sdk.XunitException("閒置的錄影未被背景檢查暫停");
+            await Task.Delay(20);
+        }
+        Assert.Equal(1, server.ActiveCount);
+        Assert.Equal(HttpStatusCode.OK, (await ChunkAsync(c, id, 0, Bytes(64, 5))).StatusCode);
+        using var stop = await StopAsync(c, id);
+        Assert.Equal(64, stop.RootElement.GetProperty("sizeBytes").GetInt64());
+        Assert.Equal("client", stop.RootElement.GetProperty("stopReason").GetString());
+    }
+
+    /// <summary>以反射看某段錄影目前是否開著 .part(Session.Stream)</summary>
+    private static bool HasOpenStream(MediaUploadServer server, string mediaId)
+    {
+        var active = (System.Collections.IDictionary)typeof(MediaUploadServer).GetField("_active", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(server)!;
+        var session = active[mediaId]!;
+        return session.GetType().GetField("Stream")!.GetValue(session) is not null;
+    }
+
+    /// <summary>本程序開著某檔案的檔案代號數(Linux:/proc/self/fd 的符號連結)</summary>
+    private static int OpenHandles(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var n = 0;
+        foreach (var fd in Directory.EnumerateFileSystemEntries("/proc/self/fd"))
+        {
+            try { if (new FileInfo(fd).LinkTarget == full) n++; }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return n;
+    }
+
+    /// <summary>以反射讀某段錄影正在讀 body 的片段請求數(Session.InFlight)</summary>
+    private static async Task WaitForInFlightAsync(MediaUploadServer server, string mediaId, int expected)
+    {
+        var active = (System.Collections.IDictionary)typeof(MediaUploadServer).GetField("_active", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(server)!;
+        var session = active[mediaId]!;
+        var field = session.GetType().GetField("InFlight")!;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while ((int)field.GetValue(session)! != expected)
+        {
+            if (DateTime.UtcNow > deadline) throw new Xunit.Sdk.XunitException($"InFlight 未變成 {expected}");
+            await Task.Delay(10);
+        }
     }
 }

@@ -836,7 +836,7 @@ distToWp = |B − P|;brgToWp = atan2(B − P)
 | `manoeuvring.hardOverCount`、`hardOverTime_s` | \|rudder\| ≥ `hardOver_deg − 0.5` 的進入次數與秒數 |
 | `manoeuvring.rudderOrders` | `rudder` 指令次數(\|Δ\| ≥ 1°;自動舵不計;以 1 s 視窗合併:視窗自計入的那道舵令起算、不隨後續舵令延長,連續拖曳舵輪每 1 s 最多計 1 次)— 從 `CommandApplied` 計 |
 | `manoeuvring.maxRot_degPerMin`、`maxRotAt_s`、`timeRotOverLimit_s`、`rotExcursions` | |
-| `manoeuvring.telegraphChanges`、`telegraphOrders[]` | 車令次數與 `{order, from_s, to_s, duration_s}` 各段;`rpmOrders` 次數 |
+| `manoeuvring.telegraphChanges`、`telegraphOrders[]` | 車令次數與 `{order, from_s, to_s, duration_s}` 各段;`rpmOrders` 次數。評估狀態只保留最近 100 段(`MetricsCollector.TelegraphSpanHistory`;最後一段 = 目前這段),移出者併入各車令累計;超過 100 段時 `telegraphOrders[]` 只列最近 100 段,另輸出 `telegraphOrdersTotal`(段落總數)與 `telegraphTotals{<order>: {count, duration_s}}`(各車令段數與累計時間,含移出者與目前這段;未超過時兩者不寫出,舊格式不變)。完整時間序列可由紀錄的 input 行重建(第三十輪 ENG-C4:原本每次車鐘變更加一筆、無上限) |
 | `manoeuvring.thrusterOrders`、`thrusterTime_s` | |
 | `manoeuvring.timeOverSpeedLimit_s`、`maxOverSpeed_kn`、`speedLimitSource` | 航段/區域速限(取較嚴者),無速限時 0 |
 | `manoeuvring.autopilotTime_s`、`autopilotSwitches` | |
@@ -1442,3 +1442,9 @@ assessment:
 | D39 | 第 7.1 節黃金案例 `GoldenE07SummaryMatches` 逐鍵比對 | 比對忽略 `$.parameterSet.sha256`(整個參數集檔案的雜湊,其他情境新增參數鍵就會改變);E07 實際引用的參數(`assessment.parameters[]` 鍵/值/單位/來源/版次/條款、bands/required 的 paramKey 與門檻)與 `parameterSet.id/version` 仍逐一比對;黃金檔已更新(只有 sha256 改變) | 新增 E12–E14 參數使黃金測試在 E07 行為不變時失敗 |
 | D40 | fault-catalogue `engineStartFailure` modelled: false | **modelled**:由 STOP 轉進/倒車(停俥起動或換向後反向點火)時 `args.delay_s` 每次點火延後、`args.attempts` 先失敗 N 次;皆省略 = 持續失敗;失敗後於起動時間後自動再試並消耗起動空氣,連續 3 次封鎖(engine.state failed,車令回 STOP 解除;mainEngine 故障使目標轉速為 0 時不解除);暫代模型注入時依目前軸轉速同步「運轉中」狀態(故障未成立期間不更新,避免沿用陳舊的 Run);事件 `engineStartFailed` / `engineStartBlocked` / `engineStarted`;狀態進 `ActuatorSnapshot`(預設值不寫入 JSON)與雜湊(故障成立或留有狀態時追加 `ENGSTART` 區塊,未使用者雜湊不變) | 規劃書第 8.1 節 E14「主機起動延遲」 |
 主控程序:`--record [<path>]`、`--parameters <path>`、`--validate`、`--rescore`(與 `--replay` 併用);重播結束碼需雜湊、完整性與事件序列皆一致(重新評分亦同,D23)。驗證紀錄:`build/records/e07-test.jsonl`(E07 300 s ×10,9 個事件、1 行 summary;`--replay` 雜湊/事件/summary 一致;`--rescore` 以 `navigation.xtd.channel_m` 50 → 20 重播:雜湊與事件序列不變、分數 85 → 60)。
+
+**舊紀錄重播的 summary 不一致(第三十輪,已知、預期)**:`Replayer` 以現行程式重新產生 summary,與紀錄最後一行 summary 逐字比對(`ReplayResult.SummaryMatches`,主控程序主控台印「評估摘要:與紀錄不一致」;**不影響結束碼**,結束碼只看雜湊、完整性與事件序列,狀態雜湊與事件序列不變)。第三十輪改了兩處 summary 格式(2 小時無上限成長的修正,指標值與評估結果不變),所以第三十輪以前錄下、且符合下列任一條件的紀錄,重播後 `SummaryMatches = false`:
+- **靠泊擺盪接觸**(ENG-C1、審查 REV-ENG-C1):有同一碰墊未離開 ≥ 0.5 m 的再接觸(繫泊中在纜繩上的擺盪、推靠中的反彈、已離開泊位後被壓回碰墊的擺盪)時,`berthing.contacts[]` 不再逐筆列出這些接觸,另多 `heldContacts` / `heldContactsByFender`(`docs/design/physics-tugs-anchors-mooring.md` 第 9 節)。
+- **車鐘段數超過 100**(ENG-C4、審查 REV-ENG-C4):`manoeuvring.telegraphOrders[]` 只列最近 100 段,另多 `telegraphOrdersTotal` 與 `telegraphTotals`(第 4.5 節)。段數 ≤ 100 的紀錄不受影響(審查以修正前後的程式跑 E01 每 10 s 車鐘:summary 只差這兩項與截斷)。
+
+其他欄位(分數、容許帶、各指標值)與紀錄相同;需要逐字相同的 summary 時以紀錄內的 summary 行為準。

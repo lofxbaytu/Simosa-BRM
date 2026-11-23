@@ -27,7 +27,14 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         public required string RadarId { get; init; }
         public Channel<byte[]> Frames { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(8) { FullMode = BoundedChannelFullMode.DropOldest });
         public Channel<byte[]> Json { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest });
+        /// <summary>送出迴圈的等待者集合(SendLoopAsync 開始時建立;診斷用 <see cref="SendWaitsStarted"/>)</summary>
+        public ChannelWaitSet<byte[]>? Waits;
+        /// <summary>收尾時送的關閉狀態(訊息過大時為 MessageTooBig)</summary>
+        public WebSocketCloseStatus CloseStatus = WebSocketCloseStatus.NormalClosure;
     }
+
+    /// <summary>單一 WebSocket 訊息大小上限(與 SimCore.Host 的 VhfRelayServer.MaxMessageBytes 相同);超過即以 MessageTooBig 關閉(雷達頁的指令小於 200 B)。</summary>
+    public const int MaxMessageBytes = 1 << 20;
 
     /// <summary>已啟動的 listener(TryStart 成功後才有;Start 失敗的 listener 不保留,見 HttpListenerStarter)</summary>
     private HttpListener? _listener;
@@ -58,6 +65,9 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
     }
 
     public int ClientCount(string radarId) => _clients.Values.Count(c => string.Equals(c.RadarId, radarId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>目前連線中各客戶端送出迴圈已建立的 WaitToReadAsync 總數(診斷/測試用;閒置的通道不應每圈新建,見 <see cref="ChannelWaitSet{T}"/>)</summary>
+    internal long SendWaitsStarted => _clients.Values.Sum(c => c.Waits?.WaitsStarted ?? 0);
 
     /// <summary>重播接收端路徑(/radar/replay;主控程序 --replay 連線後送 {"type":"radarControlReplay", …})</summary>
     public const string ReplayId = "replay";
@@ -155,31 +165,20 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         if (_clients.TryGetValue(clientId, out var c)) c.Frames.Writer.TryWrite(frame);
     }
 
-    private async Task AcceptLoopAsync(HttpListener listener)
+    /// <summary>
+    /// 接受迴圈:說明頁 / 404 的回應與握手都在背景處理,單一請求的錯誤不會讓迴圈結束(HttpListenerStarter.AcceptLoopAsync;
+    /// 修正前寫出失敗雖有 try,之後的 <c>Response.Close()</c> 仍在迴圈本體,客戶端 RST 時可能丟例外讓迴圈結束)。
+    /// </summary>
+    private Task AcceptLoopAsync(HttpListener listener) => HttpListenerStarter.AcceptLoopAsync(listener, _cts.Token, ctx =>
     {
-        while (!_cts.IsCancellationRequested)
-        {
-            HttpListenerContext ctx;
-            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
-            catch (Exception) when (_cts.IsCancellationRequested) { break; }
-            catch (HttpListenerException) { continue; }
-            catch (ObjectDisposedException) { break; }
-            var path = ctx.Request.Url?.AbsolutePath.TrimEnd('/') ?? "";
-            var id = path.StartsWith("/radar/", StringComparison.OrdinalIgnoreCase) ? path["/radar/".Length..].ToLowerInvariant() : "";
-            var known = _radars.Contains(id) || id == ReplayId;
-            if (!known || !ctx.Request.IsWebSocketRequest)
-            {
-                var body = Encoding.UTF8.GetBytes($"Simosa BRM radar endpoint. WebSocket paths: {string.Join(", ", _radars.Select(r => "/radar/" + r))}, /radar/{ReplayId}\n");
-                ctx.Response.StatusCode = known ? 200 : 404;
-                ctx.Response.ContentType = "text/plain; charset=utf-8";
-                ctx.Response.ContentLength64 = body.Length;
-                try { await ctx.Response.OutputStream.WriteAsync(body).ConfigureAwait(false); } catch (Exception) { }
-                ctx.Response.Close();
-                continue;
-            }
+        var path = ctx.Request.Url?.AbsolutePath.TrimEnd('/') ?? "";
+        var id = path.StartsWith("/radar/", StringComparison.OrdinalIgnoreCase) ? path["/radar/".Length..].ToLowerInvariant() : "";
+        var known = _radars.Contains(id) || id == ReplayId;
+        if (!known || !ctx.Request.IsWebSocketRequest)
+            _ = HttpListenerStarter.RespondTextAsync(ctx, known ? 200 : 404, $"Simosa BRM radar endpoint. WebSocket paths: {string.Join(", ", _radars.Select(r => "/radar/" + r))}, /radar/{ReplayId}\n");
+        else
             _ = Task.Run(() => HandleClientAsync(ctx, id));
-        }
-    }
+    }, msg => Log?.Invoke(msg), "雷達 WebSocket");
 
     private async Task HandleClientAsync(HttpListenerContext ctx, string radarId)
     {
@@ -188,8 +187,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         catch (Exception ex)
         {
             Log?.Invoke($"WebSocket 握手失敗:{ex.Message}");
-            ctx.Response.StatusCode = 500;
-            ctx.Response.Close();
+            HttpListenerStarter.CloseResponse(ctx.Response, 500);
             return;
         }
         var id = Guid.NewGuid();
@@ -212,7 +210,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
         try
         {
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None).ConfigureAwait(false);
+                await socket.CloseAsync(client.CloseStatus, client.CloseStatus == WebSocketCloseStatus.MessageTooBig ? "message too big" : "bye", CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception) { }
         socket.Dispose();
@@ -222,6 +220,9 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
 
     private async Task SendLoopAsync(Client c)
     {
+        // 兩個通道都空時等任一通道;未完成的等待留到下一圈繼續用(每個通道同時最多一個等待者;ChannelWaitSet)。
+        // 修正前每圈各新建一個:待機/失效時 Frames 沒有影像幀,每則 Json 喚醒一圈就在 Frames 多排 1 個等待者(第三十輪 2 小時搜尋 radar-R1、R3)
+        var waits = c.Waits = new ChannelWaitSet<byte[]>(_cts.Token, c.Json.Reader, c.Frames.Reader);
         try
         {
             while (c.Socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
@@ -233,10 +234,7 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
                     await c.Socket.SendAsync(frame, WebSocketMessageType.Binary, true, _cts.Token).ConfigureAwait(false);
                     continue;
                 }
-                var a = c.Frames.Reader.WaitToReadAsync(_cts.Token).AsTask();
-                var b = c.Json.Reader.WaitToReadAsync(_cts.Token).AsTask();
-                var done = await Task.WhenAny(a, b).ConfigureAwait(false);
-                if (!await done.ConfigureAwait(false) && c.Frames.Reader.Completion.IsCompleted && c.Json.Reader.Completion.IsCompleted) break;
+                if (!await waits.WaitAnyAsync().ConfigureAwait(false) && c.Frames.Reader.Completion.IsCompleted && c.Json.Reader.Completion.IsCompleted) break;
             }
         }
         catch (Exception) { }
@@ -252,9 +250,17 @@ public sealed class RadarWebSocketServer : IAsyncDisposable
             {
                 var result = await c.Socket.ReceiveAsync(buffer, _cts.Token).ConfigureAwait(false);
                 if (result.MessageType == WebSocketMessageType.Close) break;
+                if (message.Length + result.Count > MaxMessageBytes)
+                {
+                    // 異常客戶端送不結束的分段訊息:修正前 MemoryStream 隨送入量無上限成長並保留到連線結束(第三十輪 radar-R6;比照 VhfRelayServer)
+                    // 關閉握手由 HandleClientAsync 在送出迴圈結束後送(Windows 原生 WebSocket 不允許 CloseAsync 與 SendAsync 並行)
+                    Log?.Invoke($"雷達 {c.RadarId.ToUpperInvariant()} 客戶端訊息超過 {MaxMessageBytes} bytes,關閉連線");
+                    c.CloseStatus = WebSocketCloseStatus.MessageTooBig;
+                    break;
+                }
                 message.Write(buffer, 0, result.Count);
                 if (!result.EndOfMessage) continue;
-                if (result.MessageType == WebSocketMessageType.Text && message.Length < 1 << 20)
+                if (result.MessageType == WebSocketMessageType.Text)
                 {
                     var text = Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);
                     if (c.RadarId == ReplayId)

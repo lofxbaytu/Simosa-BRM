@@ -48,7 +48,15 @@ export interface OperationLogOptions {
   thrusterDeadband?: number;
   /** 取得本地時間(測試注入) */
   now?: () => Date;
+  /** 筆數保險上限(預設 MAX_OPERATION_EVENTS);超過時丟最舊的事件,規劃時間結束紀錄不丟 */
+  maxEvents?: number;
 }
+
+/**
+ * 學員操作紀錄的筆數保險上限:積極操舵(每 400 ms 改舵令、每 4 s 改車鐘)約 2,500 筆/模擬小時,一次 2 小時練習約 5,000 筆;
+ * 教官站每個新練習都會清除(第三十輪 W3),超過上限只在異常情況(例如整天不換練習)發生。
+ */
+export const MAX_OPERATION_EVENTS = 10_000;
 
 /** 由狀態序列推導操作事件;push() 回傳本筆新增(或更新)的事件。 */
 export class OperationLogDeriver {
@@ -59,12 +67,23 @@ export class OperationLogDeriver {
   private readonly rudderDeadband: number;
   private readonly thrusterDeadband: number;
   private readonly now: () => Date;
+  private readonly maxEvents: number;
 
   constructor(options: OperationLogOptions = {}) {
     this.window = options.coalesceWindow_s ?? 1.0;
     this.rudderDeadband = options.rudderDeadband_deg ?? 0.5;
     this.thrusterDeadband = options.thrusterDeadband ?? 0.05;
     this.now = options.now ?? (() => new Date());
+    this.maxEvents = Math.max(1, options.maxEvents ?? MAX_OPERATION_EVENTS);
+  }
+
+  /** 超過筆數上限時丟最舊的事件(規劃時間結束紀錄屬於練習的簡報段,講評報告據此判斷規劃時間已結束,不丟)。 */
+  private trim(): void {
+    while (this.events.length > this.maxEvents) {
+      const i = this.events.findIndex((e) => e.kind !== 'planningTime');
+      if (i < 0) break;
+      this.events.splice(i, 1);
+    }
   }
 
   all(): readonly OperationEvent[] {
@@ -96,6 +115,7 @@ export class OperationLogDeriver {
     const ev: OperationEvent = { seq: ++this.seq, t, wall: this.now().toISOString(), kind, label };
     if (value !== undefined) ev.value = value;
     this.events.push(ev);
+    this.trim();
     return ev;
   }
 
@@ -187,6 +207,7 @@ export class OperationLogDeriver {
     if ((s.flags?.aground ?? false) && !(p.flags?.aground ?? false)) add('aground', '擱淺');
     if ((s.flags?.collision ?? false) && !(p.flags?.collision ?? false)) add('collision', '碰撞');
 
+    this.trim();
     return out;
   }
 }

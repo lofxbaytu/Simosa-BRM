@@ -23,6 +23,16 @@ namespace SimosaBRM.SimCore.Host;
 /// 只接受本機或直連私有網段的來源(<see cref="HostCommandRouter.IsAllowedShutdownClient"/>;<see cref="ClientFilter"/> 可換),其餘 403。
 /// 回應一律帶 CORS 標頭(教官站網頁由 8080 靜態伺服,跨埠 fetch 需 preflight);OPTIONS 回 204。
 /// 主控程序結束時尚未 stop 的錄影一併定稿(stopReason = hostShutdown),不留 .part。
+/// <para>
+/// 有上限的資源(第三十輪 2 小時搜尋 host-media-*):讀 body 時 <see cref="BodyIdleTimeout"/>(預設 30 s)沒有收到任何位元組就中止該請求並 Abort 連線
+/// (對端消失、不送 FIN 也不送 RST 時,Linux 受控 HttpListener 沒有 body 逾時,修正前永久持有片段大小的緩衝與連線);
+/// 任何錯誤路徑最後一定 Close 或 Abort 回應(修正前上傳中途 RST 時連 500 都寫不出去,連線留在 listener 的連線表);
+/// 開始後 <see cref="SessionIdleTimeout"/>(預設 5 分鐘)沒有任何片段的錄影暫停寫檔:關閉檔案代號與寫入緩衝(被放棄的錄影 —
+/// 分頁重新整理或當機、stop 送不出去 — 修正前持有到主控程序結束),工作階段保留,下一個片段到達時接續寫入(畫面靜止、沒有音訊時
+/// MediaRecorder 可能數分鐘不吐片段,不能當成放棄而定稿:之後的片段會收到 410,教官站把它當成致命錯誤而停止錄影,第三十輪審查 REV-MEDIA)。
+/// 暫停中的錄影超過 <see cref="MaxSuspendedSessions"/> 份時,最後一次活動最早者定稿(stopReason = idleTimeout,stoppedUtc 為最後一次活動);
+/// 主控程序結束時暫停中的錄影同樣以 idleTimeout 定稿。
+/// </para>
 /// </summary>
 public sealed class MediaUploadServer : IAsyncDisposable
 {
@@ -31,13 +41,23 @@ public sealed class MediaUploadServer : IAsyncDisposable
     public const long DefaultMaxMb = 2048;
     /// <summary>單一片段上限(MediaRecorder 每 1–5 s 一片,通常數百 KB;防止誤送整檔塞爆記憶體)</summary>
     public const long MaxChunkBytes = 64L * 1024 * 1024;
+    /// <summary>讀 body 時依 Content-Length 預先配置的上限(正常片段 0.3–1 MB 不受影響;宣告 64 MB 卻只送幾 KB 的請求不先占 64 MB)</summary>
+    private const int MaxBodyPreallocBytes = 4 * 1024 * 1024;
+    /// <summary>定稿時已暫停(閒置超過 <see cref="SessionIdleTimeout"/>:被放棄,或畫面長時間靜止)的錄影的 stopReason;其 stoppedUtc 為最後一次活動</summary>
+    public const string IdleTimeoutReason = "idleTimeout";
+    /// <summary>
+    /// 暫停中(閒置、已關檔)的錄影最多保留幾份;超過時最後一次活動最早者定稿(idleTimeout)。正在錄的錄影只有教官站目前那一份,
+    /// 它的最後一次活動一定最晚,所以被定稿的必定是更早被放棄的錄影(每份暫停中的錄影只剩 SHA-256 狀態與旁檔內容,約 1–2 KB)
+    /// </summary>
+    public const int MaxSuspendedSessions = 16;
 
     private sealed class Session
     {
         public required string MediaId { get; init; }
         public required string PartPath { get; init; }
         public required string FinalPath { get; init; }
-        public required FileStream Stream { get; init; }
+        /// <summary>寫入中的 .part(暫停時關閉為 null,下一個片段到達時以 <see cref="Reopen"/> 接續;<see cref="Sync"/> 內讀寫)</summary>
+        public FileStream? Stream;
         public required MediaSidecar Sidecar { get; init; }
         public IncrementalHash Hash { get; } = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         public readonly object Sync = new();
@@ -45,6 +65,33 @@ public sealed class MediaUploadServer : IAsyncDisposable
         public int NextSeq;
         public bool Truncated;
         public bool Stopped;
+        /// <summary>最後一次活動(start、任何片段請求;<see cref="Sync"/> 內讀寫):閒置逾時由此起算</summary>
+        public DateTime LastActivityUtc;
+        /// <summary>正在讀 body 的片段請求數(<see cref="Sync"/> 內讀寫;&gt; 0 時不暫停)</summary>
+        public int InFlight;
+        /// <summary>閒置超過 SessionIdleTimeout 而暫停寫檔(<see cref="Stream"/> 已關閉;<see cref="Sync"/> 內讀寫)</summary>
+        public bool Suspended;
+
+        /// <summary>暫停後的第一個片段:重新開啟 .part 接續寫入(檔案長度須等於已收位元組數,否則拋 IOException → 500,教官站重試)。</summary>
+        public FileStream Reopen()
+        {
+            var fs = new FileStream(PartPath, FileMode.Open, FileAccess.Write, FileShare.Read, 1 << 16);
+            if (fs.Length != Bytes)
+            {
+                fs.Dispose();
+                throw new IOException($"{Path.GetFileName(PartPath)} 長度 {fs.Length} 與已收 {Bytes} 位元組不符,無法接續寫入");
+            }
+            fs.Seek(0, SeekOrigin.End);
+            Stream = fs;
+            Suspended = false;
+            return fs;
+        }
+    }
+
+    /// <summary>讀 body 時超過 <see cref="BodyIdleTimeout"/> 沒有進度(該請求直接 Abort,不回應)</summary>
+    private sealed class BodyStalledException : Exception
+    {
+        public BodyStalledException(TimeSpan timeout) : base($"body 超過 {timeout.TotalSeconds:0.#} s 沒有進度") { }
     }
 
     /// <summary>HTTP 回應用單行 JSON(旁檔本身仍以 MediaSidecar.JsonOptions 縮排寫檔)</summary>
@@ -59,6 +106,7 @@ public sealed class MediaUploadServer : IAsyncDisposable
     private readonly ConcurrentDictionary<string, MediaSidecar> _finished = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<string> _finishedOrder = new();
     private Task? _acceptLoop;
+    private Task? _idleSweep;
 
     public MediaUploadServer(string mediaDir, int port = DefaultPort, long maxBytes = DefaultMaxMb * 1024 * 1024)
     {
@@ -86,13 +134,33 @@ public sealed class MediaUploadServer : IAsyncDisposable
     public Func<IPEndPoint?, bool> ClientFilter { get; set; } = HostCommandRouter.IsAllowedShutdownClient;
     /// <summary>磁碟剩餘空間低於此值時拒絕開始錄影(507;預設 256 MB,0 = 不檢查)</summary>
     public long MinFreeBytes { get; set; } = 256L * 1024 * 1024;
-    /// <summary>mediaId 的時間戳與旁檔起訖時間的時鐘(測試可換)</summary>
+    /// <summary>mediaId 的時間戳、旁檔起訖時間與閒置判定的時鐘(測試可換)</summary>
     public TimeProvider Clock { get; set; } = TimeProvider.System;
+    /// <summary>讀 body(片段、start/stop 的 JSON、錯誤回應前的排空)時,這段時間內沒有收到任何位元組就中止該請求並 Abort 連線</summary>
+    public TimeSpan BodyIdleTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// 錄影閒置逾時:最後一次活動(start 或片段請求)後超過此時間、且沒有片段正在上傳,就暫停寫檔(關閉檔案代號與寫入緩衝),
+    /// 不定稿;下一個片段到達時接續寫入。被放棄的錄影(分頁重新整理或當機)由 <see cref="MaxSuspendedSessions"/> 或主控程序結束時定稿。
+    /// </summary>
+    public TimeSpan SessionIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    /// <summary>閒置檢查的間隔(背景迴圈;TryStart 前設定)</summary>
+    public TimeSpan IdleSweepInterval { get; set; } = TimeSpan.FromSeconds(30);
     public event Action<string>? Log;
 
+    /// <summary>未定稿的錄影數(含暫停中者)</summary>
     public int ActiveCount => _active.Count;
+    /// <summary>暫停中(閒置、已關檔)的錄影數</summary>
+    public int SuspendedCount => _active.Values.Count(s => { lock (s.Sync) return s.Suspended && !s.Stopped; });
     public long BytesReceived;
     public long ChunksReceived;
+    /// <summary>因 body 沒有進度或寫不出回應而以 Abort 收尾的請求數(診斷)</summary>
+    public long RequestsAborted;
+    /// <summary>因閒置而暫停寫檔的次數(診斷;同一份錄影可暫停多次)</summary>
+    public long SessionsSuspended;
+    /// <summary>暫停後收到片段而接續寫入的次數(診斷)</summary>
+    public long SessionsResumed;
+    /// <summary>以 idleTimeout 定稿的錄影數(暫停中的錄影超過 MaxSuspendedSessions 份時最舊者;診斷)</summary>
+    public long SessionsTimedOut;
 
     /// <summary>解析 --media-dir(null = 預設 build/records/media;相對路徑以 root 為準),必須在專案資料夾內(CLAUDE.md)。</summary>
     public static string ResolveDir(string root, string? option = null)
@@ -125,6 +193,7 @@ public sealed class MediaUploadServer : IAsyncDisposable
         Prefix = prefix;
         StartError = null;
         _acceptLoop = Task.Run(() => AcceptLoopAsync(listener));
+        _idleSweep = Task.Run(IdleSweepLoopAsync);
         return true;
     }
 
@@ -134,18 +203,9 @@ public sealed class MediaUploadServer : IAsyncDisposable
         if (!TryStart(out var error)) throw new HttpListenerException(0, $"埠 {Port} 無法監聽:{error}");
     }
 
-    private async Task AcceptLoopAsync(HttpListener listener)
-    {
-        while (!_cts.IsCancellationRequested)
-        {
-            HttpListenerContext ctx;
-            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
-            catch (Exception) when (_cts.IsCancellationRequested) { break; }
-            catch (HttpListenerException) { continue; }
-            catch (ObjectDisposedException) { break; }
-            _ = Task.Run(() => HandleAsync(ctx));
-        }
-    }
+    /// <summary>接受迴圈:每個請求都在背景處理(HttpListenerStarter.AcceptLoopAsync:單一請求的錯誤不會讓迴圈結束)。</summary>
+    private Task AcceptLoopAsync(HttpListener listener)
+        => HttpListenerStarter.AcceptLoopAsync(listener, _cts.Token, ctx => _ = Task.Run(() => HandleAsync(ctx)), msg => Log?.Invoke(msg), "錄影上傳端");
 
     private async Task HandleAsync(HttpListenerContext ctx)
     {
@@ -159,8 +219,7 @@ public sealed class MediaUploadServer : IAsyncDisposable
             res.Headers["Access-Control-Max-Age"] = "600";
             if (req.HttpMethod == "OPTIONS")
             {
-                res.StatusCode = 204;
-                res.Close();
+                HttpListenerStarter.CloseResponse(res, 204);
                 return;
             }
             if (!ClientFilter(req.RemoteEndPoint))
@@ -190,12 +249,25 @@ public sealed class MediaUploadServer : IAsyncDisposable
                 await WriteJsonAsync(res, 404, new { error = $"未知端點:{path}" }).ConfigureAwait(false);
             }
         }
+        catch (BodyStalledException ex)
+        {
+            // 對端消失(拔線、睡眠)或卡住:回應也送不到,直接 Abort 釋放連線與已讀的緩衝
+            Log?.Invoke($"錄影上傳中止({req.HttpMethod} {req.Url?.AbsolutePath},來源 {req.RemoteEndPoint}):{ex.Message},中止連線");
+            Abort(res);
+        }
         catch (Exception ex)
         {
+            // 例如上傳中途 RST(讀 body 丟 IOException):試著回 500;寫不出去時 WriteJsonAsync 會 Abort(修正前寫出失敗後什麼都不做,連線留在連線表)
             Log?.Invoke($"錄影上傳處理失敗({req.HttpMethod} {req.Url?.AbsolutePath}):{ex.Message}");
-            try { await WriteJsonAsync(res, 500, new { error = ex.Message }).ConfigureAwait(false); }
-            catch (Exception) { /* 連線已斷 */ }
+            await WriteJsonAsync(res, 500, new { error = ex.Message }).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>以 Abort 收尾一個請求(計數;不拋例外)</summary>
+    private void Abort(HttpListenerResponse res)
+    {
+        Interlocked.Increment(ref RequestsAborted);
+        HttpListenerStarter.AbortResponse(res);
     }
 
     // ---------------------------------------------------------------- start
@@ -250,7 +322,7 @@ public sealed class MediaUploadServer : IAsyncDisposable
         Directory.CreateDirectory(MediaDir);
         var partPath = Path.Combine(MediaDir, mediaId + ".webm.part");
         var stream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 16);
-        var session = new Session { MediaId = mediaId, PartPath = partPath, FinalPath = Path.Combine(MediaDir, mediaId + ".webm"), Stream = stream, Sidecar = sidecar };
+        var session = new Session { MediaId = mediaId, PartPath = partPath, FinalPath = Path.Combine(MediaDir, mediaId + ".webm"), Stream = stream, Sidecar = sidecar, LastActivityUtc = now };
         _active[mediaId] = session;
         Log?.Invoke($"開始錄影 {mediaId}(站別 {sidecar.Station},{(record is null ? "無紀錄" : $"紀錄 {record.File}")},上限 {MaxBytes / (1024.0 * 1024):F0} MB)");
         await WriteJsonAsync(res, 200, new { mediaId, file = sidecar.File, maxBytes = MaxBytes, record = record?.File }).ConfigureAwait(false);
@@ -311,9 +383,10 @@ public sealed class MediaUploadServer : IAsyncDisposable
             await WriteJsonAsync(res, 400, new { error = "缺少或不合法的 X-Seq 標頭" }).ConfigureAwait(false);
             return;
         }
-        // 先看序號與上限狀態(不必讀 body 的情況:重送、跳號、已截斷)
+        // 先看序號與上限狀態(不必讀 body 的情況:重送、跳號、已截斷);任何片段請求都算活動(閒置逾時由此重新起算)
         lock (s.Sync)
         {
+            s.LastActivityUtc = Clock.GetUtcNow().UtcDateTime;
             if (s.Truncated)
             {
                 _ = DrainThenJson(req, res, 413, new { error = "已超過錄影上限,不再接收", truncated = true, bytes = s.Bytes, maxBytes = MaxBytes });
@@ -329,8 +402,18 @@ public sealed class MediaUploadServer : IAsyncDisposable
                 _ = DrainThenJson(req, res, 409, new { error = $"片段序號不連續:收到 {seq},預期 {s.NextSeq}", expectedSeq = s.NextSeq });
                 return;
             }
+            s.InFlight++;   // 讀 body 期間不當成被放棄(慢速上傳)
         }
-        var body = await ReadBodyAsync(req, MaxChunkBytes).ConfigureAwait(false);
+        byte[]? body;
+        try { body = await ReadBodyAsync(req, MaxChunkBytes).ConfigureAwait(false); }
+        finally
+        {
+            lock (s.Sync)
+            {
+                s.InFlight--;
+                s.LastActivityUtc = Clock.GetUtcNow().UtcDateTime;
+            }
+        }
         if (body is null)
         {
             await WriteJsonAsync(res, 413, new { error = $"單一片段超過 {MaxChunkBytes / (1024 * 1024)} MB" }).ConfigureAwait(false);
@@ -352,7 +435,15 @@ public sealed class MediaUploadServer : IAsyncDisposable
             }
             else
             {
-                s.Stream.Write(body, 0, body.Length);
+                var stream = s.Stream;
+                if (stream is null)
+                {
+                    // 暫停後的第一個片段(畫面靜止數分鐘後又有變化):接續寫入同一份 .part,序號與雜湊不中斷
+                    stream = s.Reopen();
+                    Interlocked.Increment(ref SessionsResumed);
+                    Log?.Invoke($"錄影 {mediaId} 收到片段 {seq},接續寫入(暫停後恢復)");
+                }
+                stream.Write(body, 0, body.Length);
                 s.Hash.AppendData(body);
                 s.Bytes += body.Length;
                 s.NextSeq = seq + 1;
@@ -398,16 +489,20 @@ public sealed class MediaUploadServer : IAsyncDisposable
         await WriteJsonAsync(res, 404, new { error = $"未知的錄影 {mediaId}" }).ConfigureAwait(false);
     }
 
-    /// <summary>定稿:關檔、改名 .webm、寫旁檔;重複呼叫回同一份旁檔。</summary>
-    private MediaSidecar Finalize(Session s, double? durationS, string reason)
+    /// <summary>定稿:關檔、改名 .webm、寫旁檔;重複呼叫回同一份旁檔。<paramref name="stoppedUtc"/> 省略時為現在(閒置逾時以最後一次活動為停止時刻)。</summary>
+    private MediaSidecar Finalize(Session s, double? durationS, string reason, DateTime? stoppedUtc = null)
     {
         lock (s.Sync)
         {
             if (s.Stopped) return s.Sidecar;
             s.Stopped = true;
-            var now = Clock.GetUtcNow().UtcDateTime;
-            s.Stream.Flush(true);
-            s.Stream.Dispose();
+            var now = stoppedUtc ?? Clock.GetUtcNow().UtcDateTime;
+            if (s.Stream is { } stream)
+            {
+                stream.Flush(true);
+                stream.Dispose();
+                s.Stream = null;
+            }
             var sc = s.Sidecar;
             sc.StoppedUtc = now;
             sc.SizeBytes = s.Bytes;
@@ -442,11 +537,75 @@ public sealed class MediaUploadServer : IAsyncDisposable
         }
     }
 
+    /// <summary>背景閒置檢查(每 <see cref="IdleSweepInterval"/>;權杖取消即結束,Task.Delay 完成時釋放其取消註冊)。</summary>
+    private async Task IdleSweepLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            try { await Task.Delay(IdleSweepInterval, _cts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { break; }
+            try { SweepIdleSessions(); }
+            catch (Exception ex) { Log?.Invoke($"錄影閒置檢查失敗:{ex.Message}"); }
+        }
+    }
+
+    /// <summary>
+    /// 閒置檢查:最後一次活動超過 <see cref="SessionIdleTimeout"/>、且沒有片段正在上傳的錄影暫停寫檔(Flush 後關閉 .part,釋放檔案代號與寫入緩衝;
+    /// 序號、已收位元組與 SHA-256 狀態保留,下一個片段到達時接續寫入)。暫停中的錄影超過 <see cref="MaxSuspendedSessions"/> 份時,
+    /// 最後一次活動最早者定稿(stopReason = idleTimeout,stoppedUtc = 最後一次活動;.webm + 旁檔,紀錄包照常打包;之後的片段 410、stop 回同一份旁檔)。
+    /// 回傳本次暫停的錄影數。
+    /// </summary>
+    internal int SweepIdleSessions()
+    {
+        var now = Clock.GetUtcNow().UtcDateTime;
+        var count = 0;
+        var suspended = new List<(Session S, DateTime Last)>();
+        foreach (var s in _active.Values.ToList())
+        {
+            DateTime last;
+            bool newly;
+            lock (s.Sync)
+            {
+                if (s.Stopped || s.InFlight > 0) continue;
+                last = s.LastActivityUtc;
+                newly = !s.Suspended && now - last > SessionIdleTimeout;
+                if (newly)
+                {
+                    if (s.Stream is { } stream)
+                    {
+                        stream.Flush(true);
+                        stream.Dispose();
+                        s.Stream = null;
+                    }
+                    s.Suspended = true;
+                }
+                if (!s.Suspended) continue;
+            }
+            suspended.Add((s, last));
+            if (!newly) continue;
+            count++;
+            Interlocked.Increment(ref SessionsSuspended);
+            Log?.Invoke($"錄影 {s.MediaId} 已 {SessionIdleTimeout.TotalMinutes:0.#} 分鐘沒有片段(最後活動 {last:HH:mm:ss}Z):暫停寫檔、關閉檔案,下一個片段到達時接續寫入");
+        }
+        // 暫停中的錄影有上限:最後一次活動最早者定稿(被放棄的錄影;正在錄的那份最後活動最晚)
+        foreach (var (s, last) in suspended.OrderBy(x => x.Last).ThenBy(x => x.S.MediaId, StringComparer.Ordinal).Take(Math.Max(0, suspended.Count - MaxSuspendedSessions)))
+        {
+            lock (s.Sync)
+            {
+                if (s.Stopped || !s.Suspended || s.InFlight > 0) continue;
+                Finalize(s, null, IdleTimeoutReason, s.LastActivityUtc);   // 同一把鎖(Monitor 可重入):檢查與定稿之間不會插進新片段
+            }
+            Interlocked.Increment(ref SessionsTimedOut);
+            Log?.Invoke($"暫停中的錄影超過 {MaxSuspendedSessions} 份:最早的 {s.MediaId}(最後活動 {last:HH:mm:ss}Z)視為教官站已放棄,定稿");
+        }
+        return count;
+    }
+
     private object Status() => new
     {
         dir = MediaDir,
         maxBytes = MaxBytes,
-        active = _active.Values.Select(s => new { s.MediaId, bytes = Interlocked.Read(ref s.Bytes), chunks = s.NextSeq, startedUtc = s.Sidecar.StartedUtc, truncated = s.Truncated, record = s.Sidecar.Record?.File }).ToList(),
+        active = _active.Values.Select(s => new { s.MediaId, bytes = Interlocked.Read(ref s.Bytes), chunks = s.NextSeq, startedUtc = s.Sidecar.StartedUtc, truncated = s.Truncated, suspended = s.Suspended, record = s.Sidecar.Record?.File }).ToList(),
     };
 
     // ---------------------------------------------------------------- helpers
@@ -482,64 +641,105 @@ public sealed class MediaUploadServer : IAsyncDisposable
     private static string? Str(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    /// <summary>讀整個 body(最多 <paramref name="max"/> 位元組;超過回 null)。</summary>
-    private static async Task<byte[]?> ReadBodyAsync(HttpListenerRequest req, long max)
+    /// <summary>
+    /// 讀一次 body,最多等 <see cref="BodyIdleTimeout"/>;逾時拋 <see cref="BodyStalledException"/>(呼叫端 Abort 連線,未完成的讀取隨之結束)。
+    /// 不以 Task.WhenAny + Task.Delay 實作(會留下計時器);WaitAsync 完成時即釋放計時器。HttpListener 的請求串流不理會取消權杖,所以不用權杖。
+    /// </summary>
+    private async Task<int> ReadWithIdleTimeoutAsync(Stream input, byte[] buffer)
+    {
+        var read = input.ReadAsync(buffer).AsTask();
+        try { return await read.WaitAsync(BodyIdleTimeout).ConfigureAwait(false); }
+        catch (TimeoutException)
+        {
+            // Abort 後這個讀取會以例外結束:先掛上觀察,避免 UnobservedTaskException
+            _ = read.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            throw new BodyStalledException(BodyIdleTimeout);
+        }
+    }
+
+    /// <summary>讀整個 body(最多 <paramref name="max"/> 位元組;超過回 null)。每次讀取有閒置逾時(<see cref="BodyIdleTimeout"/>,逾時拋 BodyStalledException)。</summary>
+    private async Task<byte[]?> ReadBodyAsync(HttpListenerRequest req, long max)
     {
         if (req.ContentLength64 > max) { await DrainAsync(req).ConfigureAwait(false); return null; }
-        using var ms = new MemoryStream(req.ContentLength64 > 0 ? (int)Math.Min(req.ContentLength64, int.MaxValue) : 0);
+        using var ms = new MemoryStream(req.ContentLength64 > 0 ? (int)Math.Min(req.ContentLength64, MaxBodyPreallocBytes) : 0);
         var buffer = new byte[64 * 1024];
         int n;
-        while ((n = await req.InputStream.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+        while ((n = await ReadWithIdleTimeoutAsync(req.InputStream, buffer).ConfigureAwait(false)) > 0)
         {
             if (ms.Length + n > max) { await DrainAsync(req).ConfigureAwait(false); return null; }
             ms.Write(buffer, 0, n);
         }
+        // 防禦:宣告的長度沒收滿就結束(Linux 受控實作在提前 EOF 時本來就丟 HttpListenerException 400)不當成完整片段寫入
+        if (req.ContentLength64 > 0 && ms.Length < req.ContentLength64) throw new IOException($"body 不完整:收到 {ms.Length} / {req.ContentLength64} 位元組");
         return ms.ToArray();
     }
 
-    /// <summary>把尚未讀的 body 讀掉(回錯誤前;否則客戶端可能收到連線重設而不是狀態碼)。</summary>
-    private static async Task DrainAsync(HttpListenerRequest req)
+    /// <summary>
+    /// 把尚未讀的 body 讀掉(回錯誤前;否則客戶端可能收到連線重設而不是狀態碼)。連線已斷時略過(之後的回應寫不出去會 Abort);
+    /// 超過 <see cref="BodyIdleTimeout"/> 沒有進度時拋 BodyStalledException(呼叫端 Abort,不再回應)。
+    /// </summary>
+    private async Task DrainAsync(HttpListenerRequest req)
     {
         try
         {
             var buffer = new byte[64 * 1024];
             long total = 0;
-            while (await req.InputStream.ReadAsync(buffer).ConfigureAwait(false) is var n && n > 0)
+            while (await ReadWithIdleTimeoutAsync(req.InputStream, buffer).ConfigureAwait(false) is var n && n > 0)
             {
                 total += n;
                 if (total > MaxChunkBytes * 2) break;
             }
         }
+        catch (BodyStalledException) { throw; }
         catch (Exception) { /* 連線已斷 */ }
     }
 
-    private static async Task DrainThenJson(HttpListenerRequest req, HttpListenerResponse res, int status, object payload)
+    /// <summary>背景執行(呼叫端不 await):排空後回 JSON;body 卡住時 Abort。不拋例外。</summary>
+    private async Task DrainThenJson(HttpListenerRequest req, HttpListenerResponse res, int status, object payload)
     {
-        await DrainAsync(req).ConfigureAwait(false);
+        try { await DrainAsync(req).ConfigureAwait(false); }
+        catch (BodyStalledException)
+        {
+            Abort(res);
+            return;
+        }
         await WriteJsonAsync(res, status, payload).ConfigureAwait(false);
     }
 
-    private static async Task WriteJsonAsync(HttpListenerResponse res, int status, object payload)
+    /// <summary>回 JSON 並關閉;寫出或關閉失敗(客戶端已 RST、已斷線)時 Abort。不拋例外:每個錯誤路徑最後一定 Close 或 Abort。</summary>
+    private async Task WriteJsonAsync(HttpListenerResponse res, int status, object payload)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, ReplyJson);
-        res.StatusCode = status;
-        res.ContentType = "application/json; charset=utf-8";
-        res.ContentLength64 = bytes.Length;
-        await res.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
-        res.Close();
+        try
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, ReplyJson);
+            res.StatusCode = status;
+            res.ContentType = "application/json; charset=utf-8";
+            res.ContentLength64 = bytes.Length;
+            await res.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+            res.Close();
+        }
+        catch (Exception) { Abort(res); }
     }
 
-    private static async Task WriteTextAsync(HttpListenerResponse res, int status, string text)
+    /// <summary>回純文字並關閉;失敗時 Abort。不拋例外。</summary>
+    private async Task WriteTextAsync(HttpListenerResponse res, int status, string text)
     {
-        var bytes = Encoding.UTF8.GetBytes(text);
-        res.StatusCode = status;
-        res.ContentType = "text/plain; charset=utf-8";
-        res.ContentLength64 = bytes.Length;
-        await res.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
-        res.Close();
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            res.StatusCode = status;
+            res.ContentType = "text/plain; charset=utf-8";
+            res.ContentLength64 = bytes.Length;
+            await res.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+            res.Close();
+        }
+        catch (Exception) { Abort(res); }
     }
 
-    /// <summary>停止監聽;進行中的錄影定稿(stopReason = hostShutdown),不留 .part。可重複呼叫、啟動失敗後也可呼叫,不拋例外。</summary>
+    /// <summary>
+    /// 停止監聽;進行中的錄影定稿(stopReason = hostShutdown;暫停中者 idleTimeout、stoppedUtc = 最後一次活動),不留 .part。
+    /// 可重複呼叫、啟動失敗後也可呼叫,不拋例外。
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -554,9 +754,17 @@ public sealed class MediaUploadServer : IAsyncDisposable
             Log?.Invoke("錄影上傳端的監聽未在 1.5 s 內關閉,不再等待");
         if (!await HttpListenerStarter.WaitBoundedAsync(_acceptLoop, wait).ConfigureAwait(false))
             Log?.Invoke("錄影上傳端的接受迴圈未在 1.5 s 內結束,不再等待");
+        await HttpListenerStarter.WaitBoundedAsync(_idleSweep, wait).ConfigureAwait(false);
         foreach (var s in _active.Values.ToList())
         {
-            try { Finalize(s, null, "hostShutdown"); }
+            try
+            {
+                lock (s.Sync)
+                {
+                    if (s.Suspended) Finalize(s, null, IdleTimeoutReason, s.LastActivityUtc);
+                    else Finalize(s, null, "hostShutdown");
+                }
+            }
             catch (Exception ex) { Log?.Invoke($"錄影 {s.MediaId} 定稿失敗:{ex.Message}"); }
         }
         _listener = null;

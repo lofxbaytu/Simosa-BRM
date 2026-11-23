@@ -35,7 +35,7 @@ import { simpleCommand } from './lib/command.js';
 import { OperationLogDeriver, type OperationEvent } from './lib/operation-log.js';
 import { DebriefAccumulator, type DebriefSummary } from './lib/debrief.js';
 import { BRM_CATEGORIES, BrmMarkerStore, type BrmMarker } from './lib/brm-markers.js';
-import { StateSampler, buildSessionRecord, type CommandLogEntry } from './lib/session-record.js';
+import { StateSampler, buildSessionRecord, sessionRecordBlob, type CommandLogEntry, type SessionRecord } from './lib/session-record.js';
 import type { SessionInfo } from './lib/session-info.js';
 import {
   ScreenRecordingController,
@@ -50,7 +50,7 @@ import {
   type RecordingSummary,
 } from './lib/screen-recording.js';
 import { saveHandoff } from './report/report-store.js';
-import { downloadText, fileStamp } from './lib/download.js';
+import { downloadBlob, downloadText, fileStamp } from './lib/download.js';
 import { formatHeading, formatKnots, formatMeters, formatRot, formatRudder, formatSimTime } from './lib/format.js';
 import type { SimEvent } from './types/event.js';
 import { EventStore, eventFromFrame, eventLabel, scenarioLoadRejection, voiceScriptData, type ScenarioLoadRejection } from './lib/sim-event.js';
@@ -589,6 +589,8 @@ export class InstructorApp extends LitElement {
   private unsubscribe: Array<() => void> = [];
   private readonly history = new TrackHistory(1, 7200);
   private readonly opLog = new OperationLogDeriver();
+  /** 「規劃時間結束」紀錄(opLog planningTime,以 seq 為鍵)所屬的情境 id:新練習清操作紀錄時只保留本練習情境的這類紀錄 */
+  private readonly planningScenario = new Map<number, string>();
   private readonly debrief = new DebriefAccumulator();
   private readonly markerStore = new BrmMarkerStore();
   private readonly sampler = new StateSampler(1);
@@ -741,8 +743,7 @@ export class InstructorApp extends LitElement {
     this.issues = issues;
     if (this.pendingLoad && state.scenario?.id === this.pendingLoad.targetId) this.finishLoad(true); // 核心已換成要求的情境:載入成功
     this.history.push(state.pos.x, state.pos.y, state.t);
-    const recording = this.pageMode !== 'simple' || this.simplePhase === 'running';
-    if (recording) {
+    if (this.isLoggingExercise()) {
       const added = this.opLog.push(state);
       if (added.length > 0) this.opEvents = [...this.opLog.all()];
       this.debrief.push(state);
@@ -750,6 +751,11 @@ export class InstructorApp extends LitElement {
     } else {
       this.opLog.restart();
     }
+  }
+
+  /** 是否正在記錄練習(推導操作、講評累計、狀態抽樣):完整模式一直記;簡化模式只在「開始練習」到「結束練習」之間。 */
+  private isLoggingExercise(): boolean {
+    return this.pageMode !== 'simple' || this.simplePhase === 'running';
   }
 
   private onMessage(msg: Record<string, unknown>): void {
@@ -786,7 +792,7 @@ export class InstructorApp extends LitElement {
   /**
    * 即時模式倒帶(restore;D31):狀態 tick 倒退時比照 record-replay.pushState 丟棄 t > 倒帶點的舊分支事件,
    * 倒帶點取 restore 指令要求的 tick(核心倒帶後第一筆廣播晚 BroadcastDivider 個 tick),無則取該狀態的 t;
-   * 並重算 CPA 警報集合(C# Restore 由快照還原交通狀態、不重發 cpaAlarm/cpaClear)。
+   * 記錄中時狀態抽樣也截掉倒帶點之後的樣本(StateSampler.rewind);並重算 CPA 警報集合(C# Restore 由快照還原交通狀態、不重發 cpaAlarm/cpaClear)。
    */
   private rewindEvents(state: OwnShipState): void {
     const want = this.pendingRewindTick;
@@ -794,8 +800,14 @@ export class InstructorApp extends LitElement {
     // 倒帶(含核心端重設造成的 tick 倒退):拖船面板草稿以還原後的 state 為準
     this.exerciseEpoch += 1;
     const dt = state.tick > 0 ? state.t / state.tick : 0.02;
-    const tMax = want !== undefined && want <= state.tick ? want * dt : state.t;
-    if (this.eventStore.dropAfter(tMax) > 0) this.events = [...this.eventStore.all()];
+    const rewindTick = want !== undefined && want <= state.tick ? want : undefined;
+    const tMax = rewindTick !== undefined ? rewindTick * dt : state.t;
+    const droppedEvents = this.eventStore.dropAfter(tMax);
+    if (droppedEvents > 0) this.events = [...this.eventStore.all()];
+    // 狀態抽樣同樣截掉倒帶點之後的舊分支(第三十輪 W1;倒帶點記入紀錄 rewinds)。只在記錄中截:簡化模式「結束練習」後
+    // 核心重啟/他站重設造成的 tick 倒退不動已結束練習的抽樣(與修正前相同;審查 WR1)。簡化模式重新開始記錄一定經
+    // 「開始練習」→ restartExercise → sampler.clear(),不會留下 t 不單調的抽樣。
+    if (this.isLoggingExercise()) this.sampler.rewind(tMax, rewindTick ?? state.tick, droppedEvents);
     this.alarms.rebuild(this.eventStore.all());
     this.alarmTargets = this.alarms.snapshot();
   }
@@ -960,11 +972,18 @@ export class InstructorApp extends LitElement {
     this.restartExercise();
   };
 
-  /** 新練習(載入情境、重設、覆寫):清航跡、操作紀錄、講評累計與抽樣;標記保留(教官可匯出或刪除)。 */
+  /**
+   * 新練習(載入情境、重設、覆寫、簡化模式「開始練習」):清航跡、操作紀錄、講評累計與抽樣;標記保留(教官可匯出或刪除)。
+   * 操作紀錄兩種模式都清(完整模式原本只 restart、整天跨練習累積並混進匯出紀錄;第三十輪 W3),只保留本練習情境的
+   * 「規劃時間結束」(完整模式的簡報倒數可能在載入情境前跑完;簡化模式在「開始練習」前;講評報告據此判斷規劃時間已結束)。
+   */
   private restartExercise(): void {
     this.exerciseEpoch += 1;
     this.history.clear();
-    this.opLog.restart();
+    const sid = this.activeScenario?.id ?? '';
+    this.opLog.clear((e) => e.kind === 'planningTime' && this.planningScenario.get(e.seq) === sid);
+    for (const seq of [...this.planningScenario.keys()]) if (!this.opLog.all().some((e) => e.seq === seq)) this.planningScenario.delete(seq);
+    this.opEvents = [...this.opLog.all()];
     this.debrief.reset();
     this.sampler.clear();
     this.exerciseStartedUtc = null;
@@ -1045,6 +1064,7 @@ export class InstructorApp extends LitElement {
     if (this.pageMode === 'full' && this.recSettings.autoStart) void this.startRecording();
     if (this.pageMode === 'simple') {
       this.opLog.clear();
+      this.planningScenario.clear();
       this.opEvents = [];
       this.markerStore.clear();
       this.markers = [];
@@ -1074,10 +1094,12 @@ export class InstructorApp extends LitElement {
 
   /**
    * 簡報的規劃時間倒數到時(<brm-briefing-block>;規劃書第 9.1 節 R7):在學員操作紀錄記一筆(本地,不送核心;
-   * 模擬時間取目前狀態的 t,簡報期間核心凍結故為定值)。簡化模式按「開始練習」清紀錄時保留此筆(simpleStart)。
+   * 模擬時間取目前狀態的 t,簡報期間核心凍結故為定值)。新練習清紀錄時(restartExercise;簡化模式「開始練習」、完整模式載入/重設)
+   * 保留屬於本練習情境的這筆(情境 id 由簡報區塊的事件帶來,未帶時取目前情境)。
    */
   private onPlanningTimeEnded = (ev: PlanningTimeEndedEvent): void => {
-    this.opLog.addExternal('planningTime', `規劃時間結束(${ev.detail.planningTimeMin} 分鐘)`, this.shipState.t, ev.detail.planningTimeMin);
+    const rec = this.opLog.addExternal('planningTime', `規劃時間結束(${ev.detail.planningTimeMin} 分鐘)`, this.shipState.t, ev.detail.planningTimeMin);
+    this.planningScenario.set(rec.seq, ev.detail.scenarioId ?? this.activeScenario?.id ?? '');
     this.opEvents = [...this.opLog.all()];
   };
 
@@ -1135,26 +1157,29 @@ export class InstructorApp extends LitElement {
     return this.sourceMode === 'demo' ? `demo:${this.demoShip}` : this.wsUrl;
   }
 
+  /** 下載紀錄 JSON:以 Blob 逐筆組成(sessionRecordBlob),不先把整份紀錄組成單一字串(第三十輪 W2)。 */
   private downloadRecord(): void {
-    downloadText(`brm-record-${fileStamp()}-${this.activeScenario?.id ?? this.shipState.shipId}.json`, this.sessionRecordJson());
+    downloadBlob(`brm-record-${fileStamp()}-${this.activeScenario?.id ?? this.shipState.shipId}.json`, sessionRecordBlob(this.sessionRecord()));
   }
 
-  /** 講評報告頁(report.html):把目前的練習紀錄經 IndexedDB 交給新頁(重播檢視頁面沒有即時紀錄,只開新頁)。 */
+  /** 講評報告頁(report.html):把目前的練習紀錄(Blob)經 IndexedDB 交給新頁(重播檢視頁面沒有即時紀錄,只開新頁)。 */
   private async openReport(): Promise<void> {
-    if (this.pageMode !== 'replay') await saveHandoff(this.sessionRecordJson());
+    if (this.pageMode !== 'replay') await saveHandoff(sessionRecordBlob(this.sessionRecord()));
     window.open(this.pageMode === 'replay' ? './report.html' : './report.html?from=instructor', '_blank');
   }
 
-  private sessionRecordJson(): string {
+  /** 目前練習的紀錄物件(下載與講評報告交接都由 sessionRecordBlob 序列化)。 */
+  private sessionRecord(): SessionRecord {
     // 尚未收到狀態就匯出時也定下開始時刻,之後同一練習的匯出沿用
     this.exerciseStartedUtc ??= new Date().toISOString();
-    const record = buildSessionRecord({
+    return buildSessionRecord({
       mode: this.pageMode === 'simple' ? 'simple' : 'full',
       source: this.sourceLabel(),
       scenario: this.activeScenario,
       shipId: this.shipState.shipId,
-      sampleInterval_s: this.sampler.interval_s,
+      sampleInterval_s: this.sampler.currentInterval_s,
       states: this.sampler.all(),
+      rewinds: this.sampler.rewinds(),
       operations: this.opLog.all(),
       markers: this.markerStore.all(),
       commands: this.commandLog,
@@ -1165,7 +1190,6 @@ export class InstructorApp extends LitElement {
       sessionInfo: this.sessionInfo,
       recordings: this.recSummaries,
     });
-    return JSON.stringify(record);
   }
 
   // ------------------------------------------------------------ 畫面錄影(docs/design/screen-recording.md 第 5 節)
@@ -1217,9 +1241,7 @@ export class InstructorApp extends LitElement {
 
   // ------------------------------------------------------------ 簡化教官模式流程
   private simpleStart(): void {
-    this.restartExercise();
-    this.opLog.clear((e) => e.kind === 'planningTime'); // 簡報階段的規劃時間結束紀錄屬於本練習,保留
-    this.opEvents = [...this.opLog.all()];
+    this.restartExercise(); // 清掉簡報階段的推導事件;簡報階段的規劃時間結束紀錄屬於本練習,保留
     this.simplePhase = 'running';
     this.send(simpleCommand('resume'));
     if (this.recSettings.autoStart) void this.startRecording();
@@ -1426,7 +1448,7 @@ export class InstructorApp extends LitElement {
                     ${sc.briefingDoc.roles.length > 0 ? html`<div>角色:${sc.briefingDoc.roles.map((r) => `${ROLE_LABEL[r.role] ?? r.role}(${PLAYED_BY_LABEL[r.playedBy] ?? r.playedBy}${r.required ? ',必要' : ''})`).join('、')}${sc.briefingDoc.minParticipants !== undefined ? ` · 最少 ${sc.briefingDoc.minParticipants} 人` : ''}</div>` : nothing}
                     ${sc.briefingDoc.attachments.length > 0 ? html`<div>附件:${sc.briefingDoc.attachments.map((a) => a.title).join('、')}</div>` : nothing}
                   </div>`
-                : nothing}${sc ? keyed(sc.id, html`<brm-briefing-block large .briefing=${sc.briefingDoc}></brm-briefing-block>`) : nothing}</div>
+                : nothing}${sc ? keyed(sc.id, html`<brm-briefing-block large .briefing=${sc.briefingDoc} .scenarioId=${sc.id}></brm-briefing-block>`) : nothing}</div>
             <brm-session-info-panel compact .simUtc=${s.utc ?? ''} .submitted=${this.sessionInfo}></brm-session-info-panel>
             <brm-recording-panel .status=${this.recStatus} .summaries=${this.recSummaries} .settings=${this.recSettings} .supported=${this.recSupported} .baseUrl=${this.mediaUrl}></brm-recording-panel>
             <div class="actions">
@@ -1495,7 +1517,7 @@ export class InstructorApp extends LitElement {
               <button class="primary download" @click=${this.downloadRecord}>下載紀錄 JSON</button>
               <button class="open-report" @click=${this.openReport}>講評報告</button>
               <button @click=${this.simpleNew}>新練習</button>
-              <span class="sum-note">紀錄含狀態抽樣(每 ${this.sampler.interval_s} s)、學員操作、BRM 標記、指令與摘要;可在教官站的重播檢視開啟</span>
+              <span class="sum-note">紀錄含狀態抽樣(每 ${this.sampler.currentInterval_s} s)、學員操作、BRM 標記、指令與摘要;可在教官站的重播檢視開啟</span>
             </div>
           </div>
         </div>`;

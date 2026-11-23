@@ -21,6 +21,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { BrmMarkerStore, csvSafeText } from '../src/lib/brm-markers.js';
 import { parseReplay } from '../src/lib/record-replay.js';
 import { buildSessionRecord, type SessionRecordInput } from '../src/lib/session-record.js';
+import { instructorRecordJson } from './support/instructor-record.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import type { ScenarioSummary } from '../src/lib/scenario.js';
 import { buildDebriefReport, defaultReportNo, emptyReportMeta, recordKey } from '../src/report/debrief-report.js';
@@ -153,7 +154,7 @@ describe('教官站產生紀錄時寫入練習開始時刻', () => {
     document.body.innerHTML = '';
   });
 
-  type Inner = { onState(state: unknown, issues: string[]): void; stopSource(): void; restartExercise(): void; sessionRecordJson(): string };
+  type Inner = { onState(state: unknown, issues: string[]): void; stopSource(): void; restartExercise(): void };
 
   it('同一練習多次匯出 startedUtc 不變(createdUtc 會變);重設後開始新練習換新的 startedUtc', async () => {
     history.replaceState(null, '', '/?demo=1');
@@ -164,17 +165,17 @@ describe('教官站產生紀錄時寫入練習開始時刻', () => {
     inner.stopSource();
     inner.restartExercise();
     inner.onState({ ...defaultState('FSB1'), t: 1, tick: 50 }, []);
-    const a = JSON.parse(inner.sessionRecordJson()) as { startedUtc?: string; createdUtc: string };
+    const a = JSON.parse(instructorRecordJson(inner)) as { startedUtc?: string; createdUtc: string };
     await new Promise((r) => setTimeout(r, 15));
     inner.onState({ ...defaultState('FSB1'), t: 3, tick: 150 }, []);
-    const b = JSON.parse(inner.sessionRecordJson()) as { startedUtc?: string; createdUtc: string };
+    const b = JSON.parse(instructorRecordJson(inner)) as { startedUtc?: string; createdUtc: string };
     expect(typeof a.startedUtc).toBe('string');
     expect(b.startedUtc).toBe(a.startedUtc);
     expect(b.createdUtc).not.toBe(a.createdUtc);
     await new Promise((r) => setTimeout(r, 15));
     inner.restartExercise();
     inner.onState({ ...defaultState('FSB1'), t: 0.5, tick: 25 }, []);
-    const c = JSON.parse(inner.sessionRecordJson()) as { startedUtc?: string };
+    const c = JSON.parse(instructorRecordJson(inner)) as { startedUtc?: string };
     expect(c.startedUtc).not.toBe(a.startedUtc);
   });
 });

@@ -8,7 +8,7 @@ import { parseAssessmentSummary } from '../src/lib/assessment.js';
 import { overlayFromHeaderScenario, overlayFromScenario } from '../src/lib/plot-overlay.js';
 import { parseScenario } from '../src/lib/scenario.js';
 import { parseReplay } from '../src/lib/record-replay.js';
-import { buildSessionRecord, isSessionRecord } from '../src/lib/session-record.js';
+import { SESSION_RECORD_VERSION, buildSessionRecord, isSessionRecord } from '../src/lib/session-record.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import type { SimEvent } from '../src/types/event.js';
 
@@ -39,7 +39,7 @@ describe('SessionRecord v2', () => {
       },
       new Date(Date.UTC(2026, 9, 17)),
     );
-    expect(record.version).toBe(4);
+    expect(record.version).toBe(SESSION_RECORD_VERSION);
     expect(record.coreSummary).toBe(summaryRaw);
     expect(record.events).toHaveLength(2);
     const json = JSON.stringify(record);

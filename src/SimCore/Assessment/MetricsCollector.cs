@@ -24,7 +24,13 @@ public sealed class MetricsState
     public int RotExcursions { get; set; }
     public bool RotOver { get; set; }
     public int TelegraphChanges { get; set; }
+    /// <summary>
+    /// 最近的車鐘段落(最多 <see cref="MetricsCollector.TelegraphSpanHistory"/> 筆,依時間;最後一筆 = 目前這段)。超過上限時最舊的段落移出,
+    /// 其時間與次數併入 <see cref="TelegraphDropped"/>(第三十輪 ENG-C4:每次車鐘變更都加一筆,原本無上限)
+    /// </summary>
     public List<TelegraphSpanState> TelegraphSpans { get; set; } = new();
+    /// <summary>已移出 <see cref="TelegraphSpans"/> 的段落:各車令累計 tick 數與次數(未超過上限時 null,不寫出;舊快照格式不變)</summary>
+    public Dictionary<string, TelegraphTotalState>? TelegraphDropped { get; set; }
     public int RpmOrders { get; set; }
     public int ThrusterOrders { get; set; }
     public double ThrusterTimeS { get; set; }
@@ -90,6 +96,13 @@ public sealed class TelegraphSpanState
     public long FromTick { get; set; }
 }
 
+/// <summary>單一車令的累計(已結束段落的 tick 數與段數;MetricsState.TelegraphDropped)。</summary>
+public sealed class TelegraphTotalState
+{
+    public long Ticks { get; set; }
+    public int Count { get; set; }
+}
+
 /// <summary>
 /// 操縱控制、一般與 UKC 指標的每秒累計器(第 4.3、4.5 節);舵角分箱 0-5/5-10/10-20/20-35/&gt;35,滿舵 |δ| ≥ hardOver − 0.5°,
 /// 速限/UKC 超限事件含滯後(0.2 kn / +0.2 m)。
@@ -97,6 +110,8 @@ public sealed class TelegraphSpanState
 public sealed class MetricsCollector
 {
     private static readonly string[] BinNames = { "0-5", "5-10", "10-20", "20-35", ">35" };
+    /// <summary>MetricsState.TelegraphSpans 與 summary.manoeuvring.telegraphOrders[] 保留的最近段落數</summary>
+    public const int TelegraphSpanHistory = 100;
     private readonly double _hardOverDeg;
     private readonly double? _rotLimit;
     private readonly double _dt;
@@ -256,12 +271,22 @@ public sealed class MetricsCollector
         }
     }
 
-    /// <summary>車鐘變更(含時間表 ownShip 覆寫)紀錄段落。</summary>
+    /// <summary>車鐘變更(含時間表 ownShip 覆寫)紀錄段落;超過 <see cref="TelegraphSpanHistory"/> 筆時最舊的一段併入 TelegraphDropped。</summary>
     public void OnTelegraph(TelegraphOrder order, long tick)
     {
-        var last = State.TelegraphSpans[^1];
+        var st = State;
+        var last = st.TelegraphSpans[^1];
         if (last.Order == order.ToString()) return;
-        State.TelegraphSpans.Add(new TelegraphSpanState { Order = order.ToString(), FromTick = tick });
+        st.TelegraphSpans.Add(new TelegraphSpanState { Order = order.ToString(), FromTick = tick });
+        while (st.TelegraphSpans.Count > TelegraphSpanHistory)
+        {
+            var oldest = st.TelegraphSpans[0];
+            st.TelegraphSpans.RemoveAt(0);
+            st.TelegraphDropped ??= new Dictionary<string, TelegraphTotalState>(StringComparer.Ordinal);
+            if (!st.TelegraphDropped.TryGetValue(oldest.Order, out var tot)) st.TelegraphDropped[oldest.Order] = tot = new TelegraphTotalState();
+            tot.Ticks += st.TelegraphSpans[0].FromTick - oldest.FromTick;
+            tot.Count++;
+        }
     }
 
     public void Sample(Situation sit, (double Limit, string Source)? speedLimit, (double LimitM, string Source)? ukcLimit, Action<string, string?, object?> raise)
@@ -371,6 +396,25 @@ public sealed class MetricsCollector
             var to = (i + 1 < st.TelegraphSpans.Count ? st.TelegraphSpans[i + 1].FromTick : tick) * _dt;
             spans.Add(new TelegraphSpan { Order = st.TelegraphSpans[i].Order, FromS = from, ToS = to, DurationS = to - from });
         }
+        // 段落超過上限(清單只列最近 TelegraphSpanHistory 段)時附段落總數與各車令累計(含已移出者與目前這段);未超過時不寫出(舊 summary 格式不變)
+        int? total = null;
+        Dictionary<string, TelegraphTotal>? totals = null;
+        if (st.TelegraphDropped is { Count: > 0 } dropped)
+        {
+            var ticks = new Dictionary<string, long>(StringComparer.Ordinal);
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var (order, d) in dropped) { ticks[order] = d.Ticks; counts[order] = d.Count; }
+            for (var i = 0; i < st.TelegraphSpans.Count; i++)
+            {
+                var o = st.TelegraphSpans[i].Order;
+                var end = i + 1 < st.TelegraphSpans.Count ? st.TelegraphSpans[i + 1].FromTick : tick;
+                ticks[o] = ticks.GetValueOrDefault(o) + (end - st.TelegraphSpans[i].FromTick);
+                counts[o] = counts.GetValueOrDefault(o) + 1;
+            }
+            total = counts.Values.Sum();
+            totals = ticks.Keys.OrderBy(k => k, StringComparer.Ordinal)
+                .ToDictionary(k => k, k => new TelegraphTotal { Count = counts[k], DurationS = ticks[k] * _dt }, StringComparer.Ordinal);
+        }
         var bins = new Dictionary<string, double>();
         for (var i = 0; i < BinNames.Length; i++) bins[BinNames[i]] = st.RudderBins[i];
         return new SummaryManoeuvring
@@ -385,6 +429,8 @@ public sealed class MetricsCollector
             RotExcursions = st.RotExcursions,
             TelegraphChanges = st.TelegraphChanges,
             TelegraphOrders = spans,
+            TelegraphOrdersTotal = total,
+            TelegraphTotals = totals,
             RpmOrders = st.RpmOrders,
             ThrusterOrders = st.ThrusterOrders,
             ThrusterTimeS = st.ThrusterTimeS,

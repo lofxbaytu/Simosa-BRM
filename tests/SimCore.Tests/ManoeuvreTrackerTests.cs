@@ -349,6 +349,41 @@ public class ManoeuvreTrackerTests
 
     // ------------------------------------------------------------------ 快照與指標
 
+    /// <summary>
+    /// 第三十輪 ENG-C5:summary.manoeuvres[] 對已結束紀錄的複本做快取(每秒只複製進行中者與新增的已結束者),內容與順序仍與
+    /// <see cref="ManoeuvreTracker.Summary"/> 的 JSON 相同(進行中、結束後、快照還原後);已結束紀錄的複本跨 summary 共用、不是追蹤器內的物件。
+    /// </summary>
+    [Fact]
+    public void SummaryCachesFinishedRecordsAndMatchesTrackerAcrossRestore()
+    {
+        var (e, events) = Engine(14.5);
+        string Expected() => ContractJson.Serialize(e.Assessment!.Manoeuvres.Summary());
+        string Actual() => ContractJson.Serialize(e.Assessment!.BuildSummary(e.Tick, final: false).Manoeuvres);
+        e.Enqueue(SimCommand.Rudder(35));
+        TestData.RunTo(e, 100);
+        var snap = e.TakeSnapshot();
+        Assert.Contains("inProgress", Actual());
+        Assert.Equal(Expected(), Actual());
+        RunUntilMeasured(e, events, 600);
+        Assert.Equal(Expected(), Actual());
+        e.Enqueue(SimCommand.Rudder(0));
+        TestData.RunTo(e, e.Time + 30);
+        Assert.Equal(Expected(), Actual());
+        var s1 = e.Assessment!.BuildSummary(e.Tick, final: false).Manoeuvres!;
+        var s2 = e.Assessment.BuildSummary(e.Tick, final: false).Manoeuvres!;
+        Assert.Same(s1[0], s2[0]);
+        Assert.NotSame(e.Assessment.Manoeuvres.State.Records[0], s1[0]);
+        Assert.Equal("measured", s1[0].State);
+        // 還原到量測中:Records 回到空清單,快取重建
+        e.Restore(snap);
+        Assert.Empty(e.Assessment.Manoeuvres.State.Records);
+        Assert.Equal(Expected(), Actual());
+        events.Clear();
+        RunUntilMeasured(e, events, 600);
+        Assert.Equal(Expected(), Actual());
+        Assert.Equal("measured", Assert.Single(e.Assessment.BuildSummary(e.Tick, final: false).Manoeuvres!).State);
+    }
+
     [Fact]
     public void SnapshotRestoreMidTurnGivesSameMeasurement()
     {

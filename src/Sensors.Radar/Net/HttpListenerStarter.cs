@@ -96,6 +96,81 @@ internal static class HttpListenerStarter
         catch (Exception) { /* 已關閉 */ }
     }
 
+    /// <summary>
+    /// 接受迴圈(與 src/SimCore.Host/HttpListenerStarter.cs 的 AcceptLoopAsync 相同,說明見該處;第三十輪 2 小時搜尋 host-accept-loop-death):
+    /// 只有權杖取消或 listener 已關閉才結束;<paramref name="dispatch"/> 必須同步返回(單一請求的 I/O 一律在背景),
+    /// 其他例外記 log(有次數限制)後繼續接受,dispatch 失敗的那個請求以 Abort 收尾。
+    /// </summary>
+    public static async Task AcceptLoopAsync(HttpListener listener, CancellationToken ct, Action<HttpListenerContext> dispatch, Action<string>? log, string name)
+    {
+        long errors = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            HttpListenerContext ctx;
+            try { ctx = await listener.GetContextAsync().ConfigureAwait(false); }
+            catch (Exception) when (ct.IsCancellationRequested || !listener.IsListening) { break; }
+            catch (ObjectDisposedException) { break; }
+            catch (HttpListenerException ex)
+            {
+                LogLimited(log, ++errors, $"{name} 接受連線失敗(HttpListenerException {ex.ErrorCode}:{ex.Message}),繼續接受");
+                continue;
+            }
+            catch (Exception ex)
+            {
+                LogLimited(log, ++errors, $"{name} 接受連線失敗({ex.GetType().Name}:{ex.Message}),繼續接受");
+                try { await Task.Delay(50, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                continue;
+            }
+            try { dispatch(ctx); }
+            catch (Exception ex)
+            {
+                LogLimited(log, ++errors, $"{name} 處理請求失敗({ex.GetType().Name}:{ex.Message}),中止該連線後繼續接受");
+                AbortResponse(ctx.Response);
+            }
+        }
+    }
+
+    /// <summary>前 10 次與之後每 1000 次記一行。</summary>
+    private static void LogLimited(Action<string>? log, long count, string message)
+    {
+        if (count <= 10 || count % 1000 == 0) log?.Invoke(count > 10 ? $"{message}(累計 {count} 次)" : message);
+    }
+
+    /// <summary>回一段純文字並關閉;寫出失敗時 Abort,不拋例外(在背景執行,不在接受迴圈裡 await)。</summary>
+    public static async Task RespondTextAsync(HttpListenerContext ctx, int status, string text)
+    {
+        var res = ctx.Response;
+        try
+        {
+            var body = System.Text.Encoding.UTF8.GetBytes(text);
+            res.StatusCode = status;
+            res.ContentType = "text/plain; charset=utf-8";
+            res.ContentLength64 = body.Length;
+            await res.OutputStream.WriteAsync(body).ConfigureAwait(false);
+            res.Close();
+        }
+        catch (Exception) { AbortResponse(res); }
+    }
+
+    /// <summary>只回狀態碼並關閉(握手失敗);失敗時 Abort。不拋例外。</summary>
+    public static void CloseResponse(HttpListenerResponse res, int status)
+    {
+        try
+        {
+            res.StatusCode = status;
+            res.Close();
+        }
+        catch (Exception) { AbortResponse(res); }
+    }
+
+    /// <summary>中止回應並關閉連線;已關閉時無作用。不拋例外。</summary>
+    public static void AbortResponse(HttpListenerResponse res)
+    {
+        try { res.Abort(); }
+        catch (Exception) { /* 已關閉或已釋放 */ }
+    }
+
     /// <summary>等背景迴圈結束,但不超過 <paramref name="timeout"/>(關機流程不可被卡住:之後還要寫紀錄 footer);逾時回傳 false。</summary>
     public static async Task<bool> WaitBoundedAsync(Task? task, TimeSpan timeout)
     {

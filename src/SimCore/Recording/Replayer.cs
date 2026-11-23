@@ -54,7 +54,8 @@ public static class Replayer
         Action<SimulationEngine>? configure = null, Action<SimulationEngine>? onStep = null, Parameters.ParameterSet? rescore = null,
         bool rescoreTargets = false)
     {
-        var rec = RecordReader.Read(path);
+        // 重播不用快照行(只用標頭、指令、事件、footer 與 summary):不保留,以免整份紀錄的快照常駐於重播全程(第三十輪 ENG-C3)
+        var rec = RecordReader.Read(path, includeSnapshots: false);
         var notes = new List<string>();
         var engine = CreateEngine(rec, shipLoader, dynamicsFactory, rescore, rescoreTargets, notes);
         configure?.Invoke(engine);

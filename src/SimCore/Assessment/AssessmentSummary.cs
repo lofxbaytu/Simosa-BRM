@@ -121,7 +121,12 @@ public sealed record SummaryManoeuvring
     [JsonPropertyName("timeRotOverLimit_s")] public required double TimeRotOverLimitS { get; init; }
     [JsonPropertyName("rotExcursions")] public required int RotExcursions { get; init; }
     [JsonPropertyName("telegraphChanges")] public required int TelegraphChanges { get; init; }
+    /// <summary>車鐘各段(依時間;超過 MetricsCollector.TelegraphSpanHistory 段時只列最近的段落,總數見 telegraphOrdersTotal)</summary>
     [JsonPropertyName("telegraphOrders")] public required IReadOnlyList<TelegraphSpan> TelegraphOrders { get; init; }
+    /// <summary>段落總數(只在 telegraphOrders 已截斷時輸出;未截斷時 = telegraphOrders 長度,不寫出)</summary>
+    [JsonPropertyName("telegraphOrdersTotal")] public int? TelegraphOrdersTotal { get; init; }
+    /// <summary>各車令的段數與累計時間(含已移出清單的段落與目前這段;只在 telegraphOrders 已截斷時輸出,依車令名稱排序)</summary>
+    [JsonPropertyName("telegraphTotals")] public IReadOnlyDictionary<string, TelegraphTotal>? TelegraphTotals { get; init; }
     [JsonPropertyName("rpmOrders")] public required int RpmOrders { get; init; }
     [JsonPropertyName("thrusterOrders")] public required int ThrusterOrders { get; init; }
     [JsonPropertyName("thrusterTime_s")] public required double ThrusterTimeS { get; init; }
@@ -137,6 +142,13 @@ public sealed record TelegraphSpan
     [JsonPropertyName("order")] public required string Order { get; init; }
     [JsonPropertyName("from_s")] public required double FromS { get; init; }
     [JsonPropertyName("to_s")] public required double ToS { get; init; }
+    [JsonPropertyName("duration_s")] public required double DurationS { get; init; }
+}
+
+/// <summary>單一車令的段數與累計時間(summary.manoeuvring.telegraphTotals)。</summary>
+public sealed record TelegraphTotal
+{
+    [JsonPropertyName("count")] public required int Count { get; init; }
     [JsonPropertyName("duration_s")] public required double DurationS { get; init; }
 }
 

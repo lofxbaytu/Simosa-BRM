@@ -112,6 +112,16 @@ describe('report-store IndexedDB 版本 1 → 2 升級', () => {
     expect(await takeHandoff(store)).toBeUndefined();
   });
 
+  it('教官站交接存 Blob(第三十輪 W2):IndexedDB 存的是 Blob、不是整份字串;報告頁 takeHandoff 讀回相同文字', async () => {
+    const text = '{"format":"simosa-brm-instructor-record","note":"中文 🚢"}';
+    expect(await saveHandoff(new Blob([text.slice(0, 10), text.slice(10)], { type: 'application/json;charset=utf-8' }))).toBe(true);
+    const store = await openReportStore();
+    const raw = await store.get<{ blob?: unknown; text?: unknown }>(HANDOFF_KEY);
+    expect(raw?.blob).toBeInstanceOf(Blob);
+    expect(raw?.text).toBeUndefined();
+    expect((await takeHandoff(store))?.text).toBe(text);
+  });
+
   it('ensureStores 只建缺少的存放區(重複呼叫不擲例外)', async () => {
     const db = await openFake(factory, 'ensure-test', 1, (d) => {
       ensureStores(d as unknown as IDBDatabase);

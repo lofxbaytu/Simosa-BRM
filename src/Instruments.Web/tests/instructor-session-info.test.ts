@@ -8,7 +8,8 @@ import type { SessionInfo } from '../src/lib/session-info.js';
 import type { SessionInfoPanel } from '../src/components/instructor/session-info-panel.js';
 import { loadSessionInfoDraft, SESSION_INFO_DRAFT_KEY, saveSessionInfoDraft } from '../src/components/instructor/session-info-panel.js';
 import type { RunControlPanel } from '../src/components/instructor/run-control-panel.js';
-import { isSessionRecord } from '../src/lib/session-record.js';
+import { SESSION_RECORD_VERSION, isSessionRecord } from '../src/lib/session-record.js';
+import { instructorRecordJson } from './support/instructor-record.js';
 
 type Updatable = HTMLElement & { updateComplete: Promise<unknown> };
 
@@ -161,16 +162,16 @@ describe('未確認警示(不阻擋)', () => {
     expect(run.shadowRoot!.querySelector('.rest-warning')).toBeNull();
     const commandLog = app.shadowRoot!.querySelector('brm-command-log') as HTMLElement & { entries: ReadonlyArray<{ command: SimCommand }> };
     expect(commandLog.entries.at(-1)!.command.type).toBe('sessionInfo');
-    const json = (app as unknown as { sessionRecordJson(): string }).sessionRecordJson();
+    const json = instructorRecordJson(app);
     const record = JSON.parse(json) as { version: number; sessionInfo: SessionInfo | null };
     expect(isSessionRecord(record)).toBe(true);
-    expect(record.version).toBe(4);
+    expect(record.version).toBe(SESSION_RECORD_VERSION);
     expect(record.sessionInfo!.participants).toEqual([{ name: '王大明', role: 'master' }]);
     expect(record.sessionInfo!.restHoursConfirmation!.confirmedBy).toBe('王大明');
     // 清除後紀錄不再含 sessionInfo
     q<HTMLButtonElement>(panel, 'button.clear').click();
     await app.updateComplete;
-    expect((JSON.parse((app as unknown as { sessionRecordJson(): string }).sessionRecordJson()) as { sessionInfo: unknown }).sessionInfo).toBeNull();
+    expect((JSON.parse(instructorRecordJson(app)) as { sessionInfo: unknown }).sessionInfo).toBeNull();
     expect(app.shadowRoot!.querySelector('header .rest-warning')).not.toBeNull();
   });
 
@@ -198,7 +199,7 @@ describe('未確認警示(不阻擋)', () => {
     await app.updateComplete;
     expect(app.shadowRoot!.querySelector('.stage.running')).not.toBeNull();
     // 結束後的紀錄含 sessionInfo
-    const record = JSON.parse((app as unknown as { sessionRecordJson(): string }).sessionRecordJson()) as { mode: string; sessionInfo: SessionInfo | null };
+    const record = JSON.parse(instructorRecordJson(app)) as { mode: string; sessionInfo: SessionInfo | null };
     expect(record.mode).toBe('simple');
     expect(record.sessionInfo!.restHoursConfirmation!.confirmedBy).toBe('船長甲');
   });

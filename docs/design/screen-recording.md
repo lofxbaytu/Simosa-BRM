@@ -53,7 +53,9 @@
 - `mediaId` = `<yyyyMMdd-HHmmss>-<station>-<exerciseId 安全化>-<6 hex>`;檔名 `<mediaId>.webm`,上傳中為 `.webm.part`。
 - 來源過濾與 `shutdown` 指令相同(`HostCommandRouter.IsAllowedShutdownClient`:loopback、10/8、172.16/12、192.168/16、169.254/16、IPv6 link-local/ULA)。
 - 開始時關聯紀錄:教官站給 `recordPath`(須在專案根目錄內)優先,否則取主控程序**正在寫**的紀錄(`HostCommandRouter.Recorder`,已關閉者不算);讀該檔第一行 header 的 `createdUtc`、`scenario.id`(`RecordWriter` 以 `FileShare.Read` 開檔,可同時讀)。
-- 主控程序結束(Ctrl+C、停止檔、shutdown 指令、`--duration`)時先停錄影上傳端:進行中的錄影定稿為 `.webm` + 旁檔(`stopReason: hostShutdown`),再關閉紀錄寫 footer。
+- 主控程序結束(Ctrl+C、停止檔、shutdown 指令、`--duration`)時先停錄影上傳端:進行中的錄影定稿為 `.webm` + 旁檔(`stopReason: hostShutdown`;已暫停者 `idleTimeout`,見下一點),再關閉紀錄寫 footer。
+- **閒置的錄影與被放棄的錄影**:最後一次活動(start 或任何片段請求)後 5 分鐘沒有片段、且沒有片段正在上傳,就**暫停寫檔**:`.part` Flush 後關閉,釋放檔案代號與寫入緩衝;序號、已收位元組與 SHA-256 狀態保留,工作階段仍在 `/media/status` 的 `active`(`suspended: true`)。下一個片段到達時重新開啟同一份 `.part` 接續寫入(檔案長度須等於已收位元組,否則 500 讓教官站重試),內容、片段數與 SHA-256 與沒有暫停時相同。**不在閒置時定稿**:畫面靜止且沒有音訊(分享視窗、沒有勾選分享音訊,加上凍結模擬講解或休息)時 MediaRecorder 可能數分鐘不吐片段(Chromium 1243 以 canvas `captureStream` 實測:靜止 14 s 期間沒有 `dataavailable`,教官站也略過空片段;實際螢幕/視窗擷取是否相同未實測),若在此定稿,之後的片段收到 `410`,教官站把它當成致命錯誤,這次訓練剩下的部分就沒有錄到(第三十輪審查 REV-MEDIA;第一版的修正在 5 分鐘時定稿)。被放棄的錄影(教官站分頁重新整理或當機、瀏覽器被關、stop 送不出去)因此停在暫停狀態,每份只剩 SHA-256 狀態與旁檔內容(約 1–2 KB);暫停中的錄影超過 16 份(`MediaUploadServer.MaxSuspendedSessions`)時,最後一次活動最早者定稿(`stopReason: idleTimeout`,`stoppedUtc` 為最後一次活動、`durationEstimated: true`;正在錄的那份最後活動最晚,不受影響),之後的片段回 `410`、stop 回同一份旁檔;主控程序結束時暫停中的錄影同樣以 `idleTimeout` 定稿,其餘以 `hostShutdown`。紀錄包照常打包。每 30 s 檢查一次(`SessionIdleTimeout` / `IdleSweepInterval`)。
+- **body 逾時與錯誤收尾**:讀 body(片段、start/stop 的 JSON、錯誤回應前的排空)時 30 s 沒有收到任何位元組(對端消失:拔網路線、教官筆電睡眠,不送 FIN 也不送 RST)就中止該請求並 Abort 連線(`BodyIdleTimeout`;Linux 受控 HttpListener 沒有 body 逾時,修正前永久持有片段大小的緩衝與連線;Windows http.sys 的 EntityBody 逾時約 2 分鐘,30 s 先到);宣告長度沒收滿的片段不寫入。任何錯誤路徑最後一定 Close 或 Abort 回應(修正前上傳中途 RST 時 500 寫不出去,連線一直留在 listener 的連線表)。依 Content-Length 預先配置的緩衝最多 4 MB。以上為第三十輪 2 小時無上限成長搜尋的修正(`docs/design/testing.md` 第 6.6 節第 4 點)。
 
 旁檔 `<mediaId>.json`(`src/SimCore/Recording/MediaSidecar.cs`;SimCore.Host 寫、Tools.Packaging 讀同一型別):
 
@@ -106,6 +108,6 @@ VP9 1080p 15 fps 螢幕內容約 1.5–3 Mb/s → 每小時 0.7–1.3 GB;`--medi
 
 ## 8. 測試
 
-- `tests/SimCore.Tests/MediaUploadTests.cs`:HttpClient 三片段 → 檔案內容與旁檔(含紀錄關聯)正確;序號重送/跳號;413 上限與 truncated;拒絕外部來源(403);CORS preflight 與 status;主控程序結束定稿;選項解析與 `--media-dir` 根目錄檢查。
+- `tests/SimCore.Tests/MediaUploadTests.cs`:HttpClient 三片段 → 檔案內容與旁檔(含紀錄關聯)正確;序號重送/跳號;413 上限與 truncated;拒絕外部來源(403);CORS preflight 與 status;主控程序結束定稿;選項解析與 `--media-dir` 根目錄檢查;body 卡住時逾時中止(片段與錯誤回應的排空)、上傳中途 RST 後連線釋放(Linux 以反射數 listener 的連線表)、閒置的錄影暫停寫檔(釋放檔案代號;Linux 以 /proc/self/fd 確認)、暫停後的片段接續寫入且內容與 SHA-256 不變、片段上傳中不暫停、主控程序結束時暫停中者以 idleTimeout 定稿(可手動前進的時鐘)、暫停中的錄影超過 16 份時最舊者定稿與背景檢查。`tests/SimCore.Tests/AcceptLoopResilienceTests.cs`:GET 後 RST 30 次之後仍可連線、連線表回到基準。
 - `tests/Tools.Packaging.Tests/RecordPackageTests.cs`:錄影 + 旁檔打包、`exercises[].media` 關聯(檔名/createdUtc)、匯入解開、`inspect` 輸出、回報後刪除;超過上限只放旁檔並標 omitted、旁檔保留、放寬上限補打包、第二次回報一併刪除。
 - vitest:`screen-recording`(狀態機、序號、重試、413、緩衝上限、致命錯誤、開始失敗、停止分享、工具)、`recording-panel`、`report-recordings`(紀錄 v4 → 重播 → 報告;教官站整合:面板/徽章/紀錄 JSON、簡化模式自動開始/停止)。

@@ -389,7 +389,7 @@ public sealed class CliApp
         };
         if (a.Get("record") is { } recPath)
         {
-            var rf = RecordReader.Read(recPath);
+            var rf = RecordReader.Read(recPath, includeSnapshots: false);   // 只需標頭與完整性檢查
             if (!rf.IntegrityOk) throw new InvalidDataException($"紀錄 {recPath} 完整性檢查失敗(footer 雜湊不符或缺少 footer)");
             if (rf.Header.Scenario.Id != sc.Id) throw new InvalidDataException($"紀錄的情境為 {rf.Header.Scenario.Id},不是 {sc.Id}");
             if (method == "run" && rf.Header.ParameterSet is { } ps && !Sha256Hex.Equal(ps.Sha256, set.Sha256))

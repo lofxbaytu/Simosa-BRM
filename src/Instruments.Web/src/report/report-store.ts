@@ -2,7 +2,7 @@
 // (紀錄交接、最近紀錄、報告工作資料)與 admin(教官資格紀錄、證書效期雙軌追蹤;版本 2 新增,admin-records.ts)。
 // 只在本機瀏覽器;不連網、不經核心。IndexedDB 不可用(私密視窗、測試環境)時退回記憶體,頁面仍可用(重新整理即遺失,
 // 畫面會標示「未保存」,請以 JSON 匯出)。
-// 教官站「講評報告」按鈕先把目前的練習紀錄寫入 HANDOFF_KEY,再開 report.html?from=instructor 讀取。
+// 教官站「講評報告」按鈕先把目前的練習紀錄(Blob)寫入 HANDOFF_KEY,再開 report.html?from=instructor 讀取。
 
 export const REPORT_DB_NAME = 'simosa-brm-report';
 export const REPORT_DB_VERSION = 2;
@@ -13,7 +13,7 @@ const STORES = [KV_STORE, ADMIN_STORE] as const;
 export type ReportStoreName = (typeof STORES)[number];
 export const ADMIN_KEY = 'admin:v1';
 
-/** 教官站交給報告頁的練習紀錄(SessionRecord JSON 文字)。 */
+/** 教官站交給報告頁的練習紀錄:{ savedUtc, blob }(SessionRecord JSON 的 Blob;第三十輪 W2 起)或舊版的 { savedUtc, text }。 */
 export const HANDOFF_KEY = 'handoff:instructorRecord';
 /** 最近載入的紀錄文字(重新整理後還原) */
 export const LAST_RECORD_KEY = 'record:last';
@@ -97,18 +97,30 @@ export function resetReportStoreForTest(): void {
   shared = null;
 }
 
-/** 教官站:把練習紀錄交給報告頁(寫入後才開新頁,避免新頁讀到舊資料)。 */
-export async function saveHandoff(recordJson: string): Promise<boolean> {
+/**
+ * 教官站:把練習紀錄交給報告頁(寫入後才開新頁,避免新頁讀到舊資料)。教官站傳 Blob(session-record.ts sessionRecordBlob):
+ * IndexedDB 直接存 Blob,不必把整份紀錄組成字串再結構化複製(2 小時的紀錄可達數十 MB);也接受文字(測試、舊呼叫者)。
+ */
+export async function saveHandoff(record: Blob | string): Promise<boolean> {
   try {
     const store = await openReportStore();
-    await store.set(HANDOFF_KEY, { savedUtc: new Date().toISOString(), text: recordJson });
+    const savedUtc = new Date().toISOString();
+    await store.set(HANDOFF_KEY, typeof record === 'string' ? { savedUtc, text: record } : { savedUtc, blob: record });
     return store.persistent;
   } catch {
     return false;
   }
 }
 
+function isBlobLike(v: unknown): v is Blob {
+  return typeof v === 'object' && v !== null && typeof (v as { text?: unknown }).text === 'function';
+}
+
+/** 報告頁:讀出交接的紀錄文字(Blob 以 blob.text() 讀;舊版交接為文字)。 */
 export async function takeHandoff(store: KvStore): Promise<{ savedUtc: string; text: string } | undefined> {
-  const v = await store.get<{ savedUtc: string; text: string }>(HANDOFF_KEY);
-  return v && typeof v.text === 'string' ? v : undefined;
+  const v = await store.get<{ savedUtc?: unknown; text?: unknown; blob?: unknown }>(HANDOFF_KEY);
+  if (!v || typeof v !== 'object') return undefined;
+  const savedUtc = typeof v.savedUtc === 'string' ? v.savedUtc : '';
+  if (isBlobLike(v.blob)) return { savedUtc, text: await v.blob.text() };
+  return typeof v.text === 'string' ? { savedUtc, text: v.text } : undefined;
 }

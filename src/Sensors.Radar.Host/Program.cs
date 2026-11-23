@@ -118,8 +118,8 @@ RadarService? service = null;
 string? scenarioId = null;
 var startUtc = DateTime.UtcNow.Date;
 var nextReport = 0.0;
-var cpaErrors = new List<(double T, string Radar, int Id, string Truth, double Err, bool Stable)>();
-var trackCounts = new List<(double T, string Radar, int Tracking, int Total)>();
+// 結束摘要的 ARPA 對真值統計:只留累計值與每組配對的最後一筆(有上限;修正前兩個 List 隨模擬時間無上限成長,第三十輪 radar-R2)
+var truthSummary = new ArpaTruthSummary();
 var wall = Stopwatch.StartNew();
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -158,10 +158,10 @@ void OnState(OwnShipState s)
 void OnTracks(RadarUnit unit, RadarScene scene)
 {
     var tracking = unit.Arpa.Tracks.Count(t => t.State == TrackState.Tracking);
-    trackCounts.Add((scene.T, unit.Config.Id, tracking, unit.Arpa.Tracks.Count));
+    truthSummary.AddTrackCount(unit.Config.Id, scene.T, tracking, unit.Arpa.Tracks.Count);
     var matches = ArpaTruthComparison.Compare(unit, scene);
     foreach (var m in matches.Where(m => m.State == "tracking"))
-        cpaErrors.Add((scene.T, unit.Config.Id, m.TrackId, m.TruthId, m.CpaErrorNm, m.Stable));
+        truthSummary.AddCpaError(unit.Config.Id, scene.T, m.TrackId, m.TruthId, m.CpaErrorNm, m.Stable);
     if (options.TruthReport <= 0 || unit != service!.Units[0] || scene.T + 1e-6 < nextReport) return;
     nextReport = scene.T + options.TruthReport;
     Console.WriteLine($"--- t={scene.T:F0}s 追蹤 {tracking}/{unit.Arpa.Tracks.Count}({unit.RadarLetter});真值目標 {scene.TruthTargets?.Count ?? 0}");
@@ -183,19 +183,15 @@ if (service is not null)
     {
         var cpu = service.CpuSeconds(u.Config.Id);
         Console.WriteLine($"  雷達 {u.RadarLetter}:方位線 {u.TotalSpokes}、處理 {cpu:F1} s CPU(平均 {cpu / Math.Max(wallS, 1e-9) * 100:F1}% 單核)、追蹤 {u.Arpa.Tracks.Count(t => t.State == TrackState.Tracking)}/{u.Arpa.Tracks.Count}");
-        var errs = cpaErrors.Where(e => e.Radar == u.Config.Id).ToList();
-        var stable = errs.Where(e => e.Stable).ToList();
+        var errs = truthSummary.AllErrors(u.Config.Id);
+        var stable = truthSummary.StableErrors(u.Config.Id);
         if (errs.Count > 0)
-            Console.WriteLine($"    CPA 誤差(追蹤中,全部 {errs.Count} 筆):平均 {errs.Average(e => e.Err):F4} nm、最大 {errs.Max(e => e.Err):F4} nm");
+            Console.WriteLine($"    CPA 誤差(追蹤中,全部 {errs.Count} 筆):平均 {errs.Average:F4} nm、最大 {errs.Max:F4} nm");
         if (stable.Count > 0)
-            Console.WriteLine($"    CPA 誤差(穩定追蹤 ≥ 3 分,{stable.Count} 筆):平均 {stable.Average(e => e.Err):F4} nm、最大 {stable.Max(e => e.Err):F4} nm");
-        var lastCount = trackCounts.LastOrDefault(c => c.Radar == u.Config.Id);
-        if (lastCount != default) Console.WriteLine($"    最後追蹤數 {lastCount.Tracking}(t={lastCount.T:F0}s)");
-        foreach (var g in errs.GroupBy(e => (e.Id, e.Truth)).OrderBy(g => g.Key.Id))
-        {
-            var last = g.Last();
-            Console.WriteLine($"    {u.RadarLetter}{g.Key.Id:00} ↔ {g.Key.Truth}:最後 CPA 誤差 {last.Err:F4} nm(t={last.T:F0}s,{(last.Stable ? "穩定" : "趨勢")})");
-        }
+            Console.WriteLine($"    CPA 誤差(穩定追蹤 ≥ 3 分,{stable.Count} 筆):平均 {stable.Average:F4} nm、最大 {stable.Max:F4} nm");
+        if (truthSummary.LastTrackCount(u.Config.Id) is { } lastCount) Console.WriteLine($"    最後追蹤數 {lastCount.Tracking}(t={lastCount.T:F0}s)");
+        foreach (var last in truthSummary.LastByPair(u.Config.Id))
+            Console.WriteLine($"    {u.RadarLetter}{last.TrackId:00} ↔ {last.TruthId}:最後 CPA 誤差 {last.Err:F4} nm(t={last.T:F0}s,{(last.Stable ? "穩定" : "趨勢")})");
     }
     service.Dispose();
 }

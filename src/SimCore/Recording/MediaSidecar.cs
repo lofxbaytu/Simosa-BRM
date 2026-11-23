@@ -39,7 +39,7 @@ public sealed class MediaSidecar
     public bool Truncated { get; set; }
     /// <summary>上傳上限(位元組;--media-max-mb)</summary>
     public long MaxBytes { get; set; }
-    /// <summary>停止原因:client(教官站 stop)| hostShutdown(主控程序結束時尚未 stop)| limit(超過上限後教官站 stop)</summary>
+    /// <summary>停止原因:client(教官站 stop)| hostShutdown(主控程序結束時尚未 stop)| limit(超過上限後教官站 stop)| idleTimeout(定稿時已 5 分鐘以上沒有片段而暫停寫檔:教官站已放棄,或畫面長時間靜止;暫停中的錄影超過 16 份時的最舊者,或主控程序結束時暫停中者;stoppedUtc 為最後一次活動)</summary>
     public string? StopReason { get; set; }
     /// <summary>對應的練習紀錄(開始錄影時主控程序正在寫的紀錄;無紀錄時 null)</summary>
     public MediaRecordRef? Record { get; set; }

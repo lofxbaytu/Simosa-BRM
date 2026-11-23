@@ -197,7 +197,7 @@ export function overlayFromHeaderScenario(raw: unknown): PlotOverlay {
 }
 
 /** 事件標記:以事件時刻的自船位置(狀態序列內插前一筆)為座標;只標 warning/alarm 與時間表觸發。 */
-export function eventMarks(events: readonly SimEvent[], states: readonly OwnShipState[], tMax = Number.POSITIVE_INFINITY): OverlayEventMark[] {
+export function eventMarks(events: readonly SimEvent[], states: readonly Pick<OwnShipState, 't' | 'pos'>[], tMax = Number.POSITIVE_INFINITY): OverlayEventMark[] {
   const out: OverlayEventMark[] = [];
   if (states.length === 0) return out;
   for (const e of events) {

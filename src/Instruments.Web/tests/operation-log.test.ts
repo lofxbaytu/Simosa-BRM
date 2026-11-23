@@ -1,6 +1,6 @@
 // 學員操作紀錄推導:由狀態變化推出舵令/車鐘/側推/凍結/故障/擱淺事件,連續舵令合併。
 import { describe, expect, it } from 'vitest';
-import { OperationLogDeriver } from '../src/lib/operation-log.js';
+import { MAX_OPERATION_EVENTS, OperationLogDeriver } from '../src/lib/operation-log.js';
 import { defaultState } from '../src/lib/state-parser.js';
 import type { OwnShipState } from '../src/types/state.js';
 
@@ -134,5 +134,22 @@ describe('OperationLogDeriver.clear(keep)', () => {
     expect(log.length).toBe(0);
     // 清空後第一筆重新作基準,不會把前一筆舵角當變化
     expect(log.push(s.at(2, { rudderOrder: 20 }))).toEqual([]);
+  });
+});
+
+describe('OperationLogDeriver 筆數保險上限(第三十輪 W3)', () => {
+  it('超過 maxEvents 丟最舊的事件,規劃時間結束紀錄不丟;預設上限 MAX_OPERATION_EVENTS', () => {
+    expect(MAX_OPERATION_EVENTS).toBe(10_000);
+    const log = new OperationLogDeriver({ maxEvents: 5 });
+    log.addExternal('planningTime', '規劃時間結束(5 分鐘)', 0, 5);
+    const s = seq();
+    log.push(s.at(0));
+    for (let i = 1; i <= 20; i++) log.push(s.at(i * 2, { rudderOrder: i % 2 === 0 ? 10 : -10 }));
+    expect(log.length).toBe(5);
+    expect(log.all()[0]!.kind).toBe('planningTime');
+    expect(log.all().slice(1).map((e) => e.t)).toEqual([34, 36, 38, 40]); // 最新的 4 筆舵令
+    log.addExternal('voiceScript', 'v', 41);
+    expect(log.length).toBe(5);
+    expect(log.all().map((e) => e.kind)).toEqual(['planningTime', 'rudder', 'rudder', 'rudder', 'voiceScript']);
   });
 });

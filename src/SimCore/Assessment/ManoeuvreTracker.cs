@@ -1102,9 +1102,18 @@ public sealed class ManoeuvreTracker
     public IReadOnlyList<ManoeuvreRecord> Summary()
     {
         var list = new List<ManoeuvreRecord>(State.Records);
-        foreach (var p in new[] { State.Active, State.Swing, State.Mob })
-            if (p is { Pending: false }) list.Add(p.Record);   // 未確定的開始序列不輸出
+        list.AddRange(InProgress());
         return list;
+    }
+
+    /// <summary>
+    /// 進行中(已確定開始、尚未結束)的量測紀錄,依 Active、Swing、Mob 順序(未確定的開始序列不輸出)。
+    /// 已結束者在 <see cref="ManoeuvreState.Records"/>,加入後不再變動(評估引擎據此快取其 summary 複本)。
+    /// </summary>
+    public IEnumerable<ManoeuvreRecord> InProgress()
+    {
+        foreach (var p in new[] { State.Active, State.Swing, State.Mob })
+            if (p is { Pending: false }) yield return p.Record;
     }
 
     /// <summary>容許帶指標 manoeuvres.*(<see cref="MetricNames"/>);無值時 null。</summary>

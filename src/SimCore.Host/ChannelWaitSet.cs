@@ -13,6 +13,7 @@ namespace SimosaBRM.SimCore.Host;
 /// 有界通道的等待者則排隊到下一筆資料才喚醒。
 /// </para>
 /// 非執行緒安全:只由單一傳送迴圈依序呼叫 <see cref="WaitAnyAsync"/>(前一次完成後才呼叫下一次)。
+/// 雷達服務另有一份相同的實作(src/Sensors.Radar/Net/ChannelWaitSet.cs;雷達不引用 SimCore.Host),改一份時另一份一併改。
 /// </summary>
 internal sealed class ChannelWaitSet<T>
 {
