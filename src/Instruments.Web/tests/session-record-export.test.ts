@@ -1,7 +1,7 @@
 // 教官站紀錄匯出(第三十輪 W2;lib/session-record.ts sessionRecordChunks / sessionRecordBlob、report-store saveHandoff/takeHandoff):
 // 逐欄、逐筆序列化後以 BlobPart[] 組成的 Blob,與修正前「整份 JSON.stringify 成單一字串再包成 Blob」的位元組完全相同
 //(中文、表情符號、孤立代理字元、undefined/NaN/-0、巢狀 Date、子 Blob 切得很碎時皆同);講評報告交接存 Blob、報告頁讀回文字;
-// 舊版交接({ text })仍可讀。
+// 舊版交接({ text })仍可讀。takeHandoff 回傳 Blob 本身(報告頁分段解析,不讀成整份文字)。
 import { describe, expect, it } from 'vitest';
 import { parseReplay } from '../src/lib/record-replay.js';
 import { SESSION_RECORD_MIME, buildSessionRecord, sessionRecordBlob, sessionRecordChunks, type SessionRecord } from '../src/lib/session-record.js';
@@ -70,7 +70,7 @@ describe('sessionRecordChunks / sessionRecordBlob', () => {
 });
 
 describe('講評報告交接存 Blob', () => {
-  it('saveHandoff(Blob) → takeHandoff 讀回同一段文字(記憶體儲存;IndexedDB 路徑見 report-store-idb.test.ts);舊版 { text } 仍可讀', async () => {
+  it('saveHandoff(Blob) → takeHandoff 拿到內容相同的 Blob(記憶體儲存;IndexedDB 路徑見 report-store-idb.test.ts);舊版 { text } 仍可讀', async () => {
     resetReportStoreForTest();
     const rec = trickyRecord();
     expect(await saveHandoff(sessionRecordBlob(rec, 64))).toBe(false); // node 環境沒有 IndexedDB:記憶體儲存(未保存)
@@ -79,7 +79,8 @@ describe('講評報告交接存 Blob', () => {
     expect(raw?.blob).toBeInstanceOf(Blob);
     expect(raw?.text).toBeUndefined();
     const h = await takeHandoff(store);
-    expect(h?.text).toBe(JSON.stringify(rec));
+    expect(h && 'blob' in h ? await h.blob.text() : null).toBe(JSON.stringify(rec));
+    expect(h && 'text' in h).toBe(false);
     expect(typeof h?.savedUtc).toBe('string');
     const legacy = new MemoryKvStore();
     await legacy.set(HANDOFF_KEY, { savedUtc: 't', text: '{"format":"x"}' });

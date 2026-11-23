@@ -2,6 +2,8 @@
 // 跑真正的 openReportStore() —— 版本 1(只有 kv)升級到版本 2(新增 admin)時 kv 資料保留、admin 可 set/get 且與 kv 同名鍵互不干擾;
 // 全新資料庫一次建兩個存放區;再次開啟(版本已是 2)不再升級;onblocked(舊連線未關閉)、onerror(現有版本更高)、open 擲例外、
 // 無 indexedDB 時退回記憶體儲存(persistent=false,畫面據此標示「未保存」)。
+// 寫入以交易提交為準(第三十輪審查 A-rA-1):請求的 onsuccess 已觸發、交易之後才中止(Chromium 存內容仍在變動的檔案、空間不足)時
+// set() 必須拒絕,原本的值不變。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeIDBDatabase, FakeIDBFactory, openFake, requestToPromise } from './support/fake-indexeddb.js';
 import {
@@ -16,8 +18,10 @@ import {
   WORKSPACE_KEY,
   ensureStores,
   openReportStore,
+  readLastRecord,
   resetReportStoreForTest,
   saveHandoff,
+  saveLastRecord,
   takeHandoff,
 } from '../src/report/report-store.js';
 
@@ -106,20 +110,92 @@ describe('report-store IndexedDB 版本 1 → 2 升級', () => {
     expect(factory.storeNames(REPORT_DB_NAME)).toEqual([KV_STORE, ADMIN_STORE]);
     const store = await openReportStore();
     const handoff = await takeHandoff(store);
-    expect(handoff?.text).toBe('{"format":"simosa-brm-instructor-record"}');
+    // 以文字交接(舊版教官站、測試):原樣回傳文字
+    expect(handoff).toMatchObject({ text: '{"format":"simosa-brm-instructor-record"}' });
     expect(typeof handoff?.savedUtc).toBe('string');
     await store.delete(HANDOFF_KEY);
     expect(await takeHandoff(store)).toBeUndefined();
   });
 
-  it('教官站交接存 Blob(第三十輪 W2):IndexedDB 存的是 Blob、不是整份字串;報告頁 takeHandoff 讀回相同文字', async () => {
+  it('教官站交接存 Blob(第三十輪 W2):IndexedDB 存的是 Blob、不是整份字串;報告頁 takeHandoff 拿到 Blob(不讀成文字),內容相同', async () => {
     const text = '{"format":"simosa-brm-instructor-record","note":"中文 🚢"}';
     expect(await saveHandoff(new Blob([text.slice(0, 10), text.slice(10)], { type: 'application/json;charset=utf-8' }))).toBe(true);
     const store = await openReportStore();
     const raw = await store.get<{ blob?: unknown; text?: unknown }>(HANDOFF_KEY);
     expect(raw?.blob).toBeInstanceOf(Blob);
     expect(raw?.text).toBeUndefined();
-    expect((await takeHandoff(store))?.text).toBe(text);
+    const handoff = await takeHandoff(store);
+    expect(handoff && 'text' in handoff).toBe(false);
+    const blob = handoff && 'blob' in handoff ? handoff.blob : null;
+    expect(blob).toBeInstanceOf(Blob);
+    expect(await blob!.text()).toBe(text);
+  });
+
+  it('最近載入的紀錄存 Blob(saveLastRecord / readLastRecord);舊版存的整份文字({ name, text })仍讀得出來', async () => {
+    const store = await openReportStore();
+    expect(await readLastRecord(store)).toBeUndefined();
+    const text = '{"kind":"header","note":"中文"}\n';
+    await saveLastRecord(store, 'a.jsonl', new Blob([text]));
+    const raw = await store.get<{ name?: unknown; blob?: unknown; text?: unknown }>(LAST_RECORD_KEY);
+    expect(raw?.blob).toBeInstanceOf(Blob);
+    expect(raw?.text).toBeUndefined();
+    const last = await readLastRecord(store);
+    expect(last?.name).toBe('a.jsonl');
+    expect(last && 'blob' in last ? await last.blob.text() : null).toBe(text);
+    // 舊版(第三十輪以前)的內容:整份文字
+    await store.set(LAST_RECORD_KEY, { name: 'old.jsonl', text });
+    expect(await readLastRecord(store)).toEqual({ name: 'old.jsonl', text });
+    // 壞掉的內容:當作沒有
+    await store.set(LAST_RECORD_KEY, { name: 'x', text: '' });
+    expect(await readLastRecord(store)).toBeUndefined();
+    await store.set(LAST_RECORD_KEY, 'not an object');
+    expect(await readLastRecord(store)).toBeUndefined();
+  });
+
+  it('寫入以交易提交為準:請求成功、交易之後才中止(Chromium 存內容仍在變動的檔案:Failed to write blobs)→ set 拒絕、原值不變;之後的寫入照常', async () => {
+    const store = await openReportStore();
+    await saveLastRecord(store, 'earlier.jsonl', new Blob(['{"kind":"header"}\n']));
+    await store.set(WORKSPACE_KEY, WORKSPACE_V1);
+    // 提交失敗:只針對名為 live.jsonl 的那一筆(其餘寫入照常提交)
+    const aborted: string[] = [];
+    factory.commitFailure = (writes) => {
+      const hit = writes.find((w) => w.op === 'put' && (w.value as { name?: unknown } | undefined)?.name === 'live.jsonl');
+      if (!hit) return null;
+      aborted.push(String(hit.key));
+      return new DOMException('Failed to write blobs (InvalidBlob)', 'DataError');
+    };
+    // 假 IndexedDB 與真的一樣:put 的請求先成功(onsuccess),交易之後才中止(onabort),寫入還原
+    const db = await openFake(factory, REPORT_DB_NAME, REPORT_DB_VERSION);
+    const seen: string[] = [];
+    await new Promise<void>((resolve) => {
+      const t = db.transaction(KV_STORE, 'readwrite');
+      const req = t.objectStore(KV_STORE).put({ name: 'live.jsonl', blob: new Blob(['x']) }, 'probe');
+      req.onsuccess = () => seen.push('request.onsuccess');
+      req.onerror = () => seen.push('request.onerror');
+      t.oncomplete = () => (seen.push('tx.oncomplete'), resolve());
+      t.onabort = () => (seen.push(`tx.onabort ${t.error?.name}: ${t.error?.message}`), resolve());
+    });
+    db.close();
+    expect(seen).toEqual(['request.onsuccess', 'tx.onabort DataError: Failed to write blobs (InvalidBlob)']);
+    expect(await store.get('probe')).toBeUndefined();
+
+    await expect(saveLastRecord(store, 'live.jsonl', new Blob(['{"kind":"header"}\n{"kind":"state"}\n']))).rejects.toMatchObject({ name: 'DataError', message: 'Failed to write blobs (InvalidBlob)' });
+    expect(aborted).toEqual(['probe', LAST_RECORD_KEY]);
+    // 原本記下的那一份還在(交易中止不會留下半套);其他鍵不受影響
+    expect((await readLastRecord(store))?.name).toBe('earlier.jsonl');
+    expect(await store.get(WORKSPACE_KEY)).toEqual(WORKSPACE_V1);
+    // 教官站交接遇到同樣的失敗:回報未保存(false),不是當成已寫入
+    factory.commitFailure = () => new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    expect(await saveHandoff(new Blob(['{}']))).toBe(false);
+    expect(await takeHandoff(store)).toBeUndefined();
+    await expect(store.delete(WORKSPACE_KEY)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+    expect(await store.get(WORKSPACE_KEY)).toEqual(WORKSPACE_V1);
+    // 之後恢復正常:寫入與刪除照常
+    factory.commitFailure = null;
+    await saveLastRecord(store, 'live.jsonl', new Blob(['ok']));
+    expect((await readLastRecord(store))?.name).toBe('live.jsonl');
+    await store.delete(LAST_RECORD_KEY);
+    expect(await readLastRecord(store)).toBeUndefined();
   });
 
   it('ensureStores 只建缺少的存放區(重複呼叫不擲例外)', async () => {

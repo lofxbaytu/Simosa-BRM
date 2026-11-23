@@ -17,6 +17,7 @@ export class CoreClient {
   private readonly ws: WebSocket;
   private readonly frames: Array<Record<string, unknown>> = [];
   private readonly waiters: Array<{ pred: (f: Record<string, unknown>) => boolean; resolve: (f: Record<string, unknown>) => void }> = [];
+  private readonly collectors: Array<(f: Record<string, unknown>) => void> = [];
   private _last: StateFrame | null = null;
 
   private constructor(ws: WebSocket) {
@@ -30,6 +31,7 @@ export class CoreClient {
       if (typeof f['tick'] === 'number' && typeof f['heading'] === 'number') this._last = f as unknown as StateFrame;
       this.frames.push(f);
       if (this.frames.length > 2000) this.frames.splice(0, this.frames.length - 1000);
+      for (const collect of this.collectors) collect(f);
       for (let i = this.waiters.length - 1; i >= 0; i--) {
         const w = this.waiters[i]!;
         if (w.pred(f)) {
@@ -87,6 +89,27 @@ export class CoreClient {
   /** 等待狀態幀滿足條件 */
   waitState(pred: (s: StateFrame) => boolean, timeoutMs = 10_000, what = '狀態條件'): Promise<StateFrame> {
     return this.waitFor((f) => typeof f['tick'] === 'number' && typeof f['heading'] === 'number' && pred(f as unknown as StateFrame), timeoutMs, what) as Promise<StateFrame>;
+  }
+
+  /**
+   * 開始收集事件框 {type:'event', event:{kind}} 的 event(之後收到的每一筆都加進回傳的陣列;stop() 停止收集)。
+   * 用來和頁面上的事件流逐筆對照(例:碰墊接觸的次數)。
+   */
+  collectEvents(kind: string): { events: Array<Record<string, unknown>>; stop: () => void } {
+    const events: Array<Record<string, unknown>> = [];
+    const collect = (f: Record<string, unknown>): void => {
+      if (f['type'] !== 'event' || typeof f['event'] !== 'object' || f['event'] === null) return;
+      const ev = f['event'] as Record<string, unknown>;
+      if (ev['kind'] === kind) events.push(ev);
+    };
+    this.collectors.push(collect);
+    return {
+      events,
+      stop: () => {
+        const i = this.collectors.indexOf(collect);
+        if (i >= 0) this.collectors.splice(i, 1);
+      },
+    };
   }
 
   /** 等待事件框 {type:'event', event:{kind}} */

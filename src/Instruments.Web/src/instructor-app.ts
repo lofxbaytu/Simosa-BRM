@@ -87,13 +87,14 @@ import './components/instructor/command-log-view.js';
 import './components/instructor/brm-marker-bar.js';
 import './components/instructor/debrief-summary.js';
 import './components/instructor/replay-view.js';
-import './components/instructor/event-stream.js';
+import { rowTime } from './components/instructor/event-stream.js';
 import './components/instructor/alert-monitor.js';
 import './components/instructor/sensor-truth-panel.js';
 import './components/instructor/tug-panel.js';
 import './components/instructor/anchor-panel.js';
 import './components/instructor/mooring-panel.js';
 import './components/instructor/recording-panel.js';
+import './components/instructor/release-status.js';
 import { requiredCountdowns } from './components/instructor/timeline-panel.js';
 
 export type PageMode = 'full' | 'simple' | 'replay';
@@ -131,6 +132,8 @@ export class InstructorApp extends LitElement {
         filter: brightness(var(--ob-dim));
       }
       header {
+        /* 定位容器:<brm-release-status> 展開的降版說明浮貼在頁首下方(position: absolute;不佔版面高度) */
+        position: relative;
         display: flex;
         align-items: center;
         gap: 10px;
@@ -602,8 +605,12 @@ export class InstructorApp extends LitElement {
   private staleTimer: ReturnType<typeof setInterval> | null = null;
   private commandSeq = 0;
   private confirmEndTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 載入嘗試前的教官站狀態(被拒時還原:情境、組題結果、簡化模式階段)與目標情境 id(狀態幀帶到即視為成功) */
-  private pendingLoad: { targetId: string; previous: ScenarioSummary | null; previousRehearsal: BerthingRehearsalResult | null; previousPhase: SimplePhase } | null = null;
+  /**
+   * 載入嘗試前的教官站狀態(被拒時還原:情境、組題結果、簡化模式階段)與目標情境 id(狀態幀帶到即視為成功)。
+   * tickAtSend / early:送出載入指令時的核心 tick,以及等待期間收到的事件 — 核心同一個 tick 的事件框先於狀態幀送出,新情境第一個廣播 tick
+   * 的事件(例:開始即繫妥的 E14,四個碰墊在 tick 2 的第一次接觸)會比「帶新情境 id 的第一筆狀態幀」早到;載入成功清空事件流後要放回去(finishLoad)。
+   */
+  private pendingLoad: { targetId: string; previous: ScenarioSummary | null; previousRehearsal: BerthingRehearsalResult | null; previousPhase: SimplePhase; tickAtSend: number; early: SimEvent[] } | null = null;
   private loadTimer: ReturnType<typeof setTimeout> | null = null;
 
   override connectedCallback(): void {
@@ -741,7 +748,7 @@ export class InstructorApp extends LitElement {
     this.hasReceived = true;
     this.shipState = state;
     this.issues = issues;
-    if (this.pendingLoad && state.scenario?.id === this.pendingLoad.targetId) this.finishLoad(true); // 核心已換成要求的情境:載入成功
+    if (this.pendingLoad && state.scenario?.id === this.pendingLoad.targetId) this.finishLoad(true, state.tick); // 核心已換成要求的情境:載入成功
     this.history.push(state.pos.x, state.pos.y, state.t);
     if (this.isLoggingExercise()) {
       const added = this.opLog.push(state);
@@ -820,9 +827,9 @@ export class InstructorApp extends LitElement {
       this.onScenarioLoadRejected(scenarioLoadRejection(ev)!);
       return;
     }
-    this.eventStore.push(ev);
-    this.events = [...this.eventStore.all()];
-    if (this.alarms.apply(ev)) this.alarmTargets = this.alarms.snapshot();
+    // 等待載入結果期間收到的事件先記下(上限 200 筆):屬於新情境者在載入成功、清空事件流後放回(finishLoad)
+    if (this.pendingLoad && this.pendingLoad.early.length < 200) this.pendingLoad.early.push(ev);
+    this.pushEvent(ev);
     if (ev.kind === 'steeringModeChanged') this.recordSteeringEvent(ev);
     else if (ev.kind === 'commandRejected') this.markRejected(ev);
     const v = voiceScriptData(ev);
@@ -836,6 +843,13 @@ export class InstructorApp extends LitElement {
       this.requestAssessment();
       if (this.recSettings.autoStart) void this.stopRecording('exerciseEnded');
     }
+  }
+
+  /** 事件進事件流(EventStore:同一個碰墊的反覆接觸合併成一列,lib/event-merge.ts)與 CPA 警報集合。 */
+  private pushEvent(ev: SimEvent): void {
+    this.eventStore.push(ev);
+    this.events = [...this.eventStore.all()];
+    if (this.alarms.apply(ev)) this.alarmTargets = this.alarms.snapshot();
   }
 
   private recordSteeringEvent(ev: SimEvent): void {
@@ -895,7 +909,8 @@ export class InstructorApp extends LitElement {
   private onEventSeek = (ev: CustomEvent<SimEvent>): void => {
     if (this.pageMode === 'simple') return;
     if (!this.replayView?.loaded) return;
-    void this.seekReplay(ev.detail.t);
+    // 合併列跳到它時間欄寫的時刻(第一次接觸)
+    void this.seekReplay(rowTime(ev.detail));
   };
 
   private async seekReplay(t: number): Promise<void> {
@@ -1025,7 +1040,7 @@ export class InstructorApp extends LitElement {
    * 被拒時核心仍在跑原練習,onScenarioLoadRejected 只還原情境、組題結果與簡化模式階段並顯示問題清單(不得停在「已載入」)。
    */
   private loadScenarioSummary(s: ScenarioSummary, cmd: SimCommand, rehearsal: BerthingRehearsalResult | null): void {
-    this.pendingLoad = { targetId: s.id, previous: this.activeScenario, previousRehearsal: this.rehearsal, previousPhase: this.simplePhase };
+    this.pendingLoad = { targetId: s.id, previous: this.activeScenario, previousRehearsal: this.rehearsal, previousPhase: this.simplePhase, tickAtSend: this.hasReceived ? this.shipState.tick : 0, early: [] };
     this.scenarioRejection = null;
     this.loadPending = true;
     if (this.loadTimer) clearTimeout(this.loadTimer);
@@ -1049,9 +1064,13 @@ export class InstructorApp extends LitElement {
   /**
    * 載入有結果:結束載入中狀態;succeeded(狀態幀帶新情境 id / ack ok / 示範模式 / 逾時視同成功)才重設本地練習資料與簡化模式的
    * 操作紀錄/標記;被拒(false)時全部保留,原練習的紀錄與講評不受影響。
+   * newTick:觸發成功判定的狀態幀(帶新情境 id 的第一筆)的 tick。等待期間收到、tick ≤ newTick 的事件屬於新情境(核心先送該 tick 的事件框、
+   * 再送狀態幀),清空事件流後放回;只在送出載入指令時原情境的 tick 已超過 newTick 時才放回(否則分不出是原情境還是新情境的事件,照舊全部清掉)。
+   * 只放回事件流與 CPA 警報集合(語音自動播放等一次性的處理在收到當下已做過)。
    */
-  private finishLoad(succeeded: boolean): void {
-    const wasPending = this.pendingLoad !== null;
+  private finishLoad(succeeded: boolean, newTick?: number): void {
+    const pending = this.pendingLoad;
+    const wasPending = pending !== null;
     this.pendingLoad = null;
     this.loadPending = false;
     if (this.loadTimer) {
@@ -1060,6 +1079,7 @@ export class InstructorApp extends LitElement {
     }
     if (!succeeded || !wasPending) return;
     this.restartExercise();
+    if (pending && newTick !== undefined && pending.tickAtSend > newTick) for (const ev of pending.early) if (ev.tick <= newTick) this.pushEvent(ev);
     // 完整教官站:載入情境成功即為新練習開始 → 依設定自動開始錄影(簡化模式在「開始練習」才開始)
     if (this.pageMode === 'full' && this.recSettings.autoStart) void this.startRecording();
     if (this.pageMode === 'simple') {
@@ -1297,6 +1317,8 @@ export class InstructorApp extends LitElement {
     `;
   }
 
+  // 頁首右側的 <brm-release-status>(完整與簡化模式):「發行版 <版本>」(套用過軟體更新包時「軟體更新 <版次>」)與降版提醒;沒有發行版狀態(開發模式)時不顯示。
+  // 顯示的是提供本頁面的電腦的發行版(lib/release-status.ts);駕駛台頁(app.ts)不放。
   private renderHeader() {
     const s = this.shipState;
     const cfg = this.config;
@@ -1355,6 +1377,7 @@ export class InstructorApp extends LitElement {
           ${THEMES.map((t) => html`<button class=${this.theme === t.id ? 'active' : ''} @click=${() => this.setTheme(t.id)}>${t.label}</button>`)}
         </span>
         <button title="全螢幕" @click=${this.toggleFullscreen}>全螢幕</button>
+        ${live ? html`<brm-release-status></brm-release-status>` : nothing}
         <span class="notice">訓練模擬器,非航行設備</span>
       </header>
     `;

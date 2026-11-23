@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 船上筆電啟動(Linux/容器煙霧版;正式為 start-ship-laptop.ps1,參數與行為相同;規劃書第 5.4–5.5 節、第 14 章「船上部署」):
 #   依 config/ship-laptop.json 啟動 SimCore.Host(WebSocket/UDP 多播/NMEA)、USB 操控台服務(config console.port 非 null 或 --console 時)、
-#   Sensors.Radar.Host、靜態網頁(simosa-web 提供 app/web)、視景(匯出檔或 Godot 編輯器,每個 views[] 一個程序)、直連同步服務 simosa-pkg serve;
+#   Sensors.Radar.Host、靜態網頁(simosa-web 提供 app/web;啟動前先執行一次 simosa-pkg status --json 存成 build/run/release-status.json,
+#   教官站頁首據此顯示「發行版 <版本>」與降版提醒,逾時或失敗不擋住啟動)、視景(匯出檔或 Godot 編輯器,每個 views[] 一個程序)、直連同步服務 simosa-pkg serve;
 #   各程序 log 在 build/logs/;Ctrl+C 一併結束。
 # 用法:start-ship-laptop.sh [--config config/ship-laptop.json] [--scenario <yaml>] [--duration <秒>] [--no-visual] [--no-web] [--no-radar] [--no-sync]
 #       [--console <序列埠|loopback:<讀取檔>[,<寫入檔>]>] [--no-console]
@@ -28,7 +29,7 @@ while [[ $# -gt 0 ]]; do
     --no-console) CONSOLE_ON=0; shift ;;
     --wait) WAIT=1; shift ;;
     --check-only) CHECK_ONLY=1; shift ;;
-    -h|--help) sed -n 2,11p "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n 2,12p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
@@ -61,6 +62,8 @@ WEB_DIR=""; for d in "$ROOT/app/web" "$ROOT/build/web/instruments"; do [[ -f "$d
 if [[ $CHECK_ONLY == 1 ]]; then
   echo "SimCore.Host:$HOST_DLL"; echo "雷達:${RADAR_DLL:-略過}"; echo "網頁:${WEB_DLL:-略過} ← ${WEB_DIR:-(找不到 app/web)}"; echo "同步:${PKG_DLL:-略過}"
   echo "操控台:${CONSOLE_DLL:-略過}${CONSOLE_SPEC:+ ← $CONSOLE_SPEC}"
+  if STATUS_TOOL="$(release_status_tool "$ROOT")"; then echo "發行版狀態:$STATUS_TOOL → $(release_status_path "$ROOT")(網頁 /_status/release.json)"
+  else echo "發行版狀態:略過(開發模式:沒有 manifest.json;或找不到 simosa-pkg)"; fi
   exit 0
 fi
 
@@ -121,7 +124,10 @@ fi
 
 # 3) 靜態網頁
 if [[ -n "$WEB_DLL" && -n "$WEB_DIR" ]]; then
-  start_bg web "$ROOT/$LOGS/web.log" dotnet "$WEB_DLL" --root "$WEB_DIR" --port "$WEB_PORT" --bind "$(cfg web_bind 0.0.0.0)"
+  # 發行版狀態(教官站頁首的「發行版 <版本>」與降版提醒):啟動網頁伺服前取一次,逾時或失敗只警告、不擋住啟動。
+  # 開發模式(沒有 manifest.json)不產生狀態檔,simosa-web 對 /_status/release.json 回 200 與各欄 null(「沒有發行版狀態」),教官站不顯示
+  write_release_status "$ROOT" "$ROOT/$LOGS"
+  start_bg web "$ROOT/$LOGS/web.log" dotnet "$WEB_DLL" --root "$WEB_DIR" --port "$WEB_PORT" --bind "$(cfg web_bind 0.0.0.0)" --status-file "$(release_status_path "$ROOT")"
   wait_tcp 127.0.0.1 "$WEB_PORT" 10 "$LAST_PID" || echo "警告:simosa-web 未開啟埠 $WEB_PORT 或已結束,見 $LOGS/web.log" >&2
 elif [[ -n "$WEB_DLL" ]]; then echo "警告:找不到網頁目錄(app/web 或 build/web/instruments),略過" >&2; fi
 

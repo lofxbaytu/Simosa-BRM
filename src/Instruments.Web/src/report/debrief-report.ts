@@ -7,6 +7,7 @@ import type { SimEvent } from '../types/event.js';
 import type { AssessmentSummary } from '../lib/assessment.js';
 import type { BrmMarker } from '../lib/brm-markers.js';
 import { summarize, type DebriefState, type DebriefSummary } from '../lib/debrief.js';
+import { formatSimTime } from '../lib/format.js';
 import type { ReplayDataOf } from '../lib/record-replay.js';
 import { eventLabel, eventSeverity, SOURCE_LABEL, type EventSeverity } from '../lib/sim-event.js';
 import type { SessionInfo } from '../lib/session-info.js';
@@ -456,17 +457,25 @@ export interface TimelineRow {
   label: string;
   severity: EventSeverity;
   phase?: string;
+  /** 合併列(同一個碰墊的反覆接觸)合併的事件數;一般的列省略 */
+  count?: number;
 }
 
 /** 講評時間軸不列的高頻/內部事件(仍計入 summary.events)。 */
 const TIMELINE_SKIP = new Set(['timelineArmed', 'timelineDisarmed', 'environmentRampDone']);
 export const TIMELINE_MAX_ROWS = 400;
 
+/**
+ * 事件與 BRM 標記依時間排成講評時間軸。事件是教官站事件流的列(record-replay 讀入時已合併碰墊的反覆接觸):
+ * 合併列排在**第一次接觸**的時刻(報告由前往後讀;文字裡寫有第一次到最近一次的時刻、次數與最大值),並帶 count;
+ * 文字裡的起訖時刻與時刻欄同樣是 HH:MM:SS(事件流畫面上是短格式 MM:SS)。
+ */
 export function buildTimeline(events: readonly SimEvent[], markers: readonly BrmMarker[] = []): { rows: TimelineRow[]; omitted: number } {
   const rows: TimelineRow[] = events
     .filter((e) => !TIMELINE_SKIP.has(e.kind))
     .map((e) => {
-      const row: TimelineRow = { t: e.t, kind: e.kind, source: SOURCE_LABEL[e.source] ?? e.source, label: eventLabel(e), severity: eventSeverity(e) };
+      const row: TimelineRow = { t: e.merged ? e.merged.firstT : e.t, kind: e.kind, source: SOURCE_LABEL[e.source] ?? e.source, label: eventLabel(e, formatSimTime), severity: eventSeverity(e) };
+      if (e.merged) row.count = e.merged.count;
       if (e.phase) row.phase = e.phase;
       return row;
     });

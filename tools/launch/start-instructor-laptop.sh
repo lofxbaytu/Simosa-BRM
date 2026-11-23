@@ -2,6 +2,8 @@
 # 教官筆電啟動(Linux 開發版;正式為 start-instructor-laptop.ps1;規劃書第 5.4 節教官筆電):
 #   依 config/instructor-laptop.json 提供教官站網頁(本機 simosa-web,頁面的 ws 參數指向船上筆電)、雷達鏡像頁,並印出 simosa-pkg sync 指令說明;
 #   standalone.enabled=true 時另啟動本機 SimCore.Host(離船備課)。log 在 build/logs/;stop-all.sh 結束。
+#   啟動網頁伺服前先執行一次 simosa-pkg status --json 存成 build/run/release-status.json:教官站頁首顯示「發行版 <版本>」與降版提醒 —
+#   這是教官筆電本機(提供教官站頁面的這一台)的發行版,不是船上筆電的;逾時或失敗不擋住啟動。
 # 用法:start-instructor-laptop.sh [--config config/instructor-laptop.json] [--ship FSB1|FSB2|<IP>] [--standalone] [--check-wifi] [--wait]
 #   --check-wifi:直連模式下以 nmcli/iw 檢查無線介面(與 ps1 的 -CheckWifi 相同),Wi-Fi 仍啟用時拒絕繼續(exit 1);沒有這些工具時只提示。
 source "$(dirname "${BASH_SOURCE[0]}")/launch-common.sh"
@@ -14,7 +16,7 @@ while [[ $# -gt 0 ]]; do
     --standalone) STANDALONE=1; shift ;;
     --check-wifi) CHECK_WIFI=1; shift ;;
     --wait) WAIT=1; shift ;;
-    -h|--help) sed -n 2,7p "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n 2,9p "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知參數:$1" >&2; exit 2 ;;
   esac
 done
@@ -76,7 +78,9 @@ fi
 
 WEB_DIR=""; for d in "$ROOT/app/web" "$ROOT/build/web/instruments"; do [[ -f "$d/index.html" ]] && { WEB_DIR="$d"; break; }; done
 if [[ "$(cfg web_enabled true)" == true && -n "$WEB_DIR" ]] && WEB_DLL="$(find_dll web-server StaticWeb simosa-web.dll "$ROOT")"; then
-  start_bg web "$ROOT/$LOGS/web.log" dotnet "$WEB_DLL" --root "$WEB_DIR" --port "$WEB_PORT" --bind "$(cfg web_bind 127.0.0.1)"
+  # 發行版狀態(教官站頁首;本機的發行版):與 start-ship-laptop.sh 相同,逾時或失敗不擋住啟動
+  write_release_status "$ROOT" "$ROOT/$LOGS"
+  start_bg web "$ROOT/$LOGS/web.log" dotnet "$WEB_DLL" --root "$WEB_DIR" --port "$WEB_PORT" --bind "$(cfg web_bind 127.0.0.1)" --status-file "$(release_status_path "$ROOT")"
   n="$(cfg web_openPages__n 0)"
   echo "教官站頁面(以瀏覽器開啟):"
   for ((i = 0; i < n; i++)); do

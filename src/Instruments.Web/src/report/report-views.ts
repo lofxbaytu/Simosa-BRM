@@ -2,6 +2,7 @@
 // 純樣板函式(lit html),資料模型在 debrief-report.ts / marker-form.ts / training-record.ts。
 
 import { html, nothing, type TemplateResult } from 'lit';
+import { ifDefined } from 'lit/directives/if-defined.js';
 import { BAND_STATE_LABEL, HARD_FAIL_RULE_LABEL, REQUIRED_STATE_LABEL, type AssessmentSummary } from '../lib/assessment.js';
 import { formatSimTime } from '../lib/format.js';
 import { formatMb, formatRecordingDuration } from '../lib/screen-recording.js';
@@ -125,7 +126,9 @@ export function renderReportDoc(r: DebriefReport, anchors: BehaviouralAnchors = 
         ? html`<p class="muted">紀錄中沒有事件</p>`
         : html`<table class="tbl timeline">
             <thead><tr><th class="t">時刻</th><th>來源</th><th>事件</th></tr></thead>
-            <tbody>${r.timeline.map((e) => html`<tr class="sev-${e.severity}"><td class="t">${tStr(e.t)}</td><td>${e.source}</td><td>${e.label}</td></tr>`)}</tbody>
+            <tbody>
+              ${r.timeline.map((e) => html`<tr class="sev-${e.severity}" data-kind=${e.kind} data-count=${ifDefined(e.count)}><td class="t">${tStr(e.t)}</td><td>${e.source}</td><td>${e.label}</td></tr>`)}
+            </tbody>
           </table>
           ${r.timelineOmitted > 0 ? html`<p class="muted">另有 ${r.timelineOmitted} 筆事件未列出(完整事件見重播檢視)</p>` : nothing}`}
     </section>

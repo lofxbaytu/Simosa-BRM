@@ -15,6 +15,7 @@ import { isBrmCategory, type BrmMarker } from '../lib/brm-markers.js';
 import { downloadText, fileStamp } from '../lib/download.js';
 import { formatSimTime } from '../lib/format.js';
 import { debriefState } from '../lib/debrief.js';
+import { rawEventCount } from '../lib/event-merge.js';
 import { parseReplayBlob, parseReplayText, type ReplayStreamResult } from '../lib/record-stream.js';
 import { applyTheme, isTheme } from '../lib/theme.js';
 import {
@@ -86,6 +87,18 @@ const DOCUMENT_FORMATS: ReadonlySet<unknown> = new Set(['simosa-brm-marker-form'
 
 /** 讀取中顯示進度的檔案大小下限(位元組;小檔案一閃而過,不顯示) */
 const PROGRESS_MIN_BYTES = 8 * 1024 * 1024;
+
+/** 「最近載入的紀錄」沒有寫進瀏覽器儲存時,接在狀態列訊息後的說明(rememberRecord) */
+export const NOT_REMEMBERED_NOTE = '這份紀錄未能另存於瀏覽器(檔案內容仍在變動,或儲存空間不足),重新整理後請重新開啟檔案';
+
+/**
+ * 讀檔失敗的說明。NotReadableError:檔案在選取之後被改動(瀏覽器以選取當下的修改時間核對),最常見的是核心仍在寫入這份紀錄
+ * (build/records 下正在變大的 .jsonl)——重新選取一次通常就能讀到當下的內容;其餘錯誤照原樣顯示。
+ */
+function readErrorText(err: unknown): string {
+  if (typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'NotReadableError') return '檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)';
+  return String(err);
+}
 
 function megabytes(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0);
@@ -182,6 +195,14 @@ export class ReportApp extends LitElement {
   fileErrors: string[] = [];
 
   private store: KvStore | null = null;
+  /**
+   * 紀錄載入的先後:分段讀取期間頁面仍可操作,使用者可能在還原最近紀錄(或讀前一個大檔)還沒完成時又開了別的紀錄。
+   * 較晚開始的載入已經套用之後,較早開始、較晚讀完的結果作廢(不蓋掉使用者後來開的紀錄,進度訊息也不再顯示)。
+   */
+  private loadSeq = 0;
+  private appliedSeq = 0;
+  /** rememberRecord 的呼叫序號:寫入失敗時只有「最後一次」才清掉記下的紀錄並顯示說明 */
+  private rememberSeq = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private adminSaveTimer: ReturnType<typeof setTimeout> | null = null;
   private pageStyle: HTMLStyleElement | null = null;
@@ -227,7 +248,7 @@ export class ReportApp extends LitElement {
       } else {
         const last = await readLastRecord(this.store);
         // 舊版存的是整份文字:讀得進來,並改存成 Blob(之後還原時不必再把整份文字讀進頁面)
-        if (last && (await this.loadStored(last, last.name)) && 'text' in last) await this.rememberRecord(last.name, new Blob([last.text]));
+        if (last && (await this.loadStored(last, last.name, true)) && 'text' in last) await this.rememberRecord(last.name, new Blob([last.text]));
         if (fromInstructor) this.say('沒有找到教官站交接的紀錄,請以「開啟檔案」載入', 'error');
       }
     } catch (err) {
@@ -295,34 +316,39 @@ export class ReportApp extends LitElement {
 
   /** 載入已在手上的練習紀錄文字(核心 JSON Lines 或教官站 JSON;測試與小段文字用,檔案與交接走 importBlob / 分段讀取)。 */
   loadRecordText(text: string, name: string, remember = true): boolean {
-    const ok = this.applyRecord(parseReplayText(text, debriefState).data, name);
+    const ok = this.applyRecord(parseReplayText(text, debriefState).data, name, ++this.loadSeq);
     if (ok && remember) void this.rememberRecord(name, new Blob([text]));
     return ok;
   }
 
-  /** 套用解析好的練習紀錄;沒有狀態、summary 與事件時顯示錯誤、保留原本載入的紀錄。 */
-  private applyRecord(data: ReportReplayData, name: string): boolean {
+  /**
+   * 套用解析好的練習紀錄;沒有狀態、summary 與事件時顯示錯誤、保留原本載入的紀錄。
+   * seq:這次載入開始時取的序號(已有較晚開始的載入套用時作廢,回傳 false、不動畫面);note:接在「已載入」訊息後的補充。
+   */
+  private applyRecord(data: ReportReplayData, name: string, seq: number, note = ''): boolean {
+    if (seq < this.appliedSeq) return false;
     if (data.states.length === 0 && !data.summary && data.events.length === 0) {
       this.say(`無法載入紀錄「${name}」:${data.errors[0] ?? '紀錄沒有狀態或 summary'}`, 'error');
       return false;
     }
+    this.appliedSeq = seq;
     this.data = data;
     this.recordName = name;
     void this.meta; // 建立預設 meta
     this.activeFormId = this.formsForRecord()[0]?.formId ?? '';
-    this.say(`已載入 ${name}:${data.header.scenarioId ?? ''} 狀態 ${data.states.length} 筆、事件 ${data.events.length} 筆${data.summary ? '、核心 summary' : ''}${data.errors.length ? `(略過 ${data.errors.length} 行)` : ''}`);
+    this.say(`已載入 ${name}:${data.header.scenarioId ?? ''} 狀態 ${data.states.length} 筆、事件 ${data.events.length} 筆${rawEventCount(data.events) > data.events.length ? `(合併前 ${rawEventCount(data.events)})` : ''}${data.summary ? '、核心 summary' : ''}${data.errors.length ? `(略過 ${data.errors.length} 行)` : ''}${note}`);
     this.touch();
     return true;
   }
 
   /** 分段讀取並解析一份紀錄(每筆狀態只留講評累計用到的欄位);大檔案在狀態列顯示進度。 */
-  private parseRecordBlob(blob: Blob, name: string): Promise<ReplayStreamResult<ReportReplayData['states'][number]>> {
+  private parseRecordBlob(blob: Blob, name: string, seq: number): Promise<ReplayStreamResult<ReportReplayData['states'][number]>> {
     let shown = -1;
     const onProgress =
       blob.size >= PROGRESS_MIN_BYTES
         ? (read: number, total: number) => {
             const pct = Math.floor((read / total) * 100);
-            if (pct === shown) return;
+            if (pct === shown || seq < this.appliedSeq) return;
             shown = pct;
             this.say(`讀取 ${name}… ${pct}%(共 ${megabytes(total)} MB)`);
           }
@@ -330,13 +356,32 @@ export class ReportApp extends LitElement {
     return parseReplayBlob(blob, { project: debriefState, ...(onProgress ? { onProgress } : {}) });
   }
 
-  /** 載入存放在本機儲存的紀錄(交接或最近載入的紀錄;Blob 分段讀取,舊版的整份文字直接解析)。 */
-  private async loadStored(rec: StoredRecord, name: string): Promise<boolean> {
+  /**
+   * 載入存放在本機儲存的紀錄(交接或最近載入的紀錄;Blob 分段讀取,舊版的整份文字直接解析)。
+   * restoring:重新整理後還原「最近載入的紀錄」。這時 Blob **讀不出來**(不是內容解析不了)代表另存的那一份已經壞了 ——
+   * 無痕視窗(IndexedDB 只在記憶體)存的是原檔案的參照,原檔案之後被改動(核心仍在寫入的紀錄)或移走就讀不到(實測 Chromium:
+   * 「TypeError: network error」)。之後也不會再讀得到,所以清掉那一份(不然每次重新整理都是同一個錯誤),並請使用者重新開啟檔案。
+   */
+  private async loadStored(rec: StoredRecord, name: string, restoring = false): Promise<boolean> {
+    const seq = ++this.loadSeq;
+    const remembered = this.rememberSeq;
     try {
-      const res = 'blob' in rec ? await this.parseRecordBlob(rec.blob, name) : parseReplayText(rec.text, debriefState);
-      return this.applyRecord(res.data, name);
+      const res = 'blob' in rec ? await this.parseRecordBlob(rec.blob, name, seq) : parseReplayText(rec.text, debriefState);
+      return this.applyRecord(res.data, name, seq);
     } catch (err) {
-      this.say(`無法載入「${name}」:${String(err)}`, 'error');
+      if (!restoring) {
+        if (seq >= this.appliedSeq) this.say(`無法載入「${name}」:${String(err)}`, 'error');
+        return false;
+      }
+      // 這段時間使用者已經開了別的紀錄:那一份自己另存過了,不動它,也不蓋掉它的訊息
+      if (remembered === this.rememberSeq && seq >= this.appliedSeq) {
+        this.say(`無法還原先前載入的紀錄「${name}」:另存於瀏覽器的那一份已經讀不到(原檔案之後被改動或移走時會這樣),請重新開啟檔案`, 'error');
+        try {
+          await this.store?.delete(LAST_RECORD_KEY);
+        } catch {
+          /* 清不掉:下次重新整理再試 */
+        }
+      }
       return false;
     }
   }
@@ -344,19 +389,35 @@ export class ReportApp extends LitElement {
   /**
    * 記下最近載入的紀錄(重新整理後還原):IndexedDB 存 Blob(內容留在瀏覽器的檔案儲存),不存文字。
    * 超過 LAST_RECORD_MAX_BYTES 的紀錄不另存(並清掉先前記下的那一份,避免重新整理後還原成別的練習)。
-   * 寫入失敗(空間不足、檔案已被移走)不影響已載入的報告。
+   * 寫入失敗不影響已載入的報告,但同樣清掉先前記下的那一份,並在狀態列說明這份紀錄沒有另存:
+   * 核心仍在寫入的紀錄(選取之後內容又變動的檔案)瀏覽器在交易提交時才拒絕(Chromium:Failed to write blobs (InvalidBlob)),
+   * 儲存空間不足也是提交時才失敗;不清掉的話重新整理會還原成前一份(別的練習)紀錄,而且沒有任何訊息。
    */
   private async rememberRecord(name: string, blob: Blob): Promise<void> {
     const store = this.store;
     if (!store) return;
+    const seq = ++this.rememberSeq;
     try {
-      if (blob.size > LAST_RECORD_MAX_BYTES) {
-        await store.delete(LAST_RECORD_KEY);
-        this.say(`${this.message};檔案 ${megabytes(blob.size)} MB,不另存於瀏覽器,重新整理後請重新開啟檔案`, this.messageLevel);
-      } else await saveLastRecord(store, name, blob);
+      if (blob.size > LAST_RECORD_MAX_BYTES) await store.delete(LAST_RECORD_KEY);
+      else await saveLastRecord(store, name, blob);
     } catch {
-      /* 只是少了「重新整理後還原」;報告與工作資料不受影響 */
+      // 這段時間又載入了別的紀錄:那一份自己會另存(或清掉),這裡不動它
+      if (seq !== this.rememberSeq) return;
+      try {
+        await store.delete(LAST_RECORD_KEY);
+      } catch {
+        /* 連刪除都失敗(儲存已不可用):只剩畫面上的說明 */
+      }
+      // 超過上限的紀錄本來就不另存(訊息已寫明),清除失敗不再多說一次
+      if (seq === this.rememberSeq && blob.size <= LAST_RECORD_MAX_BYTES) this.noteNotRemembered(name);
     }
+  }
+
+  /** 在「已載入 …」訊息後補一句:這份紀錄沒有另存於瀏覽器(其他訊息或錯誤訊息在畫面上時不蓋掉,另起一句)。 */
+  private noteNotRemembered(name: string): void {
+    if (this.message.includes(NOT_REMEMBERED_NOTE)) return;
+    if (this.messageLevel === 'error') return;
+    this.say(this.message.startsWith(`已載入 ${name}`) ? `${this.message};${NOT_REMEMBERED_NOTE}` : `「${name}」${NOT_REMEMBERED_NOTE}`);
   }
 
   /** 開啟一個檔案(見 importBlob)。 */
@@ -369,14 +430,15 @@ export class ReportApp extends LitElement {
    * 其餘當作練習紀錄,由分段解析的結果直接載入(不把整份紀錄讀成字串)。判斷與 importText 相同。
    */
   async importBlob(blob: Blob, name: string): Promise<void> {
-    const res = await this.parseRecordBlob(blob, name);
+    const seq = ++this.loadSeq;
+    const res = await this.parseRecordBlob(blob, name, seq);
     if (res.jsonObject && DOCUMENT_FORMATS.has(res.jsonFormat)) {
       this.importText(await blob.text(), name);
       return;
     }
     let ok = false;
     try {
-      ok = this.applyRecord(res.data, name);
+      ok = this.applyRecord(res.data, name, seq, blob.size > LAST_RECORD_MAX_BYTES ? `;檔案 ${megabytes(blob.size)} MB,不另存於瀏覽器,重新整理後請重新開啟檔案` : '');
     } catch (err) {
       this.say(`無法載入「${name}」:${String(err)}`, 'error');
     }
@@ -391,7 +453,7 @@ export class ReportApp extends LitElement {
         await this.openFile(f);
         if (this.messageLevel === 'error' && this.message.includes(f.name)) errors.push(this.message);
       } catch (err) {
-        errors.push(`無法載入「${f.name}」:${String(err)}`);
+        errors.push(`無法載入「${f.name}」:${readErrorText(err)}`);
       }
     }
     this.fileErrors = errors;

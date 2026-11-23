@@ -247,6 +247,86 @@ function Wait-LaunchTcp([string]$HostName, [int]$Port, [int]$Seconds = 20, [Syst
     return $false
 }
 
+# ---- 發行版狀態(教官站頁首的「發行版 <版本>」與降版提醒;docs\design\packaging-sync.md 第 5.1 節)----
+# Get-LaunchReleaseStatusPath <根目錄>:狀態檔 <根目錄>\build\run\release-status.json(執行期資料,不是程式檔;simosa-web --status-file 讀它,
+#   以 /_status/release.json 提供教官站需要的欄位)。與 launch-common.sh 的 release_status_path 相同。
+function Get-LaunchReleaseStatusPath([string]$Root) {
+    return (Join-Path (Join-Path (Join-Path $Root 'build') 'run') 'release-status.json')
+}
+
+# Find-LaunchReleaseStatusTool <根目錄>:安裝版(根目錄有 manifest.json)才回傳 simosa-pkg.dll 的路徑(tools\updater;沒有時用已建置的開發輸出),
+#   否則 $null。不建置:開發模式(儲存庫,沒有 manifest.json)沒有發行版本可顯示,也不為了它建置 Tools.Packaging.Cli。
+#   與啟動同步服務無關(-NoSync 或 sync.enabled=false 時照樣取狀態)。
+function Find-LaunchReleaseStatusTool([string]$Root) {
+    if (-not (Test-Path (Join-Path $Root 'manifest.json') -PathType Leaf)) { return $null }
+    $bin = Join-Path (Join-Path (Join-Path $Root 'build') 'bin') 'Tools.Packaging.Cli'
+    foreach ($c in @((Join-Path (Join-Path (Join-Path $Root 'tools') 'updater') 'simosa-pkg.dll'),
+                     (Join-Path (Join-Path (Join-Path $bin 'Release') 'net8.0') 'simosa-pkg.dll'),
+                     (Join-Path (Join-Path (Join-Path $bin 'Debug') 'net8.0') 'simosa-pkg.dll'))) {
+        if (Test-Path $c -PathType Leaf) { return $c }
+    }
+    return $null
+}
+
+# Write-LaunchReleaseStatus <根目錄> <log 資料夾> [-TimeoutSeconds 20] [-PkgDll <simosa-pkg.dll>]:啟動網頁伺服之前執行一次
+#   simosa-pkg status --json,輸出存成 Get-LaunchReleaseStatusPath。回傳狀態檔路徑;沒有產生時 $null。
+#   - 先刪掉上一次的狀態檔:這次沒有產生(開發模式、找不到 simosa-pkg、逾時、失敗、輸出不是 JSON)時教官站就不顯示,不會顯示過期的版本。
+#   - 逾時與失敗都不擋住啟動、不丟例外:只警告並在 <log 資料夾>\launch.log 記一行(stderr 在 release-status.err.log)。
+#   - 存的是 status 的完整輸出(與在本機下指令看到的相同,留在本機);simosa-web 只把發行版本與降版資訊送給網頁,不會整份送出。
+#   - 以 Start-Process 把輸出導到檔案(不用 & dotnet … 擷取):Windows PowerShell 5.1 擷取原生程式的輸出時以主控台字碼頁解碼,
+#     simosa-pkg 輸出的 UTF-8 中文(降版說明)會變成亂碼;導到檔案是原樣的位元組。
+function Write-LaunchReleaseStatus([string]$Root, [string]$LogDir, [int]$TimeoutSeconds = 20, [string]$PkgDll = '') {
+    $out = Get-LaunchReleaseStatusPath $Root
+    $tmp = $out + '.tmp'
+    $note = { param([string]$Message)
+        try { Add-Content -Path (Join-Path $LogDir 'launch.log') -Value ("# {0:u} release-status {1}" -f (Get-Date).ToUniversalTime(), $Message) -Encoding UTF8 } catch { } }
+    try {
+        Remove-Item -LiteralPath $out, $tmp -Force -ErrorAction SilentlyContinue
+        if (-not $PkgDll) { $PkgDll = Find-LaunchReleaseStatusTool $Root }
+        if (-not $PkgDll) {
+            if (Test-Path (Join-Path $Root 'manifest.json') -PathType Leaf) { Write-Warning '發行版狀態:找不到 tools\updater\simosa-pkg.dll,教官站不顯示發行版本' }
+            return $null
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $out), $LogDir | Out-Null
+        $err = Join-Path $LogDir 'release-status.err.log'
+        # 含空白的路徑(D:\Simosa BRM\…)加引號:Start-Process 只以空白串接 -ArgumentList(與 Start-LaunchProcess 相同)
+        $quoted = (@($PkgDll, 'status', '--root', $Root, '--json') | ForEach-Object { if ("$_" -match '[\s"]') { '"' + ("$_" -replace '"', '\"') + '"' } else { "$_" } }) -join ' '
+        $sp = @{ FilePath = 'dotnet'; ArgumentList = $quoted; WorkingDirectory = $Root; PassThru = $true; RedirectStandardOutput = $tmp; RedirectStandardError = $err }
+        if ($script:OnWindows) { $sp.WindowStyle = 'Hidden' }
+        $p = Start-Process @sp
+        $null = $p.Handle   # Windows PowerShell 5.1:先取 Handle,結束後才讀得到 ExitCode
+        if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $p.Kill() } catch { }
+            Write-Warning "發行版狀態:simosa-pkg status 超過 $TimeoutSeconds 秒沒有結束,略過(教官站不顯示發行版本)"
+            & $note "逾時($TimeoutSeconds 秒),略過"
+            return $null
+        }
+        # 結束碼讀不到($null;Windows PowerShell 5.1 的 Start-Process 偶有)時不當成失敗:下面仍會確認輸出是 JSON 物件
+        if ($null -ne $p.ExitCode -and $p.ExitCode -ne 0) {
+            Write-Warning "發行版狀態:simosa-pkg status 結束碼 $($p.ExitCode),略過(教官站不顯示發行版本;見 $err)"
+            & $note "simosa-pkg status 結束碼 $($p.ExitCode),略過"
+            return $null
+        }
+        # 確認輸出是 JSON 物件(不是的話不留檔);版本只用來在啟動視窗與 launch.log 記一行
+        $st = [System.IO.File]::ReadAllText($tmp, (New-Object System.Text.UTF8Encoding($false))) | ConvertFrom-Json
+        if ($null -eq $st -or $st -isnot [System.Management.Automation.PSCustomObject]) { throw 'simosa-pkg status 的輸出不是 JSON 物件' }
+        Move-Item -LiteralPath $tmp -Destination $out -Force
+        $ver = Get-Cfg $st 'releaseVersion'
+        $summary = if ($ver) { "發行版 $ver" } else { 'status 沒有發行版本(manifest.json 讀不到,或 simosa-pkg 是較舊的版本),教官站不顯示' }
+        $basis = Get-Cfg $st 'releaseDowngrade.basisVersion'
+        if ($basis) { $summary += "(降版提醒:曾安裝或套用過 ${basis};教官站頁首會顯示)" }
+        Write-Host "  發行版狀態:$summary → $out"
+        & $note $summary
+        return $out
+    } catch {
+        Write-Warning "發行版狀態:無法取得($($_.Exception.Message)),略過(教官站不顯示發行版本)"
+        & $note "無法取得:$($_.Exception.Message)"
+        return $null
+    } finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # 設定直連介面固定 IP(需系統管理員;僅在介面存在且 IP 不同時變更)
 function Set-DirectLinkIp([string]$Adapter, [string]$Ip, [string]$Mask) {
     if (-not $Adapter -or -not $Ip) { return }

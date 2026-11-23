@@ -207,6 +207,31 @@ export interface SimEvent {
   seq: number;
   /** 動作/規則的附加資料(voiceScript 欄位、漸變參數、指標值…) */
   data?: Record<string, unknown>;
+  /**
+   * 教官站合併列(lib/event-merge.ts;docs/design/scenario-engine.md 第 6.2 節):同一個碰墊連續的低速接觸(fenderContact)合併成一列時才有。
+   * 核心的事件框與 JSON Lines 紀錄沒有此欄(核心仍逐筆發);只出現在教官站事件流、教官站紀錄(版本 6 起的 events)與由它們建出的重播 / 報告。
+   * 有此欄時列本身的 tick / t / seq / phase / data 是最近一次接觸的。
+   */
+  merged?: FenderContactMerge;
+}
+
+/** 合併列的彙總(SimEvent.merged):次數、第一次與最近一次的時刻、各次接觸中的最大值。 */
+export interface FenderContactMerge {
+  /** 合併的接觸次數(≥ 2;只有一次時不帶 merged) */
+  count: number;
+  /** 第一次接觸的模擬時間(秒)與 tick */
+  firstT: number;
+  firstTick: number;
+  /** 最近一次接觸的模擬時間(秒);與列本身的 t 相同(寫出來讓紀錄自己說得清楚) */
+  lastT: number;
+  /** 接觸點法向接近速度的最大值(m/s;事件 data.normalSpeed_mps) */
+  maxNormalSpeed_mps: number;
+  /** 接觸能量的最大值(kN·m;事件 data.energy_kNm) */
+  maxEnergy_kNm: number;
+  /** 壓縮量的最大值(% 碰墊高度;事件 data.deflection_pct;事件沒有此欄時省略) */
+  maxDeflection_pct?: number;
+  /** 反力的最大值(kN;事件 data.maxReaction_kN;事件沒有此欄時省略) */
+  maxReaction_kN?: number;
 }
 
 /** 語音腳本事件的 data(設計文件第 1.1.2 節 voiceScript)。 */

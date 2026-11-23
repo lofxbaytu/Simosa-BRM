@@ -127,7 +127,13 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 
 ### 教官站(full)
 
-- **標題列**:船名、連線狀態(與儀器頁相同的已連線/連線中/未連線/示範模式/資料逾時)、凍結/擱淺/碰撞/故障/資料可疑標示、「即時 / 重播檢視 / 情境編輯」切換、資料來源(即時連線/示範模式)、「下載紀錄 JSON」、主題、全螢幕。
+- **標題列**:船名、連線狀態(與儀器頁相同的已連線/連線中/未連線/示範模式/資料逾時)、凍結/擱淺/碰撞/故障/資料可疑標示、「即時 / 重播檢視 / 情境編輯」切換、資料來源(即時連線/示範模式)、「下載紀錄 JSON」、主題、全螢幕、**發行版本**(見下一項)。
+- **發行版本與降版提醒**(`<brm-release-status>`:`src/components/instructor/release-status.ts`、`src/lib/release-status.ts`;完整與簡化模式的頁首,重播檢視與駕駛台頁沒有;設計見 `docs/design/packaging-sync.md` 第 5.1 節末、操作說明見 `docs/ops/安裝與啟動.md` 第 4.1 節):頁面載入時取同源的 `/_status/release.json`(靜態網頁伺服 `simosa-web --status-file` 由啟動腳本存下的 `simosa-pkg status --json` 縮成的 `simosa-release-status/1`:發行版本、軟體更新包版次、降版資訊、取得時間)。
+  - 取不到(開發模式沒有狀態檔:`simosa-web` 回 200 與各欄 `null` — 不回 404,否則瀏覽器每次載入都記一筆 console error;不帶 `--status-file` 的伺服器是 404;Vite 開發伺服器回 HTML;格式不符;逾時 5 s)→ 什麼都不顯示,不報錯。
+  - 正常 → 頁首右側小字「發行版 2026.11.30」(不是按鈕;title 寫明這是提供本頁面的電腦的發行版與取得時間)。發行版是**安裝程式的版本**,套用軟體更新包不會改它:套用過比發行版新的軟體更新包(沒有降版;實際執行的是更新包的程式)時改寫「**軟體更新 2026.12.2**」(title 寫「套用在發行版 2026.12.1 之上」)— 頁首寫的是實際執行的那一版。不把兩個版本並排:寬約 125 px 的差別會讓簡化模式簡報頁 1366×768 的頁首多折一行、把同儕評估提示擠出簡報框(端對端實測);「軟體更新 <版次>」只比「發行版 <版本>」寬一個字。
+  - 降版(`releaseDowngrade`:套用更新包之後以較舊的安裝程式重新安裝過)→ 橙色徽章鈕「發行版 2026.11.1 · 降版提醒」,一直在頁首、不擋操作;按一下在頁首下方**浮貼**展開說明(不佔版面高度):目前執行的是較舊的發行版、比它新的各項(先前安裝的發行版 / 曾套用的軟體更新包 / 被安裝覆蓋的軟體更新包最高版本)、`simosa-pkg status` 顯示的軟體版次不是實際執行的程式、建議的處理、status 的完整訊息與資料來源;「收合」、再按一次徽章、Esc 或點說明以外的地方收起(那一下點按照常作用在被點的控制項上)。
+  - **顯示的是提供這個頁面的電腦的發行版**:船上筆電開的簡化教官站是船上筆電的;教官筆電以 `start-instructor-laptop` 開的教官站是教官筆電的(頁面由教官筆電自己的 `simosa-web` 提供,只有 `?ws=` 指向船上)。
+  - 只有教官站的進入點 `instructor-main.ts` 會發這個請求(`src/lib/release-status-enable.ts`,排在 `instructor-app` 之前匯入);`releaseStatusProvider` 預設不發請求,單元測試掛上 `<brm-instructor-app>` 時不會真的連線。
 - **自船摘要**:與儀器頁相同的 conning 條(`<brm-conning-bar>`)。
 - **情境**:建置時以 `import.meta.glob` 匯入 `data/scenarios/*.yaml`(`yaml` 套件解析,`src/lib/scenario.ts`),列出 id、標題、船、裝載、環境摘要、初始狀態、種子與路徑,以及擴充欄位統計「時間表 n 項(手動 m)· 航線 n 航點 · 區域 n · 評估規則 n 條 · 參數引用 n 個 · 目標船 n」(`src/lib/timeline.ts`、`src/lib/assessment.ts` 解析設計文件第 1 節的 `timeline` / `route` / `zones` / `briefing` / `assessment`);`briefing` 物件版顯示角色(扮演者、必要)、最少人數與附件連結(`data/scenarios/<id>/<file>`);`${params:key}` 參數引用在教官站**不解析**,顯示為「參數 key」(核心載入時解析)。按「載入」送 `loadScenario`。示範模式下改以情境的船、初始位置(情境 origin 座標系)/航向/速度、風、流、水深、拖船與泊位重建示範運動學。
 - **情境編輯**(標題列「情境編輯」分頁;`src/components/instructor/scenario-editor.ts`、`src/lib/scenario-editor.ts`;`docs/design/scenario-engine.md` 第 6.1 節):依範本(任一情境的 YAML 原文或空白範本)組出新練習——基本資料與簡報文字、船與裝載、初始位置/航向/速度、環境(風/流/水深/能見度;開始時刻決定日夜)、目標船(新增/刪除/編輯)、時間表故障(故障目錄列舉、時間/手動/自訂條件觸發、`recordOnly`、參數)、評估(硬性失敗開關與規則、容許帶、通過分數);未涵蓋的欄位原樣保留。**海圖點選編輯**(`components/instructor/scenario-editor-plot.ts`;`docs/design/instructor-plot.md` 第 4 節):航線/區域的「在圖上編輯」、船與初始/目標船的「圖上」鈕開啟內嵌航跡圖(以 `data/areas` 示意幾何為底圖,非海圖),點擊新增航點/頂點或設定自船/目標船初始位置、拖曳移動、右鍵刪除、方向鍵微調(Shift ×10)、游標座標讀數(x/y 與經緯度),與表格雙向同步;環境進階的空間流場有「由均勻流產生網格」「由兩端流速線性內插」產生器與「網格預覽」。即時以 `parseScenario` 與編輯器檢查顯示問題清單;「下載 YAML」或「載入核心」(`loadScenario {args: {id, scenario}}` 內嵌,核心拒絕時顯示原因並還原);草稿存本機 localStorage,重新整理後還原。
@@ -140,19 +146,21 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 - **版面**:中欄航跡圖下方的環境 / 故障 / 自船覆寫 / 操舵模式四個面板,寬度 ≤ 1440px(1366×768 筆電)時改為兩列兩欄,列高依面板內容、放不下時整列捲動;左欄(情境 / 時間表 / 執行控制)在同寬度下依內容高度排列並整欄捲動;conning 條單列 11 格時風 / 流 / 時間格加寬。以 Playwright 在 1366×768 與 1920×1080 檢查過無水平捲動、面板不重疊、文字不截斷、console 無錯誤(教官站進入點 `instructor-main.ts` 內嵌 favicon,避免瀏覽器抓 `/favicon.ico` 的 404)。
 - **操舵模式**(`src/components/instructor/steering-panel.ts`、`src/lib/steering.ts`;規劃書第 7.2 節,設計文件 D32/D35):顯示 `state.steering`(模式、泵、NFU 推舵中;C# SimCore 產生,Python 參考伺服器不輸出時標「核心未回報」。`state-parser.ts` 不認得此欄位,由 `ws-client.ts` 以原始框補上);按鈕 **FU / NFU / 自動舵 / 應急操舵** 送 `steeringMode`(`value` 為模式);NFU 的 **左 / 右推桿按住**送 `args.direction: port|starboard`、**放開**(含指標離開)送 `stop`,「NFU 停」送 `stop`;舵機泵選擇(No.1 / No.2 / 1 + 2)附在每筆指令的 `args.pump`,已在某模式時改選泵即送同模式 + 新泵;自動舵可帶設定航向與 ROT 限制(`args.heading` / `rotLimit`,只在 `autopilot` 時送)。應急操舵中自動舵鈕停用並提示需先切回 FU;核心仍拒絕時(`commandRejected` 事件,C# 不回 ack 框)把最近一筆同類型的教官指令標為「核心拒絕:應急操舵中不可自動舵」。`compact` 屬性為簡化教官模式用的精簡版(見下)。
 - **鳥瞰航跡圖**:與儀器頁相同的 `<brm-track-plot>`,疊上情境的航線(航點、檢查點/報告點空心圓、到達半徑、各航段走廊半寬虛線;`route.xtdLimit_m` 為參數引用時無走廊)與區域多邊形(禁區紅、速限橙、UKC 政策藍、報告灰;`src/lib/plot-overlay.ts`,經緯度以情境 `origin` 平面近似換算),以及事件標記(warning 橙、alarm 紅三角,位置取事件時刻的狀態抽樣)。**目標船**(`state.targets[]`,`src/types/target.ts`、`src/lib/targets.ts`):三角形依航向、船名/ID 標籤、COG/SOG 虛線短向量;AIS 關閉者空心虛線並標「(AIS 關)」;處於 `cpaAlarm` 的目標紅色(由事件流 `cpaAlarm` / `cpaClear` 推得);完整模式左上角列 **CPA/TCPA 小表**(目標、距離、方位、CPA、TCPA;警報者在前,其餘依距離,最多 8 列)。簡化教官模式只畫目標船,不列小表。**流場層**(工具列「流」,預設開;`docs/design/instructor-plot.md` 第 3 節):情境 `environment.current.field` 的網格節點箭頭(可見範圍內取樣、最多 40 × 40,長度/顏色依流速、依 `state` 反推的 timeScale 比例 k(t) 縮放,網格外框與說明)與左下角自船位置的流(單一箭頭 + 流向/流速 + 來源;均勻流/時變流時即為唯一的流資訊);`setEnvironment current` 覆寫後網格標「未作用」。
-- **事件**(`src/components/instructor/event-stream.ts`):核心推送的 `{"type":"event"}` 框(`src/lib/sim-event.ts` 的 `parseSimEvent` / `eventLabel`;舊 `TrafficEvent` 欄位不變,`source` 缺時由 kind 推得)依時間列出,最新在上,只保留最近 2,000 筆;左緣顏色依來源(時間表藍、評估綠、目標船黃、教官灰、引擎),`hardFail` / `collision` / `grounding` / `bandFail` / `requiredEventMissed` 紅字,`cpaAlarm` / `faultInjected` / `xtdExceeded` / `zoneEntered` / `ukcAlarm` / `speedLimitExceeded` 橙字,`visible: true` 標「學員可見」;來源篩選鈕;語音事件有「播放」鈕;點擊事件 → 切到重播檢視並跳至該時刻(需已載入紀錄)。
+- **事件**(`src/components/instructor/event-stream.ts`):核心推送的 `{"type":"event"}` 框(`src/lib/sim-event.ts` 的 `parseSimEvent` / `eventLabel`;舊 `TrafficEvent` 欄位不變,`source` 缺時由 kind 推得)依時間列出,最新在上,只保留最近 2,000 列;左緣顏色依來源(時間表藍、評估綠、目標船黃、教官灰、引擎),`hardFail` / `collision` / `grounding` / `bandFail` / `requiredEventMissed` 紅字,`cpaAlarm` / `faultInjected` / `xtdExceeded` / `zoneEntered` / `ukcAlarm` / `speedLimitExceeded` 橙字,`visible: true` 標「學員可見」;來源篩選鈕;語音事件有「播放」鈕;點擊事件 → 切到重播檢視並跳至該時刻(需已載入紀錄)。
+  - **碰墊的反覆接觸合併成一列**(第三十輪 ENG-C9;`src/lib/event-merge.ts`、`EventStore`;設計與理由見 `docs/design/scenario-engine.md` 第 6.2 節):核心在繫泊擺盪時每碰一次就發一個 `fenderContact`(吹攏風 25 kn 約 16 筆/min,2 小時填滿 2,000 列)。同一個碰墊、未過載、法向速度 ≤ 0.15 m/s、與該碰墊上一筆接觸相隔 ≤ 120 模擬秒的接觸併成一列:`碰墊 S03 反覆接觸 ×697(00:16–1:59:57)最大 v 0.07 m/s、能量 7 kN·m(額定 282)、壓縮 9 %`(列內換行,不截斷)。**合併列留在它建立時的位置**:事件流依「第一次接觸」的時刻排它(時間欄也是),之後每併入一次只在原地更新次數與最大值,不跳到最上面(`event-stream.ts` 的 `displayRows`;`EventStore` 內部仍依最近活動排序)— 每併入一次就移到最上面的話,持續擺盪時清單可見的部分一直被四個碰墊的合併列占著,新的故障、警報、教官指令 1.6–10.7 s 就被推出可見範圍(實測;改後 60 s 的觀察時間內一直在最上面)。新的一段擺盪另起新列,出現在最上面;仍在進行中的合併列即使排到 300 列之外也留在清單最下面。第一次接觸、過載、超過警示速度、隔超過門檻的再碰回照舊各自一列;別的事件不打斷合併列。合併列算一列(2,000 列上限、標題的「N 筆」、來源篩選鈕上的數字都是列數;有合併列時標題另寫「(合併前 M)」)。倒帶時合併列截到倒帶點(次數、時刻、最大值重算)。教官站紀錄(版本 6)、重播檢視、講評報告的事件時間軸是同樣的列;核心的 JSON Lines 紀錄仍逐筆。E14 維持吹攏風 25 kn 2 小時:1,974 筆事件 → 51 列。
+  - 完整教官站載入情境時,新情境第一個廣播 tick 的事件(核心先送事件框、再送狀態幀;例:E14 開始即繫妥的四個碰墊在 tick 2 的第一次接觸)不再被「載入成功時清空事件流」一起清掉(簡化模式載入後即凍結在 tick 0,這些事件在「開始練習」之後才送出,原本就不受影響)。
 - **語音腳本**(`src/lib/voice-script.ts`):收到 `voiceScript` 事件時,有 `file` 用 `<audio>` 播情境包音檔(`data/scenarios/<id>/<file>`,建置時以 `import.meta.glob` 打包 `*.ogg|mp3|wav|m4a|opus`;找不到或載入失敗退回 TTS),無檔用 `speechSynthesis`(語言依 `lang`,預設 zh-TW);完整教官站按「播放」,簡化教官模式自動播放;每次播放記入學員操作紀錄(kind `voiceScript`,含音檔/TTS/被瀏覽器阻擋/僅顯示),並寫入下載的紀錄。
 - **學員操作紀錄**:教官站收不到學員站的指令(指令直接進核心),因此由連續狀態推導(`src/lib/operation-log.ts`):舵令(1 秒內的連續變更合併)、車鐘、轉速令、側推、凍結/恢復、故障注入/清除、擱淺/碰撞、時間倒退、規劃時間結束(`planningTime`,由簡報區塊的倒數到時加入,非狀態推導)、**操舵模式/泵**(`state.steering` 變化,NFU 推桿推舵/放開亦記;核心的 `steeringModeChanged` 事件經 `recordSteering()` 記入,同一模式與泵在 1 s 內已記過時不重複),附模擬時間與本地時鐘。新練習(完整模式載入情境/重設、簡化模式「開始練習」)時清空,只保留本練習情境的「規劃時間結束」(簡報區塊的事件帶情境 id;完整模式的倒數可在載入前跑完);筆數保險上限 10,000(`MAX_OPERATION_EVENTS`,超過丟最舊的推導事件,規劃時間結束不丟;積極操舵約 2,500 筆/模擬小時)。
 - **教官指令**:本站送出的每筆指令與核心回應(Python 參考伺服器的 ack;C# 不回應)。
 - **參數集版次**:標題列顯示 `state.scenario.parameterSetVersion`(例如「參數集 2026.10.1」)與情境階段(`degraded` 橙、`emergency` 紅)、硬性失敗、練習已結束;以下情形標「參數集不一致」(滑鼠停留看原因):核心載入的情境 id 與所選不同、情境檔有參數引用但核心未回報版次、核心 summary 的版次與狀態不同。
 - **BRM 快速標記**:第 8.2 節五大類(領導、狀況覺知、溝通、團隊合作、決策)各一鈕,可先填一句備註與 ＋(做得好)/ Δ(待改進)再按類別;鍵盤 1–5 亦可(焦點不在輸入欄時)。標記含模擬時間、tick、本地時鐘、情境 id,不經核心;「匯出 JSON / CSV」下載(`src/lib/brm-markers.ts`;CSV 含 UTF-8 BOM 供 Excel)。
-- **下載紀錄 JSON**:本站自己的練習紀錄(`src/lib/session-record.ts`,`format: simosa-brm-instructor-record`,版本 5):`createdUtc`(匯出時刻)、`startedUtc`(練習開始時刻:載入情境/重設/簡化模式「開始練習」後第一筆抽樣時記下,同一練習多次匯出不變;舊紀錄無此欄)、狀態每 1 s 抽樣、學員操作、BRM 標記、指令與回應、本地講評摘要、核心事件(`events`)與核心 summary 原始物件(`coreSummary`,無則 null)、參與者與休息時間確認(`sessionInfo`:練習前以 sessionInfo 指令送核心的 args,未送出為 null;版本 3)、畫面錄影摘要(`recordings`;版本 4)、倒帶點(`rewinds`;版本 5);可在重播檢視開啟(版本 1–4 的舊紀錄仍可讀)。
+- **下載紀錄 JSON**:本站自己的練習紀錄(`src/lib/session-record.ts`,`format: simosa-brm-instructor-record`,版本 6):`createdUtc`(匯出時刻)、`startedUtc`(練習開始時刻:載入情境/重設/簡化模式「開始練習」後第一筆抽樣時記下,同一練習多次匯出不變;舊紀錄無此欄)、狀態每 1 s 抽樣、學員操作、BRM 標記、指令與回應、本地講評摘要、核心事件(`events`)與核心 summary 原始物件(`coreSummary`,無則 null)、參與者與休息時間確認(`sessionInfo`:練習前以 sessionInfo 指令送核心的 args,未送出為 null;版本 3)、畫面錄影摘要(`recordings`;版本 4)、倒帶點(`rewinds`;版本 5);版本 6 起 `events` 是教官站事件流的列(碰墊的反覆接觸合併成一列,帶 `merged{count, firstT, firstTick, lastT, maxNormalSpeed_mps, maxEnergy_kNm, maxDeflection_pct?, maxReaction_kN?}`,其餘欄位與版本 5 相同;逐筆的接觸在核心紀錄裡);可在重播檢視開啟(版本 1–4 的舊紀錄仍可讀)。
   - **狀態抽樣(版本 5,第三十輪 W1)**:每筆只存重播檢視、講評報告與事件標記實際讀取的欄位(`sampleState`;`SAMPLED_STATE_KEYS`:位置、航向/COG/SOG/STW/ROT/漂角、舵與舵令、轉速/車鐘/主機、側推、UKC/水深/潮高/艉沉/吃水、風、流與流場來源、故障、旗標、能見度、航線、拖船、泊位、浪/船間交互作用/橫搖/升沉縱搖;感測器只存四個有效性旗標;目標船只存 id、船名、位置 x/y、航向、COG、SOG、LOA、AIS 開關、距離/方位/CPA/TCPA;錨只存已放出(有位置)者)。真值、自動舵、警報、BNWAS、操舵模式、情境執行狀態、`utc`、u/v/r、裝載與目標船的 AIS 報告不存(E02 交通密度每筆約 9.7 KB → 4.0 KB)。倒帶(restore)時截掉倒帶點之後的舊分支樣本,倒帶點另記於 `rewinds`(講評報告的「倒帶次數」與重播檢視的倒帶標記不變);只在記錄中截斷,簡化模式「結束練習」後核心重啟或他站重設造成的 tick 倒退不動已結束練習的抽樣。安全上限 7201 筆(`MAX_STATE_SAMPLES`:1 Hz 剛好 2 小時,含 t = 0 與 t = 7200 兩端):超過時降採樣為一半(保留第一筆與最後一筆,之後抽樣間隔加倍,`sampleInterval_s` 寫降採樣後的間隔),2 小時內不會觸發。
-  - **匯出(第三十輪 W2)**:「下載紀錄 JSON」與「講評報告」交接都由 `sessionRecordBlob` 逐欄、逐筆 `JSON.stringify` 後以 `BlobPart[]` 組成 Blob(約 1 MB 字串組成一個子 Blob),不產生整份紀錄的單一字串;內容與 `JSON.stringify(record)` 位元組相同(`tests/session-record-export.test.ts`)。講評報告交接在 IndexedDB 存 Blob(`saveHandoff`),報告頁 `takeHandoff` 以 `blob.text()` 讀回(舊版 `{ text }` 交接仍可讀)。這不是核心的 JSON Lines 紀錄(那份在核心主機的 `build/records/`),也尚未簽章(第 5.5 節紀錄包待做)。
+  - **匯出(第三十輪 W2)**:「下載紀錄 JSON」與「講評報告」交接都由 `sessionRecordBlob` 逐欄、逐筆 `JSON.stringify` 後以 `BlobPart[]` 組成 Blob(約 1 MB 字串組成一個子 Blob),不產生整份紀錄的單一字串;內容與 `JSON.stringify(record)` 位元組相同(`tests/session-record-export.test.ts`)。講評報告交接在 IndexedDB 存 Blob(`saveHandoff`),報告頁 `takeHandoff` 取回同一份 Blob 後分段解析,不讀成整份文字(見「講評報告頁」的「紀錄讀取」;舊版 `{ text }` 交接仍可讀)。這不是核心的 JSON Lines 紀錄(那份在核心主機的 `build/records/`),也尚未簽章(第 5.5 節紀錄包待做)。
 
 ### 簡化教官模式(`?mode=simple`)
 
-船長在船上筆電單機用的精簡流程,同一頁、大字:
+船長在船上筆電單機用的精簡流程,同一頁、大字(頁首與完整教官站相同,也顯示發行版本與降版提醒 — 船上筆電自己開的頁面顯示的是船上筆電的發行版):
 
 1. **選擇練習**:分頁「情境清單」(按「載入」→ 送 `loadScenario` 後立即 `freeze`)或「**靠離泊預演**」(規劃書第 8.0、9.1 節 R13;`<brm-berthing-rehearsal-panel>`、`src/lib/berthing-rehearsal.ts`):輸入船/裝載、泊位(`data/areas/*.json` 的泊位清單,顯示碼頭線走向與水側)、靠泊/離泊、靠泊舷、預定時刻 UTC、潮高與基底水深、潮流、預報風、能見度、拖船數(0–2,拖力預設 40 t、連接點在船體水側艏/艉)、引水人在船、選填風變化,按「組題並載入」由 TypeScript 範本函式組出情境物件(靠泊:泊位外約 0.8 nm、艏向與碼頭線平行;離泊:繫妥於泊位、4 纜 fast;時間表:簡報語音、拖船就位、潮窗提示、風變化;評估引用參數集 `berthing.*`/`navigation.ukc.*`;必要事件 MPX 檢查表、拖船令確認;自動簡報文字),以 `parseScenario` 自我驗證後以 `loadScenario {args: {id, scenario}}`(內嵌情境物件,兩核心皆支援)送核心並 `freeze`(初始 UKC 以與核心相同的最大吃水 max(艏、艉、平均)計算:≤ 0 時列為錯誤、不可載入,低於公司下限 1.0 m 時以警告色提示);「預覽」/「下載 YAML」可檢視或保存產生的情境(簡報頁也有「下載情境 YAML」)。
 2. **簡報**:大字顯示情境 YAML 的 `briefing`(字串或 `briefing.text`),下方列出角色/扮演者/最少人數與附件標題;標題顯示核心回報的參數集版次。情境有 `planningTimeMin` / `peerAssessmentPrompts` / `debriefQuestions` 時另由 `<brm-briefing-block>` 顯示規劃時間倒數(本地計時:開始/暫停/重設,剩 1 分鐘變色,到時在學員操作紀錄記一筆「規劃時間結束」;不送核心指令)、同儕評估提示與講評引導問題(R7)。沒有簡報時顯示說明 + 船/裝載 + 初始 + 環境摘要。按「開始練習」送 `resume`,並清空操作紀錄(保留簡報階段的「規劃時間結束」那筆)、標記與講評累計。
@@ -167,7 +175,7 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 
 - 時間軸拖曳、播放/暫停(×0.25 / 1 / 4 / 16)、上一筆/下一筆;任一時刻顯示 conning 條與鳥瞰航跡圖(航跡畫到該時刻為止,疊 `header.scenario` 的航線走廊與區域(含流場網格的流場層,k(t) 由該筆 state 反推),事件標記畫到該時刻;**目標船**取該時刻那筆 `state.targets[]`,`cpaAlarm` 紅色由 t ≤ 該時刻的事件推得,CPA/TCPA 小表在非 compact 時顯示)。
 - 時間軸上方的**事件標記**列:顏色依來源(時間表藍、評估綠、目標船黃、教官灰),warning 橙、`hardFail` / `collision` / `grounding` 紅,階段分界細線,BRM 標記黑;**倒帶標記**(`ReplayData.rewinds[]`,restore/reset 後 tick 倒退處)為橙色雙線,滑鼠停留顯示倒帶至的時刻與 tick(由 `t / header.dt` 推得)、來源時刻與丟棄的舊分支狀態/事件筆數,點擊跳至倒帶點;滑鼠停留看時刻與說明,點擊跳至。
-- 輸入事件清單(tick × header.dt 換算時間;點選跳至)、事件流(同教官站;點選跳至)、BRM 標記(教官站紀錄才有;SimCore 紀錄不含)、講評摘要(**核心 summary 優先**,取紀錄最後一行 `summary`;顯示評分與是否通過、硬性失敗、必要事件、容許帶、故障應變、參數來源;無則本地推導,兩者皆有可並列)、header 資訊(情境、船、動力學模型、雜湊、**參數集 id/版次與已解析引用數**、評分)、略過的壞行數與未知行種類。
+- 輸入事件清單(tick × header.dt 換算時間;點選跳至)、事件流(同教官站,碰墊的反覆接觸同樣合併成一列,時間軸上畫成第一次到最近一次的橫條;點選跳至)、BRM 標記(教官站紀錄才有;SimCore 紀錄不含)、講評摘要(**核心 summary 優先**,取紀錄最後一行 `summary`;顯示評分與是否通過、硬性失敗、必要事件、容許帶、故障應變、參數來源;無則本地推導,兩者皆有可並列)、header 資訊(情境、船、動力學模型、雜湊、**參數集 id/版次與已解析引用數**、評分)、略過的壞行數與未知行種類。
 - 不需核心連線;航跡圖無海圖,儀器時序曲線、語音影像同步(第 9.2 節)待後續版本。
 
 ### 真實連線測試結果(Python 參考伺服器,2026-10)
@@ -178,7 +186,29 @@ Python 參考伺服器對每筆指令回 `{"type":"ack","command":…,"ok":…,"
 
 規劃書第 8.2 節(行為標記)、第 8.4 節(講評結構)、第 9.1 節「多站與管理」(個人訓練紀錄、課程班次紀錄)、第 9.2 節(講評報告匯出)與第 14 章評估列的第一版。五個分頁共用一份練習紀錄與本機工作資料(「教官與證書」另存 `admin` 存放區);左邊編輯、右邊是 A4 列印預覽。**不連網、不經核心**:資料存在瀏覽器 IndexedDB(資料庫 `simosa-brm-report`;不可用時退回記憶體並在狀態列標示,請以 JSON 匯出)與匯出檔。
 
-**開啟紀錄**:「開啟檔案…」可一次選多個檔案,依內容自動判斷 —— 核心 JSON Lines 紀錄(`build/records/*.jsonl`)或教官站「下載紀錄 JSON」(`record-replay.parseReplay`)、BRM 快速標記 JSON(`simosa-brm-markers`)、評估表 JSON、學員名冊 JSON、課程班次 JSON。教官站(完整/重播檢視)標題列與簡化教官模式結束畫面的「**講評報告**」按鈕會把目前的教官站紀錄寫入 IndexedDB 再開 `report.html?from=instructor`(新分頁讀取後刪除交接資料)。重新整理後還原最近的紀錄與工作資料。`?tab=report|form|individual|session|admin` 選起始分頁;報告是紙本文件,預設日間主題(`?theme=` 可覆寫,不影響其他頁記住的主題)。
+**開啟紀錄**:「開啟檔案…」可一次選多個檔案,依內容自動判斷 —— 核心 JSON Lines 紀錄(`build/records/*.jsonl`)或教官站「下載紀錄 JSON」(分段解析,見下)、BRM 快速標記 JSON(`simosa-brm-markers`)、評估表 JSON、學員名冊 JSON、課程班次 JSON。教官站(完整/重播檢視)標題列與簡化教官模式結束畫面的「**講評報告**」按鈕會把目前的教官站紀錄寫入 IndexedDB 再開 `report.html?from=instructor`(新分頁讀取後刪除交接資料)。重新整理後還原最近的紀錄與工作資料。`?tab=report|form|individual|session|admin` 選起始分頁;報告是紙本文件,預設日間主題(`?theme=` 可覆寫,不影響其他頁記住的主題)。
+
+**紀錄讀取(第三十輪;`src/lib/record-stream.ts`)**:練習紀錄一律分段讀取——教官站交接的 Blob、「開啟檔案」選的檔案(所有檔案輸入)、重新整理後還原的最近紀錄都走同一條路:`Blob.stream()`(整個檔案只開啟一次;每段最多 1 MB)→ `TextDecoder` 串流解碼 → `ReplayStreamParser` 逐筆解析,**不把整份紀錄讀成一個字串**(原本是 `file.text()` / `blob.text()` 後整份 `JSON.parse`,教官站紀錄還要整份解析兩到三次)。
+
+- 核心 JSON Lines 逐行交給 `JsonLinesReplayBuilder`;教官站紀錄 JSON(分段讀取沒有改下載檔的格式:仍是單一 JSON 文件;版本 6 只多了事件合併列的 `merged` 欄)由 `TopLevelObjectScanner` 逐字掃描頂層物件,`states` 每一筆 `JSON.parse` 後立即解析、原始物件隨即可回收,其餘頂層欄位(事件、指令、情境…)收集到結尾由 `SessionReplayBuilder` 一次處理。結果與 `record-replay.parseReplay(全文)` 完全相同(同一組建構器;格式判斷、行號、錯誤訊息、JSON 的重複鍵 / 鍵順序 / 空白規則皆同):`tests/record-stream.test.ts` 以 38 個核心夾具、版本 1 / 4 / 5 的教官站紀錄、2 小時合成紀錄與隨機破壞 × 隨機切段做差異測試。
+- 每筆狀態只留講評累計讀取的欄位(`lib/debrief.ts` 的 `DebriefState`:t、tick、位置 x/y、SOG、ROT、舵角、舵令、車鐘、UKC、凍結 / 擱淺 / 碰撞旗標)。報告只用狀態算本地講評摘要(沒有核心 summary 時)與筆數,不畫圖;`buildDebriefReport` 仍接受完整狀態的 `ReplayData`。
+- 本機儲存:最近載入的紀錄存 **Blob**(`record:last` = `{ name, blob }`;內容放在瀏覽器設定檔的檔案儲存,不進頁面記憶體),原本存整份文字。舊版存的文字(`{ name, text }`)與舊版的文字交接仍讀得進來,讀到後改存成 Blob。超過 512 MB 的紀錄(約 1 小時以上的核心紀錄)照樣載入,但不另存一份(狀態列寫明,重新整理後需重新開啟檔案)。
+- 核心仍在寫入的紀錄(`build/records` 下正在變大的 `.jsonl`)讀到選取當下的大小為止,**畫面上的報告**與原本相同。不能改成分次 `Blob.slice().arrayBuffer()`:Chromium 每次讀取都核對檔案的修改時間,第二段起就以 `NotReadableError` 失敗(實測)。選取之後、開始讀取之前檔案剛好被改動時仍會失敗(原本就會),訊息改為中文說明「請重新選取一次」。
+- 核心仍在寫入的紀錄**不一定記得住**(與原本存整份文字不同):Blob 的內容在 IndexedDB 交易提交時才寫入,這時檔案又變動了,瀏覽器就讓交易中止(Chromium:請求的 `onsuccess` 先觸發,之後 `DataError: Failed to write blobs (InvalidBlob)`;實測每 15 ms 附加一行時 5 次都中止,每 30 ms 時有時寫得進去)。`IdbKvStore` 的寫入因此以**交易的 `oncomplete`** 為準(`onabort` / `onerror` 拒絕);另存失敗(含儲存空間不足)時報告照樣載入,但清掉先前記下的那一份(否則重新整理會還原成前一份、別的練習的紀錄而沒有任何訊息),狀態列在「已載入…」之後寫明「這份紀錄未能另存於瀏覽器…重新整理後請重新開啟檔案」。無痕視窗(IndexedDB 只在記憶體)存的是原檔案的參照:寫得進去,但檔案之後又變動時重新整理讀不到(`TypeError: network error`)——顯示「無法還原先前載入的紀錄…請重新開啟檔案」並清掉那一份。練習結束、檔案不再變動後開啟就沒有這些情況。
+- 評估表、BRM 標記、名冊、班次、教官與證書等小檔案:分段解析時辨識出頂層 `format` 後,以整份文字照舊匯入。8 MB 以上的檔案讀取中在狀態列顯示百分比。
+- 讀取中**定時讓出主執行緒**(`forEachBlobTextChunk`:每累計 50 ms 的工作排一個 `MessageChannel` 巨集任務再繼續):`await reader.read()` 本身不保證讓出——檔案已在快取時資料一直備妥,等待只經過微任務,整個讀取會是一個長任務,頁面沒有回應、進度也畫不出來。實測(真實 Chromium,頁面內 50 ms 計時器與 `requestAnimationFrame`;`build/tmp/r30b/fix/probe-yield.mjs`):30 分鐘核心紀錄(337 MB)讓出前全程 2.5–2.8 s 中最長停頓 2.5–2.6 s、只畫得出「100%」,讓出後全程 2.4–2.7 s(沒有變慢)、最長停頓 144–168 ms、畫出 40–44 個不同的百分比;2 小時教官站紀錄(20 MB)最長停頓 337–377 ms → 150–177 ms(最後一段是套用紀錄與重畫報告,不在讀取迴圈內)。
+- 量測(真實 Chromium,瀏覽器行程樹 Private_Dirty 的尖峰增量,每 100 ms 取樣;同一支探針分別對修正前後的建置跑;探針與原始數字在 `build/tmp/r30b/`,不進版控):
+
+  | 情境(7200 筆 E02 的教官站紀錄) | 修正前 | 修正後 |
+  |---|---|---|
+  | 教官站按「講評報告」(24.8 MB,常駐設定檔) | +254 MB;報告頁 heap +23.2 MB | +104 MB;+3.5 MB |
+  | 同上(20.9 MB,無痕視窗:IndexedDB 在記憶體) | +259 MB;+19.8 MB | +85 MB;+3.3 MB |
+  | 報告頁「開啟檔案」(24.8 MB,常駐設定檔) | +280 MB;heap 24.8 MB | +36 MB;4.4 MB |
+  | 重新整理後還原(24.8 MB,常駐設定檔) | +186 MB | +65 MB |
+  | 核心紀錄 30 分鐘(337 MB、45,000 筆狀態) | +2,371 MB、5.8 s、heap 258 MB | +156 MB、2.8 s、heap 11 MB |
+  | 核心紀錄 2 小時(1.35 GB、180,000 筆狀態) | 1.5 s 後分頁當掉(已 +1.28 GB) | 9.2 s 載入、+265 MB、heap 37 MB |
+
+  「講評報告」剩下的約 +100 MB 裡,教官站自己組 Blob(約 25 MB 的字串片段)、交接 Blob 在瀏覽器程序的暫存與新分頁本身的開銷不屬於讀取端;報告頁單獨讀同一份紀錄是 +36 MB(多為尚未回收的解析垃圾,強制 GC 後 heap 4.4 MB)。報告的 HTML 與 A4 PDF(頁數、文字與排版、每頁點陣圖;頁面時鐘固定)前後逐一相同(2 小時教官站紀錄、E05 與 E07 核心紀錄)。
 
 | 分頁 | 內容 |
 |---|---|
@@ -297,7 +327,7 @@ src/Instruments.Web/
 ├─ src/
 │  ├─ main.ts, app.ts         <brm-app>:儀器頁版面、資料來源、主題、指令路由
 │  ├─ instructor-main.ts, instructor-app.ts
-│  │                          <brm-instructor-app>:教官站 / 簡化教官模式 / 重播檢視的版面與流程
+│  │                          <brm-instructor-app>:教官站 / 簡化教官模式 / 重播檢視的版面與流程(instructor-main 另啟用頁首的發行版狀態請求)
 │  ├─ report-main.ts, report/ <brm-report-app>(report-app.ts,light DOM)與 report.css(A4 列印);behavioural-anchors.json + anchors.ts(錨定描述)、
 │  │                          marker-form.ts(評估表、驗證、帶入標記、一致率)、debrief-report.ts(報告模型、manoeuvres[]、參數集來源)、
 │  │                          training-record.ts(名冊、班次、個人訓練紀錄、CSV)、report-views.ts(列印樣板)、report-store.ts(IndexedDB、教官站交接)
@@ -311,12 +341,14 @@ src/Instruments.Web/
 │  │                          ship-geometry(船形、船體→ENU)、track-history、theme(主題讀寫)、download(下載)、
 │  │                          scenario(情境 YAML 解析與摘要)、timeline(timeline/route/zones/briefing 與 ${params:…} 解析、
 │  │                          條件/動作摘要、經緯度→ENU)、assessment(情境 assessment 規則與核心 summary 解析)、
-│  │                          sim-event(事件解析、文字化、嚴重度、EventStore)、voice-script(語音腳本播放)、
+│  │                          sim-event(事件解析、文字化、嚴重度、EventStore)、event-merge(事件流合併碰墊的反覆接觸)、voice-script(語音腳本播放)、
 │  │                          plot-overlay(航線/區域/事件疊圖)、instructor-command(教官指令與故障目錄)、
 │  │                          operation-log(學員操作推導)、debrief(本地講評摘要)、brm-markers(BRM 標記與匯出)、
-│  │                          session-record(教官站紀錄 v5:精簡抽樣、倒帶截斷、Blob 匯出)、record-replay(JSON Lines / 教官站紀錄解析,含 event/summary)、
+│  │                          session-record(教官站紀錄 v6:精簡抽樣、倒帶截斷、Blob 匯出、事件合併列)、record-replay(JSON Lines / 教官站紀錄解析,含 event/summary)、
+│  │                          record-stream(紀錄的分段讀取與逐筆解析:講評報告頁不把整份紀錄讀成字串)、
 │  │                          alerts(警報/BNWAS/真值解析、排序、圖示狀態、指令、歷史、事件文字)、alert-sound(Web Audio 嗶聲)、
-│  │                          external-forces(拖船/錨/泊位解析、標籤與拒絕原因、指令、事件文字、泊位幾何、艏艉橫向速度)
+│  │                          external-forces(拖船/錨/泊位解析、標籤與拒絕原因、指令、事件文字、泊位幾何、艏艉橫向速度)、
+│  │                          release-status(頁首的發行版本與降版提醒:/_status/release.json 的解析、版本比較、重點文字;release-status-enable 啟用請求)
 │  ├─ net/                    sim-source.ts(來源介面,含非狀態訊息)、ws-client.ts(WebSocket + 重連 + ack/事件框)
 │  ├─ demo/                   demo-sim.ts(示範運動學;假事件、情境/航線狀態、假 summary、操舵模式、假目標船)、demo-source.ts(25 Hz 廣播 + 事件框)、
 │  │                          demo-alerts.ts(示範感測器故障、警報狀態機、BNWAS 循環)、demo-external.ts(示範拖船、錨、泊位與繫纜)
@@ -326,7 +358,8 @@ src/Instruments.Web/
 │     └─ instructor/          scenario-panel、timeline-panel、event-stream、run-control-panel、environment-panel、
 │                             fault-panel、ownship-panel、steering-panel、operation-log-view、command-log-view、brm-marker-bar、
 │                             debrief-summary(核心/本地)、replay-view、alert-monitor(警報/BNWAS 監看)、sensor-truth-panel(真值 vs 指示值)、
-│                             tug-panel(拖船,含精簡版)、anchor-panel(錨)、mooring-panel(泊位碰墊與繫纜)
+│                             tug-panel(拖船,含精簡版)、anchor-panel(錨)、mooring-panel(泊位碰墊與繫纜)、
+│                             release-status(頁首的發行版本與降版提醒徽章)
 └─ tests/                     vitest:angles、format、state-parser、command、ship-config、demo-sim、
                               ws-client(假 WebSocket)、components(happy-dom 渲染與指令事件)、
                               scenario、timeline(含設計文件 E07 範例)、assessment(含設計文件 summary 範例)、
@@ -348,8 +381,12 @@ src/Instruments.Web/
                               header、每 5/10 s 一筆 state、全部 event、3 筆 snapshot、summary、footer;footer 的 lines/sha256 為原檔值)
                               report-marker-form(錨定描述檔、表單驗證、時間輸入、標記帶入、一致率、匯出入)、report-debrief(E07 夾具產生報告、
                               manoeuvres 比較表、參數集來源、列印樣板)、report-training-record(聲明文字、加入班次、個人紀錄、CSV 欄位、JSON)、
-                              report-app(報告頁元件、交接、教官站入口)、report-review-fixes(2026-10-17 審查發現:穩定紀錄鍵 startedUtc、
-                              一致率需評完、未完成評估表不計分、未綁定評估表、評估員判定/備註、觀察時刻、損壞檔、CSS/CSV 注入、出席矩陣、本地日期)
+                              report-app(報告頁元件、交接、教官站入口)、record-stream(分段解析與全文解析的差異測試:夾具、各版本教官站紀錄、
+                              2 小時合成紀錄、空白 / 重複鍵 / 格式判斷的邊界、隨機破壞 × 隨機切段)、report-record-stream(報告頁分段讀取:
+                              2 小時紀錄的報告與列印版 HTML 與全文解析相同、最近紀錄存 Blob、舊版文字仍可讀、壞檔與讀取失敗)、report-review-fixes(2026-10-17 審查發現:穩定紀錄鍵 startedUtc、
+                              一致率需評完、未完成評估表不計分、未綁定評估表、評估員判定/備註、觀察時刻、損壞檔、CSS/CSV 注入、出席矩陣、本地日期)、
+                              release-status(頁首的發行版本與降版提醒:無檔 / 正常 / 降版三種、版本比較、重點文字、訊息不當成 HTML、
+                              完整與簡化模式有而重播檢視與駕駛台頁沒有、預設不發請求;fixtures/release-status-downgrade.json 取自真實的 simosa-pkg status)
 ```
 
 船舶參數(LPP、船寬、舵角上限、舵機速率、MCR 轉速、車鐘各段轉速與速度、側推參數、吃水)直接由 `data/ships/FSB1|FSB2/particulars.json` 在建置時匯入(`src/lib/ship-config.ts`),與核心共用同一份資料。

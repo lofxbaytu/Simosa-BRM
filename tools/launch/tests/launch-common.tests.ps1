@@ -8,7 +8,9 @@
   找不到外殼時退回 Open-LaunchPages(以假 exe 於 build\test-tmp\launch-ps\app\shell\SimosaBRM.Shell.exe)、
   USB 操控台服務:Get-LaunchConsoleArgs 的參數規則(序列埠 / loopback:)與以 loopback 假裝置實跑 app\console 服務(ACK、LED,LINK,0 回寫;無核心)、
   NMEA 選項 Get-LaunchNmeaArgs(ports.nmeaTargets/nmeaBind/nmeaFile → --nmea-target/--nmea-bind/--nmea-file;空/null 不加)與
-  Assert-LaunchPortsFree 對 VHF 8767 / 錄影 8768 埠名稱的回報(第二十四輪)。
+  Assert-LaunchPortsFree 對 VHF 8767 / 錄影 8768 埠名稱的回報(第二十四輪)、
+  發行版狀態(第三十輪;教官站頁首的「發行版 <版本>」與降版提醒):Get-LaunchReleaseStatusPath、Find-LaunchReleaseStatusTool(安裝版才有、不建置)、
+  Write-LaunchReleaseStatus(以真實的 simosa-pkg status --json 寫出狀態檔;失敗、逾時、輸出不是 JSON 都不丟例外並刪掉舊檔)與啟動腳本的 -CheckOnly 輸出。
   所有輸出留在 build\test-tmp\launch-ps\。
   用法:pwsh -NoProfile -File tools\launch\tests\launch-common.tests.ps1(tools\launch\tests\launch-tests.sh 為 .sh 版測試;
   容器/開發機沒有 pwsh 時以 tools\run-ps-tests.sh 自 .cache\dotnet-tools 取用 dotnet 全域工具版 PowerShell)
@@ -503,6 +505,99 @@ Invoke-Test 'Get-LaunchGitInfo:有 git 時乾淨 / 修改 / 未追蹤檔;-NoGit 
     Assert-True ($null -eq $i.Rev -and $null -eq $i.Dirty) "不是儲存庫:$($i.Rev) / $($i.Dirty)"
     & git -C $repo worktree remove --force $wt 2>$null
     Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+}
+
+# ---- 發行版狀態(第三十輪;docs\design\packaging-sync.md 第 5.1 節;start-*-laptop.ps1 在啟動網頁伺服前呼叫)----
+Invoke-Test '發行版狀態:狀態檔位置、安裝版才取(不建置)、Write-LaunchReleaseStatus 成功寫檔並記 launch.log;失敗 / 逾時 / 不是 JSON 不丟例外、刪掉舊檔' {
+    . (Join-Path $launch 'launch-common.ps1')
+    $norm = { param($p) ([string]$p) -replace '\\', '/' }
+    $fakeRoot = Join-Path $tmp 'relroot'
+    Remove-Item -Recurse -Force $fakeRoot -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path (Join-Path $fakeRoot 'data') | Out-Null
+    $statusPath = Get-LaunchReleaseStatusPath $fakeRoot
+    Assert-True ((& $norm $statusPath) -eq ((& $norm $fakeRoot) + '/build/run/release-status.json')) "狀態檔應為 <根目錄>/build/run/release-status.json:$statusPath"
+    $logDir = Join-Path (Join-Path $fakeRoot 'build') 'logs'
+    # 開發模式(沒有 manifest.json;儲存庫本身也是):沒有工具,不產生檔、不輸出、不警告
+    Assert-True ($null -eq (Find-LaunchReleaseStatusTool $fakeRoot)) '沒有 manifest.json 時不應有發行版狀態工具'
+    Assert-True (-not (Test-Path (Join-Path $root 'manifest.json'))) '測試前置:儲存庫根目錄不應有 manifest.json(開發模式)'
+    Assert-True ($null -eq (Find-LaunchReleaseStatusTool $root)) '儲存庫(開發模式)不應有發行版狀態工具(即使 simosa-pkg 已建置)'
+    $quiet = (Write-LaunchReleaseStatus $fakeRoot $logDir 3>&1 6>&1 | Out-String)
+    Assert-True ($quiet.Trim() -eq '' -and -not (Test-Path $statusPath)) "開發模式應不輸出、不產生檔:$quiet"
+    # 安裝版:manifest.json(以真實的 simosa-pkg 產生)
+    $pkgDll = Find-LaunchDll 'simosa-pkg' 'Tools.Packaging.Cli' 'simosa-pkg.dll' $root
+    Assert-True ([bool]$pkgDll) '應找到或建置 simosa-pkg.dll'
+    $pkgDll = (Resolve-Path $pkgDll).Path
+    & dotnet $pkgDll release manifest --dir $fakeRoot --version 2026.11.30 | Out-Null
+    Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path (Join-Path $fakeRoot 'manifest.json'))) 'release manifest 應產生 manifest.json'
+    # 有 manifest.json 但找不到 simosa-pkg:警告、不產生檔;tools\updater 有 simosa-pkg.dll 時回傳它(優先於開發建置輸出)
+    Assert-True ($null -eq (Find-LaunchReleaseStatusTool $fakeRoot)) '有 manifest.json 但沒有 simosa-pkg.dll 時應為 $null'
+    $warn = (Write-LaunchReleaseStatus $fakeRoot $logDir 3>&1 | Out-String)
+    Assert-True ($warn.Contains('找不到') -and $warn.Contains('simosa-pkg.dll') -and -not (Test-Path $statusPath)) "找不到 simosa-pkg 時應警告、不產生檔:$warn"
+    $devDll = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $fakeRoot 'build') 'bin') 'Tools.Packaging.Cli') 'Release') 'net8.0') 'simosa-pkg.dll'
+    $instDll = Join-Path (Join-Path (Join-Path $fakeRoot 'tools') 'updater') 'simosa-pkg.dll'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $devDll), (Split-Path -Parent $instDll) | Out-Null
+    Set-Content -Path $devDll -Value 'x' -Encoding ascii
+    Assert-True ((& $norm (Find-LaunchReleaseStatusTool $fakeRoot)) -eq (& $norm $devDll)) '沒有 tools\updater 時用已建置的開發輸出'
+    Set-Content -Path $instDll -Value 'x' -Encoding ascii
+    Assert-True ((& $norm (Find-LaunchReleaseStatusTool $fakeRoot)) -eq (& $norm $instDll)) 'tools\updater\simosa-pkg.dll 優先'
+    Remove-Item -Force $devDll, $instDll
+    # 成功(-PkgDll 指到建置好的 simosa-pkg):回傳狀態檔路徑;檔案是 status --json 的輸出(UTF-8、無 BOM);launch.log 記一行;不留暫存檔
+    $info = (Write-LaunchReleaseStatus $fakeRoot $logDir -PkgDll $pkgDll 6>&1 | Out-String)
+    Assert-True ($info.Contains('發行版狀態:發行版 2026.11.30')) "應回報發行版 2026.11.30:$info"
+    $r = Write-LaunchReleaseStatus $fakeRoot $logDir -PkgDll $pkgDll 6>$null
+    Assert-True ($r -is [string] -and (& $norm $r) -eq (& $norm $statusPath)) "回傳值應為狀態檔路徑(單一字串):$r"
+    $bytes = [System.IO.File]::ReadAllBytes($statusPath)
+    Assert-True ($bytes[0] -eq 0x7B) "狀態檔應為無 BOM 的 JSON(第一個位元組 '{'):0x$('{0:X2}' -f $bytes[0])"
+    $st = Get-Content -Raw -Encoding UTF8 $statusPath | ConvertFrom-Json
+    Assert-True ($st.type -eq 'statusResult' -and $st.releaseVersion -eq '2026.11.30') "狀態檔應是 status 的輸出、releaseVersion 2026.11.30:$(Get-Content -Raw $statusPath)"
+    Assert-True (@($st.warnings).Count -ge 1 -and ("$($st.warnings[0])" -match '[一-鿿]')) "中文(warnings)應原樣保留、不是亂碼:$($st.warnings -join '、')"
+    Assert-True ((Get-Content -Raw -Encoding UTF8 (Join-Path $logDir 'launch.log')).Contains('release-status 發行版 2026.11.30')) 'launch.log 應記一行'
+    Assert-True (-not (Test-Path ($statusPath + '.tmp'))) '不應留下暫存檔'
+    # 結束碼非 0(simosa-pkg.dll 不存在):不丟例外、回傳 $null、警告,上一次的狀態檔被刪掉(不顯示過期的版本)
+    $threw = $false; $r2 = 'x'; $warn2 = ''
+    try { $warn2 = (Write-LaunchReleaseStatus $fakeRoot $logDir -PkgDll (Join-Path $tmp 'nope.dll') 3>&1 | Out-String) } catch { $threw = $true }
+    Assert-True (-not $threw) '失敗時不應丟例外(不擋住啟動)'
+    Assert-True ($warn2.Contains('結束碼') -and -not (Test-Path $statusPath)) "失敗時應警告並刪掉舊的狀態檔:$warn2"
+    $r2 = Write-LaunchReleaseStatus $fakeRoot $logDir -PkgDll (Join-Path $tmp 'nope.dll') 3>$null
+    Assert-True ($null -eq $r2) "失敗時回傳值應為 `$null:$r2"
+    if (-not $IsWindows) {
+        # 逾時與輸出不是 JSON:以 PATH 最前面的假 dotnet(sh 腳本)模擬;Windows 的 CreateProcess 不會把 .cmd 當成 dotnet,略過
+        $fakeBin = Join-Path $tmp 'fakebin'
+        New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
+        $fakeDotnet = Join-Path $fakeBin 'dotnet'
+        $savedPath = $env:PATH
+        try {
+            Set-Content -Path $fakeDotnet -Value "#!/bin/sh`nexec sleep 30`n" -Encoding ascii -NoNewline
+            & chmod +x $fakeDotnet
+            Set-Content -Path $statusPath -Value '{"stale":true}' -Encoding ascii
+            $env:PATH = $fakeBin + [System.IO.Path]::PathSeparator + $savedPath
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $warn3 = (Write-LaunchReleaseStatus $fakeRoot $logDir -TimeoutSeconds 1 -PkgDll $pkgDll 3>&1 | Out-String)
+            $sw.Stop()
+            Assert-True ($warn3.Contains('超過 1 秒') -and -not (Test-Path $statusPath)) "逾時應警告並刪掉舊的狀態檔:$warn3"
+            Assert-True ($sw.Elapsed.TotalSeconds -lt 10) "逾時 1 秒應很快返回(耗時 $([int]$sw.Elapsed.TotalSeconds) s)"
+            Set-Content -Path $fakeDotnet -Value "#!/bin/sh`necho not-json`n" -Encoding ascii -NoNewline
+            $warn4 = (Write-LaunchReleaseStatus $fakeRoot $logDir -PkgDll $pkgDll 3>&1 | Out-String)
+            Assert-True ($warn4.Contains('無法取得') -and -not (Test-Path $statusPath) -and -not (Test-Path ($statusPath + '.tmp'))) "輸出不是 JSON 時應警告、不留檔:$warn4"
+        } finally { $env:PATH = $savedPath }
+        $log = Get-Content -Raw -Encoding UTF8 (Join-Path $logDir 'launch.log')
+        Assert-True ($log.Contains('release-status 逾時') -and $log.Contains('release-status 無法取得')) "launch.log 應記下逾時與失敗:$log"
+    }
+    # 啟動腳本:啟動網頁伺服前取狀態,並把狀態檔交給 simosa-web(--status-file);-CheckOnly 列出發行版狀態的來源
+    foreach ($name in @('start-ship-laptop.ps1', 'start-instructor-laptop.ps1')) {
+        $ps1 = Get-Content -Raw -Encoding UTF8 (Join-Path $launch $name)
+        $iWrite = $ps1.IndexOf('Write-LaunchReleaseStatus $root $logDir | Out-Null')
+        $iWeb = $ps1.IndexOf("'--status-file', (Get-LaunchReleaseStatusPath `$root)")
+        Assert-True ($iWrite -gt 0 -and $iWeb -gt $iWrite) "$name 應先 Write-LaunchReleaseStatus,再以 --status-file 啟動 simosa-web"
+    }
+    # -CheckOnly 在同一個工作階段執行(腳本會改目前目錄與 TEMP / NuGet 等環境變數:執行後還原)
+    $envNames = @('SIMOSA_BRM_ROOT', 'SIMOSA_INSTALL_ROOT', 'DOTNET_CLI_TELEMETRY_OPTOUT', 'DOTNET_NOLOGO', 'DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH', 'NUGET_PLUGINS_CACHE_PATH', 'NUGET_SCRATCH', 'TEMP', 'TMP')
+    $savedEnv = @{}; foreach ($n in $envNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n) }
+    $savedLocation = Get-Location
+    try { $checkOut = (& (Join-Path $launch 'start-ship-laptop.ps1') -CheckOnly 3>&1 6>&1 | Out-String) }
+    finally { Set-Location $savedLocation; foreach ($n in $envNames) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) } }
+    Assert-True ($checkOut.Contains('SimCore.Host:')) "-CheckOnly 應列出找到的元件:$checkOut"
+    Assert-True ($checkOut.Contains('發行版狀態:略過(開發模式')) "-CheckOnly 在開發模式應印「發行版狀態:略過」:$checkOut"
 }
 
 Write-Host "通過 $pass,失敗 $fail$(if ($failed) { '(' + ($failed -join '、') + ')' })"

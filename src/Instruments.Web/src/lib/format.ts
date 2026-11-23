@@ -111,6 +111,16 @@ export function formatSimTime(seconds: number | undefined | null): string {
   return [h, m, s].map((n) => n.toString().padStart(2, '0')).join(':');
 }
 
+/** 模擬時間(秒)→ "MM:SS",滿一小時為 "H:MM:SS"(清單與事件文字用的短格式)。 */
+export function formatShortSimTime(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const ms = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  return h > 0 ? `${h}:${ms}` : ms;
+}
+
 /** 本地時鐘 "HH:MM:SS"。 */
 export function formatClock(date: Date): string {
   return [date.getHours(), date.getMinutes(), date.getSeconds()]

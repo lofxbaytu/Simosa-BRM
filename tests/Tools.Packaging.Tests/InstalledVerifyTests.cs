@@ -125,6 +125,7 @@ public sealed class InstalledVerifyTests : IDisposable
         W(ship.Root, "build/webview2/instructor/EBWebView/Local State", "{}");
         W(ship.Root, "build/downloads/draft.yaml", "id: x\n");
         W(ship.Root, "build/tmp/t.tmp", "x");
+        W(ship.Root, "build/run/release-status.json", "{\"type\":\"statusResult\"}");   // 啟動腳本存的 simosa-pkg status --json(教官站頁首的發行版本)
         W(ship.Root, "build/visual/quality.json", "{}");
         W(ship.Root, "state/outbox/p.sbrec", "x");
         W(ship.Root, "store/records/FSB1/2026/p.sbrec", "x");
@@ -1325,6 +1326,10 @@ public sealed class InstalledVerifyTests : IDisposable
         Assert.Contains("config/device/", seen);
 
         // 程式目錄與設定檔不是執行期資料;更新包的元件都有分類
+        // 啟動腳本在啟動網頁伺服前寫的發行版狀態檔(tools/launch/launch-common.* 的 release_status_path / Get-LaunchReleaseStatusPath;
+        // simosa-web --status-file 讀它)是執行期資料:安裝模式核對不得把它列為「多出的檔案」
+        Assert.NotNull(InstalledPaths.FindRuntimeData("build/run/release-status.json", StringComparison.Ordinal));
+        Assert.Contains("build/run/release-status.json", File.ReadAllText(Path.Combine(_env.RepoRoot, "tools", "launch", "launch-common.sh")));
         Assert.Null(InstalledPaths.FindRuntimeData("app/simcore/x.dll", StringComparison.Ordinal));
         Assert.Null(InstalledPaths.FindRuntimeData("tools/updater/simosa-pkg.dll", StringComparison.Ordinal));
         Assert.Null(InstalledPaths.FindRuntimeData("config/ship-laptop.json", StringComparison.Ordinal));
@@ -1392,6 +1397,7 @@ public sealed class InstalledVerifyTests : IDisposable
         foreach (var rel in new[]
                  {
                      "build/logs/simcore.log", "build/logs/simosa.pids", "build/records/20261122T010203Z-E01_baseline.jsonl", "build/tmp/setup.tmp",
+                     "build/run/release-status.json",   // 第三十輪:啟動腳本存的發行版狀態(simosa-pkg status --json)
                      "build/browser/edge/Default/Preferences", "build/downloads/draft.yaml", "build/webview2/ship/EBWebView/Local State",
                      "config/device/device-extra.json", "config/trusted-keys/installed-by-admin.pem", "data/records/old.jsonl",
                      "state/audit.jsonl", "state/records-ledger.json", "store/records/FSB1/p.sbrec",

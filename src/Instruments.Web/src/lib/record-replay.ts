@@ -12,6 +12,10 @@
 // 兩種格式各有一個逐筆的建構器(JsonLinesReplayBuilder 逐行、SessionReplayBuilder 逐筆狀態):整份文字的 parseReplay() 與
 // 分段讀取的 record-stream.ts(ReplayStreamParser;講評報告頁不把整份紀錄讀成一個字串)共用同一份邏輯,結果相同。
 // 建構器可帶「狀態投影」:解析後每筆狀態只留呼叫端需要的欄位(講評報告頁只需要講評累計讀取的欄位,見 debrief.ts DebriefState)。
+//
+// 事件(events):與教官站即時事件流相同的列 — 同一個碰墊連續的低速接觸合併成一列(SimEvent.merged;規則見 lib/event-merge.ts)。
+// 核心 JSON Lines 紀錄仍是逐筆的 fenderContact,讀入時經同一個 EventStore 合併(倒帶時合併列截到倒帶點);教官站紀錄版本 6 起
+// 已是合併後的列,原樣讀回;版本 5 以前的教官站紀錄(逐筆)讀入時合併。重播檢視與講評報告因此與教官站即時看到的列相同。
 
 import type { SimCommand } from '../types/command.js';
 import type { SimEvent } from '../types/event.js';
@@ -23,7 +27,7 @@ import { parseState } from './state-parser.js';
 import { isSessionRecord, type SessionRecord } from './session-record.js';
 import { parseSessionInfo, type SessionInfo } from './session-info.js';
 import { parseRecordings, type RecordingSummary } from './screen-recording.js';
-import { parseSimEvent } from './sim-event.js';
+import { EventStore, mergeEventRows, parseSimEvent } from './sim-event.js';
 import type { TrackPoint } from './track-history.js';
 import { BrmMarkerStore } from './brm-markers.js';
 import type { OperationEvent } from './operation-log.js';
@@ -101,7 +105,7 @@ export interface ReplayDataOf<S> {
   snapshots: Array<{ tick: number; t: number }>;
   markers: BrmMarker[];
   operations: OperationEvent[];
-  /** 核心事件(event 行;教官站紀錄的 events) */
+  /** 核心事件(event 行;教官站紀錄的 events),依時間遞增;同一個碰墊連續的低速接觸已合併成一列(SimEvent.merged) */
   events: SimEvent[];
   /** 核心 summary(最後一行 summary;教官站紀錄的 coreSummary);舊紀錄為 null */
   summary: AssessmentSummary | null;
@@ -177,18 +181,24 @@ export function notSessionRecordReplay<S>(): ReplayDataOf<S> {
  * 依序加入一筆狀態;tick(或 t)比前一筆小即為倒帶:丟棄 t > 倒帶點的舊分支狀態與事件(倒帶後核心從快照 tick 重新推進,
  * 快照 tick 當下的狀態與之前的歷史仍然有效),並記錄倒帶點。
  * rewindTick:restore 指令要求的 tick(已知時倒帶點 = rewindTick × dt,而非倒帶後第一筆狀態的 t)。
+ * dropEvents:丟棄 t > 倒帶點的事件並回傳丟棄的事件數(核心紀錄:事件在 EventStore 裡,合併列截到倒帶點;省略時直接濾 data.events)。
  */
-function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, s: S, rewindTick?: number): void {
+function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, s: S, rewindTick?: number, dropEvents?: (t: number) => number): void {
   const prev = data.states[data.states.length - 1];
   if (prev && (Number.isFinite(s.tick) && Number.isFinite(prev.tick) ? s.tick < prev.tick : s.t < prev.t)) {
     const known = rewindTick !== undefined && Number.isFinite(rewindTick) && rewindTick <= s.tick;
     const tick = known ? rewindTick : s.tick;
     const t = known ? tick * data.header.dt : s.t;
     const nStates = data.states.length;
-    const nEvents = data.events.length;
     data.states = data.states.filter((x) => x.t <= t);
-    data.events = data.events.filter((e) => e.t <= t);
-    data.rewinds.push({ t, tick, from: prev.t, droppedStates: nStates - data.states.length, droppedEvents: nEvents - data.events.length });
+    let droppedEvents: number;
+    if (dropEvents) droppedEvents = dropEvents(t);
+    else {
+      const nEvents = data.events.length;
+      data.events = data.events.filter((e) => e.t <= t);
+      droppedEvents = nEvents - data.events.length;
+    }
+    data.rewinds.push({ t, tick, from: prev.t, droppedStates: nStates - data.states.length, droppedEvents });
   }
   data.states.push(s);
 }
@@ -211,6 +221,9 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
   private prev: OwnShipState | undefined;
   /** 最近一筆 restore 指令要求的 tick;下一筆 state 行(倒帶後第一筆)消耗之 */
   private pendingRewindTick: number | undefined;
+  /** 事件先進 EventStore(不設上限):與教官站即時事件流相同的合併規則;finish() 時才放進 data.events */
+  private readonly eventStore = new EventStore(Number.POSITIVE_INFINITY);
+  private readonly dropEvents = (t: number): number => this.eventStore.dropAfter(t);
 
   constructor(private readonly project?: StateProjection<S>) {}
 
@@ -266,7 +279,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
           return;
         }
         if (typeof obj['tick'] === 'number' && !Number.isFinite(ev.tick)) ev.tick = obj['tick'];
-        data.events.push(ev);
+        this.eventStore.push(ev);
         break;
       }
       case 'vhf': {
@@ -282,7 +295,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
           data.errors.push(`第 ${i + 1} 行:vhf 無法解析`);
           return;
         }
-        data.events.push(ev);
+        this.eventStore.push(ev);
         break;
       }
       case 'summary': {
@@ -316,7 +329,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
           return;
         }
         this.prev = parsed.state;
-        pushState(data, this.project ? this.project(parsed.state) : (parsed.state as unknown as S), this.pendingRewindTick);
+        pushState(data, this.project ? this.project(parsed.state) : (parsed.state as unknown as S), this.pendingRewindTick, this.dropEvents);
         this.pendingRewindTick = undefined;
         break;
       }
@@ -347,6 +360,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
   }
 
   finish(): ReplayDataOf<S> {
+    this.data.events = [...this.eventStore.all()];
     return finishTimes(this.data);
   }
 }
@@ -429,8 +443,9 @@ export class SessionReplayBuilder<S extends ReplayStateBase = OwnShipState> {
     data.operations = Array.isArray(obj.operations) ? obj.operations.filter((o) => typeof o === 'object' && o !== null && typeof o.t === 'number') : [];
     if (Array.isArray(obj.events)) {
       // 教官站紀錄的事件在狀態之後才整批加入:倒帶點之前的舊分支事件(t > 倒帶點且早於倒帶發生)一併丟棄
+      // 之後照教官站事件流的規則合併碰墊的反覆接觸(版本 6 起紀錄裡已是合併列,原樣保留;版本 5 以前是逐筆)
       const events = obj.events.map((e) => parseSimEvent(e, DEFAULT_DT)).filter((e): e is SimEvent => e !== null);
-      data.events = dropRewoundEvents(events, data.rewinds);
+      data.events = mergeEventRows(dropRewoundEvents(events, data.rewinds));
     }
     if (obj.coreSummary) data.summary = parseAssessmentSummary(obj.coreSummary);
     return finishTimes(data);

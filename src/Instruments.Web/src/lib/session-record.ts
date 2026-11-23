@@ -10,6 +10,9 @@
 //    記憶體因此有上限;2 小時內(1 Hz)不會觸發。
 // 匯出(第三十輪 W2):sessionRecordBlob 逐欄、逐筆 JSON.stringify 後以 BlobPart[] 組成 Blob,不產生整份紀錄的單一字串;
 // 內容與 JSON.stringify(record) 位元組相同。
+// 事件(版本 6;第三十輪 ENG-C9):events 是教官站事件流的列 — 同一個碰墊連續的低速接觸合併成一列,帶 merged
+// (次數 count、第一次與最近一次的時刻 firstT / lastT、各次的最大法向速度 / 能量 / 壓縮 / 反力;型別 FenderContactMerge,規則見 event-merge.ts)。
+// 逐筆的接觸仍在核心的 JSON Lines 紀錄裡;版本 5 以前的紀錄(逐筆)讀入時由 record-replay 以同樣的規則合併。
 
 import type { SimCommand } from '../types/command.js';
 import type { SimEvent } from '../types/event.js';
@@ -27,7 +30,7 @@ import type { RecordingSummary } from './screen-recording.js';
 
 export const SESSION_RECORD_FORMAT = 'simosa-brm-instructor-record';
 /** 目前寫出的紀錄版本(SessionRecord.version) */
-export const SESSION_RECORD_VERSION = 5;
+export const SESSION_RECORD_VERSION = 6;
 
 export interface CommandLogEntry {
   seq: number;
@@ -128,7 +131,7 @@ export interface SampledRewind {
   from: number;
   /** 截掉的舊分支抽樣筆數 */
   droppedStates: number;
-  /** 同時丟棄的舊分支事件數(教官站事件流 dropAfter) */
+  /** 同時丟棄的舊分支事件數(教官站事件流 dropAfter;合併列裡被截掉的每一次接觸各算一筆) */
   droppedEvents: number;
 }
 
@@ -136,9 +139,10 @@ export interface SessionRecord {
   format: typeof SESSION_RECORD_FORMAT;
   /**
    * 1:第一版;2:新增 events(核心事件)與 coreSummary(核心 summary);3:新增 sessionInfo(參與者與休息時間確認);4:新增 recordings(畫面錄影);
-   * 5:states 改為精簡投影(SampledState)、倒帶的舊分支已截掉並新增 rewinds、超過上限時降採樣(sampleInterval_s 為降採樣後的間隔)
+   * 5:states 改為精簡投影(SampledState)、倒帶的舊分支已截掉並新增 rewinds、超過上限時降採樣(sampleInterval_s 為降採樣後的間隔);
+   * 6:events 中同一個碰墊連續的低速接觸合併成一列(帶 merged;其餘欄位與版本 5 相同)
    */
-  version: 1 | 2 | 3 | 4 | 5;
+  version: 1 | 2 | 3 | 4 | 5 | 6;
   /** 匯出時刻(每次下載或按「講評報告」都不同;不可作為練習識別) */
   createdUtc: string;
   /**
@@ -159,7 +163,7 @@ export interface SessionRecord {
   commands: CommandLogEntry[];
   /** 本地推導(debrief.ts) */
   summary: DebriefSummary | null;
-  /** 核心推送/查詢得到的事件(版本 2;舊紀錄無) */
+  /** 核心推送/查詢得到的事件(版本 2;舊紀錄無)。版本 6 起為教官站事件流的列:碰墊的反覆接觸合併成一列(SimEvent.merged),依最近活動的時間遞增 */
   events?: SimEvent[];
   /** 核心 summary(版本 2;Python 伺服器/離線時為 null)。存原始物件(summary.raw),讀回時再解析 */
   coreSummary?: Record<string, unknown> | null;

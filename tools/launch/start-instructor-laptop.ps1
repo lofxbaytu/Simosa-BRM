@@ -4,6 +4,8 @@
 .DESCRIPTION
   依 config\instructor-laptop.json:本機 simosa-web 提供 app\web(教官站 instructor.html、雷達 radar.html、簡化 ECDIS ecdis.html、講評 report.html),
   頁面的 ws 參數指向船上筆電(直連 IP);-Standalone(或 standalone.enabled)時改啟動本機 SimCore.Host 與雷達供岸上備課、審閱紀錄。
+  啟動網頁伺服前先執行一次 simosa-pkg status --json 存成 build\run\release-status.json:教官站頁首顯示「發行版 <版本>」與降版提醒 —
+  這是教官筆電本機(提供教官站頁面的這一台)的發行版,不是船上筆電的;逾時或失敗不擋住啟動。
   直連前檢查 Wi-Fi/藍牙(第 5.4 節:直連期間停用;-CheckWifi 時 Wi-Fi 開啟則拒絕繼續)。同步不自動執行:顯示 simosa-pkg sync 指令
   (需硬體金鑰 --cert,且更新包產生前須完成受影響情境驗證;docs\design\packaging-sync.md 第 6.2–6.3 節)。
   網頁以專屬設定檔啟動 Microsoft Edge(build\browser\edge):教官站的情境草稿、參與者資料與講評報告站的訓練紀錄(瀏覽器端儲存)留在安裝根目錄內,不寫 C:\Users。
@@ -74,7 +76,9 @@ try {
     if ((Get-Cfg $cfg 'web.enabled' $true) -and $webDir) {
         $webDll = Find-LaunchDll 'web-server' 'StaticWeb' 'simosa-web.dll' $root
         if ($webDll) {
-            Start-LaunchProcess -Name 'web' -Log (Join-Path $logDir 'web.log') -File 'dotnet' -Arguments @($webDll, '--root', $webDir, '--port', $webPort, '--bind', (Get-Cfg $cfg 'web.bind' '127.0.0.1')) -WorkDir $root | Out-Null
+            # 發行版狀態(教官站頁首;本機的發行版):與 start-ship-laptop.ps1 相同,逾時或失敗不擋住啟動
+            Write-LaunchReleaseStatus $root $logDir | Out-Null
+            Start-LaunchProcess -Name 'web' -Log (Join-Path $logDir 'web.log') -File 'dotnet' -Arguments @($webDll, '--root', $webDir, '--port', $webPort, '--bind', (Get-Cfg $cfg 'web.bind' '127.0.0.1'), '--status-file', (Get-LaunchReleaseStatusPath $root)) -WorkDir $root | Out-Null
             Wait-LaunchTcp '127.0.0.1' $webPort 10 | Out-Null
             $pages = Get-Cfg $cfg 'web.openPages' @()
             if ($NoBrowser) { foreach ($p in @($pages)) { Write-Host "  http://127.0.0.1:$webPort/$p" } }

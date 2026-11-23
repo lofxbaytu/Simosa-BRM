@@ -144,6 +144,69 @@ nmea_host_args() {
   return 0
 }
 
+# ---- 發行版狀態(教官站頁首的「發行版 <版本>」與降版提醒;docs/design/packaging-sync.md 第 5.1 節;Windows 版為 launch-common.ps1 的同名函式)----
+# release_status_path <根目錄>:狀態檔 <根目錄>/build/run/release-status.json(執行期資料,不是程式檔;simosa-web --status-file 讀它,
+#   以 /_status/release.json 提供教官站需要的欄位)
+release_status_path() { echo "$1/build/run/release-status.json"; }
+
+# release_status_tool <根目錄>:安裝版(根目錄有 manifest.json)才印出 simosa-pkg.dll 的路徑(tools/updater;沒有時用已建置的開發輸出)並回傳 0,
+#   否則回傳 1。不建置:開發模式(儲存庫,沒有 manifest.json)沒有發行版本可顯示。與啟動同步服務無關(--no-sync 時照樣取狀態)。
+release_status_tool() {
+  local root="$1" c
+  [[ -f "$root/manifest.json" ]] || return 1
+  for c in "$root/tools/updater/simosa-pkg.dll" "$root/build/bin/Tools.Packaging.Cli/Release/net8.0/simosa-pkg.dll" "$root/build/bin/Tools.Packaging.Cli/Debug/net8.0/simosa-pkg.dll"; do
+    [[ -f "$c" ]] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+# write_release_status <根目錄> <log 目錄> [逾時秒=20] [simosa-pkg.dll]:啟動網頁伺服之前執行一次 simosa-pkg status --json,輸出存成 release_status_path。
+#   先刪掉上一次的狀態檔:這次沒有產生(開發模式、找不到 simosa-pkg、逾時、失敗、輸出不是 JSON)時教官站就不顯示,不會顯示過期的版本。
+#   逾時與失敗都不擋住啟動:只警告並在 <log 目錄>/launch.log 記一行(stderr 在 release-status.err.log);本函式一律回傳 0。
+#   存的是 status 的完整輸出(留在本機);simosa-web 只把發行版本與降版資訊送給網頁,不會整份送出。
+write_release_status() {
+  local root="$1" logdir="$2" secs="${3:-20}" dll="${4:-}" out tmp err rc=0 summary
+  out="$(release_status_path "$root")"; tmp="$out.tmp"
+  rm -f "$out" "$tmp" 2>/dev/null || true
+  if [[ -z "$dll" ]]; then
+    dll="$(release_status_tool "$root")" || {
+      [[ -f "$root/manifest.json" ]] && echo "警告:發行版狀態:找不到 tools/updater/simosa-pkg.dll,教官站不顯示發行版本" >&2
+      return 0
+    }
+  fi
+  mkdir -p "$(dirname "$out")" "$logdir" 2>/dev/null || { echo "警告:發行版狀態:無法建立 $(dirname "$out"),略過" >&2; return 0; }
+  err="$logdir/release-status.err.log"
+  timeout "$secs" dotnet "$dll" status --root "$root" --json > "$tmp" 2> "$err" || rc=$?
+  if [[ $rc != 0 ]]; then
+    rm -f "$tmp"
+    if [[ $rc == 124 ]]; then summary="逾時($secs 秒),略過"; else summary="simosa-pkg status 結束碼 $rc,略過(見 $err)"; fi
+    echo "警告:發行版狀態:$summary(教官站不顯示發行版本)" >&2
+    echo "# $(date -u +%FT%TZ) release-status $summary" >> "$logdir/launch.log" 2>/dev/null || true
+    return 0
+  fi
+  # 確認輸出是 JSON 物件(不是的話不留檔);版本只用來在啟動視窗與 launch.log 記一行(python3 與 load_config 相同的相依)
+  summary="$(python3 -I - "$tmp" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+if not isinstance(st, dict): raise SystemExit("not an object")
+ver = st.get("releaseVersion")
+s = f"發行版 {ver}" if ver else "status 沒有發行版本(manifest.json 讀不到,或 simosa-pkg 是較舊的版本),教官站不顯示"
+basis = (st.get("releaseDowngrade") or {}).get("basisVersion")
+if basis: s += f"(降版提醒:曾安裝或套用過 {basis};教官站頁首會顯示)"
+print(s)
+PY
+)" || {
+    rm -f "$tmp"
+    echo "警告:發行版狀態:simosa-pkg status 的輸出不是 JSON 物件,略過(教官站不顯示發行版本)" >&2
+    echo "# $(date -u +%FT%TZ) release-status 輸出不是 JSON 物件,略過" >> "$logdir/launch.log" 2>/dev/null || true
+    return 0
+  }
+  mv -f "$tmp" "$out" || { rm -f "$tmp"; return 0; }
+  echo "  發行版狀態:$summary → $out"
+  echo "# $(date -u +%FT%TZ) release-status $summary" >> "$logdir/launch.log" 2>/dev/null || true
+  return 0
+}
+
 # wait_tcp <host> <port> <秒> [PID]:等待埠開啟;給 PID 時程序已結束即回傳 2(不再等到逾時,也不會把別的程序的監聽當成自己的)
 wait_tcp() {
   local host="$1" port="$2" secs="${3:-20}" pid="${4:-}" i

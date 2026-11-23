@@ -1,6 +1,7 @@
 // 教官站元件共用樣式:面板、表單列、清單、核心支援標示。
 
 import { css } from 'lit';
+import { formatShortSimTime } from '../../lib/format.js';
 
 export const instructorStyles = css`
   .panel {
@@ -134,14 +135,9 @@ export const instructorStyles = css`
   }
 `;
 
-/** 秒 → "MM:SS" 或 "H:MM:SS"(清單用的短格式)。 */
+/** 秒 → "MM:SS" 或 "H:MM:SS"(清單用的短格式;與事件文字裡的時刻同一個格式)。 */
 export function shortTime(t: number): string {
-  const total = Math.max(0, Math.floor(t));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const ms = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return h > 0 ? `${h}:${ms}` : ms;
+  return formatShortSimTime(t);
 }
 
 /** ISO 時間 → 本地 "HH:MM:SS"。 */

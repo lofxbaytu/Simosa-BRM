@@ -31,6 +31,12 @@ export interface E2eEnv {
   logsDir: string;
   /** SimCore.Host 停止檔(--stop-file;teardown 寫入以優雅結束並寫完紀錄 footer) */
   stopFile: string;
+  /** 發行版狀態檔(simosa-web --status-file;global-setup 寫的 simosa-pkg status --json 形式的檔) */
+  statusFile: string;
+  /** 發行版狀態檔裡的發行版本(VERSION 的內容;沒套用過軟體更新包時教官站頁首顯示「發行版 <版本>」) */
+  releaseVersion: string;
+  /** 發行版狀態檔裡的軟體更新包版次(比發行版新;教官站頁首顯示實際執行的這一版「軟體更新 <版次>」) */
+  softwareVersion: string;
   /** 啟動時刻(ISO;teardown 以此找本輪在 build/records 產生的紀錄) */
   startedUtc: string;
   pids: { host: number; radar: number; web: number };
@@ -50,6 +56,9 @@ export function e2eEnv(): E2eEnv {
       mediaDir: p['E2E_MEDIA_DIR'] ?? path.join(OUT, 'media'),
       logsDir: p['E2E_LOGS_DIR'] ?? path.join(OUT, 'logs'),
       stopFile: p['E2E_STOP_FILE'] ?? '',
+      statusFile: p['E2E_STATUS_FILE'] ?? '',
+      releaseVersion: p['E2E_RELEASE_VERSION'] ?? '',
+      softwareVersion: p['E2E_SOFTWARE_VERSION'] ?? '',
       startedUtc: p['E2E_STARTED_UTC'] ?? '',
       pids: { host: 0, radar: 0, web: 0 },
     };
@@ -70,6 +79,9 @@ export function exportEnv(e: E2eEnv): void {
   process.env['E2E_MEDIA_DIR'] = e.mediaDir;
   process.env['E2E_LOGS_DIR'] = e.logsDir;
   process.env['E2E_STOP_FILE'] = e.stopFile;
+  process.env['E2E_STATUS_FILE'] = e.statusFile;
+  process.env['E2E_RELEASE_VERSION'] = e.releaseVersion;
+  process.env['E2E_SOFTWARE_VERSION'] = e.softwareVersion;
   process.env['E2E_STARTED_UTC'] = e.startedUtc;
 }
 

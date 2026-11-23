@@ -1,9 +1,9 @@
 // 練習紀錄的分段解析(講評報告頁;規劃書第 9.2 節、第 14 章「記憶體不持續成長」):
 // 2 小時的教官站紀錄約 25 MB(版本 4 以前約 55 MB)、核心 JSON Lines 紀錄約 0.5–1 GB。整份讀成一個字串再 JSON.parse 時,
-// 頁面同時持有全文(非 ASCII 內容時每字元 2 位元組)、整棵原始物件樹與解析後的狀態,7200 筆 E02 的尖峰約 +360 MB;
-// 超過 V8 字串長度上限(約 512 MB)的核心紀錄則根本讀不進來。
+// 頁面同時持有全文(非 ASCII 內容時每字元 2 位元組)、整棵原始物件樹與解析後的狀態:實測 7200 筆 E02 的教官站紀錄尖峰約
+// +250–300 MB,30 分鐘的核心紀錄(337 MB)約 +2.4 GB,2 小時的核心紀錄(1.35 GB)分頁直接當掉(數字見 README「紀錄讀取」)。
 //
-// 這裡改為一段一段讀(Blob.slice → arrayBuffer → TextDecoder 串流解碼,預設每段 1 MB)並逐筆解析:
+// 這裡改為一段一段讀(Blob.stream() → TextDecoder 串流解碼;每段最多 1 MB)並逐筆解析:
 //  - 核心 JSON Lines:逐行交給 JsonLinesReplayBuilder;
 //  - 教官站紀錄 JSON(單一 JSON 文件;下載檔的格式不變):以 TopLevelObjectScanner 逐字掃描頂層物件,頂層陣列逐筆 JSON.parse,
 //    states 的每一筆解析後立即交給 SessionReplayBuilder(原始物件隨即可回收),其餘頂層欄位(事件、指令、情境…)收集後在結尾一次處理。
@@ -519,20 +519,80 @@ export function parseReplayText<S extends ReplayStateBase = OwnShipState>(text: 
   return p.finish();
 }
 
-/** 分段讀取的預設大小(位元組) */
+/** 一段文字的位元組上限(預設 1 MB);瀏覽器一次給的資料比它大時再切開 */
 export const RECORD_CHUNK_BYTES = 1 << 20;
+
+/** 連續解碼 / 解析這麼久(毫秒)就讓出主執行緒一次(見 forEachBlobTextChunk) */
+export const RECORD_YIELD_MS = 50;
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+/**
+ * 讓出主執行緒一次:排一個巨集任務(MessageChannel;沒有時 setTimeout 0),等它執行後才繼續 —— 瀏覽器在這中間處理輸入、
+ * 跑計時器並把畫面(讀取進度)畫出來。不用 setTimeout:連續呼叫五層之後瀏覽器把延遲墊到 4 ms。
+ */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof MessageChannel === 'function') {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        channel.port1.close();
+        resolve();
+      };
+      channel.port2.postMessage(0);
+    } else setTimeout(resolve, 0);
+  });
+}
 
 /**
  * 把 Blob / File 一段一段解碼成文字(UTF-8;開頭的 BOM 去掉、不合法的位元組換成 U+FFFD,與 Blob.text() 相同),
- * 各段依序交給 onChunk。每段之間等待讀取(讓出主執行緒),頁面不會整段卡住。
+ * 各段依序交給 onChunk(文字、已讀位元組)。
+ *
+ * 讓出主執行緒:`await reader.read()` 本身**不保證**讓出 —— 檔案已在快取、磁碟讀得比解析快時,資料一直是備妥的,等待只經過微任務,
+ * 整個讀取成為一個長任務(實測 Chromium:337 MB 的核心紀錄全程 2.4 s 中頁面停住 2.2 s,計時器與畫面都不動,進度只畫得出「100%」)。
+ * 因此每累計 yieldEveryMs 毫秒的工作就明確讓出一次(yieldToEventLoop);0 = 每段之後都讓出,Infinity = 不讓出。
+ *
+ * 以 Blob.stream() 讀:整個檔案只開啟一次。不能改成每段各自 Blob.slice().arrayBuffer() —— Chromium 每次讀取都核對檔案的修改時間,
+ * 核心仍在寫入的紀錄(build/records 下正在變大的 .jsonl)在選取之後又被寫入,第二段起就會以 NotReadableError 失敗
+ * (實測:slice 分次讀失敗;stream 讀到選取當下的大小為止,與原本一次 file.text() 相同)。沒有 stream() 的環境才退回 slice。
  */
-export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, bytesRead: number) => void, chunkBytes = RECORD_CHUNK_BYTES): Promise<void> {
+export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, bytesRead: number) => void, chunkBytes = RECORD_CHUNK_BYTES, yieldEveryMs = RECORD_YIELD_MS): Promise<void> {
   const decoder = new TextDecoder('utf-8');
   const size = blob.size;
-  for (let offset = 0; offset < size; offset += chunkBytes) {
-    const end = Math.min(size, offset + chunkBytes);
-    const text = decoder.decode(await blob.slice(offset, end).arrayBuffer(), { stream: true });
-    onChunk(text, end);
+  let sliceStart = nowMs();
+  /** 一段處理完之後:這一輪已經連續工作超過 yieldEveryMs 就讓出一次 */
+  const breathe = async (): Promise<void> => {
+    if (nowMs() - sliceStart < yieldEveryMs) return;
+    await yieldToEventLoop();
+    sliceStart = nowMs();
+  };
+  if (typeof blob.stream === 'function') {
+    const reader = blob.stream().getReader();
+    let read = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (let offset = 0; offset < value.byteLength; offset += chunkBytes) {
+          const part = offset === 0 && value.byteLength <= chunkBytes ? value : value.subarray(offset, offset + chunkBytes);
+          read += part.byteLength;
+          onChunk(decoder.decode(part, { stream: true }), read);
+          await breathe();
+        }
+      }
+    } catch (err) {
+      // onChunk(解析)擲出例外時停止讀取;讀取本身的錯誤照樣往外丟
+      await reader.cancel().catch(() => undefined);
+      throw err;
+    }
+  } else {
+    for (let offset = 0; offset < size; offset += chunkBytes) {
+      const end = Math.min(size, offset + chunkBytes);
+      onChunk(decoder.decode(await blob.slice(offset, end).arrayBuffer(), { stream: true }), end);
+      await breathe();
+    }
   }
   const tail = decoder.decode();
   if (tail) onChunk(tail, size);
@@ -540,12 +600,15 @@ export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, b
 
 export interface ParseReplayBlobOptions<S extends ReplayStateBase> {
   project?: StateProjection<S>;
+  /** 一段文字的位元組上限(預設 RECORD_CHUNK_BYTES) */
   chunkBytes?: number;
+  /** 連續工作多久(毫秒)讓出主執行緒一次(預設 RECORD_YIELD_MS;0 = 每段之後都讓出,Infinity = 不讓出) */
+  yieldEveryMs?: number;
   /** 每讀完一段呼叫一次(已讀位元組、總位元組) */
   onProgress?: (bytesRead: number, totalBytes: number) => void;
 }
 
-/** 分段讀取並解析一份紀錄(Blob / File):不把整份紀錄讀成一個字串。 */
+/** 分段讀取並解析一份紀錄(Blob / File):不把整份紀錄讀成一個字串;讀取中定時讓出主執行緒(頁面不會整段停住,進度畫得出來)。 */
 export async function parseReplayBlob<S extends ReplayStateBase = OwnShipState>(blob: Blob, options: ParseReplayBlobOptions<S> = {}): Promise<ReplayStreamResult<S>> {
   const parser = new ReplayStreamParser<S>(options.project);
   await forEachBlobTextChunk(
@@ -555,6 +618,7 @@ export async function parseReplayBlob<S extends ReplayStateBase = OwnShipState>(
       options.onProgress?.(read, blob.size);
     },
     options.chunkBytes,
+    options.yieldEveryMs,
   );
   return parser.finish();
 }

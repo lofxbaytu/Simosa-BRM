@@ -25,7 +25,9 @@ public static class InstalledPaths
     /// 執行期資料與本機設定(相對安裝根目錄)。
     /// <code>
     /// build/                 輸出與執行期資料:logs(各程序 log、PID)、records(練習紀錄、錄影)、browser/webview2(瀏覽器端資料)、
-    ///                        downloads、tmp、visual(視景品質設定)— CLAUDE.md「本機資料守則」:build\ 之下全部是本機產生的資料
+    ///                        downloads、tmp、visual(視景品質設定)、run(啟動腳本存的發行版狀態 release-status.json:
+    ///                        simosa-pkg status --json 的輸出,simosa-web 據此提供教官站頁首的發行版本與降版提醒)
+    ///                        — CLAUDE.md「本機資料守則」:build\ 之下全部是本機產生的資料
     /// .cache/                快取(Godot 使用者資料 .cache\godot\appdata 等)
     /// state/                 更新包狀態、稽核紀錄、待回傳紀錄包、上一版元件(InstallLayout.StateDir)
     /// store/                 教官筆電紀錄庫(PackagingConfig.Store 預設值)
@@ -40,7 +42,7 @@ public static class InstalledPaths
     /// </summary>
     public static readonly IReadOnlyList<InstalledPathRule> RuntimeData = new InstalledPathRule[]
     {
-        new("build/", "輸出與執行期資料(log、練習紀錄與錄影、瀏覽器端資料、下載、暫存、視景設定)"),
+        new("build/", "輸出與執行期資料(log、練習紀錄與錄影、瀏覽器端資料、下載、暫存、視景設定、發行版狀態)"),
         new(".cache/", "快取(Godot 使用者資料等)"),
         new("state/", "更新包狀態、稽核紀錄、待回傳紀錄包"),
         new("store/", "教官筆電紀錄庫"),

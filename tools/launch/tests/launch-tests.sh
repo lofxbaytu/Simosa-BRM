@@ -3,7 +3,10 @@
 #   tools/launch/*.sh 的失敗回報、埠檢查、stop-all --keep-sync、--logs 傳遞、--ship <IP>、--check-wifi、停止檔優雅停止(footer)、
 #   USB 操控台服務 --console loopback:…(假裝置:ACK/LED/DISP 回寫、指令轉送核心、stop-all 結束)、
 #   NMEA 選項(config ports.nmeaTargets/nmeaBind/nmeaFile → --nmea-target/--nmea-bind/--nmea-file;UDP 單播目標真的收到、檔案寫出)、
-#   VHF 8767/錄影 8768 埠預檢(第二十四輪),以及 docs/驗收/需求追溯表.md 的數字。
+#   VHF 8767/錄影 8768 埠預檢(第二十四輪),以及 docs/驗收/需求追溯表.md 的數字;
+#   發行版狀態(第三十輪;教官站頁首的「發行版 <版本>」與降版提醒):simosa-web --status-file 與 /_status/release.json(只含白名單欄位、
+#   路徑安全、狀態檔不存在 / 不是 status 的輸出時各欄 null)、write_release_status(開發模式不產生、逾時與失敗不擋住啟動並刪掉舊檔)、
+#   以真實的 simosa-pkg 做出降版後從「安裝版」資料夾啟動教官筆電腳本(狀態檔 → simosa-web → 降版資訊)。
 # 用法:tools/launch/tests/launch-tests.sh [--only <測試名>] [--list]
 #   所有輸出留在專案內:build/test-tmp/launch/(設定檔、假 PID 檔)、build/logs-test*/(各測試的 log);埠自 LAUNCH_TEST_PORT_BASE(預設 18760)起。
 #   Windows 版(launch-common.ps1、stop-all.ps1)另見 launch-common.tests.ps1(pwsh 7 於 Linux 亦可執行)。
@@ -353,7 +356,328 @@ test_git_info() {
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info)
+# ---- 發行版狀態(教官站頁首的「發行版 <版本>」與降版提醒;docs/design/packaging-sync.md 第 5.1 節)----
+# http_get <網址> <標頭輸出檔> <本體輸出檔> [curl 參數…]:印出 HTTP 狀態碼(--path-as-is:不讓 curl 先把 .. 與 // 化簡)
+http_get() { local url="$1" hdr="$2" body="$3"; shift 3; curl -s --path-as-is -m 5 -D "$hdr" -o "$body" -w '%{http_code}' "$@" "$url" 2>/dev/null; }
+# start_web <log> <simosa-web 參數…>:以真實的 simosa-web 在 $WEB 埠啟動(PID 放 WEB_PID),等埠開啟
+start_web() {
+  local log="$1"; shift
+  local dll; dll="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll web-server StaticWeb simosa-web.dll '$ROOT'")" || return 1
+  : > "$log"
+  ( exec dotnet "$dll" --port "$WEB" --bind 127.0.0.1 "$@" > "$log" 2>&1 ) &
+  WEB_PID=$!; HELPERS+=("$WEB_PID")
+  local i; for ((i = 0; i < 40; i++)); do tcp_open "$WEB" && return 0; kill -0 "$WEB_PID" 2>/dev/null || return 1; sleep 0.25; done
+  return 1
+}
+# 與 simosa-pkg status --json 相同形式的狀態檔(另帶網頁用不到、不得送出的欄位):status_fixture <輸出檔> <releaseVersion 的 JSON> [releaseDowngrade 的 JSON]
+status_fixture() {
+  python3 -I - "$1" "$2" "${3:-}" <<'PY'
+import json, sys
+st = {"type": "statusResult", "shipId": "FSB1", "deviceId": "SECRET-DEVICE", "version": "2026.12.2",
+      "signer": {"keyId": "SECRET-KEYID", "name": "SECRET-SIGNER", "role": "primary"},
+      "components": {"software": {"version": "2026.12.2", "summary": "SECRET-SUMMARY"}},
+      "trustedKeys": [{"keyId": "SECRET-KEYID", "name": "SECRET-KEYNAME", "role": "primary", "holder": "SECRET-HOLDER"}],
+      "environment": {"os": "SECRET-OS", "dotnet": ".NET 8", "collectedUtc": "2026-11-23T00:00:00Z"},
+      "warnings": ["SECRET-WARNING D:\\Simosa BRM\\state"], "releaseVersion": json.loads(sys.argv[2])}
+if sys.argv[3]: st["releaseDowngrade"] = json.loads(sys.argv[3])
+json.dump(st, open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+PY
+}
+
+# raw_request <方法> <路徑>:以原始 TCP 送一個請求到 $WEB,把整個回應(標頭 + 本體)原樣寫到 stdout(curl -I 不讀本體,量不到 HEAD 有沒有多送)
+raw_request() {
+  python3 -I - "$WEB" "$1" "$2" <<'PY'
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.sendall(f"{sys.argv[2]} {sys.argv[3]} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".encode("ascii"))
+buf = b""
+while True:
+    chunk = s.recv(65536)
+    if not chunk: break
+    buf += chunk
+sys.stdout.buffer.write(buf)
+PY
+}
+
+# simosa-web --status-file:固定網址 /_status/release.json 只送白名單欄位(發行版本、軟體更新包版次、降版資訊、狀態檔時間)、no-store;
+# 狀態檔不存在 / 不是 JSON / 字串含不合法的 UTF-8 / 不是 status 的輸出 / 太大 → 200 與各欄 null 的同一格式(「沒有發行版狀態」;原因記在 log,
+# 內容不外洩 —— 回 404 的話教官站每次載入瀏覽器都記一筆 console error);/_status/ 之下其他路徑一律 404(不落到網頁目錄,字首不分大小寫);
+# 沒有 --status-file 是 404
+test_web_status_file() {
+  local d="$TMP/statusweb"; rm -rf "$d"; mkdir -p "$d/web/_status" "$d/web/_STATUS"
+  echo '<html>ok</html>' > "$d/web/index.html"
+  echo '{"secret":"WEBROOT-SECRET"}' > "$d/web/_status/release.json"   # 網頁目錄內同名的檔不得被送出(/_status/ 是保留的字首)
+  # 字首不分大小寫:大小寫不同的資料夾(Linux 上是另一個資料夾;Windows 上與 _status 同一個,已存在時這一行只是覆寫同一個檔)也不得被送出
+  echo '{"secret":"WEBROOT-SECRET-UPPER"}' > "$d/web/_STATUS/release.json"
+  local st="$d/release-status.json" h="$d/h.txt" b="$d/b.txt" code u
+  local EMPTY='{"format":"simosa-release-status/1","generatedUtc":null,"releaseVersion":null,"softwareVersion":null,"releaseDowngrade":null}'
+  # (1) 沒有 --status-file:404;網頁目錄的檔案照常
+  start_web "$d/web1.log" --root "$d/web" || fail "simosa-web 未啟動:$(cat "$d/web1.log")" || return 1
+  code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+  [[ "$code" == 404 ]] || fail "沒有 --status-file 時應為 404,實際 $code" || return 1
+  grep -q "WEBROOT-SECRET" "$b" && { fail "網頁目錄內的 _status/release.json 不得被送出"; return 1; }
+  [[ "$(http_get "http://127.0.0.1:$WEB/index.html" "$h" "$b")" == 200 ]] && grep -q '<html>ok</html>' "$b" || fail "網頁目錄的 index.html 應照常提供" || return 1
+  kill -INT "$WEB_PID"; wait "$WEB_PID" 2>/dev/null
+  # (2) --status-file 指到還不存在的檔(開發模式、status 逾時或失敗):照常啟動,回 200 與各欄 null(教官站不顯示、瀏覽器不記 console error),
+  #     原因記在 log;之後檔案出現即送出內容(每次請求重讀)
+  start_web "$d/web2.log" --root "$d/web" --status-file "$st" || fail "simosa-web(--status-file)未啟動:$(cat "$d/web2.log")" || return 1
+  grep -q "發行版狀態:$st → /_status/release.json" "$d/web2.log" || fail "啟動訊息應列出狀態檔與網址:$(cat "$d/web2.log")" || return 1
+  code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+  [[ "$code" == 200 && "$(cat "$b")" == "$EMPTY" ]] || fail "狀態檔不存在時應為 200 與各欄 null,實際 $code:$(cat "$b")" || return 1
+  grep -qi '^cache-control: no-store' "$h" && grep -qi '^content-type: application/json' "$h" || fail "「沒有發行版狀態」也應為 no-store 的 JSON:$(cat "$h")" || return 1
+  grep -q "200 GET /_status/release.json HTTP/1.1(狀態檔不存在;回覆「沒有發行版狀態」)" "$d/web2.log" || fail "log 應記下狀態檔不存在:$(tail -3 "$d/web2.log")" || return 1
+  status_fixture "$st" '"2026.11.30"'
+  code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+  [[ "$code" == 200 ]] || fail "狀態檔存在時應為 200,實際 $code;log:$(tail -3 "$d/web2.log")" || return 1
+  grep -qi '^cache-control: no-store' "$h" || fail "應為 Cache-Control: no-store:$(cat "$h")" || return 1
+  grep -qi '^content-type: application/json' "$h" || fail "應為 application/json:$(cat "$h")" || return 1
+  grep -q "SECRET" "$b" && { fail "不得送出 status 的其他欄位(裝置、金鑰、環境、警告):$(cat "$b")"; return 1; }
+  python3 -I - "$b" <<'PY' || fail "回應應只有白名單欄位、版本 2026.11.30、沒有降版:$(cat "$b")" || return 1
+import json, re, sys
+j = json.load(open(sys.argv[1], encoding="utf-8"))
+assert sorted(j) == ["format", "generatedUtc", "releaseDowngrade", "releaseVersion", "softwareVersion"], sorted(j)
+assert j["format"] == "simosa-release-status/1" and j["releaseVersion"] == "2026.11.30" and j["releaseDowngrade"] is None, j
+assert j["softwareVersion"] == "2026.12.2", j   # status 的 components.software.version(軟體更新包版次);其餘 components 的內容不送
+assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", j["generatedUtc"]), j
+PY
+  # HEAD:相同的標頭、沒有本體(以原始 TCP 讀整個回應:curl -I 不讀本體,本體有沒有多送它量不到);POST:405;查詢字串不影響
+  raw_request HEAD /_status/release.json > "$d/head.raw" && raw_request GET /_status/release.json > "$d/get.raw" || fail "原始請求失敗" || return 1
+  python3 -I - "$d/head.raw" "$d/get.raw" <<'PY' || fail "HEAD 應回 200、與 GET 相同的 Content-Length 與 no-store、標頭之後沒有任何位元組:$(head -c 600 "$d/head.raw")" || return 1
+import sys
+def split(path):
+    raw = open(path, "rb").read()
+    head, sep, body = raw.partition(b"\r\n\r\n")
+    assert sep, raw[:200]
+    lines = head.decode("ascii").split("\r\n")
+    return lines[0], {k.strip().lower(): v.strip() for k, v in (l.split(":", 1) for l in lines[1:])}, body
+hs, hh, hb = split(sys.argv[1])
+gs, gh, gb = split(sys.argv[2])
+assert hs == gs == "HTTP/1.1 200 OK", (hs, gs)
+assert len(gb) > 0 and int(gh["content-length"]) == len(gb), (gh, len(gb))
+assert hh == gh, (hh, gh)
+assert hh["cache-control"] == "no-store", hh
+assert hb == b"", ("HEAD 的回應帶了本體", hb[:80])
+PY
+  [[ "$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b" -X POST)" == 405 ]] || fail "POST 應為 405" || return 1
+  [[ "$(http_get "http://127.0.0.1:$WEB/_status/release.json?x=../../etc/passwd" "$h" "$b")" == 200 ]] || fail "查詢字串不影響" || return 1
+  # /_status/ 之下其他路徑(含大小寫不同、結尾斜線、多一層、雙斜線)一律 404,不落到網頁目錄;.. 為 400
+  #   /_STATUS/release.json:網頁目錄裡真的有這個檔(上面建的),字首若區分大小寫它就會被當成一般檔案送出
+  for u in /_status /_status/ /_status/other.json /_STATUS/release.json /_STATUS/ /_status/release.json/ /_status/release.json/x //_status/release.json /_Status/Release.json; do
+    code="$(http_get "http://127.0.0.1:$WEB$u" "$h" "$b")"
+    [[ "$code" == 404 ]] || fail "$u 應為 404,實際 $code" || return 1
+    grep -q "SECRET" "$b" && { fail "$u 的回應不得有狀態檔或網頁目錄 _status 的內容"; return 1; }
+  done
+  for u in /_status/../index.html /_status/..%2f..%2fetc/passwd '/_status/release.json/..%5c..%5cx'; do
+    code="$(http_get "http://127.0.0.1:$WEB$u" "$h" "$b")"
+    [[ "$code" == 400 ]] || fail "$u 應為 400(bad path),實際 $code" || return 1
+  done
+  # 降版資訊原樣帶出(版本欄位只接受數字版本;其他型別 / 內容以 null、false 帶過);releaseVersion 不是版本 → null
+  status_fixture "$st" '"<script>alert(1)</script>"' '{"releaseVersion":"2026.11.1","basisVersion":"2026.12.2","previousReleaseVersion":"2026.12.1","softwareVersion":"../../x","highestVersion":7,"softwareStale":true,"message":"降版:測試訊息","extra":"SECRET-EXTRA"}'
+  [[ "$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")" == 200 ]] || fail "降版狀態檔應為 200" || return 1
+  grep -q "SECRET\|script" "$b" && { fail "不得送出白名單以外的內容:$(cat "$b")"; return 1; }
+  python3 -I - "$b" <<'PY' || fail "降版資訊的欄位不符:$(cat "$b")" || return 1
+import json, sys
+j = json.load(open(sys.argv[1], encoding="utf-8"))
+assert j["releaseVersion"] is None, j
+assert j["softwareVersion"] == "2026.12.2", j
+d = j["releaseDowngrade"]
+assert sorted(d) == ["basisVersion", "highestVersion", "message", "previousReleaseVersion", "releaseVersion", "softwareStale", "softwareVersion"], sorted(d)
+assert (d["releaseVersion"], d["basisVersion"], d["previousReleaseVersion"], d["softwareVersion"], d["highestVersion"], d["softwareStale"], d["message"]) == ("2026.11.1", "2026.12.2", "2026.12.1", None, None, True, "降版:測試訊息"), d
+PY
+  # components.software.version 不是版本 / components 不是物件:softwareVersion 為 null(其他欄位照常)
+  python3 -I - "$st" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8"))
+st["releaseVersion"] = "2026.11.30"; st.pop("releaseDowngrade", None)
+st["components"] = {"software": {"version": "SECRET-NOT-A-VERSION"}, "charts": {"version": "9.9.9"}}
+json.dump(st, open(sys.argv[1], "w", encoding="utf-8"))
+PY
+  [[ "$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")" == 200 ]] && grep -q '"releaseVersion":"2026.11.30","softwareVersion":null' "$b" || fail "software 版次不是版本時應為 null:$(cat "$b")" || return 1
+  grep -q "SECRET\|9.9.9" "$b" && { fail "不得送出 components 的其他內容:$(cat "$b")"; return 1; }
+  # 狀態檔不是 JSON / 不是 status 的輸出 / 是陣列 / 字串含不合法的 UTF-8(寫到一半斷電、磁碟錯誤)/ 太大:200 與各欄 null,
+  # 內容不外洩(伺服器 log 也不記內容),伺服器不因此斷線(修正前:不合法的 UTF-8 讓連線直接關閉、log 沒有任何一行)
+  local bad n=0
+  for bad in 'SECRET-NOT-JSON root:x:0:0' '{"type":"other","releaseVersion":"9.9.9","password":"SECRET-PW"}' '["SECRET-ARRAY"]' '{"releaseVersion":"9.9.9","note":"SECRET-NOTYPE"}' \
+             '{"type":"statusResult","releaseVersion":"9.9.9","releaseDowngrade":{"releaseVersion":"9.9.1","basisVersion":"9.9.2","message":"SECRET \xa4\xa4\xa4\xe5 \xff\xfe"}}' \
+             '{"type":"\xff\xfe","releaseVersion":"9.9.9","note":"SECRET-BADTYPE"}' \
+             '{"type":"statusResult","releaseVersion":"9.9.\xff9","components":{"software":{"version":"9.9.9"}}}'; do
+    n=$((n + 1))
+    printf "$bad" > "$st"
+    code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+    [[ "$code" == 200 && "$(cat "$b")" == "$EMPTY" ]] || fail "不合格的狀態檔(第 $n 種)應為 200 與各欄 null,實際 $code:$(head -c 300 "$b");log:$(tail -2 "$d/web2.log")" || return 1
+    grep -qi '^cache-control: no-store' "$h" || fail "不合格的狀態檔(第 $n 種)也應為 no-store" || return 1
+  done
+  python3 -I -c 'import sys; open(sys.argv[1], "w").write("{\"type\":\"statusResult\",\"releaseVersion\":\"2026.11.30\",\"pad\":\"" + "x" * 300000 + "\"}")' "$st"
+  code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+  [[ "$code" == 200 && "$(cat "$b")" == "$EMPTY" ]] || fail "超過大小上限的狀態檔應為 200 與各欄 null,實際 $code" || return 1
+  grep -q "SECRET" "$d/web2.log" && { fail "伺服器 log 不得記下狀態檔內容"; return 1; }
+  grep -q "狀態檔不是有效的 JSON;回覆「沒有發行版狀態」" "$d/web2.log" && grep -q "狀態檔不是 simosa-pkg status --json 的輸出" "$d/web2.log" && grep -q "字串含不合法的 UTF-8" "$d/web2.log" && grep -q "超過上限" "$d/web2.log" \
+    || fail "伺服器 log 應記下各種原因:$(tail -8 "$d/web2.log")" || return 1
+  grep -q "內部錯誤" "$d/web2.log" && { fail "不應有未預期的內部錯誤:$(grep "內部錯誤" "$d/web2.log" | head -3)"; return 1; }
+  [[ "$(grep -c ' /_status/release.json' "$d/web2.log")" -ge 12 ]] || fail "每個請求都應在 log 留下一行" || return 1
+  kill -INT "$WEB_PID"; local wcode=0; wait "$WEB_PID" || wcode=$?
+  [[ $wcode == 0 ]] || fail "simosa-web 應正常結束(結束碼 $wcode)" || return 1
+  # (3) --status-file 必須是 .json 檔的路徑(不是資料夾、不是其他副檔名):結束碼 2,不啟動
+  local dll; dll="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll web-server StaticWeb simosa-web.dll '$ROOT'")"
+  #     前面加 timeout:檢查退化(沒有拒絕)時伺服器會正常啟動、在前景一直跑,測試要以結束碼 124 失敗,不可以卡到整個工作逾時
+  timeout 15 dotnet "$dll" --root "$d/web" --port "$WEB" --bind 127.0.0.1 --status-file /etc/passwd > "$d/web3.log" 2>&1; code=$?
+  [[ $code == 2 ]] && grep -q -- "--status-file 必須是 .json" "$d/web3.log" || fail "--status-file /etc/passwd 應以結束碼 2 拒絕(實際 $code;124 = 沒有拒絕、伺服器啟動了):$(cat "$d/web3.log")" || return 1
+  mkdir -p "$d/dir.json"
+  timeout 15 dotnet "$dll" --root "$d/web" --port "$WEB" --bind 127.0.0.1 --status-file "$d/dir.json" > "$d/web4.log" 2>&1; code=$?
+  [[ $code == 2 ]] || fail "--status-file 指到資料夾應以結束碼 2 拒絕(實際 $code;124 = 沒有拒絕、伺服器啟動了)" || return 1
+  # 狀態檔放在網頁目錄內會被當成一般檔案整份送出:拒絕
+  timeout 15 dotnet "$dll" --root "$d/web" --port "$WEB" --bind 127.0.0.1 --status-file "$d/web/status.json" > "$d/web5.log" 2>&1; code=$?
+  [[ $code == 2 ]] && grep -q "不可放在網頁目錄" "$d/web5.log" || fail "--status-file 在網頁目錄內應以結束碼 2 拒絕(實際 $code;124 = 沒有拒絕、伺服器啟動了):$(cat "$d/web5.log")" || return 1
+  return 0
+}
+
+# write_release_status(launch-common.sh):開發模式(沒有 manifest.json)不產生、不警告、不建置;安裝版以 simosa-pkg status --json 寫出狀態檔並記 launch.log;
+# 逾時、結束碼非 0、輸出不是 JSON 都只警告、回傳 0(不擋住啟動),而且刪掉上一次的狀態檔(不顯示過期的版本)
+test_release_status_write() {
+  [[ ! -f "$ROOT/manifest.json" ]] || fail "測試前置:儲存庫根目錄不應有 manifest.json(開發模式)" || return 1
+  local pkg; pkg="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll simosa-pkg Tools.Packaging.Cli simosa-pkg.dll '$ROOT'")" || fail "找不到/無法建置 simosa-pkg" || return 1
+  local d="$TMP/relstatus"; rm -rf "$d"; mkdir -p "$d/root/data" "$d/root/app/web" "$d/fakebin"
+  echo '<html></html>' > "$d/root/app/web/index.html"
+  local out; out="$(bash -c "source '$LAUNCH/launch-common.sh'; release_status_path '$d/root'")"
+  [[ "$out" == "$d/root/build/run/release-status.json" ]] || fail "狀態檔應為 <根目錄>/build/run/release-status.json:$out" || return 1
+  # 開發模式:儲存庫與沒有 manifest.json 的資料夾都沒有工具;write 不輸出任何東西、不產生檔
+  bash -c "source '$LAUNCH/launch-common.sh'; release_status_tool '$ROOT'" >/dev/null && { fail "儲存庫(開發模式)不應有發行版狀態工具"; return 1; }
+  run_launch "$d/dev.out" bash -c "source '$LAUNCH/launch-common.sh'; write_release_status '$d/root' '$d/root/build/logs'"
+  [[ $CODE == 0 && -z "$OUT" && ! -e "$out" ]] || fail "開發模式應不輸出、不產生檔(結束碼 $CODE;輸出:$OUT)" || return 1
+  run_launch "$d/checkonly.out" bash "$LAUNCH/start-ship-laptop.sh" --check-only
+  grep -q "^發行版狀態:略過(開發模式" <<<"$OUT" || fail "--check-only 在開發模式應印「發行版狀態:略過」;輸出:$OUT" || return 1
+  # 安裝版(有 manifest.json)但找不到 simosa-pkg:警告、不產生檔
+  dotnet "$pkg" release manifest --dir "$d/root" --version 2026.11.30 --runtime linux-x64 > "$d/manifest.out" 2>&1 || fail "release manifest 失敗:$(cat "$d/manifest.out")" || return 1
+  run_launch "$d/notool.out" bash -c "source '$LAUNCH/launch-common.sh'; write_release_status '$d/root' '$d/root/build/logs'"
+  [[ $CODE == 0 && ! -e "$out" ]] && grep -q "找不到 tools/updater/simosa-pkg.dll" <<<"$OUT" || fail "有 manifest.json 但沒有 simosa-pkg 時應警告(結束碼 $CODE):$OUT" || return 1
+  # 成功:狀態檔是 status --json 的輸出;launch.log 記一行
+  run_launch "$d/ok.out" bash -c "source '$LAUNCH/launch-common.sh'; write_release_status '$d/root' '$d/root/build/logs' 20 '$pkg'"
+  [[ $CODE == 0 ]] && grep -q "發行版狀態:發行版 2026.11.30 → $out" <<<"$OUT" || fail "應回報發行版 2026.11.30(結束碼 $CODE):$OUT" || return 1
+  python3 -I -c 'import json,sys; j=json.load(open(sys.argv[1],encoding="utf-8")); assert j["type"]=="statusResult" and j["releaseVersion"]=="2026.11.30" and "releaseDowngrade" not in j, j' "$out" || fail "狀態檔內容不符:$(head -c 300 "$out")" || return 1
+  grep -q "release-status 發行版 2026.11.30" "$d/root/build/logs/launch.log" || fail "launch.log 應記一行:$(cat "$d/root/build/logs/launch.log")" || return 1
+  [[ ! -e "$out.tmp" ]] || fail "不應留下暫存檔 $out.tmp" || return 1
+  # 結束碼非 0(simosa-pkg.dll 不存在):警告、回傳 0、上一次的狀態檔被刪掉
+  run_launch "$d/bad.out" bash -c "source '$LAUNCH/launch-common.sh'; write_release_status '$d/root' '$d/root/build/logs' 20 '$d/nope.dll'"
+  [[ $CODE == 0 && ! -e "$out" ]] && grep -q "simosa-pkg status 結束碼" <<<"$OUT" || fail "失敗時應警告、回傳 0 並刪掉舊的狀態檔(結束碼 $CODE):$OUT" || return 1
+  # 逾時(假的 dotnet 不結束):1 秒後放棄,不擋住啟動
+  printf '#!/bin/sh\nexec sleep 30\n' > "$d/fakebin/dotnet"; chmod +x "$d/fakebin/dotnet"
+  cp "$d/ok.out" "$out"   # 假的舊狀態檔
+  local t0=$SECONDS
+  run_launch "$d/timeout.out" env PATH="$d/fakebin:$PATH" bash -c "source '$LAUNCH/launch-common.sh'; write_release_status '$d/root' '$d/root/build/logs' 1 '$pkg'"
+  [[ $CODE == 0 && ! -e "$out" && ! -e "$out.tmp" ]] && grep -q "逾時(1 秒)" <<<"$OUT" || fail "逾時應警告、回傳 0 並刪掉舊的狀態檔(結束碼 $CODE):$OUT" || return 1
+  [[ $((SECONDS - t0)) -lt 10 ]] || fail "逾時 1 秒應很快返回(耗時 $((SECONDS - t0)) s)" || return 1
+  grep -q "release-status 逾時" "$d/root/build/logs/launch.log" || fail "launch.log 應記下逾時" || return 1
+  # 輸出不是 JSON 物件:警告、不留檔
+  printf '#!/bin/sh\necho "not json"\n' > "$d/fakebin/dotnet"
+  run_launch "$d/notjson.out" env PATH="$d/fakebin:$PATH" bash -c "source '$LAUNCH/launch-common.sh'; write_release_status '$d/root' '$d/root/build/logs' 5 '$pkg'"
+  [[ $CODE == 0 && ! -e "$out" && ! -e "$out.tmp" ]] && grep -q "輸出不是 JSON 物件" <<<"$OUT" || fail "輸出不是 JSON 時應警告、不留檔(結束碼 $CODE):$OUT" || return 1
+  return 0
+}
+
+# 啟動腳本帶 --status-file(開發模式:沒有狀態檔,/_status/release.json 回 200 與各欄 null、啟動不受影響);
+# 「安裝版」資料夾(app/launch、app/web、app/web-server、tools/updater、manifest.json)以真實的 simosa-pkg 做出降版
+# (2026.12.1 套用軟體更新包 2026.12.2 後以 2026.11.1 重新安裝)→ 從該資料夾啟動教官筆電腳本 → 狀態檔 → simosa-web → 網頁拿到降版資訊(只有白名單欄位)
+test_release_status_launch() {
+  # 不論哪一步失敗,都要結束從「安裝版」資料夾啟動的程序(它的 PID 檔不在儲存庫的 log 資料夾,cleanup_helpers 收不到;留著會占住網頁埠)
+  local rc=0
+  release_status_launch_body || rc=$?
+  [[ -f "$TMP/installed/root/app/launch/stop-all.sh" ]] && bash "$TMP/installed/root/app/launch/stop-all.sh" >/dev/null 2>&1
+  return $rc
+}
+release_status_launch_body() {
+  local h="$TMP/rs-h.txt" b="$TMP/rs-b.txt" code
+  # (1) 開發模式:儲存庫的啟動腳本
+  local cfg; cfg="$(instructor_cfg instructor-status.json 'web.enabled=true' 'web.bind="127.0.0.1"')"
+  rm -f "$ROOT/build/run/release-status.json"
+  run_launch "$TMP/rs-dev.out" bash "$LAUNCH/start-instructor-laptop.sh" --config "$cfg" --ship 127.0.0.2
+  [[ $CODE == 0 ]] || fail "教官筆電腳本結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "發行版狀態" <<<"$OUT" && { fail "開發模式不應有發行版狀態的訊息或警告;輸出:$OUT"; return 1; }
+  local i; for ((i = 0; i < 40; i++)); do tcp_open "$WEB" && break; sleep 0.25; done
+  # web.log 是追加寫入:只看這一次(最後一行)的啟動列
+  grep '^# ' "$ROOT/$LOGS/web.log" | tail -n 1 | grep -q -- "--status-file $ROOT/build/run/release-status.json" || fail "web.log 的啟動列應帶 --status-file:$(grep '^# ' "$ROOT/$LOGS/web.log" | tail -n 1)" || return 1
+  code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+  [[ "$code" == 200 && "$(cat "$b")" == '{"format":"simosa-release-status/1","generatedUtc":null,"releaseVersion":null,"softwareVersion":null,"releaseDowngrade":null}' ]] \
+    || fail "開發模式 /_status/release.json 應為 200 與各欄 null(沒有發行版狀態;不是 404:教官站每次載入都會取,404 會在瀏覽器留下 console error),實際 $code:$(cat "$b")" || return 1
+  [[ "$(http_get "http://127.0.0.1:$WEB/instructor.html" "$h" "$b")" == 200 ]] || fail "教官站頁面應照常提供" || return 1
+  [[ ! -e "$ROOT/build/run/release-status.json" ]] || fail "開發模式不應產生 build/run/release-status.json" || return 1
+  "$LAUNCH/stop-all.sh" --logs "$LOGS" >/dev/null 2>&1
+  grep -q -- "--status-file \"\$(release_status_path \"\$ROOT\")\"" "$LAUNCH/start-ship-laptop.sh" && grep -q 'write_release_status "$ROOT" "$ROOT/$LOGS"' "$LAUNCH/start-ship-laptop.sh" || fail "start-ship-laptop.sh 應在啟動網頁伺服前取狀態並帶 --status-file" || return 1
+
+  # (2) 安裝版資料夾:發行版先在乾淨的資料夾組好並產生清單(與真的發行版一樣不含 build/、state/),再「安裝」到根目錄
+  local pkg web
+  pkg="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll simosa-pkg Tools.Packaging.Cli simosa-pkg.dll '$ROOT'")" || fail "找不到/無法建置 simosa-pkg" || return 1
+  web="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll web-server StaticWeb simosa-web.dll '$ROOT'")" || fail "找不到/無法建置 simosa-web" || return 1
+  local d="$TMP/installed" r="$TMP/installed/root" q="$TMP/installed/pkg.out"
+  rm -rf "$d"; mkdir -p "$r" "$d/keys" "$d/src/app/web"
+  make_release() {  # make_release <版本>:$d/rel-<版本>/(app/launch、app/web、app/web-server、tools/updater、data、config、manifest.json)
+    local rel="$d/rel-$1"
+    mkdir -p "$rel/data" "$rel/config" "$rel/app/web" "$rel/app/launch" "$rel/tools"
+    cp "$LAUNCH/launch-common.sh" "$LAUNCH/start-instructor-laptop.sh" "$LAUNCH/start-ship-laptop.sh" "$LAUNCH/stop-all.sh" "$rel/app/launch/"
+    cp -r "$(dirname "$web")" "$rel/app/web-server"; cp -r "$(dirname "$pkg")" "$rel/tools/updater"
+    find "$rel" -name '*.pdb' -delete   # 發行版不含偵錯符號(release manifest 會拒絕;tools/build-release.* 也在產生清單前刪除)
+    echo "<html>release $1</html>" > "$rel/app/web/index.html"
+    echo "data $1" > "$rel/data/readme.txt"
+    make_cfg instructor-laptop.json "$rel/config/instructor-laptop.json" "ports.stateWs=$WS" "ports.radarWs=$RADAR" "ports.web=$WEB" "ports.sync=$SYNC" 'logs="build/logs"' 'web.enabled=true' 'web.bind="127.0.0.1"'
+    dotnet "$pkg" release manifest --dir "$rel" --version "$1" --runtime linux-x64
+  }
+  install_release() {  # 與安裝程式相同:先清空程式目錄 app/ 與 tools/updater/,再放入發行版的檔案(config/、data/、state/、build/ 不清)
+    rm -rf "$r/app" "$r/tools/updater"
+    cp -r "$d/rel-$1/." "$r/"
+  }
+  local P=(dotnet "$r/tools/updater/simosa-pkg.dll")
+  {
+    make_release 2026.12.1 && make_release 2026.11.1 && install_release 2026.12.1 &&
+    "${P[@]}" keygen --out "$d/keys/dev" --name "launch-test" --role primary --password test-pw &&
+    "${P[@]}" trust add --root "$r" --file "$d/keys/dev.pub.pem" --admin test &&
+    "${P[@]}" device init --root "$r" --ship FSB1 --device-id FSB1-LAUNCHTEST --pem &&
+    cp -r "$r/app/launch" "$r/app/web-server" "$d/src/app/" && echo '<html>update 2026.12.2</html>' > "$d/src/app/web/index.html" &&
+    "${P[@]}" pack --kind software --version 2026.12.2 --summary "launch test" --out "$d/sw.sbupd" --key "$d/keys/dev.key.pem" --key-password test-pw --dir "app/=$d/src/app" &&
+    "${P[@]}" apply "$d/sw.sbupd" --root "$r" --operator test
+  } > "$q" 2>&1 || fail "安裝版前置(發行版、金鑰、更新包、套用)失敗:$(tail -8 "$q")" || return 1
+  grep -q 'update 2026.12.2' "$r/app/web/index.html" || fail "套用軟體更新包後 app/web 應為更新包的內容" || return 1
+  # 套用更新包後(沒有重新安裝):沒有降版
+  run_launch "$d/noreinstall.out" bash -c "source '$r/app/launch/launch-common.sh'; write_release_status '$r' '$r/build/logs'"
+  grep -q "發行版狀態:發行版 2026.12.1 → $r/build/run/release-status.json" <<<"$OUT" || fail "套用更新包後應為發行版 2026.12.1、沒有降版提醒:$OUT" || return 1
+  grep -q "降版" <<<"$OUT" && { fail "沒有重新安裝時不應有降版提醒:$OUT"; return 1; }
+  # 這時實際執行的是軟體更新包 2026.12.2 的程式:網頁拿到發行版 2026.12.1 與軟體更新包版次 2026.12.2(教官站頁首兩個都顯示)、沒有降版
+  start_web "$d/web-applied.log" --root "$r/app/web" --status-file "$r/build/run/release-status.json" || fail "simosa-web 未啟動:$(cat "$d/web-applied.log")" || return 1
+  code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+  kill -INT "$WEB_PID"; wait "$WEB_PID" 2>/dev/null
+  [[ "$code" == 200 ]] && grep -q '"releaseVersion":"2026.12.1","softwareVersion":"2026.12.2","releaseDowngrade":null' "$b" || fail "套用軟體更新包後應為發行版 2026.12.1、軟體更新包 2026.12.2、沒有降版,實際 $code:$(cat "$b")" || return 1
+  # 以較舊的安裝程式(2026.11.1)重新安裝到同一位置:降版
+  install_release 2026.11.1
+  grep -q 'release 2026.11.1' "$r/app/web/index.html" || fail "重新安裝後 app/web 應為 2026.11.1 的內容" || return 1
+  run_launch "$d/checkonly.out" bash -c "source '$r/app/launch/launch-common.sh'; release_status_tool '$r'"
+  [[ $CODE == 0 && "$OUT" == "$r/tools/updater/simosa-pkg.dll" ]] || fail "安裝版應找到 tools/updater/simosa-pkg.dll:$OUT" || return 1
+  run_launch "$d/launch.out" bash "$r/app/launch/start-instructor-laptop.sh" --ship 127.0.0.2
+  [[ $CODE == 0 ]] || fail "安裝版的教官筆電腳本結束碼應為 0,實際 $CODE;輸出:$OUT" || return 1
+  grep -q "安裝根目錄 $r" <<<"$OUT" || fail "應以安裝版資料夾為根目錄:$OUT" || return 1
+  grep -q "發行版狀態:發行版 2026.11.1(降版提醒:曾安裝或套用過 2026.12.2;教官站頁首會顯示) → $r/build/run/release-status.json" <<<"$OUT" || fail "啟動輸出應回報發行版 2026.11.1 與降版提醒:$OUT" || return 1
+  for ((i = 0; i < 40; i++)); do tcp_open "$WEB" && break; sleep 0.25; done
+  code="$(http_get "http://127.0.0.1:$WEB/_status/release.json" "$h" "$b")"
+  [[ "$code" == 200 ]] || fail "安裝版 /_status/release.json 應為 200,實際 $code;web.log:$(tail -3 "$r/build/logs/web.log")" || { bash "$r/app/launch/stop-all.sh" >/dev/null 2>&1; return 1; }
+  bash "$r/app/launch/stop-all.sh" > "$d/stop.out" 2>&1
+  grep -q "FSB1-LAUNCHTEST\|launch-test\|trustedKeys\|deviceId\|warnings\|environment" "$b" && { fail "網頁拿到的狀態不得含裝置、金鑰、環境或警告:$(cat "$b")"; return 1; }
+  grep -q "FSB1-LAUNCHTEST" "$r/build/run/release-status.json" || fail "狀態檔本身應是 status 的完整輸出(含裝置 ID)" || return 1
+  python3 -I - "$b" <<'PY' || fail "網頁拿到的降版資訊不符:$(cat "$b")" || return 1
+import json, sys
+j = json.load(open(sys.argv[1], encoding="utf-8"))
+assert sorted(j) == ["format", "generatedUtc", "releaseDowngrade", "releaseVersion", "softwareVersion"], sorted(j)
+d = j["releaseDowngrade"]
+assert j["releaseVersion"] == "2026.11.1" and d["releaseVersion"] == "2026.11.1" and d["basisVersion"] == "2026.12.2", j
+assert j["softwareVersion"] == "2026.12.2", j   # status 仍顯示的軟體版次(降版後不是實際執行的程式:教官站這時不把它當成「軟體更新」顯示)
+assert d["previousReleaseVersion"] == "2026.12.1" and d["softwareVersion"] == "2026.12.2" and d["softwareStale"] is True, d
+assert "simosa-pkg status 顯示的軟體版次 2026.12.2 不是實際執行的程式" in d["message"] and "版本不低於 2026.12.2 的安裝程式" in d["message"], d["message"]
+PY
+  # 安裝模式核對:執行期的 build/run/release-status.json、build/logs 不算「多出的檔案」(降版是提醒,不是錯誤 → 結束碼 0)
+  "${P[@]}" verify-install --root "$r" > "$d/verify.out" 2>&1; code=$?
+  [[ $code == 0 ]] || fail "verify-install 應通過(狀態檔在執行期資料位置 build/),結束碼 $code:$(tail -12 "$d/verify.out")" || return 1
+  grep -q "release-status.json" "$d/verify.out" && { fail "verify-install 不應把 build/run/release-status.json 列為問題:$(grep release-status "$d/verify.out")"; return 1; }
+  [[ ! -f "$r/build/logs/simosa.pids" ]] || fail "stop-all 後 PID 檔應被移除" || return 1
+  return 0
+}
+
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info test_web_status_file test_release_status_write test_release_status_launch)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers

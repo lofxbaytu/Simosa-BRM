@@ -3,9 +3,10 @@
 //  - 對未知欄位寬容、對缺欄位有預設(source 由 kind 推得、visible 預設 false、seq 預設 -1);
 //  - eventLabel() 把事件轉成教官站事件流、重播時間軸與講評分段用的繁體中文一句話。
 
-import type { SimEvent, SimEventKind, SimEventSource, VoiceScriptData } from '../types/event.js';
+import type { FenderContactMerge, SimEvent, SimEventKind, SimEventSource, VoiceScriptData } from '../types/event.js';
 import { formatHeading } from './format.js';
 import { alertEventLabel, alertEventSeverity } from './alerts.js';
+import { FENDER_MERGE_DETAIL_WINDOW_S, FENDER_MERGE_GAP_S, FENDER_MERGE_MAX_COUNT, FenderContactRun, fenderIdOf, isMergeableContact, type EventMergeOptions } from './event-merge.js';
 import { ANCHOR_SIDE_LABEL, EXTERNAL_COMMAND_EVENT_KINDS, EXTERNAL_REJECT_REASON_LABEL, externalEventLabel, externalEventSeverity } from './external-forces.js';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -107,7 +108,33 @@ export function parseSimEvent(raw: unknown, dt = 0.02): SimEvent | null {
   const tcpa = finiteNum(r['tcpa_min']);
   if (tcpa !== undefined) ev.tcpa_min = tcpa;
   if (isRecord(r['data'])) ev.data = r['data'];
+  const merged = kind === 'fenderContact' ? parseMerged(r['merged'], ev, dt) : null;
+  if (merged) ev.merged = merged;
   return ev;
+}
+
+/**
+ * 教官站紀錄(版本 6 起)的合併列彙總(SimEvent.merged):次數須為 ≥ 2 的整數、第一次的時刻須為有限值且不晚於列的 t,
+ * 否則當作一般的單筆接觸(不帶 merged)。lastT 一律取列的 t;最大值缺時退回列上那一次接觸的值。
+ */
+function parseMerged(raw: unknown, ev: SimEvent, dt: number): FenderContactMerge | null {
+  if (!isRecord(raw)) return null;
+  const count = finiteNum(raw['count']);
+  const firstT = finiteNum(raw['firstT']);
+  if (count === undefined || !Number.isInteger(count) || count < 2 || firstT === undefined || firstT > ev.t) return null;
+  const out: FenderContactMerge = {
+    count,
+    firstT,
+    firstTick: finiteNum(raw['firstTick']) ?? Math.round(firstT / dt),
+    lastT: ev.t,
+    maxNormalSpeed_mps: finiteNum(raw['maxNormalSpeed_mps']) ?? finiteNum(ev.data?.['normalSpeed_mps']) ?? 0,
+    maxEnergy_kNm: finiteNum(raw['maxEnergy_kNm']) ?? finiteNum(ev.data?.['energy_kNm']) ?? 0,
+  };
+  const deflection = finiteNum(raw['maxDeflection_pct']);
+  if (deflection !== undefined) out.maxDeflection_pct = deflection;
+  const reaction = finiteNum(raw['maxReaction_kN']);
+  if (reaction !== undefined) out.maxReaction_kN = reaction;
+  return out;
 }
 
 /** WebSocket 推送框 {"type":"event","event":{…}} → SimEvent;非事件框回傳 null。 */
@@ -301,11 +328,15 @@ export function voiceScriptData(e: SimEvent): VoiceScriptData | null {
   return out;
 }
 
-/** 事件的一句話(繁體中文;既有交通事件也涵蓋)。 */
-export function eventLabel(e: SimEvent): string {
+/**
+ * 事件的一句話(繁體中文;既有交通事件也涵蓋)。
+ * formatTime:文字裡出現的模擬時刻(目前只有合併列的起訖時刻)用的格式;省略 = 清單的短格式(MM:SS / H:MM:SS)。
+ * 講評報告的時間軸傳 formatSimTime(HH:MM:SS),與它的時刻欄一致(紙本上「00:16」容易被讀成時:分)。
+ */
+export function eventLabel(e: SimEvent, formatTime?: (seconds: number) => string): string {
   const alertText = alertEventLabel(e);
   if (alertText !== null) return alertText;
-  const extText = externalEventLabel(e);
+  const extText = externalEventLabel(e, formatTime);
   if (extText !== null) return extText;
   const target = e.targetId ? ` ${e.targetId}` : '';
   const item = e.itemId ? ` ${e.itemId}` : '';
@@ -481,13 +512,91 @@ export function zoneTypeLabel(type: string): string {
   }
 }
 
-/** 事件保存(教官站事件流只保留最近 N 筆,設計文件第 9 節「大量事件」)。 */
+/**
+ * 事件保存(教官站事件流只保留最近 N 列,設計文件第 9 節「大量事件」)。
+ * 同一個碰墊連續的低速接觸合併成一列(規則與理由見 lib/event-merge.ts;設計文件第 6.2 節):合併列算一列,
+ * 每併入一次就移到清單最後、t 改為最近一次接觸的時刻,清單因此維持依 t 遞增(也就是依最近活動的先後;上限先擠掉最久沒有活動的列)。
+ * 這是儲存的順序;畫面上事件流把合併列排在它第一次接觸的時刻(留在原地更新,不跳到最上面;event-stream.ts displayRows)。
+ * 重播檢視與講評報告讀紀錄時也經過這個類別(上限設為無限),教官站即時、重播、報告看到的列相同。
+ */
 export class EventStore {
   private readonly events: SimEvent[] = [];
+  /** 合併門檻(模擬秒);≤ 0 = 不合併 */
+  readonly mergeGap_s: number;
+  /** 一列最多合併的次數 */
+  readonly mergeMaxCount: number;
+  /** 逐次明細的保留時間(模擬秒) */
+  readonly detailWindow_s: number;
+  /** 還留著逐次明細的合併列(依建立先後;久未活動者由 pruneDetail 丟掉明細並移出) */
+  private detailed: FenderContactRun[] = [];
+  /** 清單裡的列 → 它的逐次明細(列物件每次併入都換新;被擠出清單的列隨物件回收) */
+  private readonly runs = new WeakMap<SimEvent, FenderContactRun>();
+  /** 每個碰墊最近一次接觸的時刻與進行中的合併列(沒有則 null) */
+  private readonly fenders = new Map<string, { lastT: number; open: FenderContactRun | null }>();
 
-  constructor(readonly max = 2000) {}
+  constructor(
+    readonly max = 2000,
+    merge: EventMergeOptions = {},
+  ) {
+    this.mergeGap_s = merge.gap_s ?? FENDER_MERGE_GAP_S;
+    this.mergeMaxCount = Math.max(2, merge.maxCount ?? FENDER_MERGE_MAX_COUNT);
+    this.detailWindow_s = Math.max(this.mergeGap_s, merge.detailWindow_s ?? FENDER_MERGE_DETAIL_WINDOW_S);
+  }
 
   push(e: SimEvent): void {
+    const fid = this.mergeGap_s > 0 ? fenderIdOf(e) : null;
+    if (fid === null) {
+      this.append(e);
+      return;
+    }
+    const track = this.fenders.get(fid);
+    // 與同一個碰墊上一筆接觸相隔不超過門檻(時間倒退者不算;倒帶另由 dropAfter 處理)
+    const near = track !== undefined && e.t >= track.lastT && e.t - track.lastT <= this.mergeGap_s;
+    if (!track || !near || !isMergeableContact(e)) {
+      // 第一次接觸、隔了超過門檻再接觸、過載、法向速度超過警示門檻(或紀錄讀回的已合併列):自己一列,並結束這個碰墊進行中的合併列
+      this.fenders.set(fid, { lastT: e.t, open: null });
+      this.append(e);
+      return;
+    }
+    track.lastT = e.t;
+    const run = track.open;
+    const at = run && run.hasDetail && run.count < this.mergeMaxCount ? this.events.lastIndexOf(run.current) : -1;
+    if (run && at >= 0) {
+      // 併入進行中的合併列:移到清單最後(列數不變)
+      this.events.splice(at, 1);
+      const row = run.add(e);
+      this.runs.set(row, run);
+      this.events.push(row);
+      return;
+    }
+    // 緊接在單獨一列的接觸之後(或上一列已滿、已被擠出清單):另起一列,只有一次時就是原事件
+    this.pruneDetail(e.t);
+    const fresh = new FenderContactRun(fid, e);
+    track.open = fresh;
+    this.runs.set(fresh.current, fresh);
+    this.detailed.push(fresh);
+    this.append(fresh.current);
+  }
+
+  /** 最近一次接觸比 now 早超過 detailWindow_s 的合併列丟掉逐次明細(另起新列時順便做;列數少,整個掃一遍)。 */
+  private pruneDetail(now: number): void {
+    const limit = now - this.detailWindow_s;
+    if (!this.detailed.some((run) => run.lastT < limit)) return;
+    this.detailed = this.detailed.filter((run) => {
+      if (run.lastT >= limit) return true;
+      run.dropDetail();
+      return false;
+    });
+  }
+
+  /** 還留著的逐次明細筆數(診斷與測試用;穩定狀態下不超過 detailWindow_s 內的接觸數加上各進行中合併列的次數) */
+  get retainedDetail(): number {
+    let n = 0;
+    for (const run of this.detailed) n += run.detailCount;
+    return n;
+  }
+
+  private append(e: SimEvent): void {
     this.events.push(e);
     if (this.events.length > this.max) this.events.splice(0, this.events.length - this.max);
   }
@@ -496,24 +605,64 @@ export class EventStore {
     return this.events;
   }
 
+  /** 列數(合併列算一列;上限 max 以此計) */
   get length(): number {
     return this.events.length;
   }
 
   clear(): void {
     this.events.length = 0;
+    this.fenders.clear();
+    this.detailed = [];
   }
 
-  /** 倒帶(restore):丟棄 t > tMax 的舊分支事件(與 record-replay.pushState 的規則相同,D31);回傳丟棄筆數。 */
+  /**
+   * 倒帶(restore):丟棄 t > tMax 的舊分支事件(與 record-replay.pushState 的規則相同,D31);回傳丟棄的**事件數**
+   * (合併列裡被丟掉的每一次接觸各算一筆)。合併列依逐次明細截到 tMax 為止(次數、最近時刻、最大值重算)並放回時間順序的位置,
+   * 結果與「只收到 tMax 之前的事件」相同;沒有明細的合併列(由教官站紀錄讀回者、最近一次接觸早於最新事件超過 detailWindow_s 者)
+   * 無法截斷,最近時刻晚於 tMax 時整列丟棄。
+   */
   dropAfter(tMax: number): number {
-    const before = this.events.length;
-    let w = 0;
-    for (const e of this.events) if (e.t <= tMax) this.events[w++] = e;
-    this.events.length = w;
-    return before - w;
+    let dropped = 0;
+    const kept: SimEvent[] = [];
+    const moved: SimEvent[] = [];
+    for (const e of this.events) {
+      const run = this.runs.get(e);
+      if (run) {
+        const n = run.truncate(tMax);
+        dropped += n;
+        if (run.count === 0) continue;
+        if (n === 0) kept.push(e);
+        else {
+          this.runs.set(run.current, run);
+          moved.push(run.current);
+        }
+      } else if (e.t <= tMax) kept.push(e);
+      else dropped += e.merged?.count ?? 1;
+    }
+    if (dropped === 0) return 0;
+    // 截短的合併列 t 變早了:插回依 (t, seq) 的位置(同一時刻依核心事件序號;沒有序號的帶外事件排在前面)
+    for (const row of moved) {
+      let i = kept.length;
+      while (i > 0 && (kept[i - 1]!.t > row.t || (kept[i - 1]!.t === row.t && row.seq >= 0 && kept[i - 1]!.seq > row.seq))) i--;
+      kept.splice(i, 0, row);
+    }
+    this.events.length = 0;
+    for (const e of kept) this.events.push(e);
+    // 各碰墊的最近接觸與進行中的合併列以留下的列為準(倒帶點之後才結束合併列的那筆接觸已不存在時,合併列回到進行中)
+    this.fenders.clear();
+    this.detailed = [];
+    for (const e of this.events) {
+      const fid = this.mergeGap_s > 0 ? fenderIdOf(e) : null;
+      if (fid === null) continue;
+      const run = this.runs.get(e) ?? null;
+      this.fenders.set(fid, { lastT: e.t, open: run });
+      if (run?.hasDetail) this.detailed.push(run);
+    }
+    return dropped;
   }
 
-  /** 該 kind(可再依 itemId/targetId)最後一次發生的事件。 */
+  /** 該 kind(可再依 itemId/targetId)最後一次發生的事件(合併列為最近一次接觸 + merged)。 */
   last(kind: string, filter: { itemId?: string; targetId?: string } = {}): SimEvent | undefined {
     for (let i = this.events.length - 1; i >= 0; i--) {
       const e = this.events[i]!;
@@ -525,14 +674,22 @@ export class EventStore {
     return undefined;
   }
 
+  /** 該 kind(可再依 itemId/targetId)的事件數;合併列算它合併的次數。 */
   count(kind: string, filter: { itemId?: string; targetId?: string } = {}): number {
     let n = 0;
     for (const e of this.events) {
       if (e.kind !== kind) continue;
       if (filter.itemId !== undefined && e.itemId !== filter.itemId) continue;
       if (filter.targetId !== undefined && e.targetId !== filter.targetId) continue;
-      n++;
+      n += e.merged?.count ?? 1;
     }
     return n;
   }
+}
+
+/** 把一串事件(依發生順序)合併成教官站事件流的列(重播 / 報告讀教官站紀錄時用;已合併的列原樣保留)。 */
+export function mergeEventRows(events: readonly SimEvent[], merge: EventMergeOptions = {}): SimEvent[] {
+  const store = new EventStore(Number.POSITIVE_INFINITY, merge);
+  for (const e of events) store.push(e);
+  return [...store.all()];
 }

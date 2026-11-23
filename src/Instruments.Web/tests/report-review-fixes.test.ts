@@ -360,11 +360,12 @@ describe('(7) 損壞的教官站紀錄不丟未處理例外', () => {
 
   it('多選檔案:其中一個讀取失敗時顯示錯誤並繼續處理其餘檔案', async () => {
     const app = await mount();
-    const broken = { name: 'broken.json', text: () => Promise.reject(new Error('讀取失敗')) } as unknown as File;
+    // 檔案分段讀取(Blob.slice → arrayBuffer);讀取失敗(檔案被移走、裝置拔除)時 arrayBuffer() 拒絕
+    const broken = { name: 'broken.json', size: 100, slice: () => ({ arrayBuffer: () => Promise.reject(new Error('讀取失敗')) }), text: () => Promise.reject(new Error('讀取失敗')) } as unknown as File;
     const roster = new File([JSON.stringify({ format: 'simosa-brm-roster', trainees: [{ id: 'T009', name: '甲' }], staff: [] })], 'roster.json');
     await app.openFiles([broken, roster]);
     expect(app.ws.session.trainees.map((t) => t.id)).toEqual(['T009']);
-    expect(app.fileErrors.some((e) => e.includes('broken.json'))).toBe(true);
+    expect(app.fileErrors).toEqual(['無法載入「broken.json」:Error: 讀取失敗']);
     await app.updateComplete;
     expect(app.querySelector('.msg.error')!.textContent).toContain('broken.json');
     document.body.innerHTML = '';

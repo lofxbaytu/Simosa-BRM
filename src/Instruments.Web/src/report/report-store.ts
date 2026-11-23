@@ -69,12 +69,22 @@ class IdbKvStore implements KvStore {
   readonly persistent = true;
   constructor(private readonly db: IDBDatabase) {}
 
+  /**
+   * 一個交易做一個請求。讀取在請求成功時完成;**寫入要等交易提交(oncomplete)才算成功**:Blob / File 的內容在提交時才寫進瀏覽器的儲存,
+   * 請求的 onsuccess 先觸發、交易之後才中止的情況是有的 —— 實測(Chromium)把核心仍在寫入的紀錄檔(選取後內容又變動的 File)
+   * 存進去時,request.onsuccess 之後交易以「DataError: Failed to write blobs (InvalidBlob)」中止,原本的值留著;儲存空間不足也在提交時才失敗。
+   * 交易中止(onabort)或出錯時以交易的錯誤拒絕,呼叫端才知道沒有寫進去。
+   */
   private tx<T>(store: ReportStoreName, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
     return new Promise((resolve, reject) => {
       const t = this.db.transaction(store, mode);
       const req = fn(t.objectStore(store));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('IndexedDB 存取失敗'));
+      const fail = (): void => reject(t.error ?? req.error ?? new Error('IndexedDB 存取失敗'));
+      if (mode === 'readonly') req.onsuccess = () => resolve(req.result);
+      else t.oncomplete = () => resolve(req.result);
+      req.onerror = fail;
+      t.onabort = fail;
+      t.onerror = fail;
     });
   }
 
@@ -160,7 +170,7 @@ export async function readLastRecord(store: KvStore): Promise<({ name: string } 
   return { name: typeof v.name === 'string' ? v.name : '', ...rec };
 }
 
-/** 報告頁:記下最近載入的紀錄(存 Blob,不存文字)。 */
+/** 報告頁:記下最近載入的紀錄(存 Blob,不存文字)。寫入失敗(交易中止:檔案內容仍在變動、空間不足)時擲出例外,原本記下的那一份不變。 */
 export async function saveLastRecord(store: KvStore, name: string, blob: Blob): Promise<void> {
   await store.set(LAST_RECORD_KEY, { name, blob });
 }

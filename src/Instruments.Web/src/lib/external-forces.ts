@@ -32,6 +32,7 @@ import {
   type TugStatus,
 } from '../types/external.js';
 import { clamp, knotsToMps, normalizeHeading } from './angles.js';
+import { formatShortSimTime } from './format.js';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -467,7 +468,7 @@ function targetText(data: Record<string, unknown> | undefined): string {
 }
 
 /** 外力事件的一句話(繁體中文);非外力事件回傳 null。 */
-export function externalEventLabel(e: SimEvent): string | null {
+export function externalEventLabel(e: SimEvent, formatTime: (seconds: number) => string = formatShortSimTime): string | null {
   if (!EXTERNAL_KINDS.has(e.kind)) return null;
   const d = e.data;
   switch (e.kind) {
@@ -516,6 +517,14 @@ export function externalEventLabel(e: SimEvent): string | null {
       return `${sideText(e)}絞盤超載停轉 張力 ${dn(d, 'tension_t')} t(限 ${dn(d, 'windlassLimit_t')} t)`;
     case 'fenderContact': {
       const id = ds(d, 'fenderId') || e.itemId || '?';
+      // 教官站合併列(lib/event-merge.ts):次數、第一次到最近一次的時刻、各次的最大值。額定能量每次都相同,取列上的 data
+      // 時刻的格式由呼叫端決定:事件流的時間欄是短格式(MM:SS / H:MM:SS),講評報告時間軸的時刻欄是 HH:MM:SS,文字裡的起訖時刻跟著同一列的時刻欄
+      const m = e.merged;
+      if (m) {
+        const parts = [`最大 v ${m.maxNormalSpeed_mps.toFixed(2)} m/s`, `能量 ${m.maxEnergy_kNm.toFixed(0)} kN·m(額定 ${dn(d, 'ratedEnergy_kNm', 0)})`];
+        if (m.maxDeflection_pct !== undefined) parts.push(`壓縮 ${m.maxDeflection_pct.toFixed(0)} %`);
+        return `碰墊 ${id} 反覆接觸 ×${m.count}(${formatTime(m.firstT)}–${formatTime(m.lastT)})${parts.join('、')}`;
+      }
       return `碰墊 ${id} 接觸 v ${dn(d, 'normalSpeed_mps', 2)} m/s 能量 ${dn(d, 'energy_kNm', 0)} kN·m(額定 ${dn(d, 'ratedEnergy_kNm', 0)})壓縮 ${dn(d, 'deflection_pct', 0)} %${d?.['overload'] === true ? ' — 過載' : ''}`;
     }
     case 'quayContact':
@@ -549,7 +558,8 @@ export function externalEventSeverity(e: SimEvent): 'info' | 'warning' | 'alarm'
       return e.data?.['phase'] === 'exit' ? 'info' : 'warning';
     case 'fenderContact': {
       if (e.data?.['overload'] === true) return 'alarm';
-      const v = finite(e.data?.['normalSpeed_mps']);
+      // 合併列以各次接觸的最大值判定(教官站只合併 info 的接觸,正常是 info;讀回的紀錄以其內容為準)
+      const v = e.merged ? e.merged.maxNormalSpeed_mps : finite(e.data?.['normalSpeed_mps']);
       return v !== undefined && v > BERTHING_SPEED_CAUTION_MPS ? 'warning' : 'info';
     }
     case 'anchorBrakeSlipping':

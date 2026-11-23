@@ -6,7 +6,8 @@
     build     :tools\build-release.ps1 -Installer -SkipGodot(完整發行組裝 + Inno Setup 編譯安裝程式)
     install   :靜默安裝 — (a) 指定系統磁碟而未帶 /ALLOWSYSTEMDRIVE=1 時必須不安裝(也不可卡住);(b) 不指定位置時裝到預設位置(D: → G: → 系統磁碟);
                安裝後核對檔案、開始功能表捷徑、防火牆規則、start-ship-laptop.ps1 -CheckOnly、simosa-pkg release verify(一般與 --installed)
-    launch    :從安裝位置啟動 — (a) -Duration 短跑(核心 50 Hz、紀錄 footer);(b) -NoWait + 專屬 Edge 設定檔(各埠、網頁 200、Edge 設定檔與下載位置)
+    launch    :從安裝位置啟動 — (a) -Duration 短跑(核心 50 Hz、紀錄 footer);(b) -NoWait + 專屬 Edge 設定檔(各埠、網頁 200、Edge 設定檔與下載位置、
+               發行版狀態:build\run\release-status.json 的版本 = 安裝的版本、網頁 /_status/release.json 只含發行版本、軟體更新包版次與降版資訊)
                → stop-all.ps1(核心經停止檔寫完 footer、Edge 視窗關閉)→ check-local-data.ps1(安裝版模式)
     shell     :-Shell(WebView2 外殼)啟動 → 使用者資料夾在 build\webview2 → stop-all.ps1 關閉
     packaging :simosa-pkg(安裝位置):信任金鑰、裝置金鑰(Windows 以 DPAPI 保護)、status、更新包 verify / apply / rollback(app\ 的檔案替換)、
@@ -283,6 +284,8 @@ if ($Stage -contains 'install') {
                     if ($rc.Output.IndexOf($need, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { throw "輸出沒有 $need" }
                 }
                 if ($rc.Output -match '[\uFFFD]|\?\?\?\?') { throw '輸出含亂碼' }
+                # 發行版狀態(教官站頁首的「發行版 <版本>」):安裝版應列出 simosa-pkg.dll → build\run\release-status.json
+                if ($rc.Output -notmatch '發行版狀態:.*simosa-pkg\.dll.*release-status\.json') { throw '輸出沒有發行版狀態的來源(simosa-pkg.dll → build\run\release-status.json)' }
             })
             $rv = Invoke-Proc 'dotnet' @((Join-Path $expected 'tools\updater\simosa-pkg.dll'), 'release', 'verify', '--dir', $expected) 300 $expected
             Show-Tail 'simosa-pkg release verify' $rv.Output 8
@@ -342,6 +345,43 @@ if ($Stage -contains 'launch') {
                 return "$($resp.RawContentLength) bytes;Cache-Control $($resp.Headers['Cache-Control'])"
             })
         }
+        # 發行版狀態(教官站頁首的「發行版 <版本>」與降版提醒;docs\design\packaging-sync.md 第 5.1 節):啟動腳本在啟動網頁伺服前以
+        # simosa-pkg status --json 寫出 build\run\release-status.json(-NoSync 也要有);simosa-web 以 /_status/release.json 只提供網頁需要的欄位
+        [void](Check '發行版狀態檔 build\run\release-status.json:存在,版本等於安裝的版本' {
+            $f = Join-Path $inst 'build\run\release-status.json'
+            if (-not (Test-Path $f)) { throw "沒有 ${f}(啟動輸出有沒有「發行版狀態」:$($rb.Output -match '發行版狀態'))" }
+            $bytes = [System.IO.File]::ReadAllBytes($f)
+            if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x7B) { throw "不是無 BOM 的 JSON(第一個位元組 0x$('{0:X2}' -f $bytes[0]))" }
+            $st = Get-Content -Raw -Encoding UTF8 $f | ConvertFrom-Json
+            if ("$($st.type)" -ne 'statusResult') { throw "type = $($st.type)(預期 statusResult)" }
+            if ("$($st.releaseVersion)" -ne $version) { throw "releaseVersion = $($st.releaseVersion)(預期 $version)" }
+            if ($null -ne $st.releaseDowngrade) { throw "剛安裝不應有降版資訊:$($st.releaseDowngrade.message)" }
+            if ($rb.Output -notmatch ('發行版狀態:發行版 ' + [regex]::Escape($version))) { throw '啟動輸出沒有「發行版狀態:發行版 <版本>」' }
+            return "發行版 $($st.releaseVersion)($($bytes.Length) bytes)"
+        })
+        [void](Check '網頁 http://127.0.0.1:8080/_status/release.json:200、no-store、只有發行版本、軟體更新包版次與降版資訊' {
+            $resp = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8080/_status/release.json' -TimeoutSec 10
+            if ($resp.StatusCode -ne 200) { throw "狀態碼 $($resp.StatusCode)" }
+            if ("$($resp.Headers['Cache-Control'])" -ne 'no-store') { throw "Cache-Control = $($resp.Headers['Cache-Control'])(預期 no-store)" }
+            $body = "$($resp.Content)"
+            $j = $body | ConvertFrom-Json
+            $names = (@($j.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join ','
+            if ($names -ne 'format,generatedUtc,releaseDowngrade,releaseVersion,softwareVersion') { throw "欄位:${names}(預期只有 format、generatedUtc、releaseDowngrade、releaseVersion、softwareVersion)" }
+            if ("$($j.format)" -ne 'simosa-release-status/1') { throw "format = $($j.format)" }
+            if ("$($j.releaseVersion)" -ne $version) { throw "releaseVersion = $($j.releaseVersion)(預期 $version)" }
+            if ($null -ne $j.releaseDowngrade) { throw '剛安裝不應有降版資訊' }
+            if ($null -ne $j.softwareVersion) { throw "剛安裝(沒套用過軟體更新包)softwareVersion 應為 null,實際 $($j.softwareVersion)" }
+            foreach ($leak in @('deviceId', 'trustedKeys', 'environment', 'warnings')) { if ($body.IndexOf($leak) -ge 0) { throw "回應含 status 的其他欄位 $leak" } }
+            return "$body"
+        })
+        [void](Check '網頁 /_status/ 之下其他路徑回 404' {
+            foreach ($u in @('/_status/', '/_status/other.json', '/_STATUS/release.json')) {
+                $code = 0
+                try { $code = [int](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080$u" -TimeoutSec 10).StatusCode }
+                catch { if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode } }
+                if ($code -ne 404) { throw "$u 的狀態碼 $code(預期 404)" }
+            }
+        })
         [void](Check 'PID 檔內的程序都在執行' {
             $pids = Read-Pids $inst
             if ($pids.Count -lt 3) { throw "simosa.pids 只有 $($pids.Count) 項" }
@@ -655,6 +695,13 @@ if ($Stage -contains 'instructor') {
                 if ($resp.StatusCode -ne 200) { throw "狀態碼 $($resp.StatusCode)" }
             })
         }
+        # 教官筆電的教官站頁面由本機的 simosa-web 提供:頁首顯示的是這台(教官筆電)的發行版
+        [void](Check '教官筆電網頁 /_status/release.json:發行版本等於安裝的版本' {
+            $resp = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8080/_status/release.json' -TimeoutSec 10
+            $j = "$($resp.Content)" | ConvertFrom-Json
+            if ("$($j.format)" -ne 'simosa-release-status/1' -or "$($j.releaseVersion)" -ne $version) { throw "內容:$($resp.Content)" }
+            return "發行版 $($j.releaseVersion)"
+        })
         $profileDir = Join-Path $inst 'build\browser\edge'
         [void](Check '教官站以專屬 Edge 設定檔開啟' {
             if (-not (Wait-Until { @(Get-ProcByCommandLine 'msedge.exe' $profileDir).Count -gt 0 } 40)) { throw "40 秒內沒有命令列含 $profileDir 的 msedge.exe" }

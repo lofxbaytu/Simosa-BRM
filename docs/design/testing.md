@@ -40,7 +40,10 @@ Windows 以 `tools/setup-windows.ps1` 準備(NuGet/pnpm/uv/Playwright 快取都�
 tests/e2e/
   playwright.config.ts   Chromium headless、每案例 60 s、失敗重試 1 次、單一 worker、trace/截圖只在失敗時保留 → build/e2e/
   global-setup.ts        以 dotnet 啟動 SimCore.Host(E05、--record build/e2e/records/…、--vhf-port、--media-port、--media-dir、--no-udp --no-nmea、--stop-file)、
-                         Sensors.Radar.Host(X/S;找不到 dll 或埠未開則雷達案例 skip)、simosa-web(tools/launch/StaticWeb 伺服 build/web/instruments);
+                         Sensors.Radar.Host(X/S;找不到 dll 或埠未開則雷達案例 skip)、simosa-web(tools/launch/StaticWeb 伺服 build/web/instruments;
+                         --status-file build/e2e/release-status.json:本輪寫的 simosa-pkg status --json 形式的檔,發行版取 VERSION、另套用過一個
+                         比它新的軟體更新包、沒有降版 — 與靠更新包升級的船上筆電相同,教官站頁首是「軟體更新 <版次>」,全部版面案例都在這個狀態下量測;
+                         沒有這個檔時 /_status/release.json 回 200 與各欄 null,教官站不顯示、沒有 console error — 02-instructor 有一案把檔暫時移走驗證);
                          埠向作業系統取空埠(E2E_PORT_BASE 可固定),寫 build/e2e/env.json 與 process.env
   global-teardown.ts     寫停止檔讓 Host 寫完紀錄 footer 再結束;切換情境後落在 build/records/ 的本輪紀錄搬到 build/e2e/records/
   support/env.ts         埠、路徑與各頁網址(bridgeUrl/instructorUrl/radarUrl/ecdisUrl/reportUrl)
@@ -76,6 +79,9 @@ pnpm --dir tests/e2e report           # 開 HTML 報告(build/e2e/report)
 | | 下舵令 20° → 操船台舵角指示變化 | 舵輪預設鈕「S 20°」→ 狀態幀 `rudderOrder = 20`;`brm-rudder` 舵令「S 20°」、舵角隨舵機速率到「S 20°」;案例結束回正舵 |
 | | 凍結(教官站)→ 事件 frozen、tick 停止;恢復 → 事件 resumed、tick 前進 | 執行控制「凍結」→ 事件框 `frozen`(source instructor)、1.5 s 內 tick 不前進、事件流列出;恢復以 WebSocket 送 `resume`(見下列缺陷)→ 事件 `resumed`、`flags.frozen=false`、tick 前進 |
 | | 已知缺陷(`test.fail`):凍結後教官站應顯示「已凍結」且「恢復」鈕可用 | 核心凍結時 `Step` 不 `Advance`/`Broadcast`,沒有任何 `flags.frozen=true` 的狀態幀送達 → header 不顯示「已凍結」、「恢復」鈕停用、藥丸轉「資料逾時」。核心修正後此案例會「意外通過」,屆時移除 `test.fail` |
+| | E14 繫泊中碰墊的反覆接觸:事件串流合併成一列(第三十輪 ENG-C9) | 前置 `ensureScenario(E07)`(之後收到的 `fenderContact` 都是 E14 的);教官站真實點擊載入 E14、4 倍速跑到 S03 有 4 筆接觸後凍結;測試端 WebSocket(`CoreClient.collectEvents`)數到的每個碰墊事件數 n 與頁面逐一對照:n ≥ 3 時恰好兩列(第一次接觸 + 合併列,`data-merged-count = n − 1`),合併列在第一次接觸之上、時間欄是它建立的時刻(第一次反覆接觸);測試端在合併列建立之後、最後一次併入之前送一筆教官指令,它的事件排在合併列之上(合併列留在原地更新,不跳到最上面),凍結事件在最上面;合併列文字完整(不以 … 截斷、不溢出)、標題「N 筆(合併前 M)」的 M − N = 被合併掉的筆數、完整教官站版面判定通過、關掉「引擎」篩選時隱藏;「講評報告」新分頁的時間軸 S03 同樣兩列、次數相同 |
+| | 重播檢視載入 E14 核心紀錄(逐筆的 fenderContact) | 夾具 `record-E14…-core.jsonl`:事件串流 S03 兩列、合併列 ×3(00:16–00:49;時間欄 00:16)、資訊列「n 筆事件(合併前 m)」;時間軸有一段合併列的橫條(寬 > 一半)、點左端跳到 00:16;重播檢視版面判定通過 |
+| | 發行版本與降版提醒(第三十輪) | 真實的 `simosa-web`:`/_status/release.json` 只有 `format` / `generatedUtc` / `releaseDowngrade` / `releaseVersion` / `softwareVersion`(狀態檔裡的裝置、金鑰、環境、警告不送出)、`no-store`,`/_status/` 之下其他路徑 404;完整教官站頁首「軟體更新 <VERSION + 1>」(實際執行的那一版,title 寫發行版),`page.route` 回沒套用過更新包的內容時是「發行版 <VERSION>」;**把狀態檔暫時移走**:`/_status/release.json` 回 200 與各欄 `null`,完整與簡化模式頁首都不顯示、沒有 console error;以 `page.route` 回降版內容(夾具取自真實的 `simosa-pkg status`)→ 1366×768 與 1536×864 真實點擊載入 E13 後徽章「發行版 2026.11.1 · 降版提醒」、預設收合、`layoutFailures` 為空;真實點擊展開 → 重點 / 處理 / 完整訊息 / 來源,說明浮貼在頁首下方且整個在視窗內、整頁不捲動;「收合」與 Esc 收起後版面判定仍通過;簡化模式 1366×768 同樣有徽章,展開後點說明裡面不收合、點說明以外的版面收合;駕駛台頁沒有元件、也不請求 `/_status/` |
 | `03-vhf` | 文字訊息:同頻道互通、不同頻道不互通 | 教官站 CH16 → 操船台(?station=bridge)CH16 收到(RX、CH16);操船台轉 CH12 後雙向都收不到 |
 | | PTT 按住 2 s | 假麥克風 → 面板 TX、對方指示燈「RX bridge CH16」;核心事件 `vhfCall{station: bridge, channel: 16, duration_s ≥ 1.5, endReason: pttEnd}`;教官站事件流與 VHF 面板有通話紀錄 |
 | `04-recording` | 錄影開始 3 s 停止 | `--media-dir` 出現唯一新 `.webm`(> 1 KiB、無 `.part`)與旁檔 `.json`(file/station/sizeBytes/chunks/durationS ≥ 2/sha256/truncated=false);面板清單列出檔名 |
@@ -83,6 +89,9 @@ pnpm --dir tests/e2e report           # 開 HTML 報告(build/e2e/report)
 | `06-ecdis` | ECDIS 頁載入、顯示情境航線與自船 | 前置 `ensureScenario(E07)`;header chip「E07… · 航線」、HDG 三位數;航線監控面板航段/DTG/XTD;`ecdis-chart canvas` 非黑像素 > 5% |
 | `07-report` | 報告頁開啟最近的核心紀錄 | 本輪最新且已寫 footer 的 `.jsonl`(`build/e2e/records` 或 `build/records`)→ 「已載入 … 狀態 n 筆」、無錯誤訊息、無 console 錯誤 |
 | | 教官站「講評報告」→ 新分頁載入交接紀錄 | `report.html?from=instructor` 顯示「已載入 教官站紀錄」 |
+| | 最近載入的紀錄存 Blob(第三十輪) | 開啟核心紀錄 → IndexedDB 的 `record:last` 是 Blob(大小 = 檔案大小)、沒有整份文字;重新整理後訊息與報告內容相同;舊版存的 `{ name, text }` 讀得進來並改存成 Blob |
+| | 大檔讀取中主執行緒有讓出(第三十輪審查 A-rA-2) | 合成約 60 MB 的核心 JSON Lines → 頁面內每個畫格(`requestAnimationFrame`)記下狀態列的讀取進度:至少看到 2 個小於 100% 的百分比且遞增(修正前整個讀取是一個長任務,只畫得出 100%) |
+| | 核心仍在寫入的紀錄(第三十輪審查 A-rA-1) | 先開一份紀錄,再開每 20 ms 被附加一行的 `.jsonl`:照樣載入;`record:last` 不可以仍是前一份 — 交易中止(常駐設定檔)→ 清掉並在狀態列寫「未能另存於瀏覽器」,重新整理後沒有紀錄;瀏覽器接受(端對端的無痕視窗:存的是原檔案的參照)→ 重新整理後還原這一份,或讀不到時顯示「無法還原先前載入的紀錄…」並清掉,再重新整理沒有錯誤 |
 | `08-scenario-editor` | 開啟範本、改 Hs、驗證通過、YAML 預覽含 waves | 套用範本 E05 → 勾浪、Hs 2.5 → 「結構檢查通過」、`pre.yaml` 含 `waves:`/`significantHeight_m: 2.5`;Hs −1 → 錯誤且載入鈕停用 |
 | | 版面(每個範本一案:E17b / E13 / E20 / E08) | 套用範本、展開各區段(兩種互斥組合)後在 1100 / 1366 / 1536 / 1920 / 2560 寬(高 = 寬 × 9/16)量測:面板/欄不水平溢出、面板不重疊、控制項點得到、標籤不逐字換行、輸入框不被擠壓或裁切、頁面無水平捲軸;1100 一欄、1366 / 1536 兩欄、1920 / 2560 三欄、每欄 ≥ 560 px(`probeEditorLayout`;規則見 `scenario-engine.md` 第 6.1 節「版面」) |
 

@@ -2,7 +2,8 @@
 .SYNOPSIS
   船上筆電啟動(Windows;規劃書第 5.4–5.5 節、第 14 章「船上部署」):依 config\ship-laptop.json 啟動全部服務,Ctrl+C 一併結束。
 .DESCRIPTION
-  啟動:SimCore.Host(WebSocket 8765、UDP 多播、NMEA)、USB 操控台服務(app\console;config console.port 非 null 或 -Console 時)、Sensors.Radar.Host(8766)、靜態網頁 simosa-web(app\web,8080)、
+  啟動:SimCore.Host(WebSocket 8765、UDP 多播、NMEA)、USB 操控台服務(app\console;config console.port 非 null 或 -Console 時)、Sensors.Radar.Host(8766)、靜態網頁 simosa-web(app\web,8080;
+  啟動前先執行一次 simosa-pkg status --json 存成 build\run\release-status.json,教官站頁首據此顯示「發行版 <版本>」與降版提醒;逾時或失敗不擋住啟動)、
   視景(app\visual\SimosaBRM.Visual.exe 匯出檔,或 Godot 編輯器 --path src\Visual.Godot;每個 views[] 一個程序,依 --view/--monitor)、
   直連同步服務 simosa-pkg serve(7300;需安裝時完成 config\packaging.json 與 device init)。各程序 log 在 build\logs\(上一次的輪替為 <元件>.1.log…,
   啟動標頭在 launch.log)。啟動前檢查各埠未被殘留程序占住(SimCore ws、VHF 8767、錄影 8768、雷達、網頁、同步;USB 操控台服務無監聽埠;占用即報錯),
@@ -79,6 +80,8 @@ if ($CheckOnly) {
     Write-Host "網頁:$(if ($webDll) { $webDll } else { '略過' }) ← $(if ($webDir) { $webDir } else { '(找不到 app\web)' })"; Write-Host "同步:$(if ($pkgDll) { $pkgDll } else { '略過' })"
     Write-Host "外殼:$(if ($shellExe) { $shellExe } elseif ($useShell) { '(找不到,將用瀏覽器)' } else { '未啟用(-Shell 或 web.shell=true)' })"
     Write-Host "操控台:$(if ($consoleDll) { "$consoleDll ← $consoleSpec" } else { '略過(-Console <COM 埠> 或 config console.port)' })"
+    $statusTool = Find-LaunchReleaseStatusTool $root
+    Write-Host "發行版狀態:$(if ($statusTool) { "$statusTool → $(Get-LaunchReleaseStatusPath $root)(網頁 /_status/release.json)" } else { '略過(開發模式:沒有 manifest.json;或找不到 simosa-pkg)' })"
     return
 }
 
@@ -135,7 +138,10 @@ try {
 
     # 3) 靜態網頁
     if ($webDll -and $webDir) {
-        $webProc = Start-LaunchProcess -Name 'web' -Log (Join-Path $logDir 'web.log') -File 'dotnet' -Arguments @($webDll, '--root', $webDir, '--port', $webPort, '--bind', (Get-Cfg $cfg 'web.bind' '0.0.0.0')) -WorkDir $root
+        # 發行版狀態(教官站頁首的「發行版 <版本>」與降版提醒):啟動網頁伺服前取一次,逾時或失敗只警告、不擋住啟動。
+        # 開發模式(沒有 manifest.json)不產生狀態檔,simosa-web 對 /_status/release.json 回 200 與各欄 null(「沒有發行版狀態」),教官站不顯示
+        Write-LaunchReleaseStatus $root $logDir | Out-Null
+        $webProc = Start-LaunchProcess -Name 'web' -Log (Join-Path $logDir 'web.log') -File 'dotnet' -Arguments @($webDll, '--root', $webDir, '--port', $webPort, '--bind', (Get-Cfg $cfg 'web.bind' '0.0.0.0'), '--status-file', (Get-LaunchReleaseStatusPath $root)) -WorkDir $root
         if (-not (Wait-LaunchTcp '127.0.0.1' $webPort 10 -Process $webProc)) { Write-Warning "simosa-web 未開啟埠 $webPort 或已結束,見 $logs\web.log" }
         if (-not $NoBrowser) {
             $subst = @{ ship = $shipIp; stateWs = $wsPort; radarWs = $radarPort }

@@ -4,6 +4,7 @@
 // 設計文件第 6 節 W8:時間軸上畫事件標記(顏色依來源;hardFail/collision/grounding 紅)、航跡圖疊 header.scenario 的
 // 航線走廊與區域、顯示 header.parameterSet 版次。時間軸另畫倒帶標記(ReplayData.rewinds[];懸停顯示倒帶 tick 與丟棄筆數),
 // 航跡圖畫該時刻 state 的目標船(cpaAlarm 狀態由 t ≤ 目前時刻的事件推得)。
+// 事件與教官站即時事件流是同樣的列(同一個碰墊的反覆接觸已合併,lib/event-merge.ts):合併列在時間軸上畫成第一次到最近一次的橫條。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -16,13 +17,14 @@ import { summarize, type DebriefSummary } from '../../lib/debrief.js';
 import { brmCategory } from '../../lib/brm-markers.js';
 import { defaultState } from '../../lib/state-parser.js';
 import { eventLabel, eventSeverity } from '../../lib/sim-event.js';
+import { rawEventCount } from '../../lib/event-merge.js';
 import { eventMarks, overlayFromHeaderScenario, overlayHasContent, type PlotOverlay } from '../../lib/plot-overlay.js';
 import { cpaAlarmTargets } from '../../lib/targets.js';
 import type { SimEvent } from '../../types/event.js';
 import '../conning-bar.js';
 import '../track-plot.js';
 import './debrief-summary.js';
-import './event-stream.js';
+import { rowTime } from './event-stream.js';
 
 const PLAY_RATES = [0.25, 1, 4, 16];
 
@@ -97,6 +99,14 @@ export class ReplayView extends LitElement {
       .marks .mark.alarm {
         background: var(--ob-alarm);
         width: 3px;
+      }
+      /* 合併列(同一個碰墊的反覆接觸):第一次到最近一次的橫條,畫在標記列下緣,不蓋住其他事件的直線標記 */
+      .marks .mark.merged {
+        top: 9px;
+        height: 4px;
+        transform: none;
+        opacity: 0.55;
+        border-radius: 2px;
       }
       .marks .mark.phase {
         top: 0;
@@ -276,7 +286,8 @@ export class ReplayView extends LitElement {
   }
 
   private onEventSeek(ev: CustomEvent<SimEvent>): void {
-    this.seekTo(ev.detail.t);
+    // 合併列跳到它時間欄寫的時刻(第一次接觸;與時間軸上的橫條相同),其餘事件就是事件的時刻
+    this.seekTo(rowTime(ev.detail));
   }
 
   private renderMarks(d: ReplayData) {
@@ -286,7 +297,12 @@ export class ReplayView extends LitElement {
     const phases = d.summary?.phases ?? [];
     return html`<div class="marks" aria-label="事件標記">
       ${phases.slice(1).map((p) => html`<span class="mark phase" style="left:${pct(p.from_s)}" title=${`階段 ${p.phase} ${shortTime(p.from_s)}`}></span>`)}
-      ${d.events.map((e) => html`<span class="mark ${e.source} ${eventSeverity(e)}" style="left:${pct(e.t)}" title=${`${shortTime(e.t)} ${eventLabel(e)}`} @click=${() => this.seekTo(e.t)}></span>`)}
+      ${d.events.map((e) => {
+        const m = e.merged;
+        if (!m) return html`<span class="mark ${e.source} ${eventSeverity(e)}" style="left:${pct(e.t)}" title=${`${shortTime(e.t)} ${eventLabel(e)}`} @click=${() => this.seekTo(e.t)}></span>`;
+        const width = `max(2px, calc(${pct(m.lastT)} - ${pct(m.firstT)}))`;
+        return html`<span class="mark merged ${e.source} ${eventSeverity(e)}" style="left:${pct(m.firstT)};width:${width}" title=${eventLabel(e)} @click=${() => this.seekTo(m.firstT)}></span>`;
+      })}
       ${d.markers.map((m) => html`<span class="mark marker" style="left:${pct(m.t)}" title=${`${shortTime(m.t)} ${brmCategory(m.category).label} ${m.note}`} @click=${() => this.seekTo(m.t)}></span>`)}
       ${d.rewinds.map((r) => html`<span class="mark rewind" style="left:${pct(r.t)}" title=${rewindTitle(r, d.header.dt)} @click=${() => this.seekTo(r.t)}></span>`)}
     </div>`;
@@ -352,7 +368,7 @@ export class ReplayView extends LitElement {
         ${d
           ? html`<span class="info">
               ${this.fileName} · ${d.source === 'simcore-jsonl' ? 'SimCore JSON Lines' : '教官站紀錄'} · ${d.header.scenarioId ?? '(無情境)'}${d.header.scenarioName ? ` ${d.header.scenarioName}` : ''} ·
-              ${d.header.shipId ?? '?'}${d.header.loading ? `/${d.header.loading}` : ''} · ${d.states.length} 筆狀態 · ${d.inputs.length} 筆輸入 · ${d.events.length} 筆事件 · ${d.markers.length} 筆標記
+              ${d.header.shipId ?? '?'}${d.header.loading ? `/${d.header.loading}` : ''} · ${d.states.length} 筆狀態 · ${d.inputs.length} 筆輸入 · ${eventCountText(d.events)} · ${d.markers.length} 筆標記
               ${d.header.dynamics ? ` · ${d.header.dynamics}` : ''}${d.footer?.stateHash ? ` · 雜湊 ${d.footer.stateHash.slice(0, 8)}…` : ''}
               ${d.header.parameterSet ? html`<span class="param-set"> · 參數集 ${d.header.parameterSet.id ?? ''} ${d.header.parameterSet.version ?? ''}${d.header.parameterSet.resolved.length > 0 ? `(已解析 ${d.header.parameterSet.resolved.length} 個引用)` : ''}</span>` : nothing}
               ${d.summary?.assessment.score !== undefined ? html`<span class="param-set"> · 評分 ${Math.round(d.summary.assessment.score)}${d.summary.assessment.passed !== undefined ? (d.summary.assessment.passed ? '(通過)' : '(未通過)') : ''}</span>` : nothing}
@@ -425,6 +441,12 @@ export class ReplayView extends LitElement {
 export function rewindTitle(r: ReplayRewind, dt: number): string {
   const tick = Number.isFinite(r.tick) ? r.tick : Math.round(r.t / (dt > 0 ? dt : 0.02));
   return `倒帶至 ${shortTime(r.t)}(tick ${tick})← 自 ${shortTime(r.from)};丟棄 ${r.droppedStates} 筆狀態、${r.droppedEvents} 筆事件`;
+}
+
+/** 「N 筆事件」;有合併列(同一個碰墊的反覆接觸)時另寫合併前的事件數。 */
+export function eventCountText(events: readonly SimEvent[]): string {
+  const raw = rawEventCount(events);
+  return `${events.length} 筆事件${raw > events.length ? `(合併前 ${raw})` : ''}`;
 }
 
 /** 該輸入事件是否為目前時刻之前最後一筆(清單高亮) */
