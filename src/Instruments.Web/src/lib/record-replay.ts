@@ -8,6 +8,10 @@
 // (只保留練習最終的歷史),倒帶點記在 rewinds[];不對 states 做全域排序(設計文件 D31)。
 // 倒帶點的 tick 取自 input 行的 restore args.tick(無 args 時最近一筆 snapshot 行的 tick):C# Restore 後第一筆 state 行晚
 // BroadcastDivider 個 tick 才寫出,直接用該 state 的 t 會把倒帶標記畫晚、也漏丟該區間的舊分支事件。
+//
+// 兩種格式各有一個逐筆的建構器(JsonLinesReplayBuilder 逐行、SessionReplayBuilder 逐筆狀態):整份文字的 parseReplay() 與
+// 分段讀取的 record-stream.ts(ReplayStreamParser;講評報告頁不把整份紀錄讀成一個字串)共用同一份邏輯,結果相同。
+// 建構器可帶「狀態投影」:解析後每筆狀態只留呼叫端需要的欄位(講評報告頁只需要講評累計讀取的欄位,見 debrief.ts DebriefState)。
 
 import type { SimCommand } from '../types/command.js';
 import type { SimEvent } from '../types/event.js';
@@ -16,7 +20,7 @@ import { parseAssessmentSummary, parseRecordParameterSet, type AssessmentSummary
 import type { BrmMarker } from './brm-markers.js';
 import { isValidCommand } from './command.js';
 import { parseState } from './state-parser.js';
-import { isSessionRecord } from './session-record.js';
+import { isSessionRecord, type SessionRecord } from './session-record.js';
 import { parseSessionInfo, type SessionInfo } from './session-info.js';
 import { parseRecordings, type RecordingSummary } from './screen-recording.js';
 import { parseSimEvent } from './sim-event.js';
@@ -77,11 +81,20 @@ export interface ReplayRewind {
   droppedEvents: number;
 }
 
-export interface ReplayData {
+/** 倒帶判斷需要的狀態欄位(狀態投影至少要保留這兩欄) */
+export interface ReplayStateBase {
+  t: number;
+  tick: number;
+}
+
+/** 狀態投影:解析出的完整狀態 → 要保留的欄位(回傳的物件會被長期持有;省略 = 保留完整狀態) */
+export type StateProjection<S extends ReplayStateBase> = (state: OwnShipState) => S;
+
+export interface ReplayDataOf<S> {
   source: 'simcore-jsonl' | 'instructor-json';
   header: ReplayHeader;
   /** 練習最終歷史的狀態(依時間遞增;倒帶的舊分支已丟棄) */
-  states: OwnShipState[];
+  states: S[];
   /** 倒帶點(restore/reset;依發生順序) */
   rewinds: ReplayRewind[];
   inputs: ReplayInput[];
@@ -100,6 +113,9 @@ export interface ReplayData {
   tStart: number;
   tEnd: number;
 }
+
+/** 完整狀態的重播資料(重播檢視、測試);講評報告頁用 ReplayDataOf<DebriefState>。 */
+export type ReplayData = ReplayDataOf<OwnShipState>;
 
 const DEFAULT_DT = 0.02;
 
@@ -135,11 +151,26 @@ export function parseReplay(text: string): ReplayData {
   const fmt = detectRecordFormat(text);
   if (fmt === 'jsonl') return parseJsonLines(text);
   if (fmt === 'json') return parseSessionJson(text);
+  return unrecognizedReplay();
+}
+
+function empty<S>(source: ReplayData['source'], errors: string[]): ReplayDataOf<S> {
+  return { source, header: { dt: DEFAULT_DT }, states: [], rewinds: [], inputs: [], snapshots: [], markers: [], operations: [], events: [], summary: null, footer: null, errors, unknownKinds: {}, tStart: 0, tEnd: 0 };
+}
+
+/** 無法辨識格式時的結果(parseReplay 與分段解析共用同一則訊息)。 */
+export function unrecognizedReplay<S>(): ReplayDataOf<S> {
   return empty('simcore-jsonl', ['無法辨識的紀錄格式(需為 SimCore JSON Lines 或教官站 JSON 紀錄)']);
 }
 
-function empty(source: ReplayData['source'], errors: string[]): ReplayData {
-  return { source, header: { dt: DEFAULT_DT }, states: [], rewinds: [], inputs: [], snapshots: [], markers: [], operations: [], events: [], summary: null, footer: null, errors, unknownKinds: {}, tStart: 0, tEnd: 0 };
+/** 單一 JSON 文件解析失敗時的結果。 */
+export function invalidJsonReplay<S>(): ReplayDataOf<S> {
+  return empty('instructor-json', ['JSON 解析失敗']);
+}
+
+/** JSON 文件不是教官站紀錄(format 不符或沒有 states 陣列)時的結果。 */
+export function notSessionRecordReplay<S>(): ReplayDataOf<S> {
+  return empty('instructor-json', ['不是教官站紀錄(format 欄位不符)']);
 }
 
 /**
@@ -147,7 +178,7 @@ function empty(source: ReplayData['source'], errors: string[]): ReplayData {
  * 快照 tick 當下的狀態與之前的歷史仍然有效),並記錄倒帶點。
  * rewindTick:restore 指令要求的 tick(已知時倒帶點 = rewindTick × dt,而非倒帶後第一筆狀態的 t)。
  */
-function pushState(data: ReplayData, s: OwnShipState, rewindTick?: number): void {
+function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, s: S, rewindTick?: number): void {
   const prev = data.states[data.states.length - 1];
   if (prev && (Number.isFinite(s.tick) && Number.isFinite(prev.tick) ? s.tick < prev.tick : s.t < prev.t)) {
     const known = rewindTick !== undefined && Number.isFinite(rewindTick) && rewindTick <= s.tick;
@@ -162,7 +193,7 @@ function pushState(data: ReplayData, s: OwnShipState, rewindTick?: number): void
   data.states.push(s);
 }
 
-function finishTimes(data: ReplayData): ReplayData {
+function finishTimes<S extends ReplayStateBase>(data: ReplayDataOf<S>): ReplayDataOf<S> {
   if (data.states.length > 0) {
     data.tStart = data.states[0]!.t;
     data.tEnd = data.states[data.states.length - 1]!.t;
@@ -170,23 +201,36 @@ function finishTimes(data: ReplayData): ReplayData {
   return data;
 }
 
-/** SimCore JSON Lines:逐行解析,壞行記入 errors 後繼續。 */
-export function parseJsonLines(text: string): ReplayData {
-  const data = empty('simcore-jsonl', []);
-  const lines = text.split(/\r?\n/);
-  let prev: OwnShipState | undefined;
+/**
+ * SimCore JSON Lines 的逐行建構器:addLine() 每行呼叫一次(行號 i 由 0 起,錯誤訊息寫「第 i + 1 行」),壞行記入 errors 後繼續;
+ * 讀完呼叫 finish()。parseJsonLines(整份文字)與 record-stream.ts(分段讀取)共用。
+ */
+export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
+  private readonly data: ReplayDataOf<S> = empty('simcore-jsonl', []);
+  /** 上一筆解析出的完整狀態(parseState 以它補缺漏的欄位;與投影後存入 states 的物件分開) */
+  private prev: OwnShipState | undefined;
   /** 最近一筆 restore 指令要求的 tick;下一筆 state 行(倒帶後第一筆)消耗之 */
-  let pendingRewindTick: number | undefined;
-  lines.forEach((line, i) => {
+  private pendingRewindTick: number | undefined;
+
+  constructor(private readonly project?: StateProjection<S>) {}
+
+  /** 一行文字(不含換行;前後空白會去掉,空行略過)。 */
+  addLine(line: string, i: number): void {
     const s = line.trim();
     if (!s) return;
     let obj: unknown;
     try {
       obj = JSON.parse(s);
     } catch {
-      data.errors.push(`第 ${i + 1} 行:JSON 解析失敗`);
+      this.data.errors.push(`第 ${i + 1} 行:JSON 解析失敗`);
       return;
     }
+    this.addObject(obj, i);
+  }
+
+  /** 已解析的一行(JSON.parse 的結果)。 */
+  addObject(obj: unknown, i: number): void {
+    const data = this.data;
     if (!isRecord(obj)) {
       data.errors.push(`第 ${i + 1} 行:不是物件`);
       return;
@@ -261,19 +305,19 @@ export function parseJsonLines(text: string): ReplayData {
         data.inputs.push({ tick, t: tick * data.header.dt, command: cmd });
         if (cmd.type === 'restore') {
           const want = cmd.args?.['tick'];
-          pendingRewindTick = typeof want === 'number' && Number.isFinite(want) ? want : data.snapshots[data.snapshots.length - 1]?.tick;
+          this.pendingRewindTick = typeof want === 'number' && Number.isFinite(want) ? want : data.snapshots[data.snapshots.length - 1]?.tick;
         }
         break;
       }
       case 'state': {
-        const parsed = parseState(obj['state'], prev);
+        const parsed = parseState(obj['state'], this.prev);
         if (!parsed) {
           data.errors.push(`第 ${i + 1} 行:state 無法解析`);
           return;
         }
-        prev = parsed.state;
-        pushState(data, parsed.state, pendingRewindTick);
-        pendingRewindTick = undefined;
+        this.prev = parsed.state;
+        pushState(data, this.project ? this.project(parsed.state) : (parsed.state as unknown as S), this.pendingRewindTick);
+        this.pendingRewindTick = undefined;
         break;
       }
       case 'snapshot': {
@@ -300,8 +344,97 @@ export function parseJsonLines(text: string): ReplayData {
         data.unknownKinds[kind] = (data.unknownKinds[kind] ?? 0) + 1;
       }
     }
-  });
-  return finishTimes(data);
+  }
+
+  finish(): ReplayDataOf<S> {
+    return finishTimes(this.data);
+  }
+}
+
+/** SimCore JSON Lines:逐行解析,壞行記入 errors 後繼續。 */
+export function parseJsonLines(text: string): ReplayData {
+  const b = new JsonLinesReplayBuilder();
+  text.split(/\r?\n/).forEach((line, i) => b.addLine(line, i));
+  return b.finish();
+}
+
+/**
+ * 教官站 SessionRecord JSON 的建構器:states 逐筆 addState()(i = 在 states 陣列中的索引),其餘頂層欄位在 finish() 一次給。
+ * parseSessionJson(整份文字)與 record-stream.ts(分段讀取:states 不必整個留在記憶體)共用。
+ */
+export class SessionReplayBuilder<S extends ReplayStateBase = OwnShipState> {
+  private data: ReplayDataOf<S> = empty('instructor-json', []);
+  private prev: OwnShipState | undefined;
+
+  constructor(private readonly project?: StateProjection<S>) {}
+
+  /** 丟掉已加入的狀態重新開始(JSON 的重複鍵以後者為準)。 */
+  resetStates(): void {
+    this.data = empty('instructor-json', []);
+    this.prev = undefined;
+  }
+
+  addState(raw: unknown, i: number): void {
+    const parsed = parseState(raw, this.prev);
+    if (!parsed) {
+      this.data.errors.push(`states[${i}] 無法解析`);
+      return;
+    }
+    this.prev = parsed.state;
+    pushState(this.data, this.project ? this.project(parsed.state) : (parsed.state as unknown as S));
+  }
+
+  /** rest:紀錄的頂層物件(states 欄不讀;呼叫端已確認 format 與 states 為陣列)。 */
+  finish(rest: Omit<SessionRecord, 'states'>): ReplayDataOf<S> {
+    const obj = rest;
+    const data = this.data;
+    const sc = obj.scenario;
+    const h: ReplayHeader = { dt: DEFAULT_DT };
+    h.createdUtc = obj.createdUtc;
+    if (typeof obj.startedUtc === 'string' && obj.startedUtc) h.startedUtc = obj.startedUtc;
+    h.shipId = obj.shipId;
+    if (sc) {
+      h.scenarioId = sc.id;
+      h.scenarioName = sc.name;
+      h.loading = sc.loading;
+      h.seed = sc.seed;
+      h.scenario = sc;
+    }
+    h.dynamics = `教官站紀錄(${obj.mode === 'simple' ? '簡化教官模式' : '教官站'},來源 ${obj.source})`;
+    const si = parseSessionInfo(obj.sessionInfo);
+    if (si) h.sessionInfo = si;
+    const recordings = parseRecordings((obj as { recordings?: unknown }).recordings);
+    if (recordings.length > 0) h.recordings = recordings;
+    data.header = h;
+    // 版本 5:教官站已在倒帶當下截掉舊分支抽樣(states 的 t 不再倒退),倒帶點另存於 rewinds[](依發生順序)
+    for (const rw of Array.isArray(obj.rewinds) ? obj.rewinds : []) {
+      if (!isRecord(rw) || typeof rw['t'] !== 'number' || !Number.isFinite(rw['t'])) continue;
+      const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+      data.rewinds.push({ t: rw['t'], tick: num(rw['tick'], NaN), from: num(rw['from'], rw['t']), droppedStates: num(rw['droppedStates'], 0), droppedEvents: num(rw['droppedEvents'], 0) });
+    }
+    // 損壞的檔案:commands 不是陣列或元素不是物件時略過(不丟例外)
+    for (const c of Array.isArray(obj.commands) ? obj.commands : []) {
+      if (!isRecord(c) || !isValidCommand(c.command)) continue;
+      const input: ReplayInput = { tick: typeof c.ack?.tick === 'number' ? c.ack.tick : Math.round(c.t / DEFAULT_DT), t: c.t, command: c.command };
+      if (c.ack) {
+        const ack: { ok: boolean; detail?: string } = { ok: c.ack.ok };
+        if (c.ack.detail) ack.detail = c.ack.detail;
+        input.ack = ack;
+      }
+      data.inputs.push(input);
+    }
+    const store = new BrmMarkerStore();
+    store.load(obj.markers ?? []);
+    data.markers = [...store.all()];
+    data.operations = Array.isArray(obj.operations) ? obj.operations.filter((o) => typeof o === 'object' && o !== null && typeof o.t === 'number') : [];
+    if (Array.isArray(obj.events)) {
+      // 教官站紀錄的事件在狀態之後才整批加入:倒帶點之前的舊分支事件(t > 倒帶點且早於倒帶發生)一併丟棄
+      const events = obj.events.map((e) => parseSimEvent(e, DEFAULT_DT)).filter((e): e is SimEvent => e !== null);
+      data.events = dropRewoundEvents(events, data.rewinds);
+    }
+    if (obj.coreSummary) data.summary = parseAssessmentSummary(obj.coreSummary);
+    return finishTimes(data);
+  }
 }
 
 /** 教官站 SessionRecord JSON。 */
@@ -310,66 +443,12 @@ export function parseSessionJson(text: string): ReplayData {
   try {
     obj = JSON.parse(text);
   } catch {
-    return empty('instructor-json', ['JSON 解析失敗']);
+    return invalidJsonReplay();
   }
-  if (!isSessionRecord(obj)) return empty('instructor-json', ['不是教官站紀錄(format 欄位不符)']);
-  const data = empty('instructor-json', []);
-  const sc = obj.scenario;
-  const h: ReplayHeader = { dt: DEFAULT_DT };
-  h.createdUtc = obj.createdUtc;
-  if (typeof obj.startedUtc === 'string' && obj.startedUtc) h.startedUtc = obj.startedUtc;
-  h.shipId = obj.shipId;
-  if (sc) {
-    h.scenarioId = sc.id;
-    h.scenarioName = sc.name;
-    h.loading = sc.loading;
-    h.seed = sc.seed;
-    h.scenario = sc;
-  }
-  h.dynamics = `教官站紀錄(${obj.mode === 'simple' ? '簡化教官模式' : '教官站'},來源 ${obj.source})`;
-  const si = parseSessionInfo(obj.sessionInfo);
-  if (si) h.sessionInfo = si;
-  const recordings = parseRecordings((obj as { recordings?: unknown }).recordings);
-  if (recordings.length > 0) h.recordings = recordings;
-  data.header = h;
-  let prev: OwnShipState | undefined;
-  obj.states.forEach((raw, i) => {
-    const parsed = parseState(raw, prev);
-    if (!parsed) {
-      data.errors.push(`states[${i}] 無法解析`);
-      return;
-    }
-    prev = parsed.state;
-    pushState(data, parsed.state);
-  });
-  // 版本 5:教官站已在倒帶當下截掉舊分支抽樣(states 的 t 不再倒退),倒帶點另存於 rewinds[](依發生順序)
-  for (const rw of Array.isArray(obj.rewinds) ? obj.rewinds : []) {
-    if (!isRecord(rw) || typeof rw['t'] !== 'number' || !Number.isFinite(rw['t'])) continue;
-    const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
-    data.rewinds.push({ t: rw['t'], tick: num(rw['tick'], NaN), from: num(rw['from'], rw['t']), droppedStates: num(rw['droppedStates'], 0), droppedEvents: num(rw['droppedEvents'], 0) });
-  }
-  // 損壞的檔案:commands 不是陣列或元素不是物件時略過(不丟例外)
-  for (const c of Array.isArray(obj.commands) ? obj.commands : []) {
-    if (!isRecord(c) || !isValidCommand(c.command)) continue;
-    const input: ReplayInput = { tick: typeof c.ack?.tick === 'number' ? c.ack.tick : Math.round(c.t / DEFAULT_DT), t: c.t, command: c.command };
-    if (c.ack) {
-      const ack: { ok: boolean; detail?: string } = { ok: c.ack.ok };
-      if (c.ack.detail) ack.detail = c.ack.detail;
-      input.ack = ack;
-    }
-    data.inputs.push(input);
-  }
-  const store = new BrmMarkerStore();
-  store.load(obj.markers ?? []);
-  data.markers = [...store.all()];
-  data.operations = Array.isArray(obj.operations) ? obj.operations.filter((o) => typeof o === 'object' && o !== null && typeof o.t === 'number') : [];
-  if (Array.isArray(obj.events)) {
-    // 教官站紀錄的事件在狀態之後才整批加入:倒帶點之前的舊分支事件(t > 倒帶點且早於倒帶發生)一併丟棄
-    const events = obj.events.map((e) => parseSimEvent(e, DEFAULT_DT)).filter((e): e is SimEvent => e !== null);
-    data.events = dropRewoundEvents(events, data.rewinds);
-  }
-  if (obj.coreSummary) data.summary = parseAssessmentSummary(obj.coreSummary);
-  return finishTimes(data);
+  if (!isSessionRecord(obj)) return notSessionRecordReplay();
+  const b = new SessionReplayBuilder();
+  obj.states.forEach((raw, i) => b.addState(raw, i));
+  return b.finish(obj);
 }
 
 /** 依倒帶點(依發生順序)逐段丟棄舊分支事件:事件依檔案順序,倒帶前 t > 倒帶點者屬舊分支。 */

@@ -5,6 +5,8 @@
 //  - 教官與證書(?tab=admin):教官資格紀錄(A-I/6、評估者校準)、學員證書效期雙軌追蹤、複訓排程(admin-records.ts;
 //    IndexedDB admin 存放區,JSON 匯入/匯出跨機搬移)。
 // 列印:瀏覽器「列印 → 另存為 PDF」(A4,@media print 只印 .sheet);資料只在本機 IndexedDB 與匯出檔,不連網。
+// 練習紀錄一律分段讀取(lib/record-stream.ts:教官站交接的 Blob、「開啟檔案」選的檔案、重新整理後還原的最近紀錄都走同一條路),
+// 不把整份紀錄讀成一個字串;每筆狀態只留講評累計用到的欄位(lib/debrief.ts DebriefState);最近載入的紀錄在 IndexedDB 存 Blob。
 // 使用 light DOM(createRenderRoot 回傳 this),讓 report.css 的列印樣式直接套用整頁。
 
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
@@ -12,7 +14,8 @@ import { customElement, state } from 'lit/decorators.js';
 import { isBrmCategory, type BrmMarker } from '../lib/brm-markers.js';
 import { downloadText, fileStamp } from '../lib/download.js';
 import { formatSimTime } from '../lib/format.js';
-import { parseReplay, type ReplayData } from '../lib/record-replay.js';
+import { debriefState } from '../lib/debrief.js';
+import { parseReplayBlob, parseReplayText, type ReplayStreamResult } from '../lib/record-stream.js';
 import { applyTheme, isTheme } from '../lib/theme.js';
 import {
   ADMIN_RECORDS_FORMAT,
@@ -42,9 +45,9 @@ import {
   type InstructorQualification,
 } from './admin-records.js';
 import { ANCHORS, allElements, type DeficiencyType, type HumanFactor } from './anchors.js';
-import { applySessionInfoToMeta, buildDebriefReport, emptyReportMeta, PARTICIPANT_ROLES, recordKey, stcwText, type DebriefReport, type Participant, type ReportMeta } from './debrief-report.js';
+import { applySessionInfoToMeta, buildDebriefReport, emptyReportMeta, PARTICIPANT_ROLES, recordKey, stcwText, type DebriefReport, type Participant, type ReportMeta, type ReportReplayData } from './debrief-report.js';
 import { attachMarker, computeAgreement, createMarkerForm, elementsForMarker, exportForms, importForms, isFormComplete, parseSimTimeInput, ratingOf, summarizeForm, validateMarkerForm, type ElementRating, type FormIssue, type MarkerForm } from './marker-form.js';
-import { ADMIN_KEY, ADMIN_STORE, HANDOFF_KEY, LAST_RECORD_KEY, openReportStore, takeHandoff, WORKSPACE_KEY, type KvStore } from './report-store.js';
+import { ADMIN_KEY, ADMIN_STORE, HANDOFF_KEY, LAST_RECORD_KEY, LAST_RECORD_MAX_BYTES, openReportStore, readLastRecord, saveLastRecord, takeHandoff, WORKSPACE_KEY, type KvStore, type StoredRecord } from './report-store.js';
 import { renderAdminDoc, renderAgreement, renderFormDoc, renderIndividualDoc, renderReportDoc, renderSessionDoc, tStr } from './report-views.js';
 import {
   buildIndividualRecords,
@@ -73,6 +76,19 @@ const TAB_LABEL: Record<ReportTab, string> = { report: '講評報告', form: '�
 
 export function isReportTab(v: unknown): v is ReportTab {
   return typeof v === 'string' && Object.hasOwn(TAB_LABEL, v);
+}
+
+/**
+ * 練習紀錄以外、報告頁可匯入的 JSON 文件(頂層 format 欄):評估表、BRM 標記、班次紀錄、名冊、教官與證書。
+ * 這些檔案很小,辨識出來後以整份文字匯入(importText);其餘一律當作練習紀錄,由分段解析的結果直接載入。
+ */
+const DOCUMENT_FORMATS: ReadonlySet<unknown> = new Set(['simosa-brm-marker-form', 'simosa-brm-marker-forms', 'simosa-brm-markers', COURSE_SESSION_FORMAT, ROSTER_FORMAT, ADMIN_RECORDS_FORMAT]);
+
+/** 讀取中顯示進度的檔案大小下限(位元組;小檔案一閃而過,不顯示) */
+const PROGRESS_MIN_BYTES = 8 * 1024 * 1024;
+
+function megabytes(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0);
 }
 
 export interface ReportWorkspace {
@@ -148,7 +164,7 @@ function val(e: Event): string {
 @customElement('brm-report-app')
 export class ReportApp extends LitElement {
   @state() tab: ReportTab = 'report';
-  @state() data: ReplayData | null = null;
+  @state() data: ReportReplayData | null = null;
   @state() recordName = '';
   @state() extraMarkers: BrmMarker[] = [];
   @state() ws: ReportWorkspace = emptyWorkspace();
@@ -204,11 +220,14 @@ export class ReportApp extends LitElement {
       if (adminRes?.admin) this.admin = adminRes.admin;
       const handoff = fromInstructor ? await takeHandoff(this.store) : undefined;
       if (handoff) {
-        this.loadRecordText(handoff.text, `教官站紀錄(${handoff.savedUtc})`);
+        const name = `教官站紀錄(${handoff.savedUtc})`;
+        // 先記成「最近載入的紀錄」(同一份 Blob)再刪交接
+        if (await this.loadStored(handoff, name)) await this.rememberRecord(name, 'blob' in handoff ? handoff.blob : new Blob([handoff.text]));
         await this.store.delete(HANDOFF_KEY);
       } else {
-        const last = await this.store.get<{ name: string; text: string }>(LAST_RECORD_KEY);
-        if (last?.text) this.loadRecordText(last.text, last.name, false);
+        const last = await readLastRecord(this.store);
+        // 舊版存的是整份文字:讀得進來,並改存成 Blob(之後還原時不必再把整份文字讀進頁面)
+        if (last && (await this.loadStored(last, last.name)) && 'text' in last) await this.rememberRecord(last.name, new Blob([last.text]));
         if (fromInstructor) this.say('沒有找到教官站交接的紀錄,請以「開啟檔案」載入', 'error');
       }
     } catch (err) {
@@ -274,9 +293,15 @@ export class ReportApp extends LitElement {
     return out.sort((a, b) => a.t - b.t);
   }
 
-  /** 載入練習紀錄文字(核心 JSON Lines 或教官站 JSON)。 */
+  /** 載入已在手上的練習紀錄文字(核心 JSON Lines 或教官站 JSON;測試與小段文字用,檔案與交接走 importBlob / 分段讀取)。 */
   loadRecordText(text: string, name: string, remember = true): boolean {
-    const data = parseReplay(text);
+    const ok = this.applyRecord(parseReplayText(text, debriefState).data, name);
+    if (ok && remember) void this.rememberRecord(name, new Blob([text]));
+    return ok;
+  }
+
+  /** 套用解析好的練習紀錄;沒有狀態、summary 與事件時顯示錯誤、保留原本載入的紀錄。 */
+  private applyRecord(data: ReportReplayData, name: string): boolean {
     if (data.states.length === 0 && !data.summary && data.events.length === 0) {
       this.say(`無法載入紀錄「${name}」:${data.errors[0] ?? '紀錄沒有狀態或 summary'}`, 'error');
       return false;
@@ -286,15 +311,76 @@ export class ReportApp extends LitElement {
     void this.meta; // 建立預設 meta
     this.activeFormId = this.formsForRecord()[0]?.formId ?? '';
     this.say(`已載入 ${name}:${data.header.scenarioId ?? ''} 狀態 ${data.states.length} 筆、事件 ${data.events.length} 筆${data.summary ? '、核心 summary' : ''}${data.errors.length ? `(略過 ${data.errors.length} 行)` : ''}`);
-    if (remember) void this.store?.set(LAST_RECORD_KEY, { name, text });
     this.touch();
     return true;
   }
 
-  /** 依內容判斷檔案種類:評估表、BRM 標記、班次紀錄、名冊,其餘當作練習紀錄。 */
+  /** 分段讀取並解析一份紀錄(每筆狀態只留講評累計用到的欄位);大檔案在狀態列顯示進度。 */
+  private parseRecordBlob(blob: Blob, name: string): Promise<ReplayStreamResult<ReportReplayData['states'][number]>> {
+    let shown = -1;
+    const onProgress =
+      blob.size >= PROGRESS_MIN_BYTES
+        ? (read: number, total: number) => {
+            const pct = Math.floor((read / total) * 100);
+            if (pct === shown) return;
+            shown = pct;
+            this.say(`讀取 ${name}… ${pct}%(共 ${megabytes(total)} MB)`);
+          }
+        : undefined;
+    return parseReplayBlob(blob, { project: debriefState, ...(onProgress ? { onProgress } : {}) });
+  }
+
+  /** 載入存放在本機儲存的紀錄(交接或最近載入的紀錄;Blob 分段讀取,舊版的整份文字直接解析)。 */
+  private async loadStored(rec: StoredRecord, name: string): Promise<boolean> {
+    try {
+      const res = 'blob' in rec ? await this.parseRecordBlob(rec.blob, name) : parseReplayText(rec.text, debriefState);
+      return this.applyRecord(res.data, name);
+    } catch (err) {
+      this.say(`無法載入「${name}」:${String(err)}`, 'error');
+      return false;
+    }
+  }
+
+  /**
+   * 記下最近載入的紀錄(重新整理後還原):IndexedDB 存 Blob(內容留在瀏覽器的檔案儲存),不存文字。
+   * 超過 LAST_RECORD_MAX_BYTES 的紀錄不另存(並清掉先前記下的那一份,避免重新整理後還原成別的練習)。
+   * 寫入失敗(空間不足、檔案已被移走)不影響已載入的報告。
+   */
+  private async rememberRecord(name: string, blob: Blob): Promise<void> {
+    const store = this.store;
+    if (!store) return;
+    try {
+      if (blob.size > LAST_RECORD_MAX_BYTES) {
+        await store.delete(LAST_RECORD_KEY);
+        this.say(`${this.message};檔案 ${megabytes(blob.size)} MB,不另存於瀏覽器,重新整理後請重新開啟檔案`, this.messageLevel);
+      } else await saveLastRecord(store, name, blob);
+    } catch {
+      /* 只是少了「重新整理後還原」;報告與工作資料不受影響 */
+    }
+  }
+
+  /** 開啟一個檔案(見 importBlob)。 */
   async openFile(file: File): Promise<void> {
-    const text = await file.text();
-    this.importText(text, file.name);
+    await this.importBlob(file, file.name);
+  }
+
+  /**
+   * 分段讀取一個檔案並依內容判斷種類:評估表、BRM 標記、班次紀錄、名冊、教官與證書(頂層 format 欄;小檔案)以整份文字匯入;
+   * 其餘當作練習紀錄,由分段解析的結果直接載入(不把整份紀錄讀成字串)。判斷與 importText 相同。
+   */
+  async importBlob(blob: Blob, name: string): Promise<void> {
+    const res = await this.parseRecordBlob(blob, name);
+    if (res.jsonObject && DOCUMENT_FORMATS.has(res.jsonFormat)) {
+      this.importText(await blob.text(), name);
+      return;
+    }
+    let ok = false;
+    try {
+      ok = this.applyRecord(res.data, name);
+    } catch (err) {
+      this.say(`無法載入「${name}」:${String(err)}`, 'error');
+    }
+    if (ok) await this.rememberRecord(name, blob);
   }
 
   /** 依序開啟多個檔案;某個檔案讀取或解析失敗時記下錯誤並繼續處理其餘檔案,最後彙總顯示。 */

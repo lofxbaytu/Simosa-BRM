@@ -6,8 +6,8 @@ import { parseBriefing } from '../lib/timeline.js';
 import type { SimEvent } from '../types/event.js';
 import type { AssessmentSummary } from '../lib/assessment.js';
 import type { BrmMarker } from '../lib/brm-markers.js';
-import { summarize, type DebriefSummary } from '../lib/debrief.js';
-import type { ReplayData } from '../lib/record-replay.js';
+import { summarize, type DebriefState, type DebriefSummary } from '../lib/debrief.js';
+import type { ReplayDataOf } from '../lib/record-replay.js';
 import { eventLabel, eventSeverity, SOURCE_LABEL, type EventSeverity } from '../lib/sim-event.js';
 import type { SessionInfo } from '../lib/session-info.js';
 import type { RecordingSummary } from '../lib/screen-recording.js';
@@ -125,16 +125,22 @@ export function applySessionInfoToMeta(meta: ReportMeta, info: SessionInfo | und
 // ------------------------------------------------------------------ 紀錄識別
 
 /**
+ * 講評報告用的紀錄資料:每筆狀態只需講評累計讀取的欄位(lib/debrief.ts DebriefState)。
+ * 報告頁分段解析紀錄時只留這些欄位;完整狀態的 ReplayData(parseReplay 的結果)也可直接傳入。
+ */
+export type ReportReplayData = ReplayDataOf<DebriefState>;
+
+/**
  * 練習紀錄的識別鍵:核心紀錄用 footer.sha256(紀錄檔雜湊);教官站紀錄用 情境 id + 練習開始時刻 startedUtc
  * (同一練習多次匯出不變;舊紀錄無 startedUtc 時退回建立時間 createdUtc,與先前存下的評估表/報告欄位相容)。
  */
-export function recordKey(data: ReplayData): string {
+export function recordKey(data: ReportReplayData): string {
   if (data.footer?.sha256) return `sha256:${data.footer.sha256}`;
   return `${data.header.scenarioId ?? data.header.shipId ?? 'record'}@${data.header.startedUtc ?? data.header.createdUtc ?? data.tStart}`;
 }
 
 /** 練習日期的依據:教官站紀錄的練習開始時刻,否則紀錄建立時間(ISO)。 */
-export function exerciseTimeUtc(data: ReplayData): string | undefined {
+export function exerciseTimeUtc(data: ReportReplayData): string | undefined {
   return data.header.startedUtc ?? data.header.createdUtc;
 }
 
@@ -167,7 +173,7 @@ export function exerciseNoFromScenario(id: string | undefined): string {
  * 教官站紀錄取紀錄鍵的 FNV-1a 雜湊前 6 碼(紀錄鍵含練習開始時刻,同情境同日的不同練習編號不同)。
  * 日期與班次練習日期(training-record.isoDate)相同,皆為本地日期。
  */
-export function defaultReportNo(data: ReplayData): string {
+export function defaultReportNo(data: ReportReplayData): string {
   const ymd = localDate(exerciseTimeUtc(data)).replace(/-/g, '') || '00000000';
   const sha = data.footer?.sha256?.replace(/[^0-9A-Za-z]/g, '');
   const tail = sha ? sha.slice(0, 6).toUpperCase() : fnv1aHex(recordKey(data)).slice(0, 6);
@@ -394,7 +400,7 @@ export interface ParameterSection {
   warnings: string[];
 }
 
-export function buildParameterSection(data: ReplayData): ParameterSection {
+export function buildParameterSection(data: ReportReplayData): ParameterSection {
   const h = data.header.parameterSet;
   const s = data.summary?.parameterSet;
   const out: ParameterSection = { rows: [], documents: [], warnings: [] };
@@ -568,7 +574,7 @@ export interface ExerciseInfo {
   duration_s: number;
   seed?: number;
   dynamics?: string;
-  source: ReplayData['source'];
+  source: ReportReplayData['source'];
   recordKey: string;
   stateHash?: string;
   sha256?: string;
@@ -639,7 +645,7 @@ export interface DebriefReport {
 const LOADING_LABEL: Readonly<Record<string, string>> = { full: '滿載', ballast: '壓載', intermediate: '中間' };
 
 export interface BuildReportInput {
-  data: ReplayData;
+  data: ReportReplayData;
   meta?: ReportMeta;
   forms?: readonly MarkerForm[];
   /** 另外載入的 BRM 快速標記(核心紀錄不含標記;教官站紀錄已含者一併列出,依 id 去重) */

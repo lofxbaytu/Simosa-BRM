@@ -2,7 +2,7 @@
 // 由收到的狀態序列即時累計最小 UKC、最大舵角、最大 ROT、車鐘變更次數、航程距離、平均速度、
 // 超過港區速限的時間等。閾值暫用常數,之後改由「公司程序參數集」提供(規劃書第 9.1 節、第 8.3 節)。
 
-import type { OwnShipState, TelegraphPosition } from '../types/state.js';
+import type { OwnShipState, Position, StateFlags, TelegraphPosition } from '../types/state.js';
 
 /** 第一版閾值常數(待程序參數集取代;UKC 與儀器頁 depth-readout 的預設一致)。 */
 export interface DebriefThresholds {
@@ -59,9 +59,40 @@ export interface DebriefSummary {
 
 const M_PER_NM = 1852;
 
+/**
+ * 講評累計讀取的狀態欄位(DebriefAccumulator.push 只讀這些;OwnShipState 可直接當作 DebriefState)。
+ * 講評報告頁解析紀錄時每筆狀態只留這些欄位(debriefState 投影),不保留整筆狀態:2 小時的教官站紀錄 7200 筆、
+ * 核心 JSON Lines 紀錄 25 Hz 約 18 萬筆,整筆保留會占數十到數百 MB。tick 供解析時判斷倒帶(record-replay pushState)。
+ */
+export interface DebriefState {
+  t: number;
+  tick: number;
+  pos: Pick<Position, 'x' | 'y'>;
+  sog: number;
+  rot: number;
+  rudder: number;
+  rudderOrder: number;
+  telegraph: TelegraphPosition;
+  depthBelowKeel: number;
+  flags?: StateFlags;
+}
+
+/** 完整狀態 → 講評累計用的精簡投影(新物件,不持有來源狀態)。 */
+export function debriefState(s: OwnShipState): DebriefState {
+  const out: DebriefState = { t: s.t, tick: s.tick, pos: { x: s.pos.x, y: s.pos.y }, sog: s.sog, rot: s.rot, rudder: s.rudder, rudderOrder: s.rudderOrder, telegraph: s.telegraph, depthBelowKeel: s.depthBelowKeel };
+  if (s.flags) {
+    const f: StateFlags = {};
+    if (s.flags.frozen !== undefined) f.frozen = s.flags.frozen;
+    if (s.flags.aground !== undefined) f.aground = s.flags.aground;
+    if (s.flags.collision !== undefined) f.collision = s.flags.collision;
+    out.flags = f;
+  }
+  return out;
+}
+
 /** 即時累計器:每收到一筆狀態呼叫 push();summary() 隨時可取。 */
 export class DebriefAccumulator {
-  private prev: OwnShipState | null = null;
+  private prev: DebriefState | null = null;
   private first_t: number | null = null;
   private last_t = 0;
   private samples = 0;
@@ -113,7 +144,7 @@ export class DebriefAccumulator {
     this.lastTelegraph = null;
   }
 
-  push(s: OwnShipState): void {
+  push(s: DebriefState): void {
     const th = this.thresholds;
     this.samples++;
     if (this.first_t === null) this.first_t = s.t;
@@ -191,8 +222,8 @@ export class DebriefAccumulator {
   }
 }
 
-/** 一次計算整段狀態序列(重播檢視用)。 */
-export function summarize(states: readonly OwnShipState[], thresholds: DebriefThresholds = DEFAULT_THRESHOLDS): DebriefSummary {
+/** 一次計算整段狀態序列(重播檢視、講評報告用;完整狀態或 DebriefState 投影皆可)。 */
+export function summarize(states: readonly DebriefState[], thresholds: DebriefThresholds = DEFAULT_THRESHOLDS): DebriefSummary {
   const acc = new DebriefAccumulator(thresholds);
   for (const s of states) acc.push(s);
   return acc.summary();
