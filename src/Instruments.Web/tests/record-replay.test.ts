@@ -239,6 +239,36 @@ describe('倒帶分段(restore/reset)', () => {
     expect(parseJsonLines(text3).rewinds).toEqual([{ t: 0.04, tick: 2, from: 6, droppedStates: 3, droppedEvents: 0 }]);
   });
 
+  it('reset:舊分支全部作廢(含 tick 不晚於重設後第一筆狀態的事件與狀態);重設後、第一筆狀態之前的事件屬於新分支', () => {
+    // 核心同一個 tick 先寫事件行、再寫狀態行:開始即繫妥的情境在 tick 2 發第一次接觸,reset 之後新分支在 tick 2 再發一次(審查 A-rA-5)
+    const contact = (t: number, seq: number) => JSON.stringify({ kind: 'event', tick: Math.round(t / 0.02), event: { kind: 'fenderContact', tick: Math.round(t / 0.02), t, source: 'engine', seq, data: { fenderId: 'S03', normalSpeed_mps: 0.01, energy_kNm: 1 } } });
+    const reset = '{"kind":"input","tick":200,"command":{"type":"reset"}}';
+    const text = [header, contact(0.04, 0), stateLine(0.04, 0, 0.4), contact(3, 1), stateLine(4, 0, 40), reset, contact(0.04, 0), stateLine(0.04, 0, 0.4), contact(30, 1), contact(40, 2), stateLine(50, 0, 500)].join('\n');
+    const r = parseJsonLines(text);
+    expect(r.errors).toEqual([]);
+    expect(r.rewinds).toEqual([{ t: 0.04, tick: 2, from: 4, droppedStates: 2, droppedEvents: 2 }]);
+    expect(r.states.map((s) => s.t)).toEqual([0.04, 50]); // 舊分支 tick 2 的那一筆狀態不留(原本會與新分支的重複)
+    // 新分支:第一次接觸一列(00:00)+ 之後兩次合併成一列;舊分支 tick 2 的第一次接觸不留(原本留著,新分支的第一次接觸被併成 ×2)
+    expect(r.events.map((e) => [e.t, e.merged?.count ?? 1, e.merged?.firstT ?? e.t])).toEqual([
+      [0.04, 1, 0.04],
+      [40, 2, 30],
+    ]);
+    // reset 沒有生效的跡象(之後的狀態沒有倒退):事件照原順序留著,不記倒帶
+    const r2 = parseJsonLines([header, stateLine(1, 0, 10), evLine(1.5, 'frozen', 0), reset, evLine(1.6, 'message', 1), stateLine(2, 0, 20)].join('\n'));
+    expect(r2.rewinds).toEqual([]);
+    expect(r2.events.map((e) => e.kind)).toEqual(['frozen', 'message']);
+    // 紀錄結束在 reset 之後、下一筆狀態之前:事件留著
+    const r3 = parseJsonLines([header, stateLine(1, 0, 10), evLine(1.5, 'frozen', 0), reset, evLine(0.02, 'message', 0)].join('\n'));
+    expect(r3.events.map((e) => e.kind)).toEqual(['frozen', 'message']);
+    // reset 之後的倒帶(restore)照舊:倒帶點之前的新分支歷史保留
+    const r4 = parseJsonLines([header, stateLine(4, 0, 40), reset, stateLine(0.04, 0, 0.4), evLine(1, 'frozen', 0), stateLine(2, 0, 20), evLine(3, 'message', 1), stateLine(4, 0, 40), '{"kind":"input","tick":200,"command":{"type":"restore","args":{"tick":100}}}', stateLine(2.04, 0, 20.4)].join('\n'));
+    expect(r4.rewinds.map((w) => [w.t, w.tick, w.droppedStates, w.droppedEvents])).toEqual([
+      [0.04, 2, 1, 0],
+      [2, 100, 1, 1],
+    ]);
+    expect(r4.events.map((e) => e.kind)).toEqual(['frozen']);
+  });
+
   it('只有一次倒帶:保留倒帶點之前的歷史與倒帶後的新分支;eventIndexAt 取得倒帶後的事件', () => {
     const text = [header, stateLine(1, 0, 10), evLine(1, 'frozen', 0), stateLine(2, 0, 20), stateLine(3, 0, 30), evLine(3, 'faultInjected', 1), stateLine(4, 0, 40), stateLine(2.04, 0, 20.4), evLine(2.5, 'resumed', 1), stateLine(3, 7, 30), stateLine(5, 9, 50)].join('\n');
     const r = parseJsonLines(text);

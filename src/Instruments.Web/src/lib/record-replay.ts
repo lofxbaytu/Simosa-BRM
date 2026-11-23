@@ -6,6 +6,10 @@
 // 未知的 kind 只計數(不逐行列為錯誤),舊紀錄(無 event/summary 行、header 無 parameterSet)仍可載入。
 // 倒帶(restore/reset):核心紀錄在倒帶後 state 的 tick/t 會倒退;解析時依 tick 遞減切分,倒帶時丟棄 t > 倒帶點的舊分支狀態與事件
 // (只保留練習最終的歷史),倒帶點記在 rewinds[];不對 states 做全域排序(設計文件 D31)。
+// reset(重設)不是倒帶到某個快照,而是整個練習從 tick 0 重新開始:舊分支的狀態與事件**全部**作廢(不是只丟 t > 倒帶後第一筆狀態的那些);
+// 核心在同一個 tick 先寫事件行、再寫狀態行,所以 reset 的 input 行之後、下一筆 state 行之前的事件屬於新分支(例:開始即繫妥的 E14,
+// 四個碰墊在 tick 2 的第一次接觸)—— 先暫存,確認 tick 倒退(重設生效)後清掉舊分支再放回(第三十輪審查 A-rA-5:原本舊分支 tick ≤ 2 的
+// 事件會留下來,與新分支的同一批事件重複,報告的合併次數多 1)。
 // 倒帶點的 tick 取自 input 行的 restore args.tick(無 args 時最近一筆 snapshot 行的 tick):C# Restore 後第一筆 state 行晚
 // BroadcastDivider 個 tick 才寫出,直接用該 state 的 t 會把倒帶標記畫晚、也漏丟該區間的舊分支事件。
 //
@@ -185,7 +189,7 @@ export function notSessionRecordReplay<S>(): ReplayDataOf<S> {
  */
 function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, s: S, rewindTick?: number, dropEvents?: (t: number) => number): void {
   const prev = data.states[data.states.length - 1];
-  if (prev && (Number.isFinite(s.tick) && Number.isFinite(prev.tick) ? s.tick < prev.tick : s.t < prev.t)) {
+  if (prev && wentBack(prev, s)) {
     const known = rewindTick !== undefined && Number.isFinite(rewindTick) && rewindTick <= s.tick;
     const tick = known ? rewindTick : s.tick;
     const t = known ? tick * data.header.dt : s.t;
@@ -201,6 +205,11 @@ function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, s: S, rewin
     data.rewinds.push({ t, tick, from: prev.t, droppedStates: nStates - data.states.length, droppedEvents });
   }
   data.states.push(s);
+}
+
+/** s 的 tick(沒有 tick 時比 t)比前一筆 prev 小:倒帶或重設之後的第一筆狀態。 */
+function wentBack(prev: ReplayStateBase, s: ReplayStateBase): boolean {
+  return Number.isFinite(s.tick) && Number.isFinite(prev.tick) ? s.tick < prev.tick : s.t < prev.t;
 }
 
 function finishTimes<S extends ReplayStateBase>(data: ReplayDataOf<S>): ReplayDataOf<S> {
@@ -224,8 +233,19 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
   /** 事件先進 EventStore(不設上限):與教官站即時事件流相同的合併規則;finish() 時才放進 data.events */
   private readonly eventStore = new EventStore(Number.POSITIVE_INFINITY);
   private readonly dropEvents = (t: number): number => this.eventStore.dropAfter(t);
+  /**
+   * reset 指令的 input 行之後、下一筆 state 行之前的事件(沒有待確認的重設時 null):那一筆狀態的 tick 倒退(重設生效)時它們屬於新分支,
+   * 清掉舊分支後才放進 EventStore;沒有倒退時照原順序放回。
+   */
+  private afterReset: SimEvent[] | null = null;
 
   constructor(private readonly project?: StateProjection<S>) {}
+
+  /** 事件進 EventStore;有待確認的重設時先暫存(見 afterReset)。 */
+  private pushEvent(ev: SimEvent): void {
+    if (this.afterReset) this.afterReset.push(ev);
+    else this.eventStore.push(ev);
+  }
 
   /** 一行文字(不含換行;前後空白會去掉,空行略過)。 */
   addLine(line: string, i: number): void {
@@ -279,7 +299,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
           return;
         }
         if (typeof obj['tick'] === 'number' && !Number.isFinite(ev.tick)) ev.tick = obj['tick'];
-        this.eventStore.push(ev);
+        this.pushEvent(ev);
         break;
       }
       case 'vhf': {
@@ -295,7 +315,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
           data.errors.push(`第 ${i + 1} 行:vhf 無法解析`);
           return;
         }
-        this.eventStore.push(ev);
+        this.pushEvent(ev);
         break;
       }
       case 'summary': {
@@ -319,7 +339,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
         if (cmd.type === 'restore') {
           const want = cmd.args?.['tick'];
           this.pendingRewindTick = typeof want === 'number' && Number.isFinite(want) ? want : data.snapshots[data.snapshots.length - 1]?.tick;
-        }
+        } else if (cmd.type === 'reset') this.afterReset ??= [];
         break;
       }
       case 'state': {
@@ -329,7 +349,20 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
           return;
         }
         this.prev = parsed.state;
-        pushState(data, this.project ? this.project(parsed.state) : (parsed.state as unknown as S), this.pendingRewindTick, this.dropEvents);
+        const s = this.project ? this.project(parsed.state) : (parsed.state as unknown as S);
+        const fresh = this.afterReset;
+        this.afterReset = null;
+        const last = data.states[data.states.length - 1];
+        if (fresh && last && wentBack(last, s)) {
+          // 重設生效:舊分支的狀態與事件全部作廢(倒帶點照舊記在重設後第一筆狀態),重設之後才發的事件放回
+          const droppedEvents = this.eventStore.dropAfter(Number.NEGATIVE_INFINITY);
+          data.rewinds.push({ t: s.t, tick: s.tick, from: last.t, droppedStates: data.states.length, droppedEvents });
+          data.states = [s];
+          for (const ev of fresh) this.eventStore.push(ev);
+        } else {
+          if (fresh) for (const ev of fresh) this.eventStore.push(ev);
+          pushState(data, s, this.pendingRewindTick, this.dropEvents);
+        }
         this.pendingRewindTick = undefined;
         break;
       }
@@ -360,6 +393,9 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
   }
 
   finish(): ReplayDataOf<S> {
+    // 紀錄結束在 reset 之後、下一筆狀態之前:分不出重設有沒有生效,事件照原順序放回
+    if (this.afterReset) for (const ev of this.afterReset) this.eventStore.push(ev);
+    this.afterReset = null;
     this.data.events = [...this.eventStore.all()];
     return finishTimes(this.data);
   }
