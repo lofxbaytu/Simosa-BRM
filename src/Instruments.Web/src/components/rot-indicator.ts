@@ -2,7 +2,7 @@
 
 import { LitElement, html, svg, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatRot } from '../lib/format.js';
 import { clamp } from '../lib/angles.js';
 
@@ -20,6 +20,7 @@ function polar(angleDeg: number, radius: number): [number, number] {
 export class RotIndicator extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .arc {
         flex: 1;
@@ -45,6 +46,16 @@ export class RotIndicator extends LitElement {
       .readout {
         text-align: center;
       }
+      /* conning 條單列:讀數(箭頭 + 一位小數)的字級不超過方塊寬度的 22%,13 格(方塊約 117 px)時「→ 99.9」放得下;
+         三位數(|ROT| ≥ 100 °/min,滿舵高速迴轉才有)多一個字,字級不超過 18.5%。原本固定 28 px,11 至 13 格時讀數比方塊寬 */
+      @container style(--brm-conning-single: 1) {
+        .readout.value.mid {
+          font-size: clamp(18px, min(1.6vw, 22cqi), 28px);
+        }
+        .readout.value.mid.long {
+          font-size: clamp(18px, min(1.6vw, 18.5cqi), 28px);
+        }
+      }
     `,
   ];
 
@@ -54,6 +65,9 @@ export class RotIndicator extends LitElement {
   override render() {
     const range = this.range > 0 ? this.range : 30;
     const over = Math.abs(this.rot) > range;
+    const text = formatRot(this.rot);
+    // 「← 100.0」以上(7 個字元)比平常多一位數:conning 條單列的窄方塊用較小的字級(見上方樣式)
+    const long = text.length >= 7;
     const angle = clamp((this.rot / range) * SWEEP, -SWEEP - 6, SWEEP + 6);
     const [nx, ny] = polar(angle, R - 6);
     const [sx, sy] = polar(-SWEEP, R);
@@ -83,7 +97,7 @@ export class RotIndicator extends LitElement {
             <circle class="hub" cx=${CX} cy=${CY} r="3" />
           </svg>
         </div>
-        <div class="readout value mid ${over ? 'caution' : ''}">${formatRot(this.rot)}</div>
+        <div class="readout value mid ${over ? 'caution' : ''} ${long ? 'long' : ''}">${text}</div>
       </div>
     `;
   }

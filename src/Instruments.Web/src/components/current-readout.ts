@@ -2,7 +2,7 @@
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatBearing, formatKnots } from '../lib/format.js';
 import { CURRENT_SOURCE_LABELS, type CurrentSource } from '../types/state.js';
 
@@ -10,6 +10,7 @@ import { CURRENT_SOURCE_LABELS, type CurrentSource } from '../types/state.js';
 export class CurrentReadout extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .body {
         flex: 1;
@@ -52,6 +53,33 @@ export class CurrentReadout extends LitElement {
       }
       .bow {
         fill: var(--ob-scale);
+      }
+      /* conning 條單列:並排時數值字級可到方塊寬度的 9%;方塊 185 px 以下(與風方塊同一門檻)玫瑰圖移到數值上方,
+         兩列數值用滿方塊寬度、字級可到 10%(13 格、方塊約 134 px 時約 13 px)。並排時數值列只剩約 100 px,
+         「流速 DRIFT 9.9 kn」在 CI 的字型下放不下 */
+      @container style(--brm-conning-single: 1) {
+        .rows {
+          min-width: 0;
+        }
+        .rows .value {
+          font-size: clamp(11px, min(0.95vw, 9cqi), 18px);
+        }
+      }
+      @container style(--brm-conning-single: 1) and (max-width: 185px) {
+        .body {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 2px;
+        }
+        .rose {
+          align-self: center;
+        }
+        .rows {
+          flex: 0 0 auto;
+        }
+        .rows .value {
+          font-size: clamp(11px, min(0.95vw, 10cqi), 18px);
+        }
       }
     `,
   ];

@@ -2,7 +2,7 @@
 
 import { LitElement, html, svg, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatThruster } from '../lib/format.js';
 import { clamp } from '../lib/angles.js';
 
@@ -14,6 +14,7 @@ const PAD = 14;
 export class ThrusterIndicator extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .bar {
         flex: 1;
@@ -37,6 +38,34 @@ export class ThrusterIndicator extends LitElement {
       .readouts {
         display: flex;
         justify-content: space-between;
+      }
+      /* conning 條單列:「實際」「令」兩組放得下時同一行(各靠一邊);方塊窄於 240 px(「實際 P 100% 令 P 100%」一行放不下)時
+         固定一組一行、數值靠右,不隨推力的位數(0% / S 45% / P 100%)跳動;數值字級不超過方塊寬度的 14.7%
+         (123 px 的方塊約 18 px),「實際 P 100%」一行放得下;再放不下時數值換到標籤的下一行。
+         原本兩組硬排在同一行,10 至 13 格時滿推力的讀數比方塊寬 14 至 69 px */
+      @container style(--brm-conning-single: 1) {
+        .readouts {
+          flex-wrap: wrap;
+          gap: 0 8px;
+        }
+        .readouts > span {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 0 4px;
+        }
+        .readouts > span > .value {
+          margin-left: auto;
+        }
+        .readouts .value.small {
+          font-size: clamp(14px, min(1.1vw, 14.7cqi), 20px);
+        }
+      }
+      @container style(--brm-conning-single: 1) and (max-width: 239px) {
+        .readouts > span {
+          flex-basis: 100%;
+        }
       }
     `,
   ];

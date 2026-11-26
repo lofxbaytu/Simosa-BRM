@@ -2,13 +2,14 @@
 
 import { LitElement, html, svg, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatBearing, formatKnots } from '../lib/format.js';
 
 @customElement('brm-wind')
 export class WindReadout extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .body {
         flex: 1;
@@ -72,6 +73,13 @@ export class WindReadout extends LitElement {
       }
       .bow {
         fill: var(--ob-scale);
+      }
+      /* conning 條單列的窄方塊(≤ 185 px,玫瑰圖在數值上方):數值用滿方塊寬度,字級可到方塊寬度的 9.5%
+         (13 格、方塊約 139 px 時約 13 px,與原本 165 px 的方塊相同) */
+      @container style(--brm-conning-single: 1) and (max-width: 185px) {
+        .rows .value {
+          font-size: clamp(11px, min(0.95vw, 9.5cqi), 18px);
+        }
       }
     `,
   ];

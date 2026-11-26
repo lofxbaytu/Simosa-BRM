@@ -2,13 +2,14 @@
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatHeading, formatKnots, formatSignedDeg } from '../lib/format.js';
 
 @customElement('brm-speed')
 export class SpeedReadout extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .rows {
         flex: 1;
@@ -20,7 +21,9 @@ export class SpeedReadout extends LitElement {
         opacity: 0.45;
         text-decoration: line-through;
       }
-      /* 窄方塊(conning 條單列 13 格,1920 寬約 115 px):數值字級依方塊寬度縮小,標籤只留英文縮寫(中文部分仍在 DOM 內供讀屏與測試) */
+      /* 窄方塊:COG / 漂角的字級依方塊寬度縮小,125 px 以下標籤只留英文縮寫(中文部分仍在 DOM 內供讀屏與測試)。
+         這個門檻單列與兩列相同(單列只有 13 格、視窗約 1980 px 以下時方塊才窄於 125 px);conning 條單列另有 STW / SOG 的字級規則,
+         見本樣式末的樣式查詢區塊 */
       .rows .value.small {
         font-size: clamp(12px, min(1.1vw, 15cqi), 20px);
       }
@@ -33,6 +36,16 @@ export class SpeedReadout extends LitElement {
         color: var(--ob-alarm);
         font-weight: 700;
         margin-left: 4px;
+      }
+      /* conning 條單列:STW / SOG 的字級不超過方塊寬度的 22%(13 格、方塊約 120 px 時約 26 px)。標籤的中文部分(對水 / 對地 / 航跡向)
+         與兩列一樣只在方塊 125 px 以下才省略 —— 11 至 12 格(方塊約 129 至 142 px)照常顯示;「標籤 + 數值」一行放不下時
+         (較寬的字型下兩位數的船速、倒俥兩位數、漂角三位數、「無效」標示)數值換到標籤的下一行(conningTileStyles 的 .row),
+         不被方塊邊界裁切。第三十一輪的第一版把省略的門檻提到 150 px(11 至 13 格都只剩 STW / SOG / COG),審查後改回:
+         11 格是最常見的畫面,方塊裡放得下 */
+      @container style(--brm-conning-single: 1) {
+        .rows .value.mid {
+          font-size: clamp(18px, min(1.6vw, 22cqi), 28px);
+        }
       }
     `,
   ];

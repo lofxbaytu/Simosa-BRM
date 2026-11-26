@@ -13,6 +13,9 @@
 // 重播檢視讀大檔(第三十一輪):超過上限(7201 筆)的核心紀錄分段讀取、讀取中顯示百分比,資訊列寫明降採樣,時間軸 / 逐筆 / 事件跳轉可用,
 // 講評摘要與航跡以全部狀態計算(完整教官站的「重播檢視」分頁與 ?mode=replay 都走同一個元件)。
 // 審查後修正:降採樣時時間軸的方向鍵走逐筆;超過上限後倒帶回到上限以內的紀錄每一筆都在、沒有降採樣的說明。
+// 1920×1080(conning 條單列;第三十一輪):重播檢視載入 E20 夾具與航線偏移很大的紀錄(當場合成),讀數列各方塊不被水平裁切,字距加大 3 % 仍通過。
+// 審查後補:重播檢視載入 E17b 夾具(情境庫唯一的 12 格)浪向玫瑰與船速方塊的中文標籤照常顯示;完整教官站 1920×945 / 1920×800
+// (瀏覽器沒有全螢幕,conning 條只有 170 / 150 px 高)平常的數值下內容不比方塊高。
 import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -21,8 +24,9 @@ import { chromium } from '@playwright/test';
 import { OUT, ROOT, bridgeUrl, instructorUrl, shipWebBase, webBase, type E2eEnv } from '../support/env.ts';
 import { freePort } from '../support/processes.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
-import { INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, probeLayout } from '../support/layout.ts';
-import { PageErrors, scenarioLoadButton, waitConnected } from '../support/pages.ts';
+import { CONNING_NONE, CONNING_UNDERWAY, CONNING_USUAL } from '../support/conning-values.ts';
+import { INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, overrideConning, probeConning, probeLayout } from '../support/layout.ts';
+import { PageErrors, expectConningSingleRow, scenarioLoadButton, waitConnected } from '../support/pages.ts';
 
 /** 與 tests/SimCore.Tests/ScenarioLoadRejectionTests.cs 相同的兩個結構 error:多邊形只有 2 點、hardFail 引用不存在的區域 */
 const INVALID_INLINE = {
@@ -603,6 +607,250 @@ test('重播檢視載入 E14 核心紀錄(逐筆的 fenderContact,1366×768):事
   const report = await page.evaluate(probeLayout, REPLAY_LAYOUT);
   expect(layoutFailures(report), '重播檢視 1366×768(E14,事件串流有合併列)的版面問題').toEqual([]);
   expect(report.ellipsis.filter((e) => e.includes('brm-event-stream')), '事件串流沒有以 … 截斷的文字').toEqual([]);
+  errors.expectNone();
+});
+
+test('重播檢視 1920×1080(conning 條單列 11 格)載入 E20 核心紀錄夾具:讀數列各方塊不被水平裁切,字距加大 3 % 仍通過', async ({ page, env }) => {
+  // 第三十一輪:視窗寬於 1900 px 時 conning 條排成單列,每格只有約 117 至 210 px。這份夾具(有航線,11 格)在 CI 的字型(DejaVu Sans)下
+  // 主機方塊的轉速與轉速令比方塊寬(brm-engine div.tile scrollWidth 181 > clientWidth 178、div.top 173 > 162),量重播檢視工具列時才發現;
+  // 原本 1920×1080 的重播檢視只用 E13 合成紀錄測,碰不到。現在單列時轉速令固定排在轉速的下一行,各方塊放不下的內容換行。
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const view = page.locator('brm-replay-view');
+  await view.locator('input.file-input').setInputFiles(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E20_comprehensive_assessment_kaohsiung-core.jsonl'));
+  const slider = view.locator('.timeline input.slider');
+  await expect(slider).toBeVisible({ timeout: 15_000 });
+  await expect(view.locator('brm-event-stream .list .item').first()).toBeVisible();
+  const [min, max] = await slider.evaluate((el) => [Number((el as HTMLInputElement).min), Number((el as HTMLInputElement).max)] as const);
+  expect(max - min, '夾具的時間範圍(秒)').toBeGreaterThan(30);
+  for (const frac of [0, 0.5, 1]) {
+    await slider.fill(String(min + (max - min) * frac));
+    const bar = await expectConningSingleRow(page, REPLAY_LAYOUT, `重播檢視 1920×1080(E20 夾具,時間軸 ${frac * 100}%)`, 11);
+    // 主機方塊:轉速(大字)沒有為了塞進方塊而一路縮小(11 格時仍是 56 px);轉速令在轉速的下一行、整個在方塊內
+    const engine = bar.tiles.find((t) => t.tag === 'brm-engine')!;
+    expect(engine.fonts['.top>.value.big'], '主機轉速的字級(px)').toBeGreaterThanOrEqual(50);
+    const boxes = await view.locator('brm-engine').evaluate((host) => {
+      const root = host.shadowRoot!;
+      const r = (sel: string) => root.querySelector(sel)!.getBoundingClientRect();
+      return { tile: r('.tile'), rpm: r('.top .value.big'), order: r('.top .label') };
+    });
+    expect(boxes.order.top, '轉速令在轉速的下一行').toBeGreaterThanOrEqual(boxes.rpm.bottom - 12);
+    expect(boxes.order.right, '轉速令的右緣在方塊內').toBeLessThanOrEqual(boxes.tile.right - 8);
+    expect(boxes.rpm.left, '轉速的左緣在方塊內').toBeGreaterThanOrEqual(boxes.tile.left + 8);
+  }
+  errors.expectNone();
+});
+
+test('重播檢視 1920×1080(conning 條單列)載入航線偏移很大的紀錄(當場合成):航線方塊的偏移、左右、限值不被方塊邊界裁切', async ({ page, env }) => {
+  // 第三十一輪:以真實核心錄的 E02 紀錄(5 秒起舵角 20° 偏離航線)在 1920×1080 的重播檢視,航線偏移(XTD)到三位數之後
+  // 「R 偏右 限 1500 m」被方塊邊界切掉 11 至 19 px(brm-route div.tile scrollWidth 150 > clientWidth 139、div.xtd 142 > 123;本機字型就會)。
+  // 合成:E02 夾具(有航線,6 筆狀態)各筆的航線偏移改成 0 至五位數、左右都有、有超過限值的;現在偏移的數值獨占一行,左右與限值在下一行。
+  const errors = new PageErrors(page);
+  const lines = fs.readFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E02_coastal_traffic_strait-core.jsonl'), 'utf8').split('\n').filter((l) => l.trim());
+  // 每筆狀態:[航線偏移 m(右正左負), 預期顯示的數值, 預期的左右]
+  const XTD: Array<[number, string, string]> = [
+    [0.2, '0', '在線上'],
+    [386.4, '386', 'R 偏右'],
+    [1567.6, '1568', 'R 偏右'],
+    [-2345.2, '2345', 'L 偏左'],
+    [-999.4, '999', 'L 偏左'],
+    [12345, '12345', 'R 偏右'],
+  ];
+  const times: number[] = [];
+  const out = lines.map((line) => {
+    if (!line.startsWith('{"kind":"state"')) return line;
+    const row = JSON.parse(line) as { state: { t: number; route: Record<string, unknown> } };
+    const xtd = XTD[times.length]!;
+    row.state.route = { ...row.state.route, xtd_m: xtd[0], xtdLimit_m: 1500, nextWaypoint: 'ENTRANCE', distanceToWaypoint_nm: 123.456, bearingToWaypoint_deg: 359, legCourse_deg: 359, speedLimit_kn: 12.5 };
+    times.push(row.state.t);
+    return JSON.stringify(row);
+  });
+  expect(times.length, 'E02 夾具的狀態筆數').toBe(XTD.length);
+  const record = path.join(OUT, 'tmp', 'replay-wide-xtd.jsonl');
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  fs.writeFileSync(record, `${out.join('\n')}\n`);
+
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const view = page.locator('brm-replay-view');
+  await view.locator('input.file-input').setInputFiles(record);
+  const slider = view.locator('.timeline input.slider');
+  await expect(slider).toBeVisible({ timeout: 15_000 });
+  const route = view.locator('brm-route');
+  for (const [i, t] of times.entries()) {
+    const [, shown, side] = XTD[i]!;
+    // 紀錄裡的時刻有浮點誤差(10.040000000000001),滑桿只接受 0.04 秒一格的值:拉到該筆的下一格(各筆相隔 10 秒),最後一筆用滑桿的上限
+    await slider.fill(i === times.length - 1 ? (await slider.getAttribute('max'))! : (t + 0.04).toFixed(2));
+    await expect(route.locator('.xtd .value')).toHaveText(`${shown}m`);
+    await expect(route.locator('.xtd .side')).toHaveText(side);
+    await expect(route.locator('.xtd .label')).toHaveText('限 1500 m');
+    const bar = await expectConningSingleRow(page, REPLAY_LAYOUT, `重播檢視 1920×1080(航線偏移 ${shown} m)`, 11);
+    // 偏移的數值沒有為了塞進方塊而縮小;數值、左右、限值、位置圓點與下方各列都在方塊的內容框裡(方塊內距 8 px)
+    // (字級的鍵是「父元素的類別>數值的類別」;超過限值時數值多一個 warn 類別,以開頭比對)
+    const xtdFont = Object.entries(bar.tiles.find((tile) => tile.tag === 'brm-route')!.fonts).find(([key]) => key.startsWith('.xtd>.value.mid'));
+    expect(xtdFont?.[1], '航線偏移的字級(px)').toBeGreaterThanOrEqual(25.2);
+    const boxes = await route.evaluate((host) => {
+      const root = host.shadowRoot!;
+      const tile = root.querySelector('.tile')!.getBoundingClientRect();
+      const parts = [...root.querySelectorAll('.xtd > *, .bar .pos, .rows > *, .rows .nb')].map((el) => {
+        const b = el.getBoundingClientRect();
+        return { name: `${el.tagName.toLowerCase()}.${el.className}「${(el.textContent ?? '').trim().slice(0, 12)}」`, left: b.left - tile.left, right: tile.right - b.right };
+      });
+      const value = root.querySelector('.xtd .value')!.getBoundingClientRect();
+      const sideBox = root.querySelector('.xtd .side')!.getBoundingClientRect();
+      return { parts, sideBelowValue: sideBox.top >= value.bottom - 10 };
+    });
+    for (const part of boxes.parts) {
+      expect(part.left, `${part.name} 的左緣在方塊的內容框裡(px)`).toBeGreaterThanOrEqual(8);
+      expect(part.right, `${part.name} 的右緣在方塊的內容框裡(px)`).toBeGreaterThanOrEqual(8);
+    }
+    expect(boxes.sideBelowValue, '左右與限值在偏移數值的下一行(不隨位數跳動)').toBe(true);
+  }
+  errors.expectNone();
+  fs.rmSync(record, { force: true });
+});
+
+test('重播檢視 1920×1080(conning 條單列 12 格)載入 E17b 核心紀錄夾具:浪向玫瑰與船速方塊的中文標籤照常顯示,讀數列各方塊不被水平裁切', async ({ page, env }) => {
+  // 第三十一輪審查:單列的格寬重排之後,12 格的浪方塊由約 179 px 變成約 164 px,掉到原有「165 px 以下不顯示浪向玫瑰」的門檻以下;
+  // 船速方塊省略標籤中文部分(對水 / 對地 / 航跡向)的門檻又由 125 px 提到 150 px —— 這份夾具(有浪、有能見度,情境庫唯一的 12 格)
+  // 在 1920×1080 少了原本有的玫瑰圖與三個中文標籤,而原有的案例只判定「不裁切」,看不出內容變少。
+  // 現在單列一律顯示玫瑰圖(旁邊的 Hs / Tp 放不下一行時數值換到標籤的下一行),船速方塊的門檻回到 125 px(放不下一行時數值換行)。
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const view = page.locator('brm-replay-view');
+  await view.locator('input.file-input').setInputFiles(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E17b_typhoon_seakeeping-core.jsonl'));
+  const slider = view.locator('.timeline input.slider');
+  await expect(slider).toBeVisible({ timeout: 15_000 });
+  const [min, max] = await slider.evaluate((el) => [Number((el as HTMLInputElement).min), Number((el as HTMLInputElement).max)] as const);
+  expect(max - min, '夾具的時間範圍(秒)').toBeGreaterThan(30);
+  for (const frac of [0, 0.5, 1]) {
+    await slider.fill(String(min + (max - min) * frac));
+    const label = `重播檢視 1920×1080(E17b 夾具,時間軸 ${frac * 100}%)`;
+    // 含「各方塊的圖形與文字都有顯示」(support/pages.ts 的 conningHiddenContent)
+    await expectConningSingleRow(page, REPLAY_LAYOUT, label, 12);
+    // 浪向玫瑰:看得到、整個在方塊的內容框裡;Hs / Tp 的數值在玫瑰圖的右邊或下面(沒有疊在圖上)
+    const sea = await view.locator('brm-sea').evaluate((host) => {
+      const root = host.shadowRoot!;
+      const box = (sel: string) => {
+        const r = root.querySelector(sel)!.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+      };
+      return { tile: box('.tile'), rose: box('.rose'), svg: box('.rose svg'), hs: box('.waves-hs'), display: getComputedStyle(root.querySelector('.rose')!).display };
+    });
+    expect(sea.display, `${label}:浪向玫瑰的 display`).not.toBe('none');
+    expect(sea.svg.width, `${label}:浪向玫瑰的寬度(px)`).toBeGreaterThanOrEqual(24);
+    expect(sea.svg.height, `${label}:浪向玫瑰的高度(px)`).toBeGreaterThanOrEqual(24);
+    expect(sea.rose.left, `${label}:浪向玫瑰的左緣在方塊的內容框裡`).toBeGreaterThanOrEqual(sea.tile.left + 8);
+    expect(sea.rose.bottom, `${label}:浪向玫瑰的下緣在方塊裡`).toBeLessThanOrEqual(sea.tile.bottom - 6);
+    expect(sea.hs.left >= sea.rose.right - 1 || sea.hs.top >= sea.rose.bottom - 1, `${label}:Hs / Tp 的數值沒有疊在玫瑰圖上`).toBe(true);
+    expect(sea.hs.right, `${label}:Hs / Tp 的數值右緣在方塊的內容框裡`).toBeLessThanOrEqual(sea.tile.right - 8);
+    // 船速方塊(12 格約 129 px,在 125 px 的門檻以上):三個中文標籤看得到,數值仍在方塊的內容框裡
+    const speed = view.locator('brm-speed');
+    expect((await speed.boundingBox())!.width, `${label}:船速方塊的寬度(px)`).toBeGreaterThan(125);
+    for (const [en, zh] of [['STW', '對水'], ['SOG', '對地'], ['COG', '航跡向']] as const) {
+      const row = speed.locator('.row', { hasText: en });
+      await expect(row.locator('.label .zh'), `${label}:船速方塊的「${en} ${zh}」`).toBeVisible();
+      await expect(row.locator('.label .zh')).toHaveText(zh);
+    }
+    const speedBoxes = await speed.evaluate((host) => {
+      const tile = host.shadowRoot!.querySelector('.tile')!.getBoundingClientRect();
+      return [...host.shadowRoot!.querySelectorAll('.row > *')].map((el) => ({ left: el.getBoundingClientRect().left - tile.left, right: tile.right - el.getBoundingClientRect().right }));
+    });
+    for (const b of speedBoxes) {
+      expect(b.left, `${label}:船速方塊各列的左緣在內容框裡(px)`).toBeGreaterThanOrEqual(8);
+      expect(b.right, `${label}:船速方塊各列的右緣在內容框裡(px)`).toBeGreaterThanOrEqual(8);
+    }
+  }
+  errors.expectNone();
+});
+
+test('完整教官站 1920×945 與 1920×800(瀏覽器沒有全螢幕,conning 條單列只有 170 / 150 px 高):平常的數值下讀數列各方塊的內容不比方塊高', async ({ page, env, core }) => {
+  // 第三十一輪審查:單列時放不下的內容換行,方塊的內容因此比原本高;原有的案例只在 1080 高測,視窗較矮時沒有把關。
+  //  - 1920×945(1080p 的螢幕、瀏覽器最大化;完整教官站的 conning 條 18vh = 170 px,三個頁面裡最矮):13 格與 12 格、平常的位數,
+  //    單列的整套判定(含字距加大 3 %)通過。航線方塊「下一航點」一列現在用整個方塊的寬度(原本只用右欄,「FW1 0.98 nm」要兩行)。
+  //  - 1920×800(conning 條是下限 150 px):主機方塊原本內容比方塊高 13 px,主機狀態(「運轉中 62%」)被方塊下緣切掉一半;
+  //    現在轉速條(圖形)在方塊不夠高時縮短,把高度讓給文字。
+  const errors = new PageErrors(page);
+  await ensureRunning(core);
+  await page.setViewportSize({ width: 1920, height: 945 });
+  await page.goto(instructorUrl(env));
+  await waitConnected(page);
+  await expect(page.locator('brm-instructor-app brm-conning-bar brm-heading .hdg .value').first()).toHaveText(/^\d{3}$/);
+
+  // 1920×945、13 格(航線、浪、橫搖):航行中平常的值
+  expect(await page.evaluate(overrideConning, { patch: { ...CONNING_UNDERWAY }, setHeading: 74 })).toBe(13);
+  const bar13 = await expectConningSingleRow(page, INSTRUCTOR_LAYOUT, '完整教官站 1920×945 13 格、航行中平常的值', 13);
+  expect(bar13.height, 'conning 條的高度(px;18vh)').toBeLessThan(172);
+  expect(bar13.height, 'conning 條的高度(px;18vh)').toBeGreaterThan(168);
+  // 1920×945、12 格(航線、浪;沒有橫搖):船速兩位數 —— 船速方塊約 129 px,標籤的中文部分照常顯示,「標籤 + 數值」放不下一行時數值換行
+  expect(await page.evaluate(overrideConning, { patch: { ...CONNING_UNDERWAY, stw: 14.5, sog: 14.5, roll: null }, setHeading: 74 })).toBe(12);
+  await expectConningSingleRow(page, INSTRUCTOR_LAYOUT, '完整教官站 1920×945 12 格、船速兩位數', 12);
+  // 1920×945、13 格:平常的位數裡最寬的(ROT 兩位數、半速倒車 -100 / 令 -135、UKC 兩位數並擱淺、航向可疑)
+  expect(await page.evaluate(overrideConning, { patch: { ...CONNING_UNDERWAY, ...CONNING_USUAL }, config: { rudderMax_deg: 35 }, issues: ['heading'] })).toBe(13);
+  await expectConningSingleRow(page, INSTRUCTOR_LAYOUT, '完整教官站 1920×945 13 格、平常的位數裡最寬的', 13);
+
+  // 1920×800:conning 條 150 px。13 格、航行中平常的值:主機方塊的內容不比方塊高,主機狀態整行在方塊裡;轉速條縮短但仍看得到
+  await page.setViewportSize({ width: 1920, height: 800 });
+  expect(await page.evaluate(overrideConning, { patch: { ...CONNING_UNDERWAY }, setHeading: 74 })).toBe(13);
+  const bar800 = await page.evaluate(probeConning);
+  expect(bar800.rows, '1920×800:conning 條排成一列').toBe(1);
+  expect(bar800.height, '1920×800:conning 條的高度(px;下限 150)').toBeLessThanOrEqual(151);
+  const engine800 = bar800.tiles.find((t) => t.tag === 'brm-engine')!;
+  expect(engine800.overflowY, '1920×800:主機方塊的內容比方塊高多少(px)').toBeLessThanOrEqual(4);
+  const engine = await page.locator('brm-instructor-app brm-conning-bar brm-engine').first().evaluate((host) => {
+    const root = host.shadowRoot!;
+    const r = (sel: string) => root.querySelector(sel)!.getBoundingClientRect();
+    return { tile: r('.tile'), state: r('.bottom > :last-child'), stateText: root.querySelector('.bottom > :last-child')!.textContent!.replace(/\s+/g, ' ').trim(), svg: r('.bar svg') };
+  });
+  expect(engine.stateText).toBe('運轉中 62%');
+  expect(engine.state.bottom, '1920×800:主機狀態的下緣在方塊的內容框裡').toBeLessThanOrEqual(engine.tile.bottom - 5);
+  expect(engine.svg.height, '1920×800:轉速條的高度(px;方塊不夠高時由 26 px 縮短,下限 10 px)').toBeGreaterThanOrEqual(10);
+  expect(engine.svg.height, '1920×800:轉速條的高度(px)').toBeLessThan(26);
+  // 其他方塊:沒有任何一格的內容比方塊高出半行以上(DejaVu Sans 下航線方塊高出 6 px,見 web-layout.md 第 6 節)
+  for (const tile of bar800.tiles) expect(tile.overflowY, `1920×800:${tile.tag} 的內容比方塊高多少(px)`).toBeLessThanOrEqual(8);
+  // 回到 1080 高:轉速條回到原本的 26 px(只在不夠高時才縮)
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await expect.poll(async () => (await page.locator('brm-instructor-app brm-conning-bar brm-engine .bar svg').first().boundingBox())!.height).toBeCloseTo(26, 0);
+  errors.expectNone();
+});
+
+test('重播檢視載入 E09 核心紀錄夾具、時間軸最後(航線偏移超過限值):兩列與單列的視窗下,航線方塊的位置圓點都不超出條', async ({ page, env }) => {
+  // 第三十一輪審查:航線偏移超過限值時位置圓點的中心在條的端點上,超出條 3 px,判定 4 列出
+  // 「brm-route div.bar.over scrollWidth 212 > clientWidth 209」(1366×768;第三十一輪之前就有)。第一版只在單列把圓點夾在條內,
+  // 兩列(視窗 ≤ 1900 px)仍然超出,文件卻寫 E09 的實際數值在兩列沒有水平裁切(當時只量了夾具的開頭)。現在單列與兩列都夾在條內。
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const view = page.locator('brm-replay-view');
+  await view.locator('input.file-input').setInputFiles(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E09-core.jsonl'));
+  const slider = view.locator('.timeline input.slider');
+  await expect(slider).toBeVisible({ timeout: 15_000 });
+  await slider.fill((await slider.getAttribute('max'))!);
+  const route = view.locator('brm-route');
+  await expect(route.locator('.bar'), '時間軸最後:航線偏移超過限值').toHaveClass(/over/);
+  for (const [width, height, rows] of [[1093, 614, 2], [1366, 768, 2], [1536, 864, 2], [1900, 1069, 2], [1920, 1080, 1]] as const) {
+    await page.setViewportSize({ width, height });
+    const label = `重播檢視 ${width}×${height}(E09 夾具,時間軸最後)`;
+    await expect.poll(async () => (await page.evaluate(probeConning)).rows, `${label}:conning 條的列數`).toBe(rows);
+    const report = await page.evaluate(probeLayout, REPLAY_LAYOUT);
+    expect(report.conning, `${label}:conning 條的水平裁切`).toEqual([]);
+    const dot = await route.evaluate((host) => {
+      const bar = host.shadowRoot!.querySelector('.bar')!.getBoundingClientRect();
+      const pos = host.shadowRoot!.querySelector('.bar .pos')!.getBoundingClientRect();
+      return { left: pos.left - bar.left, right: bar.right - pos.right, width: pos.width };
+    });
+    expect(dot.width, `${label}:位置圓點的寬度(px)`).toBeCloseTo(6, 0);
+    expect(dot.left, `${label}:位置圓點的左緣在條內(px)`).toBeGreaterThanOrEqual(0);
+    expect(dot.right, `${label}:位置圓點的右緣在條內(px)`).toBeGreaterThanOrEqual(0);
+    // 偏移在限值以上:圓點貼著條的一端(離該端的內緣不到 2 px)
+    expect(Math.min(dot.left, dot.right), `${label}:位置圓點貼著條的一端(px)`).toBeLessThan(2.5);
+  }
+  // 整頁的版面判定在文書筆電的視窗下通過
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await expect.poll(async () => (await page.evaluate(probeConning)).rows).toBe(2);
+  expect(layoutFailures(await page.evaluate(probeLayout, REPLAY_LAYOUT)), '重播檢視 1366×768(E09 夾具,時間軸最後)的版面問題').toEqual([]);
   errors.expectNone();
 });
 

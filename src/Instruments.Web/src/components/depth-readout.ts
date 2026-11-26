@@ -2,13 +2,14 @@
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatMeters } from '../lib/format.js';
 
 @customElement('brm-depth')
 export class DepthReadout extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .main {
         display: flex;
@@ -25,6 +26,26 @@ export class DepthReadout extends LitElement {
         flex-direction: column;
         gap: 1px;
         font-size: 11px;
+      }
+      /* conning 條單列:大字級不超過方塊寬度的 33%,13 格(方塊約 155 px)時兩位數的 UKC(「19.2」)在最寬的 CI 字型下放得下
+         (原本固定 56 px,四個字比方塊寬 8 至 33 px);100 m 以上(深水,五個字元)再縮到 26.5%;1000 m 以上(六個字元以上,
+         例如「1234.5」;情境的水深沒有上限)依字元數再縮:方塊寬度的 130% 除以字元數(六個字元 21.7%、七個字元 18.6%)。
+         「擱淺」放不下時換到下一行 */
+      @container style(--brm-conning-single: 1) {
+        .main {
+          flex-wrap: wrap;
+          align-content: flex-start;
+          gap: 0 4px;
+        }
+        .main .value.big {
+          font-size: clamp(28px, min(3.2vw, 33cqi), 56px);
+        }
+        .main .value.big.long {
+          font-size: clamp(28px, min(3.2vw, 26.5cqi), 56px);
+        }
+        .main .value.big.xlong {
+          font-size: clamp(28px, min(3.2vw, calc(130cqi / var(--ukc-chars, 6))), 56px);
+        }
       }
     `,
   ];
@@ -49,11 +70,17 @@ export class DepthReadout extends LitElement {
   override render() {
     const alarm = this.valid && (this.aground || (!this.sensorInvalid && this.ukc <= this.alarmBelow));
     const warn = this.valid && !this.sensorInvalid && !alarm && this.ukc <= this.warnBelow;
+    const ukcText = this.valid ? formatMeters(this.ukc) : '--.-';
+    // 「100.0」以上(五個字元以上)比平常多一位數:conning 條單列的窄方塊用較小的字級(見上方樣式);
+    // 「1000.0」以上(六個字元以上)再依字元數縮(--ukc-chars)
+    const long = ukcText.length >= 5;
+    const xlong = ukcText.length >= 6;
+    const valueStyle = `${xlong ? `--ukc-chars:${ukcText.length};` : ''}${this.sensorInvalid ? 'opacity:0.45;text-decoration:line-through' : ''}`;
     return html`
       <div class="tile">
         <div class="tile-title"><span>UKC</span><span class="zh">龍骨下水深 m${this.sensorInvalid ? html` <span class="alarm" title="測深儀無效:顯示最後有效值">無效</span>` : nothing}</span></div>
         <div class="main ${alarm ? 'alarm' : ''}">
-          <span class="value big ${warn ? 'warning' : ''}" style=${this.sensorInvalid ? 'opacity:0.45;text-decoration:line-through' : ''}>${this.valid ? formatMeters(this.ukc) : '--.-'}</span>
+          <span class="value big ${warn ? 'warning' : ''} ${long ? 'long' : ''} ${xlong ? 'xlong' : ''}" style=${valueStyle}>${ukcText}</span>
           ${this.aground ? html`<span class="label" style="color: inherit">擱淺</span>` : nothing}
         </div>
         <div class="rows">

@@ -6,7 +6,7 @@
 
 import { LitElement, html, svg, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatSignedDeg } from '../lib/format.js';
 import { clamp } from '../lib/angles.js';
 import type { RollState } from '../types/state.js';
@@ -39,6 +39,7 @@ function tip(deg: number, radius: number): [number, number] {
 export class Inclinometer extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .scale {
         flex: 1;
@@ -86,7 +87,7 @@ export class Inclinometer extends LitElement {
       .readouts .value.main {
         font-size: clamp(12px, min(1.1vw, 11cqi), 20px);
       }
-      /* 窄方塊(conning 條單列 12–13 格,1920 寬約 140–160 px):數值改成單欄,每項一行(兩欄時「靜傾」與「T / 速率」會被方塊右緣裁切) */
+      /* 窄方塊(≤ 200 px):數值改成單欄,每項一行(兩欄時「靜傾」與「T / 速率」會被方塊右緣裁切)。conning 條單列一律單欄,見本樣式末的樣式查詢區塊 */
       @container (max-width: 200px) {
         .readouts {
           grid-template-columns: minmax(0, 1fr);
@@ -102,8 +103,43 @@ export class Inclinometer extends LitElement {
       .value.warn {
         color: var(--ob-warning);
       }
+      /* 警報等級是「警報色的字」,與警示等級(.value.warn)同一種寫法。共用樣式的 .alarm 是徽章(紅底、深色字;shared.ts),
+         這裡只改字色的話是紅底紅字,|橫搖角| ≥ 警報門檻時數值看不到(審查第三十一輪 conning 條時發現,兩列與單列都是):
+         把徽章的底色、內距與圓角一併取消 */
       .value.alarm {
         color: var(--ob-alarm);
+        background: none;
+        padding: 0;
+        border-radius: 0;
+      }
+      /* conning 條單列:數值一律單欄、每項一行(兩欄時每欄要約 170 px 才放得下「T / 速率 12.5 s −10.5°/s」;原本 200 px 以上排兩欄,
+         2560 寬的單列(方塊約 200 至 250 px)被方塊右緣裁切);放不下一行時數值換到標籤的下一行(靠右),「T / 速率」的週期與角速度
+         (樣板的 .nb)各自不拆開、整段比方塊寬時在兩者之間換行。字級可到方塊寬度的 12.2%(橫搖角)與 10%(其餘) */
+      @container style(--brm-conning-single: 1) {
+        .readouts {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .readouts > span {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 0 4px;
+          min-width: 0;
+        }
+        .readouts > span > .value {
+          margin-left: auto;
+          text-align: right;
+        }
+        .readouts .roll-period {
+          white-space: normal;
+        }
+        .readouts .value {
+          font-size: clamp(11px, min(0.9vw, 10cqi), 16px);
+        }
+        .readouts .value.main {
+          font-size: clamp(12px, min(1.1vw, 12.2cqi), 20px);
+        }
       }
     `,
   ];
@@ -152,7 +188,7 @@ export class Inclinometer extends LitElement {
           <span><span class="label">橫搖</span> <span class="value main roll-angle ${level}">${formatHeel(angle)}</span></span>
           <span><span class="label">靜傾</span> <span class="value roll-static" style="color: var(--ob-order)">${formatHeel(r?.staticHeel_deg)}</span></span>
           <span><span class="label">動態</span> <span class="value roll-dynamic">${formatHeel(dynamic)}</span></span>
-          <span><span class="label">T / 速率</span> <span class="value roll-period">${r && r.naturalPeriod_s > 0 ? `${r.naturalPeriod_s.toFixed(1)} s` : '--'} ${r ? formatSignedDeg(r.rate_degps) + '/s' : ''}</span></span>
+          <span><span class="label">T / 速率</span> <span class="value roll-period"><span class="nb">${r && r.naturalPeriod_s > 0 ? `${r.naturalPeriod_s.toFixed(1)} s` : '--'}</span> <span class="nb">${r ? formatSignedDeg(r.rate_degps) + '/s' : ''}</span></span></span>
         </div>
       </div>
     `;

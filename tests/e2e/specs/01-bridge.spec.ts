@@ -2,12 +2,15 @@
 // 文書筆電的視窗大小(1280×720、1366×768、1536×864;失電後 header 折成兩行)下每個控制項都點得到、VHF 文字欄 / DSC 不必捲動(版面;判定在 support/layout.ts);
 // 麥克風被拒時(1280×720、1366×768 失電後)PTT 鈕上寫「無麥克風」、DSC 仍不必捲動,VHF 訊息紀錄列貼底(看得到最新兩則);
 // 1093×614(1366×768 在 125 % 縮放)的非關鍵判定(車鐘 / 艏側推鈕內文字、浮貼外力讀數不超出航跡圖;E09 失電後警報標題列一行、
-// 2 筆警報完整可見、meta 不截斷);1280×720 的浮貼外力讀數放得下時不攔滑鼠(讀數中央的滾輪縮放、拖曳平移航跡圖)。
+// 2 筆警報完整可見、meta 不截斷);1280×720 的浮貼外力讀數放得下時不攔滑鼠(讀數中央的滾輪縮放、拖曳平移航跡圖);
+// 1920×1080(conning 條單列 10 至 13 格):真實核心的狀態與極端數值下讀數列各方塊不被水平裁切,字距加大 3 % 仍通過(第三十一輪);
+// 審查後補:顯示的內容沒有少(浪向玫瑰、船速方塊的中文標籤)、橫搖角警報等級看得到字、UKC 六個字元與沒有空白的長字串不被裁切。
 import type { Locator, Page } from '@playwright/test';
 import { bridgeUrl, instructorUrl } from '../support/env.ts';
 import { ensureRunning, ensureScenario, expect, scenarioPath, test } from '../support/fixtures.ts';
-import { BRIDGE_LAYOUT, layoutFailures, probeLayout } from '../support/layout.ts';
-import { PageErrors, waitConnected } from '../support/pages.ts';
+import { CONNING_NONE, CONNING_ROLL, CONNING_ROUTE, CONNING_ROUTE_USUAL, CONNING_SEA, CONNING_UNDERWAY, CONNING_USUAL, CONNING_WIDEST } from '../support/conning-values.ts';
+import { BRIDGE_LAYOUT, layoutFailures, overrideConning, probeLayout } from '../support/layout.ts';
+import { PageErrors, expectConningSingleRow, waitConnected } from '../support/pages.ts';
 import type { CoreClient } from '../support/ws.ts';
 
 /** E09 強制觸發全船失電,等 ≥ 2 筆警報與 ≥ 2 個故障(header 折成兩行、右欄最吃高度的情況) */
@@ -304,4 +307,108 @@ test('操船台 1280×720(E13):浮貼外力讀數放得下時不攔滑鼠,讀數
   } finally {
     if (before && before !== id) await restoreScenario(core, before, id);
   }
+});
+
+test('操船台 1920×1080(conning 條單列 10 至 13 格):真實核心的狀態與極端數值下,讀數列各方塊不被水平裁切,字距加大 3 % 仍通過', async ({ page, env, core }) => {
+  // 第三十一輪:視窗寬於 1900 px 時 conning 條排成單列,13 格時每格只有約 117 至 160 px。原本各格的寬度比例與固定的字級(大字 56 px)
+  // 讓主機轉速「-150」、UKC「19.2」、艏側推「P 100%」、航線偏移、凍結時的模擬時間、「GNSS 無效」的標題等比方塊寬,被方塊邊界切掉;
+  // 「有浪、有橫搖、沒有航線」的組合還對錯了格(時間格只有 134 px)。現在每格 =「基本寬度 + 依比例分到的多餘寬度」,放不下的內容換行。
+  // 判定在 support/pages.ts 的 expectConningSingleRow(版面判定通過、排成一列、內容不比方塊高、字距加大 3 % 後判定 4 仍通過)。
+  const errors = new PageErrors(page);
+  await ensureRunning(core);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(bridgeUrl(env));
+  await waitConnected(page);
+  await expect(page.locator('brm-heading .hdg .value')).toHaveText(/^\d{3}$/);
+  await expect(page.locator('brm-vhf .pill')).toHaveText('已連線');
+  // 1) 真實核心目前的狀態(不論前面的案例留下哪一個情境)
+  const live = await expectConningSingleRow(page, BRIDGE_LAYOUT, '操船台 1920×1080(核心目前的狀態)');
+  expect(live.tiles.length, '格數').toBeGreaterThanOrEqual(10);
+
+  // 2) 極端但合理的數值(support/conning-values.ts)。選填欄位決定格數:航線(或能見度)、浪 / 船間交互作用 / 浪一階運動、橫搖
+  const route = CONNING_ROUTE;
+  const sea = CONNING_SEA;
+  const roll = CONNING_ROLL;
+  const none = CONNING_NONE;
+  const widest = CONNING_WIDEST;
+  const usual = CONNING_USUAL;
+  const usualRoute = CONNING_ROUTE_USUAL;
+  const combos: Array<{ name: string; cells: number; extra: Record<string, unknown> }> = [
+    { name: '10 格', cells: 10, extra: {} },
+    { name: '11 格(航線)', cells: 11, extra: { route, visibility_nm: 0.2 } },
+    { name: '12 格(航線、浪)', cells: 12, extra: { route, visibility_nm: 10, ...sea } },
+    { name: '12 格(浪、橫搖;沒有航線)', cells: 12, extra: { ...sea, roll } },
+    { name: '13 格(航線、浪、橫搖)', cells: 13, extra: { route, visibility_nm: 10, ...sea, roll } },
+  ];
+  for (const combo of combos) {
+    await test.step(combo.name, async () => {
+      // 最寬的數值
+      expect(await page.evaluate(overrideConning, { patch: { ...none, ...widest, ...combo.extra }, config: { rudderMax_deg: 70 }, setHeading: 359 })).toBe(combo.cells);
+      await expect(page.locator('brm-engine .top .value.big')).toHaveText('-150');
+      await expectConningSingleRow(page, BRIDGE_LAYOUT, `操船台 1920×1080 ${combo.name}、最寬的數值`, combo.cells);
+      // 顯示的內容沒有少(審查後補;expectConningSingleRow 也檢查各方塊的圖形與文字都有顯示):浪向玫瑰在單列一律顯示;
+      // 船速方塊 125 px 以上(10 至 12 格)標籤的中文部分看得到(第三十一輪的第一版在 150 px 以下省略,11 至 12 格因此少了中文標籤)
+      if ('waves' in combo.extra) expect((await page.locator('brm-sea .rose').boundingBox())?.width ?? 0, `${combo.name}:浪向玫瑰的寬度(px)`).toBeGreaterThanOrEqual(24);
+      const speedWidth = (await page.locator('brm-speed').boundingBox())!.width;
+      if (combo.cells <= 12) expect(speedWidth, `${combo.name}:船速方塊的寬度(px)`).toBeGreaterThan(125);
+      if (speedWidth > 125) for (const zh of ['對水', '對地', '航跡向']) await expect(page.locator('brm-speed .label .zh', { hasText: zh }), `${combo.name}:船速方塊的「${zh}」`).toBeVisible();
+      // 橫搖角超過警報門檻(25°):警報色的字、沒有徽章的紅底(原本共用樣式的徽章底色加上元件自己的警報字色,紅底紅字,數值看不到)
+      if ('roll' in combo.extra) {
+        const angle = page.locator('brm-inclinometer .roll-angle');
+        await expect(angle).toHaveClass(/alarm/);
+        await expect(angle).toHaveText('P 35.5°');
+        const colors = await angle.evaluate((el) => ({ color: getComputedStyle(el).color, background: getComputedStyle(el).backgroundColor }));
+        expect(colors.background, '橫搖角(警報等級)沒有底色').toBe('rgba(0, 0, 0, 0)');
+        expect(colors.color, '橫搖角(警報等級)的字色與方塊的底色不同').not.toBe(await page.locator('brm-inclinometer .tile').evaluate((el) => getComputedStyle(el).backgroundColor));
+      }
+      // 平常的位數:主要數值的字級不比第三十一輪之前小超過 10 %(之前:航向 50.5(13 格)至 56、轉速 56、UKC 56、ROT 28、船速 28、
+      // 舵角 / 艏側推 20、時間 20、航線偏移 28 px);不是靠一路縮字塞進方塊
+      const extra = 'route' in combo.extra ? { ...combo.extra, route: usualRoute } : combo.extra;
+      expect(await page.evaluate(overrideConning, { patch: { ...none, ...usual, ...extra }, config: { rudderMax_deg: 35 }, issues: ['heading'] })).toBe(combo.cells);
+      await expect(page.locator('brm-depth .main .value.big')).toHaveText('19.2');
+      const bar = await expectConningSingleRow(page, BRIDGE_LAYOUT, `操船台 1920×1080 ${combo.name}、平常的位數`, combo.cells);
+      // 鍵是「父元素的類別>數值的類別」(support/layout.ts 的 probeConning);狀態類別(warning、caution、alarm…)在後面,以開頭比對
+      const font = (tag: string, prefix: string): number => {
+        const tile = bar.tiles.find((t) => t.tag === tag);
+        expect(tile, tag).toBeDefined();
+        const key = Object.keys(tile!.fonts).find((k) => k.startsWith(prefix));
+        expect(key, `${tag} 的數值 ${prefix}(量到的:${Object.keys(tile!.fonts).join('、')})`).toBeDefined();
+        return tile!.fonts[key!]!;
+      };
+      expect(font('brm-heading', '.hdg>.value.big'), '航向的字級').toBeGreaterThanOrEqual(50.4);
+      expect(font('brm-rot', '.tile>.readout.value.mid'), 'ROT 的字級').toBeGreaterThanOrEqual(25.2);
+      expect(font('brm-speed', '.row>.value.mid'), 'STW / SOG 的字級').toBeGreaterThanOrEqual(25.2);
+      expect(font('brm-rudder', '>.value.small'), '舵角的字級').toBeGreaterThanOrEqual(18);
+      expect(font('brm-engine', '.top>.value.big'), '主機轉速的字級').toBeGreaterThanOrEqual(50.4);
+      expect(font('brm-thruster', '>.value.small'), '艏側推的字級').toBeGreaterThanOrEqual(18);
+      expect(font('brm-depth', '.main'), 'UKC 的字級').toBeGreaterThanOrEqual(50.4);
+      expect(font('brm-clock', '.row>.value.small'), '時鐘的字級').toBeGreaterThanOrEqual(18);
+      if ('route' in combo.extra) expect(font('brm-route', '.xtd>.value.mid'), '航線偏移的字級').toBeGreaterThanOrEqual(25.2);
+    });
+  }
+  // 3) 尚未收到資料(noData:UKC 顯示 --.-、航向標「可疑」)的 13 格
+  expect(await page.evaluate(overrideConning, { patch: { ...none, ...usual, route, visibility_nm: 10, ...sea, roll }, config: { rudderMax_deg: 70 }, noData: true })).toBe(13);
+  await expect(page.locator('brm-depth .main .value.big')).toHaveText('--.-');
+  await expectConningSingleRow(page, BRIDGE_LAYOUT, '操船台 1920×1080 13 格、尚未收到資料', 13);
+
+  // 4) 再多一位數與沒有空白的長字串(13 格;審查後補。情境的水深、目標船代號、航點名稱都沒有上限):
+  //    UKC 1000 m 以上(六個字元)、航線偏移六位數、目標船代號 13 個字元並超限、航點名稱 22 個字元 ——
+  //    原本「1234.5」左右各被切約 3 px、「交互作用 <代號> 超限」的「超限」與航線方塊標題的名稱被方塊邊界切掉 6 至 23 px
+  const long = {
+    depthBelowKeel: 1234.5,
+    waterDepth: 1240.6,
+    shipInteraction: { active: true, targetId: 'EVER_GIVEN_02', forceSway_t: -123.4, momentYaw_tm: -12345, event: true },
+    route: { ...CONNING_UNDERWAY.route, nextWaypoint: 'KAOHSIUNG_2ND_ENTRANCE', xtd_m: -123456, xtdLimit_m: 18520, distanceToWaypoint_nm: 12.34 },
+  };
+  expect(await page.evaluate(overrideConning, { patch: { ...CONNING_UNDERWAY, ...long }, setHeading: 74 })).toBe(13);
+  await expect(page.locator('brm-depth .main .value.big')).toHaveText('1234.5');
+  await expect(page.locator('brm-route .tile-title .zh')).toHaveText('→ KAOHSIUNG_2ND_ENTRANCE');
+  await expect(page.locator('brm-sea .interaction .label')).toHaveText('交互作用 EVER_GIVEN_02 超限');
+  await expect(page.locator('brm-route .xtd .value')).toHaveText('123456m');
+  const longBar = await expectConningSingleRow(page, BRIDGE_LAYOUT, '操船台 1920×1080 13 格、多一位數與長字串', 13);
+  // UKC 六個字元:字級依字元數縮(方塊寬度的 130 % ÷ 6),不低於下限 28 px
+  const ukcFont = Object.entries(longBar.tiles.find((t) => t.tag === 'brm-depth')!.fonts).find(([key]) => key.startsWith('.main'))![1];
+  expect(ukcFont, 'UKC 1234.5 的字級(px)').toBeGreaterThanOrEqual(28);
+  expect(ukcFont, 'UKC 1234.5 的字級(px)').toBeLessThan(41);
+  errors.expectNone();
 });

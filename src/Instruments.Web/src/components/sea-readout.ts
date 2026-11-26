@@ -7,7 +7,7 @@
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatBearing, formatSignedDeg } from '../lib/format.js';
 import { WAVE_SPECTRUM_LABELS, type ShipInteractionState, type WaveMotionState, type WaveState } from '../types/state.js';
 
@@ -42,6 +42,7 @@ export function formatWaveMotionSummary(m: Pick<WaveMotionState, 'pitch_deg' | '
 export class SeaReadout extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .body {
         flex: 1;
@@ -123,7 +124,8 @@ export class SeaReadout extends LitElement {
           row-gap: 1px;
         }
       }
-      /* 更窄(單列 13 格,約 150 px):不顯示浪向玫瑰,相對來向仍有數值 */
+      /* 更窄(165 px 以下):不顯示浪向玫瑰,相對來向仍有數值。只有兩列(視窗 ≤ 1900 px)用這個門檻;
+         conning 條單列一律顯示(本樣式末的樣式查詢區塊) */
       @container (max-width: 165px) {
         .rose {
           display: none;
@@ -142,6 +144,39 @@ export class SeaReadout extends LitElement {
         justify-content: space-between;
         gap: 6px;
         white-space: nowrap;
+      }
+      /* conning 條單列:
+         - 交互作用列的標籤與數值放不下一行時數值換到下一行(任何寬度;原本只有 215 px 以下的方塊才換行,
+           2560 寬的單列(方塊約 220 至 250 px)長數值被方塊邊界裁切);數值的兩段(側向力 Y、艏搖力矩 N,樣板的 .nb)各自不拆開,
+           整段比方塊寬時在兩段之間換行;
+         - 交互作用列的標籤(「交互作用」、目標船代號、「超限」三段,樣板的 .nb)比方塊寬時在段與段之間換行,代號本身比方塊寬時才在字間換行
+           (原本標籤不換行:13 格、代號 10 個字元以上時「超限」被方塊邊界切掉 6 至 15 px;情境的目標船代號沒有長度上限) */
+      @container style(--brm-conning-single: 1) {
+        .interaction .row {
+          flex-wrap: wrap;
+          row-gap: 1px;
+        }
+        .interaction .value {
+          white-space: normal;
+          text-align: right;
+        }
+        .interaction .label {
+          white-space: normal;
+          min-width: 0;
+        }
+        .interaction .label .nb {
+          max-width: 100%;
+          overflow-wrap: anywhere;
+        }
+      }
+      /* conning 條單列的浪向玫瑰:一律顯示(蓋過上面 165 px 的門檻)。單列的格寬第三十一輪重排之後,12 格的浪方塊在 1920×1080 是
+         164 至 166 px(原本約 179 px),沿用 165 px 的門檻會讓 12 格(情境庫的 E17b)少掉原本有的玫瑰圖。單列最窄的方塊
+         (13 格、視窗 1901 px,150 px)也放得下:玫瑰圖旁的「Hs / Tp」一列放不下一行時數值換到標籤的下一行(conningTileStyles 的 .row);
+         第三十一輪之前 13 格在視窗 1922 px 以下不顯示玫瑰圖,現在也顯示 */
+      @container style(--brm-conning-single: 1) {
+        .rose {
+          display: block;
+        }
       }
     `,
   ];
@@ -183,8 +218,8 @@ export class SeaReadout extends LitElement {
         ${si
           ? html`<div class="interaction ${si.event ? 'event' : ''}" title="船間交互作用:側向力(右舷正)/ 艏搖力矩(艏向右正);超過門檻以警示色">
               <div class="row">
-                <span class="label">交互作用${si.active && si.targetId ? ` ${si.targetId}` : ''}${si.event ? ' 超限' : ''}</span>
-                <span class="value interaction-force">${si.active ? html`Y ${formatSignedTonnes(si.forceSway_t)}<span class="unit">t</span> N ${formatSignedTonnes(si.momentYaw_tm, 0)}<span class="unit">t·m</span>` : '無目標'}</span>
+                <span class="label"><span class="nb">交互作用</span>${si.active && si.targetId ? html` <span class="nb">${si.targetId}</span>` : nothing}${si.event ? html` <span class="nb">超限</span>` : nothing}</span>
+                <span class="value interaction-force">${si.active ? html`<span class="nb">Y ${formatSignedTonnes(si.forceSway_t)}<span class="unit">t</span></span> <span class="nb">N ${formatSignedTonnes(si.momentYaw_tm, 0)}<span class="unit">t·m</span></span>` : '無目標'}</span>
               </div>
             </div>`
           : nothing}

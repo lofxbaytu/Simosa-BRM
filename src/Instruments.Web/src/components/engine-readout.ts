@@ -2,7 +2,7 @@
 
 import { LitElement, html, svg, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatRpm } from '../lib/format.js';
 import { clamp } from '../lib/angles.js';
 import type { EngineRunState, TelegraphPosition } from '../types/state.js';
@@ -22,6 +22,7 @@ const ENGINE_STATE_LABEL: Record<EngineRunState, string> = {
 export class EngineReadout extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .top {
         display: flex;
@@ -62,6 +63,42 @@ export class EngineReadout extends LitElement {
         font-weight: 700;
         font-size: 14px;
         color: var(--ob-text);
+      }
+      /* conning 條單列:
+         - 轉速(大字)的字級不超過方塊寬度的 32.5%,13 格(方塊約 158 px)時「-150」放得下(原本固定 56 px,四個字比方塊寬);
+         - 轉速令放不下同一行時換到下一行(靠右);方塊窄於 232 px(「-150 令 -150」一行放不下)時固定在下一行,
+           不隨轉速的位數(0 / 70 / 100 / -100)在兩行之間跳動;
+         - 車鐘位置與主機狀態放不下一行時主機狀態換到下一行(靠右);
+         - 轉速條的高度平常是 26 px,方塊不夠高時(視窗很矮,conning 條只有 150 px 左右)可以縮到 10 px:換行之後內容比原本高,
+           把高度讓給文字,主機狀態那一行不被方塊下緣切掉(轉速條是 preserveAspectRatio="none" 的圖形,壓扁仍看得出轉速與轉速令的位置) */
+      @container style(--brm-conning-single: 1) {
+        .top {
+          flex-wrap: wrap;
+        }
+        .bar {
+          flex: 0 1 26px;
+          min-height: 10px;
+        }
+        .top .value.big {
+          font-size: clamp(28px, min(3.2vw, 32.5cqi), 56px);
+        }
+        .top .label {
+          margin-left: auto;
+          text-align: right;
+        }
+        .bottom {
+          flex-wrap: wrap;
+          gap: 0 6px;
+        }
+        .bottom > :last-child {
+          margin-left: auto;
+          white-space: nowrap;
+        }
+      }
+      @container style(--brm-conning-single: 1) and (max-width: 231px) {
+        .top .label {
+          flex-basis: 100%;
+        }
       }
     `,
   ];

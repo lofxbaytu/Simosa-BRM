@@ -18,6 +18,13 @@
 //  7.(資訊,不列入不合格)以 text-overflow: ellipsis 截斷的文字(scrollWidth > clientWidth + 1):第二十九輪 L5 加入 —
 //     1093×614 失電後警報 meta 的「00:00:03」被截成「00:00:…」,判定 1–6 都抓不到;各頁仍有刻意以 … 截斷的清單摘要,
 //     所以只列出供量測比對,個別元件的「不截斷」由各自的端對端斷言把關(例:01 的 1093×614 警報 meta)。
+//
+// conning 條單列(視窗寬於 1900 px)的餘裕(第三十一輪;web-layout.md 第 2.5 節):船上與教官筆電是 Windows(Edge / WebView2、
+// 微軟正黑體 / Segoe UI),字寬與 Linux 的字型不同,容器裡量不到。widenConningText 把 conning 條所有文字的字距加大(預設 0.03em),
+// 代表較寬的字型;加大之後判定 4 仍須通過(specs/01-bridge、02-instructor 的 1920×1080 案例)。probeConning 量各方塊的寬度、
+// 排成幾列、內容有沒有比方塊高(被方塊自己的 overflow: hidden 裁掉下緣)與各數值的字級;審查後另量「顯示的內容有沒有少」——
+// 各圖形(svg)的寬高、沒有畫出來的文字(display: none 等)、互相重疊的文字(內容比方塊高時,置中的內容會往上擠到標題列,
+// scrollHeight 看不出來)。overrideConning 把 conning 條顯示的狀態換成指定的值(極端數值、格數組合)。
 
 /** 關鍵控制:host 是 brm-* 元件的選擇器,inner 是其 shadow root 內的選擇器;至少要有 min 個(預設 1),每一個都必須不捲動就整個點得到 */
 export interface LayoutKeyControl {
@@ -476,3 +483,184 @@ export const REPLAY_LAYOUT: LayoutSpec = {
   ],
   lists: [{ name: '事件串流', host: 'brm-event-stream', list: '.list', rows: '.item', minRows: 0, minHeightPx: 64 }],
 };
+
+/**
+ * 在頁面內執行(page.evaluate):把 conning 條各方塊內所有文字的字距加大 em(0 = 還原),代表比量測用的字型更寬的字型
+ * (Windows 的字型在容器裡量不到)。標題列的英文縮寫原本就有 0.04em 的字距,加在它上面。回傳處理的方塊數。
+ * 樣式注入各方塊的 shadow root;之後方塊重新渲染也仍然有效(Lit 只更新樣板裡的節點)。
+ */
+export function widenConningText(em: number): number {
+  const bars: Element[] = [];
+  const find = (root: Document | ShadowRoot): void => {
+    for (const el of Array.from(root.querySelectorAll('*'))) {
+      if (el.tagName === 'BRM-CONNING-BAR') bars.push(el);
+      if (el.shadowRoot) find(el.shadowRoot);
+    }
+  };
+  find(document);
+  let count = 0;
+  for (const bar of bars) {
+    for (const tile of Array.from(bar.shadowRoot!.querySelectorAll('.bar > *'))) {
+      if (!tile.shadowRoot) continue;
+      tile.shadowRoot.querySelector('style[data-e2e-widen]')?.remove();
+      if (em > 0) {
+        const style = document.createElement('style');
+        style.setAttribute('data-e2e-widen', '1');
+        style.textContent = `* { letter-spacing: ${em}em !important; } .tile-title, .tile-title > :not(.zh) { letter-spacing: ${0.04 + em}em !important; }`;
+        tile.shadowRoot.appendChild(style);
+      }
+      count++;
+    }
+  }
+  return count;
+}
+
+/** conning 條一個方塊的量測 */
+export interface ConningTileReport {
+  /** 元件標籤(brm-heading …) */
+  tag: string;
+  width: number;
+  height: number;
+  /** 方塊內容比方塊高多少 px(> 0 時下緣被方塊的 overflow: hidden 裁掉) */
+  overflowY: number;
+  /** 各數值(.value)的 computed font-size:鍵是「父元素的類別>數值的類別」,同一個鍵只記第一個 */
+  fonts: Record<string, number>;
+  /** 方塊內各圖形(svg)的寬高(px);寬或高是 0 表示圖形沒有顯示(display: none) */
+  graphics: Array<{ label: string; width: number; height: number }>;
+  /** 沒有畫出來的文字(display: none、visibility: hidden、opacity 0;不含 SVG 內的文字):修正不可以把內容藏起來 */
+  hiddenText: string[];
+  /** 互相重疊的兩段文字(各自的墨水範圍相交超過 1.5 px;不含 SVG 內的文字與祖孫關係的元素) */
+  overlaps: string[];
+}
+
+export interface ConningReport {
+  /** 排成幾列(各方塊上緣的相異值個數) */
+  rows: number;
+  width: number;
+  height: number;
+  tiles: ConningTileReport[];
+}
+
+/** 在頁面內執行(page.evaluate):量可見的那一條 conning 條(頁面裡隱藏的另一條不算)。找不到時 tiles 是空陣列。 */
+export function probeConning(): ConningReport {
+  let bar: Element | null = null;
+  const find = (root: Document | ShadowRoot): void => {
+    for (const el of Array.from(root.querySelectorAll('*'))) {
+      if (bar) return;
+      if (el.tagName === 'BRM-CONNING-BAR' && el.getBoundingClientRect().width > 0) bar = el;
+      else if (el.shadowRoot) find(el.shadowRoot);
+    }
+  };
+  find(document);
+  const out: ConningReport = { rows: 0, width: 0, height: 0, tiles: [] };
+  if (!bar) return out;
+  const host = bar as Element;
+  const hb = host.getBoundingClientRect();
+  out.width = hb.width;
+  out.height = hb.height;
+  const classes = (el: Element | null): string => (el ? Array.from(el.classList).map((c) => `.${c}`).join('') : '');
+  const canvas = document.createElement('canvas').getContext('2d')!;
+  const tops = new Set<number>();
+  for (const tile of Array.from(host.shadowRoot!.querySelectorAll('.bar > *'))) {
+    const b = tile.getBoundingClientRect();
+    tops.add(Math.round(b.top));
+    const root = tile.shadowRoot;
+    const inner = root?.querySelector('.tile');
+    const fonts: Record<string, number> = {};
+    for (const v of Array.from(root?.querySelectorAll('.value') ?? [])) {
+      const key = `${classes(v.parentElement)}>${classes(v)}`;
+      if (!(key in fonts)) fonts[key] = parseFloat(getComputedStyle(v).fontSize);
+    }
+    const graphics = Array.from(root?.querySelectorAll('svg') ?? []).map((svg) => {
+      const r = svg.getBoundingClientRect();
+      return { label: svg.getAttribute('aria-label') ?? classes(svg.parentElement), width: r.width, height: r.height };
+    });
+    // 文字:沒有畫出來的(沒有任何行框,或 visibility / opacity 讓它看不見)與互相重疊的。
+    // 重疊以墨水範圍判定(行框含字型的上下留白,line-height: 1 的大字與相鄰的小字行框會相交但字沒有碰到):
+    // 基線 = 行框中線對齊字型的升降部,墨水 = 基線 − 實際升部 … 基線 + 實際降部(canvas measureText)
+    const hiddenText: string[] = [];
+    const inks: Array<{ left: number; right: number; top: number; bottom: number; text: string; parent: Element }> = [];
+    if (root) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = (node.textContent ?? '').replace(/\s+/g, ' ').trim();
+        const parent = node.parentElement;
+        if (!text || !parent || parent.tagName === 'STYLE' || parent instanceof SVGElement) continue;
+        const cs = getComputedStyle(parent);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0.5);
+        if (rects.length === 0 || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) {
+          hiddenText.push(text);
+          continue;
+        }
+        canvas.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+        const m = canvas.measureText(text);
+        for (const r of rects) {
+          const baseline = r.top + (r.height - (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent)) / 2 + m.fontBoundingBoxAscent;
+          inks.push({ left: r.left, right: r.right, top: baseline - m.actualBoundingBoxAscent, bottom: baseline + m.actualBoundingBoxDescent, text: text.slice(0, 24), parent });
+        }
+      }
+    }
+    const overlaps: string[] = [];
+    for (let i = 0; i < inks.length; i++) {
+      for (let j = i + 1; j < inks.length; j++) {
+        const p = inks[i]!;
+        const q = inks[j]!;
+        if (p.parent === q.parent || p.parent.contains(q.parent) || q.parent.contains(p.parent)) continue;
+        const w = Math.min(p.right, q.right) - Math.max(p.left, q.left);
+        const h = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
+        if (w > 1.5 && h > 1.5) overlaps.push(`「${p.text}」×「${q.text}」 ${w.toFixed(1)}×${h.toFixed(1)} px`);
+      }
+    }
+    out.tiles.push({ tag: tile.tagName.toLowerCase(), width: b.width, height: b.height, overflowY: inner ? inner.scrollHeight - inner.clientHeight : 0, fonts, graphics, hiddenText, overlaps });
+  }
+  out.rows = tops.size;
+  return out;
+}
+
+/** overrideConning 的參數:patch 蓋在目前(核心或紀錄來的)狀態上,值為 null 的欄位刪除;config 蓋在目前的船舶顯示設定上 */
+export interface ConningOverride {
+  patch: Record<string, unknown>;
+  config?: Record<string, unknown>;
+  noData?: boolean;
+  issues?: string[];
+  setHeading?: number | null;
+}
+
+/**
+ * 在頁面內執行(page.evaluate):把可見的那一條 conning 條顯示的狀態換成指定的值 —— 以實例屬性蓋過 Lit 的存取子,頁面之後每一幀的指定都被忽略,
+ * 所以畫面停在給定的狀態(駕駛台、完整教官站、重播檢視都可用)。選填欄位(route / visibility_nm、waves / waveMotion / shipInteraction、roll)
+ * 決定格數。回傳排版完成後的格數;找不到 conning 條時回傳 -1。
+ */
+export function overrideConning(arg: ConningOverride): Promise<number> {
+  type Bar = HTMLElement & { state: Record<string, unknown>; config: Record<string, unknown>; requestUpdate(): void; updateComplete: Promise<unknown>; __held?: Record<string, unknown>; __base?: { state: Record<string, unknown>; config: Record<string, unknown> } };
+  let found: Element | null = null;
+  const find = (root: Document | ShadowRoot): void => {
+    for (const el of Array.from(root.querySelectorAll('*'))) {
+      if (found) return;
+      if (el.tagName === 'BRM-CONNING-BAR' && el.getBoundingClientRect().width > 0) found = el;
+      else if (el.shadowRoot) find(el.shadowRoot);
+    }
+  };
+  find(document);
+  if (!found) return Promise.resolve(-1);
+  const bar = found as Bar;
+  if (!bar.__held) {
+    bar.__base = { state: bar.state, config: bar.config };
+    const held: Record<string, unknown> = {};
+    bar.__held = held;
+    for (const key of ['state', 'config', 'noData', 'issues', 'setHeading']) Object.defineProperty(bar, key, { configurable: true, get: () => held[key], set: () => undefined });
+  }
+  const state: Record<string, unknown> = { ...bar.__base!.state };
+  for (const [key, value] of Object.entries(arg.patch)) {
+    if (value === null) delete state[key];
+    else state[key] = value;
+  }
+  Object.assign(bar.__held, { state, config: { ...bar.__base!.config, ...(arg.config ?? {}) }, noData: arg.noData ?? false, issues: arg.issues ?? [], setHeading: arg.setHeading ?? undefined });
+  bar.requestUpdate();
+  const tiles = (): Array<Element & { updateComplete?: Promise<unknown> }> => Array.from(bar.shadowRoot!.querySelectorAll('.bar > *'));
+  return bar.updateComplete
+    .then(() => Promise.all(tiles().map((t) => t.updateComplete)))
+    .then(() => new Promise<number>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(tiles().length)))));
+}

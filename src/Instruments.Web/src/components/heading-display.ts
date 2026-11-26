@@ -2,7 +2,7 @@
 
 import { LitElement, html, svg, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatHeading, formatHeadingDecimal } from '../lib/format.js';
 import { headingDifference, normalizeHeading } from '../lib/angles.js';
 
@@ -15,6 +15,7 @@ const PX_PER_DEG = VIEW_W / (HALF_SPAN * 2);
 export class HeadingDisplay extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .tile {
         align-items: stretch;
@@ -25,7 +26,7 @@ export class HeadingDisplay extends LitElement {
         justify-content: center;
         gap: 8px;
       }
-      /* 窄方塊(conning 條單列 13 格,1920 寬約 150 px):大字級不超過方塊寬度的 33%,「000 359.9°」不被方塊右緣裁切 */
+      /* 大字級不超過方塊寬度的 33%(conning 條兩列時的窄方塊;單列另有規則,見本樣式末的樣式查詢區塊) */
       .hdg .value.big {
         font-size: clamp(28px, min(3.2vw, 33cqi), 56px);
       }
@@ -69,6 +70,26 @@ export class HeadingDisplay extends LitElement {
         opacity: 0.45;
         text-decoration: line-through;
         text-decoration-thickness: 2px;
+      }
+      /* conning 條單列(shared.ts 的 conningTileStyles):三位數的航向與含小數的航向放得下時同一行;放不下(12 至 13 格,
+         方塊約 150 至 170 px)時小數換到下一行(置中),不被方塊邊界裁切。大字級不超過方塊寬度的 38%(方塊 148 px 以上就是 56 px)。
+         原本以縮小大字(33cqi)硬排成一行,12 / 13 格時仍被左右兩側各切掉 2 至 5 px。下方的「設定 / COG」放不下一行時 COG 換到下一行 */
+      @container style(--brm-conning-single: 1) {
+        .hdg {
+          flex-wrap: wrap;
+          gap: 0 8px;
+        }
+        .hdg .value.big {
+          font-size: clamp(28px, min(3.2vw, 38cqi), 56px);
+        }
+        .sub {
+          flex-wrap: wrap;
+          gap: 0 6px;
+          white-space: nowrap;
+        }
+        .sub > :last-child {
+          margin-left: auto;
+        }
       }
     `,
   ];

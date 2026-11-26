@@ -169,6 +169,48 @@ export const tileStyles = css`
   }
 `;
 
+/**
+ * conning 條各方塊(brm-heading … brm-route)共用的樣式,接在 tileStyles 之後(第三十一輪;docs/design/web-layout.md 第 2.5 節)。
+ *
+ * 只在 conning 條排成**單列**時作用:brm-conning-bar 在視窗寬於 1900 px 時對 .bar 設 --brm-conning-single: 1(兩列時是 0),
+ * 各方塊以 `@container style(--brm-conning-single: 1)`(樣式查詢;Chromium / Edge / WebView2 111 以上)包住單列專用的規則,
+ * 要再依方塊寬度分情況時與尺寸條件合寫(`style(…) and (max-width: …)`)。兩列(視窗 ≤ 1900 px)與不在 conning 條內時這些規則都不套用,
+ * 排法與第三十一輪之前逐項相同;不支援樣式查詢的瀏覽器也是(退回原本的排法,不會出錯)。
+ *
+ * 原則:內容放不下時在方塊內**換行**,不讓方塊邊界(.tile 的 overflow: hidden)把數值或單位切掉 —— 單列 10 至 13 格時每格只有
+ * 約 117 至 210 px,字型較寬(CI 的 DejaVu Sans、Windows 的字型)時原本剛好放得下的一列就被裁切。這裡的換行只在「放不下」時才發生。
+ */
+export const conningTileStyles = css`
+  @container style(--brm-conning-single: 1) {
+    /* 標題列:英文縮寫與中文標題放不下一行時,中文標題換到下一行(靠右);中文標題本身比方塊寬時在詞間 / 字間換行,
+       沒有空白的長字串(航線方塊標題裡的航點名稱,例如 22 個字元的 KAOHSIUNG_2ND_ENTRANCE)比方塊寬時在字元之間換行 */
+    .tile-title {
+      flex-wrap: wrap;
+      row-gap: 0;
+    }
+    .tile-title .zh {
+      margin-left: auto;
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+    /* 「標籤 + 數值」的一列:放不下時數值換到標籤的下一行(靠右) */
+    .row {
+      flex-wrap: wrap;
+      row-gap: 0;
+    }
+    .row > :last-child {
+      margin-left: auto;
+    }
+    /* 可以在內部換行的數值裡「盡量不拆開」的一段(數值與它的單位):行內區塊 —— 一行放得下整段時整段一起換行;
+       連單獨一行都放不下(比所在的欄還寬)時才在段內的空白處換行,仍不被裁切 */
+    .nb {
+      display: inline-block;
+    }
+  }
+`;
+
 export const COMMAND_EVENT = 'sim-command';
 
 export type CommandEvent = CustomEvent<SimCommand>;

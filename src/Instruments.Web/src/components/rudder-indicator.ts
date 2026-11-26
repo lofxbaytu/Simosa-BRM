@@ -2,7 +2,7 @@
 
 import { LitElement, html, svg, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { tileStyles } from './shared.js';
+import { conningTileStyles, tileStyles } from './shared.js';
 import { formatRudder } from '../lib/format.js';
 import { clamp } from '../lib/angles.js';
 
@@ -14,6 +14,7 @@ const PAD = 18;
 export class RudderIndicator extends LitElement {
   static override styles = [
     tileStyles,
+    conningTileStyles,
     css`
       .scale {
         flex: 1;
@@ -45,6 +46,22 @@ export class RudderIndicator extends LitElement {
         display: flex;
         justify-content: space-between;
         gap: 8px;
+      }
+      /* conning 條單列的窄方塊(< 200 px:「舵角 P 70° 舵令 S 70°」一行放不下):標籤固定排在數值上方(仍是左右兩欄),
+         不隨舵角的位數(0° / P 5° / P 20°)在一行與兩行之間跳動;數值字級不超過方塊寬度的 13.2%(137 px 的方塊約 18 px),
+         160 px 以下兩欄的間距縮小,滿舵兩位數的兩個數值並排放得下 */
+      @container style(--brm-conning-single: 1) and (max-width: 199px) {
+        .readouts .label {
+          display: block;
+        }
+        .readouts .value.small {
+          font-size: clamp(14px, min(1.1vw, 13.2cqi), 20px);
+        }
+      }
+      @container style(--brm-conning-single: 1) and (max-width: 160px) {
+        .readouts {
+          gap: 4px;
+        }
       }
     `,
   ];

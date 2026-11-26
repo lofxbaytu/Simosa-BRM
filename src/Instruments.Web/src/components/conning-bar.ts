@@ -1,4 +1,4 @@
-// 上排 conning 條:把各儀器方塊排成一列(1920 寬一列;窄於 1500 時折成兩列)。
+// 上排 conning 條:把各儀器方塊排成一列(視窗寬於 1900 px 時一列 10 至 13 格;1900 px 以下折成兩列)。
 // 核心有航線狀態(state.route)或能見度時加一格航線/能見度方塊(規劃書第 7.2 節 XTD/下一航點);
 // 有浪(state.waves)或船間交互作用(state.shipInteraction)時再加一格 SEA 方塊(physics-waves.md 第 5 節);
 // 有浪一階運動(state.waveMotion;情境 ship.seakeeping.enabled 且有浪,需求 R2)時 SEA 方塊多一列縱搖/升沉(契約上必與 state.waves 同時出現,
@@ -31,61 +31,79 @@ export class ConningBar extends LitElement {
       display: block;
       min-height: 0;
     }
+    /* 單列(視窗寬於 1900 px):10 至 13 格排成一列。每格 =「基本寬度 + 依比例分到的多餘寬度」(flex: 比例 1 基本寬度)。
+       格序:HDG ROT SPEED RUDDER RPM BOW-THR UKC WIND CURRENT (SEA) (HEEL) TIME/POS (ROUTE)。
+       基本寬度是 13 格、視窗 1901 px(列寬 1889 − 12 個間距 = 1817 px)時各格放得下內容的寬度,13 格的總和就是 1817 px;
+       格數較少時多出來的寬度依比例分配(航向帶、舵角刻度、風 / 流的玫瑰圖分得多,只有數字的 ROT / 艏側推分得少;
+       10 格時各格的寬度與第三十一輪之前相近)。各方塊在這個寬度下的字級與排法寫在各元件的
+       @container style(--brm-conning-single: 1) 區塊裡(shared.ts 的 conningTileStyles 有說明);量測與餘裕的作法見
+       docs/design/web-layout.md 第 2.5 節。
+       第三十一輪之前是每種格數組合各寫一份 grid-template-columns(八種);「有浪、有橫搖、沒有航線」與「有航線、有橫搖」共用一份,
+       浪 / 傾斜儀 / 時間三格的寬度因此對錯了格(時間格只有 134 px),而且 13 格時主機、UKC、航線等格比內容窄 */
     .bar {
       height: 100%;
-      display: grid;
-      /* 格序:HDG ROT SPEED RUDDER RPM BOW-THR UKC WIND CURRENT TIME/POS(ROUTE) */
-      grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.5fr;
+      display: flex;
       gap: 6px;
+      /* 告訴各方塊「現在是單列」:方塊裡單列專用的規則以 @container style(--brm-conning-single: 1) 包住 */
+      --brm-conning-single: 1;
     }
-    /* 每個方塊是尺寸容器:方塊內的字級與排法可依「方塊自己的寬度」調整(@container / cqi),
-       單列 12–13 格時(1920 寬每格約 140–180 px)數值縮小或換排法,不被方塊邊界裁切;寬的方塊維持原本的字級 */
+    /* 每個方塊是尺寸容器:方塊內的字級與排法可依「方塊自己的寬度」調整(@container / cqi) */
     .bar > * {
       container-type: inline-size;
     }
-    .bar.with-route {
-      /* 單列 11 格(教官站 1920 寬):風/流/時間格加寬,避免「真風 040° 12.0 kn」「流向 SET 200°」「23°48.004'N」被截斷 */
-      grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.5fr 1.1fr;
+    brm-heading {
+      flex: 2 1 148px;
     }
-    .bar.with-sea {
-      /* 單列 11 格:浪方塊接在流之後 */
-      grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.5fr 1.5fr;
+    brm-rot {
+      flex: 0.7 1 117px;
     }
-    .bar.with-route.with-sea {
-      /* 單列 12 格(1920 寬每格約 150 px;窄於 1500 折成兩列 × 6 格) */
-      grid-template-columns: 1.4fr 1fr 1.1fr 1.4fr 1.3fr 1fr 1.2fr 1.5fr 1.5fr 1.5fr 1.4fr 1.1fr;
+    brm-speed {
+      flex: 1 1 120px;
     }
-    .bar.with-roll {
-      /* 單列 11 格:傾斜儀接在流之後 */
-      grid-template-columns: 1.5fr 1fr 1.1fr 1.5fr 1.4fr 1fr 1.2fr 1.5fr 1.6fr 1.2fr 1.5fr;
+    brm-rudder {
+      flex: 2 1 137px;
     }
-    .bar.with-route.with-roll,
-    .bar.with-sea.with-roll {
-      /* 單列 12 格 */
-      grid-template-columns: 1.4fr 1fr 1.1fr 1.4fr 1.3fr 1fr 1.2fr 1.5fr 1.5fr 1.2fr 1.4fr 1.1fr;
+    brm-engine {
+      flex: 1.3 1 158px;
     }
-    .bar.with-route.with-sea.with-roll {
-      /* 單列 13 格(1920 寬每格約 140 px) */
-      grid-template-columns: 1.3fr 1fr 1fr 1.3fr 1.2fr 1fr 1.1fr 1.4fr 1.4fr 1.4fr 1.2fr 1.3fr 1fr;
+    brm-thruster {
+      flex: 0.7 1 123px;
     }
-    /* 寬度 ≤ 1900 px 折成兩列:單列 10–12 格時每格至少要約 127 px 才放得下數值(SPEED 的「COG 航跡向 287°」),
-       1900 px 以下不夠或太勉強 — 包含 1920×1080 筆電在 Windows 125% 縮放下的 1536 px。app.ts / instructor-app.ts 同一門檻加高該列 */
+    brm-depth {
+      flex: 0.8 1 155px;
+    }
+    brm-wind {
+      flex: 2 1 139px;
+    }
+    brm-current {
+      flex: 2 1 134px;
+    }
+    brm-sea {
+      flex: 1.5 1 150px;
+    }
+    brm-inclinometer {
+      flex: 1 1 132px;
+    }
+    brm-clock {
+      flex: 1.5 1 158px;
+    }
+    brm-route {
+      flex: 1.5 1 146px;
+    }
+    /* 寬度 ≤ 1900 px 折成兩列:單列時每格太窄 — 包含 1920×1080 筆電在 Windows 125% 縮放下的 1536 px。
+       app.ts / instructor-app.ts / replay-view.ts 同一門檻加高該列。兩列的格線與各方塊的排法和第三十一輪之前相同
+       (--brm-conning-single: 0,方塊裡單列專用的規則不套用) */
     @media (max-width: 1900px) {
-      .bar,
-      .bar.with-route,
-      .bar.with-sea,
-      .bar.with-route.with-sea {
+      .bar {
+        display: grid;
+        --brm-conning-single: 0;
         /* 兩列 × 6 格:第二列為 UKC / 風 / 流 / (浪) / 時間 / 航線,第 2 欄(ROT / 風)略加寬 */
         grid-template-columns: 1.6fr 1.1fr 1.2fr 1.7fr 1.4fr 1.1fr;
         grid-template-rows: 1fr 1fr;
       }
-      .bar.with-roll,
-      .bar.with-route.with-roll,
-      .bar.with-sea.with-roll,
-      .bar.with-route.with-sea.with-roll {
+      .bar.with-roll {
         /* 有傾斜儀時兩列 × 7 格 */
         grid-template-columns: 1.5fr 1.1fr 1.2fr 1.6fr 1.4fr 1.1fr 1.2fr;
-        grid-template-rows: 1fr 1fr;
       }
     }
   `;

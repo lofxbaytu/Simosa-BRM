@@ -1,6 +1,7 @@
 // 頁面層的共用步驟:等待連線、收集頁面錯誤(pageerror / console error)、Shadow DOM 內取值。
 // Playwright 的 CSS 定位器預設穿透 open shadow root(Lit 元件),故選擇器可直接寫元件內部的 class。
 import { expect, type ConsoleMessage, type Page } from '@playwright/test';
+import { layoutFailures, probeConning, probeLayout, widenConningText, type ConningReport, type LayoutSpec } from './layout.ts';
 
 /** 連線狀態藥丸(操船台/教官站 header .pill;STATUS_LABEL connected = 已連線) */
 export async function waitConnected(page: Page, timeoutMs = 15_000): Promise<void> {
@@ -34,4 +35,59 @@ export function firstNumber(text: string | null): number {
 /** 教官站情境面板的「載入」鈕(完整模式只有一個 brm-scenario-panel) */
 export function scenarioLoadButton(page: Page) {
   return page.locator('brm-scenario-panel button.load');
+}
+
+/** conning 條內容比方塊高(下緣被方塊的 overflow: hidden 裁掉)的方塊;4 px 以內是字型行高的誤差 */
+const tallTiles = (bar: ConningReport): string[] => bar.tiles.filter((t) => t.overflowY > 4).map((t) => `${t.tag} 內容比方塊高 ${t.overflowY} px`);
+
+/** conning 條裡互相重疊的文字(內容比方塊高時,置中的內容往上擠到標題列;scrollHeight 看不出來) */
+const overlappingText = (bar: ConningReport): string[] => bar.tiles.flatMap((t) => t.overlaps.map((o) => `${t.tag} ${o}`));
+
+/**
+ * conning 條裡沒有顯示的內容:寬或高不到 8 px 的圖形(svg)與沒有畫出來的文字。
+ * 允許的例外只有一種,第三十一輪之前就有:船速方塊 125 px 以下(單列只有 13 格、視窗約 1980 px 以下)標籤只留英文縮寫
+ * (STW / SOG / COG),中文部分「對水 / 對地 / 航跡向」不顯示(speed-readout.ts)。
+ */
+export function conningHiddenContent(bar: ConningReport): string[] {
+  const out: string[] = [];
+  for (const t of bar.tiles) {
+    for (const g of t.graphics) if (g.width < 8 || g.height < 8) out.push(`${t.tag} 的圖形「${g.label}」沒有顯示(${g.width.toFixed(0)}×${g.height.toFixed(0)} px)`);
+    for (const text of t.hiddenText) {
+      if (t.tag === 'brm-speed' && t.width <= 125 && ['對水', '對地', '航跡向'].includes(text)) continue;
+      out.push(`${t.tag} 的文字「${text}」沒有顯示(方塊寬 ${t.width.toFixed(1)} px)`);
+    }
+  }
+  return out;
+}
+
+/**
+ * conning 條單列(視窗寬於 1900 px)的判定(第三十一輪;docs/design/web-layout.md 第 2.5 節):
+ *  1. 整頁的版面判定(layout.ts 的判定 1–6,含判定 4:各方塊內的元素沒有水平裁切)通過;
+ *  2. conning 條排成一列(cells 有給時格數相符),各方塊的內容不比方塊高、文字不互相重疊;
+ *  3. 顯示的內容沒有少:各方塊的圖形都有顯示、沒有被藏起來的文字(conningHiddenContent;修正不可以靠 display: none 把內容藏起來);
+ *  4. 餘裕:把 conning 條所有文字的字距加大 3 %(代表比這台機器的字型更寬的字型;Windows 的字型在容器裡量不到)之後,
+ *     判定 4 仍通過、內容仍不比方塊高、文字不互相重疊 —— 放不下的內容是換行,不是被方塊邊界切掉。
+ * 回傳字距還原後的量測(各方塊的寬度與數值的字級),供案例再斷言。
+ */
+export async function expectConningSingleRow(page: Page, spec: LayoutSpec, label: string, cells?: number): Promise<ConningReport> {
+  const report = await page.evaluate(probeLayout, spec);
+  expect(layoutFailures(report), `${label} 的版面問題`).toEqual([]);
+  const bar = await page.evaluate(probeConning);
+  expect(bar.rows, `${label}:conning 條排成一列`).toBe(1);
+  if (cells !== undefined) expect(bar.tiles.length, `${label}:conning 條的格數`).toBe(cells);
+  expect(tallTiles(bar), `${label}:conning 條內容比方塊高的方塊`).toEqual([]);
+  expect(overlappingText(bar), `${label}:conning 條互相重疊的文字`).toEqual([]);
+  expect(conningHiddenContent(bar), `${label}:conning 條沒有顯示的內容`).toEqual([]);
+  // 完整教官站另有一條隱藏的 conning 條(重播檢視分頁),所以是「至少」這麼多格
+  expect(await page.evaluate(widenConningText, 0.03), '加大字距的方塊數').toBeGreaterThanOrEqual(bar.tiles.length);
+  try {
+    const wide = await page.evaluate(probeLayout, spec);
+    expect(wide.conning, `${label}:字距加大 3 % 之後 conning 條的水平裁切`).toEqual([]);
+    const wideBar = await page.evaluate(probeConning);
+    expect(tallTiles(wideBar), `${label}:字距加大 3 % 之後 conning 條內容比方塊高的方塊`).toEqual([]);
+    expect(overlappingText(wideBar), `${label}:字距加大 3 % 之後 conning 條互相重疊的文字`).toEqual([]);
+  } finally {
+    await page.evaluate(widenConningText, 0);
+  }
+  return bar;
 }
