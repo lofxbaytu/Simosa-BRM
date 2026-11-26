@@ -255,6 +255,12 @@ public sealed class RecordStore
             {
                 return new FileStream(FleetLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
             }
+            catch (UnauthorizedAccessException ex)
+            {
+                // 紀錄庫資料夾唯讀、沒有權限(或鎖定檔本身唯讀):原本的訊息只有「Access to the path '…fleet-versions.json.lock' is denied」,
+                // 操作人員會以為是鎖定檔的問題。例外的型別不變(呼叫端與 CLI 的處理、結束碼都與原本相同),訊息改成指到紀錄庫
+                throw new UnauthorizedAccessException($"紀錄庫 {Root} 寫不進去(資料夾唯讀或沒有寫入權限):{ex.Message}", ex);
+            }
             catch (IOException) when (File.Exists(FleetLockPath))   // 被佔用(鎖定檔不存在時的 IOException 是別的原因,例如資料夾不在,不重試)
             {
                 if (System.Environment.TickCount64 >= deadline)

@@ -562,4 +562,28 @@ public sealed class ShipReleaseReportTests
             PackagePaths.DeleteDirectory(root);
         }
     }
+
+    [Fact]
+    public void UpdateFleet_LockFileCannotBeOpened_ErrorNamesTheStoreNotOnlyTheLockFile()
+    {
+        // 主控程序抽查(2026-11-26):紀錄庫資料夾不可寫時,錯誤原本只有 .NET 的英文訊息「Access to the path '…fleet-versions.json.lock' is denied」,
+        // 看起來像是鎖定檔的問題。這裡以「鎖定檔的位置被一個資料夾占住」做出同一種例外(不必靠檔案權限,root 也一樣;Windows 相同):
+        // 例外的型別不變(CLI 仍以「錯誤:…」、結束碼 1 結束),訊息指到紀錄庫,原本的細節留在句尾
+        var root = NewStoreDir("fleet-lock-denied");
+        try
+        {
+            var store = new RecordStore(root);
+            store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", Version = "1" });
+            File.Delete(store.FleetLockPath);
+            Directory.CreateDirectory(store.FleetLockPath);
+            var ex = Assert.Throws<UnauthorizedAccessException>(() => store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", Version = "2" }));
+            Assert.StartsWith($"紀錄庫 {root} 寫不進去(資料夾唯讀或沒有寫入權限):", ex.Message);
+            Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
+            Assert.Equal("1", store.LoadFleet().Ships["FSB1"].Version);                              // 沒有寫入
+        }
+        finally
+        {
+            PackagePaths.DeleteDirectory(root);
+        }
+    }
 }
