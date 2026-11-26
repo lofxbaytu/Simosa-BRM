@@ -16,7 +16,7 @@ import { downloadText, fileStamp } from '../lib/download.js';
 import { formatSimTime } from '../lib/format.js';
 import { debriefState } from '../lib/debrief.js';
 import { rawEventCount } from '../lib/event-merge.js';
-import { parseReplayBlob, parseReplayText, type ReplayStreamResult } from '../lib/record-stream.js';
+import { megabytesText as megabytes, parseReplayBlob, parseReplayText, recordReadErrorText as readErrorText, RECORD_PROGRESS_MIN_BYTES as PROGRESS_MIN_BYTES, type ReplayStreamResult } from '../lib/record-stream.js';
 import { applyTheme, isTheme } from '../lib/theme.js';
 import {
   ADMIN_RECORDS_FORMAT,
@@ -85,24 +85,8 @@ export function isReportTab(v: unknown): v is ReportTab {
  */
 const DOCUMENT_FORMATS: ReadonlySet<unknown> = new Set(['simosa-brm-marker-form', 'simosa-brm-marker-forms', 'simosa-brm-markers', COURSE_SESSION_FORMAT, ROSTER_FORMAT, ADMIN_RECORDS_FORMAT]);
 
-/** 讀取中顯示進度的檔案大小下限(位元組;小檔案一閃而過,不顯示) */
-const PROGRESS_MIN_BYTES = 8 * 1024 * 1024;
-
 /** 「最近載入的紀錄」沒有寫進瀏覽器儲存時,接在狀態列訊息後的說明(rememberRecord) */
 export const NOT_REMEMBERED_NOTE = '這份紀錄未能另存於瀏覽器(檔案內容仍在變動,或儲存空間不足),重新整理後請重新開啟檔案';
-
-/**
- * 讀檔失敗的說明。NotReadableError:檔案在選取之後被改動(瀏覽器以選取當下的修改時間核對),最常見的是核心仍在寫入這份紀錄
- * (build/records 下正在變大的 .jsonl)——重新選取一次通常就能讀到當下的內容;其餘錯誤照原樣顯示。
- */
-function readErrorText(err: unknown): string {
-  if (typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'NotReadableError') return '檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)';
-  return String(err);
-}
-
-function megabytes(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0);
-}
 
 export interface ReportWorkspace {
   version: 1;

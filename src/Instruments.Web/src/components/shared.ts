@@ -86,6 +86,15 @@ export const tileStyles = css`
     border-radius: 4px;
     padding: 0 4px;
   }
+  /* .alarm 是徽章(行內小方塊)的樣式。表格列也用同一個類別名表示「這一列是警報」(講評摘要的逾時 / 失敗列、航跡圖目標船小表的
+     CPA 警報列),列內由各元件自己把數值標成警報色 —— 整列套上紅底的話,那些數值是紅底紅字,看不到(2026-10 起就是這樣,
+     第三十一輪主控程序驗收重播檢視的畫面時發現)。表格列不套徽章的底色與字色。 */
+  tr.alarm {
+    background: none;
+    color: inherit;
+    border-radius: 0;
+    padding: 0;
+  }
   .warning {
     color: var(--ob-warning);
   }

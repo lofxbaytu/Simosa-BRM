@@ -5,28 +5,40 @@
 // 航線走廊與區域、顯示 header.parameterSet 版次。時間軸另畫倒帶標記(ReplayData.rewinds[];懸停顯示倒帶 tick 與丟棄筆數),
 // 航跡圖畫該時刻 state 的目標船(cpaAlarm 狀態由 t ≤ 目前時刻的事件推得)。
 // 事件與教官站即時事件流是同樣的列(同一個碰墊的反覆接觸已合併,lib/event-merge.ts):合併列在時間軸上畫成第一次到最近一次的橫條。
+//
+// 讀檔(第三十一輪;lib/replay-states.ts):紀錄檔分段讀取(只開一次 Blob.stream();8 MB 以上在工具列顯示百分比,讀取中頁面仍可操作),
+// 不把整份紀錄讀成一個字串。狀態只留顯示用的精簡投影、最多 REPLAY_MAX_STATES 筆:沒有超過的紀錄每筆都在(與原本相同;超不超過看練習最終的
+// 歷史,倒帶前曾經多長不算);超過的(25 Hz 的核心紀錄約 5 分鐘以上)每 N 筆取 1 筆,資訊列之後寫明間隔,⏮ ⏭ 逐筆的間隔跟著變大,時間軸的
+// 方向鍵也改走逐筆(滑桿一格 0.04 秒比留下的狀態密)。講評摘要、事件、輸入、標記、倒帶點、航跡與航跡圖上的事件位置都以**全部**狀態計算,
+// 不受降採樣影響。又選了別的檔案時,先前還沒讀完的那一次直接中止(後開的紀錄不會被先開的蓋掉)。讀取失敗(含讀取途中檔案被截短)時原本的紀錄不動。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { tileStyles } from '../shared.js';
 import { instructorStyles, shortTime } from './instructor-shared.js';
-import { parseReplay, stateIndexAt, trackPoints, type ReplayData, type ReplayRewind } from '../../lib/record-replay.js';
+import { stateIndexAt, type ReplayRewind } from '../../lib/record-replay.js';
+import { megabytesText, recordReadErrorText, RECORD_PROGRESS_MIN_BYTES } from '../../lib/record-stream.js';
+import { loadReplayBlob, loadReplayText, REPLAY_MAX_STATES, replayDisplayState, type ReplayStateStats, type ReplayViewData } from '../../lib/replay-states.js';
 import { TrackHistory, type TrackPoint } from '../../lib/track-history.js';
 import { getShipConfig } from '../../lib/ship-config.js';
-import { summarize, type DebriefSummary } from '../../lib/debrief.js';
+import type { DebriefSummary } from '../../lib/debrief.js';
 import { brmCategory } from '../../lib/brm-markers.js';
 import { defaultState } from '../../lib/state-parser.js';
 import { eventLabel, eventSeverity } from '../../lib/sim-event.js';
 import { rawEventCount } from '../../lib/event-merge.js';
-import { eventMarks, overlayFromHeaderScenario, overlayHasContent, type PlotOverlay } from '../../lib/plot-overlay.js';
+import { eventMarksAt, overlayFromHeaderScenario, overlayHasContent, type PlotOverlay } from '../../lib/plot-overlay.js';
 import { cpaAlarmTargets } from '../../lib/targets.js';
 import type { SimEvent } from '../../types/event.js';
+import type { OwnShipState } from '../../types/state.js';
 import '../conning-bar.js';
 import '../track-plot.js';
 import './debrief-summary.js';
 import { rowTime } from './event-stream.js';
 
 const PLAY_RATES = [0.25, 1, 4, 16];
+
+/** 讀取被後來的載入取代(loadBlob 的 onProgress 擲出,中止分段讀取) */
+class SupersededLoad extends Error {}
 
 @customElement('brm-replay-view')
 export class ReplayView extends LitElement {
@@ -55,6 +67,14 @@ export class ReplayView extends LitElement {
       }
       .toolbar .info {
         color: var(--ob-text-secondary);
+      }
+      .toolbar .error {
+        color: var(--ob-warning);
+      }
+      /* 降採樣的說明:資訊列之後另起一項(寬度不夠時自己折到下一行),字色與資訊列相同、加粗 */
+      .toolbar .decimated {
+        color: var(--ob-text-secondary);
+        font-weight: 600;
       }
       .timeline {
         display: grid;
@@ -210,16 +230,28 @@ export class ReplayView extends LitElement {
   ];
 
   @property({ type: Boolean }) compact = false;
+  /** 顯示用狀態的筆數上限(超過才降採樣;預設 REPLAY_MAX_STATES。之後載入的紀錄才套用) */
+  @property({ attribute: false }) maxStates = REPLAY_MAX_STATES;
 
-  @state() private data: ReplayData | null = null;
+  @state() private data: ReplayViewData | null = null;
   @state() private fileName = '';
   @state() private t = 0;
   @state() private playing = false;
   @state() private rate = 1;
   @state() private summary: DebriefSummary | null = null;
-  @state() private loading = false;
+  /** 讀取中的說明(空字串 = 沒有在讀取);8 MB 以上的檔案帶百分比 */
+  @state() private loadingText = '';
+  /** 最近一次讀取失敗的說明(讀取中不顯示;成功載入時清掉,再失敗時換成新的) */
+  @state() private loadError = '';
   @state() private overlay: PlotOverlay | null = null;
 
+  /**
+   * 載入序號:每開始一次載入(loadText / loadBlob)加一。分段讀取期間頁面仍可操作,使用者可能在大檔還沒讀完時又選了別的檔案 ——
+   * 較早開始的那一次在下一段就中止(不佔記憶體、也不會在讀完時蓋掉後開的紀錄)。
+   */
+  private loadSeq = 0;
+  /** 目前顯示的那一筆狀態(精簡投影補成元件吃的 OwnShipState;同一筆不重做,元件也不因此重繪) */
+  private shown: { data: ReplayViewData; index: number; state: OwnShipState } | null = null;
   private points: TrackPoint[] = [];
   private history = new TrackHistory(1, 100000);
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -230,18 +262,56 @@ export class ReplayView extends LitElement {
     this.stopPlay();
   }
 
-  /** 由文字載入紀錄(檔案選擇器與測試共用)。 */
-  loadText(text: string, name = ''): ReplayData {
-    const data = parseReplay(text);
+  /** 由文字載入紀錄(測試與已在手上的文字;檔案走 loadBlob 分段讀取,結果相同)。 */
+  loadText(text: string, name = ''): ReplayViewData {
+    const data = loadReplayText(text, { maxStates: this.maxStates });
+    this.loadSeq++;
+    this.apply(data, name);
+    return data;
+  }
+
+  /**
+   * 分段讀取並載入一份紀錄(檔案選擇器;Blob / File):只開一次 Blob.stream(),讀取中頁面仍可操作,原本載入的紀錄留到新的讀完才換掉。
+   * 回傳載入的資料;讀取失敗(說明顯示在工具列,原本的紀錄不動)或被後來的載入取代時回傳 null。
+   */
+  async loadBlob(blob: Blob, name = ''): Promise<ReplayViewData | null> {
+    const seq = ++this.loadSeq;
+    this.loadingText = '讀取中…';
+    let shownPct = -1;
+    try {
+      const data = await loadReplayBlob(blob, {
+        maxStates: this.maxStates,
+        onProgress: (read, total) => {
+          if (seq !== this.loadSeq) throw new SupersededLoad();
+          if (total < RECORD_PROGRESS_MIN_BYTES) return;
+          const pct = Math.floor((read / total) * 100);
+          if (pct === shownPct) return;
+          shownPct = pct;
+          this.loadingText = `讀取 ${name}… ${pct}%(共 ${megabytesText(total)} MB)`;
+        },
+      });
+      if (seq !== this.loadSeq) return null;
+      this.apply(data, name);
+      return data;
+    } catch (err) {
+      if (seq !== this.loadSeq || err instanceof SupersededLoad) return null;
+      this.loadingText = '';
+      this.loadError = `無法讀取「${name}」:${recordReadErrorText(err)}`;
+      return null;
+    }
+  }
+
+  private apply(data: ReplayViewData, name: string): void {
     this.data = data;
     this.fileName = name;
-    this.points = trackPoints(data.states, 1);
-    this.summary = data.states.length > 0 ? summarize(data.states) : null;
+    this.loadingText = '';
+    this.loadError = '';
+    this.points = data.track;
+    this.summary = data.debrief;
     const base = overlayFromHeaderScenario(data.header.scenario);
     this.overlay = overlayHasContent(base) || data.events.length > 0 ? base : null;
     this.stopPlay();
     this.seek(data.tStart);
-    return data;
   }
 
   /** 跳至指定時刻(教官站事件流點擊、測試)。 */
@@ -264,13 +334,23 @@ export class ReplayView extends LitElement {
     const input = ev.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
-    this.loading = true;
-    try {
-      const text = await file.text();
-      this.loadText(text, file.name);
-    } finally {
-      this.loading = false;
-    }
+    await this.loadBlob(file, file.name);
+  }
+
+  /**
+   * 開檔案對話框之前清掉上一次的選擇:同一個檔案再選一次也會觸發 change(核心仍在寫入的紀錄讀取失敗時要「重新選取一次」,
+   * 或練習還在進行、想重讀同一份紀錄的最新內容)。
+   */
+  private onFileClick(ev: Event): void {
+    (ev.target as HTMLInputElement).value = '';
+  }
+
+  private displayState(d: ReplayViewData, index: number): OwnShipState {
+    const c = this.shown;
+    if (c && c.data === d && c.index === index) return c.state;
+    const state = replayDisplayState(d.states[index]!);
+    this.shown = { data: d, index, state };
+    return state;
   }
 
   private seek(t: number): void {
@@ -282,7 +362,7 @@ export class ReplayView extends LitElement {
       if (p.t > this.t) break;
       this.history.push(p.x, p.y, p.t);
     }
-    if (this.overlay) this.overlay = { ...this.overlay, events: eventMarks(d.events, d.states, this.t) };
+    if (this.overlay) this.overlay = { ...this.overlay, events: eventMarksAt(d.events, d.eventPositions, this.t) };
   }
 
   private onEventSeek(ev: CustomEvent<SimEvent>): void {
@@ -290,7 +370,7 @@ export class ReplayView extends LitElement {
     this.seekTo(rowTime(ev.detail));
   }
 
-  private renderMarks(d: ReplayData) {
+  private renderMarks(d: ReplayViewData) {
     const span = d.tEnd - d.tStart;
     if (span <= 0) return nothing;
     const pct = (t: number) => `${((Math.min(d.tEnd, Math.max(d.tStart, t)) - d.tStart) / span) * 100}%`;
@@ -349,45 +429,63 @@ export class ReplayView extends LitElement {
     if (!d || d.states.length === 0) return;
     this.stopPlay();
     const i = stateIndexAt(d.states, this.t);
-    const j = Math.min(d.states.length - 1, Math.max(0, i + sign));
+    let j = Math.min(d.states.length - 1, Math.max(0, i + sign));
+    // 往回:前一筆的時刻與目前這一筆相同時(凍結中核心每 200 ms 記一筆 t 不變的狀態),再往前找到時刻更早的那一筆。
+    // 只退一筆的話時刻不變,顯示的又是同一段的最後一筆,永遠退不過凍結的那一段(第三十一輪審查 DATA-3;往後沒有這個問題:
+    // i 已是該時刻的最後一筆,下一筆的時刻一定比較晚)。相鄰兩筆時刻不同的紀錄不受影響。
+    if (sign < 0) while (j > 0 && d.states[j]!.t >= d.states[i]!.t) j--;
     this.seek(d.states[j]!.t);
+  }
+
+  /**
+   * 時間軸的方向鍵:降採樣時改走逐筆(與 ⏮ ⏭ 相同)。滑桿一格是 0.04 秒,留下的狀態相隔 0.08–數秒,原生的方向鍵多數按下去畫面不會變
+   * (第三十一輪審查 MEM-4:2 小時的紀錄要按 32 次才換一筆)。沒有降採樣的紀錄不攔截,方向鍵照舊一次 0.04 秒;Home / End / PageUp / PageDown 一律照舊。
+   */
+  private onSliderKey(ev: KeyboardEvent): void {
+    const d = this.data;
+    if (!d || d.stateStats.stride <= 1 || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    const sign = ev.key === 'ArrowRight' || ev.key === 'ArrowUp' ? 1 : ev.key === 'ArrowLeft' || ev.key === 'ArrowDown' ? -1 : 0;
+    if (sign === 0) return;
+    ev.preventDefault();
+    this.step(sign);
   }
 
   override render() {
     const d = this.data;
     const idx = d ? stateIndexAt(d.states, this.t) : -1;
-    const current = d && idx >= 0 ? d.states[idx]! : defaultState('FSB1');
+    const current = d && idx >= 0 ? this.displayState(d, idx) : defaultState('FSB1');
     const cfg = getShipConfig(current.shipId);
+    const stepNote = d ? stepIntervalText(d.stateStats) : '';
     return html`
       <div class="toolbar">
         <label class="file">
           <span>紀錄檔</span>
-          <input class="file-input" type="file" accept=".jsonl,.json,.txt,application/json" @change=${this.onFile} />
+          <input class="file-input" type="file" accept=".jsonl,.json,.txt,application/json" @click=${this.onFileClick} @change=${this.onFile} />
         </label>
-        ${this.loading ? html`<span class="info">讀取中…</span>` : nothing}
+        ${this.loadingText ? html`<span class="info loading">${this.loadingText}</span>` : this.loadError ? html`<span class="error" role="alert">${this.loadError}</span>` : nothing}
         ${d
           ? html`<span class="info">
               ${this.fileName} · ${d.source === 'simcore-jsonl' ? 'SimCore JSON Lines' : '教官站紀錄'} · ${d.header.scenarioId ?? '(無情境)'}${d.header.scenarioName ? ` ${d.header.scenarioName}` : ''} ·
-              ${d.header.shipId ?? '?'}${d.header.loading ? `/${d.header.loading}` : ''} · ${d.states.length} 筆狀態 · ${d.inputs.length} 筆輸入 · ${eventCountText(d.events)} · ${d.markers.length} 筆標記
+              ${d.header.shipId ?? '?'}${d.header.loading ? `/${d.header.loading}` : ''} · ${d.stateStats.total} 筆狀態 · ${d.inputs.length} 筆輸入 · ${eventCountText(d.events)} · ${d.markers.length} 筆標記
               ${d.header.dynamics ? ` · ${d.header.dynamics}` : ''}${d.footer?.stateHash ? ` · 雜湊 ${d.footer.stateHash.slice(0, 8)}…` : ''}
               ${d.header.parameterSet ? html`<span class="param-set"> · 參數集 ${d.header.parameterSet.id ?? ''} ${d.header.parameterSet.version ?? ''}${d.header.parameterSet.resolved.length > 0 ? `(已解析 ${d.header.parameterSet.resolved.length} 個引用)` : ''}</span>` : nothing}
               ${d.summary?.assessment.score !== undefined ? html`<span class="param-set"> · 評分 ${Math.round(d.summary.assessment.score)}${d.summary.assessment.passed !== undefined ? (d.summary.assessment.passed ? '(通過)' : '(未通過)') : ''}</span>` : nothing}
-            </span>`
+            </span>${d.stateStats.stride > 1 ? html`<span class="decimated">${decimationText(d.stateStats)}</span>` : nothing}`
           : html`<span class="info">選擇 SimCore 的 .jsonl 紀錄(src/SimCore/README.md 第 4 節)或教官站下載的 .json 紀錄</span>`}
       </div>
       ${d && d.states.length > 0
         ? html`<div class="timeline">
             <span class="btn-row">
-              <button @click=${() => this.step(-1)} title="上一筆">⏮</button>
+              <button @click=${() => this.step(-1)} title=${`上一筆${stepNote}`}>⏮</button>
               <button class="play" @click=${this.togglePlay}>${this.playing ? '暫停' : '播放'}</button>
-              <button @click=${() => this.step(1)} title="下一筆">⏭</button>
+              <button @click=${() => this.step(1)} title=${`下一筆${stepNote}`}>⏭</button>
               <select .value=${String(this.rate)} @change=${(e: Event) => (this.rate = Number((e.target as HTMLSelectElement).value))}>
                 ${PLAY_RATES.map((r) => html`<option value=${r} ?selected=${r === this.rate}>×${r}</option>`)}
               </select>
             </span>
             <div class="track">
               ${this.renderMarks(d)}
-              <input class="slider" type="range" min=${d.tStart} max=${d.tEnd} step="0.04" .value=${String(this.t)} @input=${this.onSlide} aria-label="時間軸" />
+              <input class="slider" type="range" min=${d.tStart} max=${d.tEnd} step="0.04" .value=${String(this.t)} @input=${this.onSlide} @keydown=${this.onSliderKey} aria-label="時間軸" />
             </div>
             <span class="t">${shortTime(this.t)} / ${shortTime(d.tEnd)}</span>
           </div>`
@@ -449,8 +547,33 @@ export function eventCountText(events: readonly SimEvent[]): string {
   return `${events.length} 筆事件${raw > events.length ? `(合併前 ${raw})` : ''}`;
 }
 
+/** 秒數的顯示文字:10 秒以上取整數,以下最多兩位小數(去掉尾端的 0)。 */
+function secondsText(s: number): string {
+  return s >= 10 ? String(Math.round(s)) : String(Number(s.toFixed(2)));
+}
+
+/**
+ * 降採樣的說明(資訊列之後另起一項;沒有降採樣時空字串,資訊列與原本完全相同):不得有無聲的降採樣 —— 寫明每幾筆取 1 筆、
+ * 大約幾秒一筆、逐筆的間隔跟著變大,以及哪些不受影響。間隔(interval_s)是時刻有前進的相鄰兩筆的中位數;留下的狀態時刻全部相同
+ * (整份紀錄都在凍結中)時是 0,那時不寫秒數。
+ */
+export function decimationText(st: ReplayStateStats): string {
+  if (st.stride <= 1) return '';
+  const n = (v: number) => v.toLocaleString('en-US');
+  const every = st.interval_s > 0 ? `約每 ${secondsText(st.interval_s)} 秒一筆,` : '';
+  // 最終筆數不到上限卻有降採樣:只會發生在時刻不依序的損壞紀錄(倒帶時丟的不是尾端,replay-states.ts ReplayHistoryStore.dropAfter)—— 不寫「超過」
+  const why = st.total > st.maxStates ? `狀態筆數超過 ${n(st.maxStates)}` : `紀錄裡狀態的時刻不是依序遞增(倒帶前超過 ${n(st.maxStates)} 筆)`;
+  return `${why}:畫面每 ${st.stride} 筆取 1 筆(${every}⏮ ⏭ 逐筆同此間隔);摘要、事件、航跡仍以全部 ${n(st.total)} 筆計算`;
+}
+
+/** 逐筆鈕的補充(降採樣時「(約 1.28 秒)」,間隔不明時「(每 32 筆)」;沒有降採樣時空字串)。 */
+export function stepIntervalText(st: ReplayStateStats): string {
+  if (st.stride <= 1) return '';
+  return st.interval_s > 0 ? `(約 ${secondsText(st.interval_s)} 秒)` : `(每 ${st.stride} 筆)`;
+}
+
 /** 該輸入事件是否為目前時刻之前最後一筆(清單高亮) */
-function isCurrent(t: number, now: number, d: ReplayData): boolean {
+function isCurrent(t: number, now: number, d: ReplayViewData): boolean {
   let last: number | null = null;
   for (const i of d.inputs) if (i.t <= now) last = i.t;
   return last !== null && last === t;

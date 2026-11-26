@@ -1,4 +1,4 @@
-// 練習紀錄的分段解析(講評報告頁;規劃書第 9.2 節、第 14 章「記憶體不持續成長」):
+// 練習紀錄的分段解析(講評報告頁,第三十一輪起教官站的重播檢視也用:lib/replay-states.ts;規劃書第 9.2 節、第 14 章「記憶體不持續成長」):
 // 2 小時的教官站紀錄約 25 MB(版本 4 以前約 55 MB)、核心 JSON Lines 紀錄約 0.5–1 GB。整份讀成一個字串再 JSON.parse 時,
 // 頁面同時持有全文(非 ASCII 內容時每字元 2 位元組)、整棵原始物件樹與解析後的狀態:實測 7200 筆 E02 的教官站紀錄尖峰約
 // +250–300 MB,30 分鐘的核心紀錄(337 MB)約 +2.4 GB,2 小時的核心紀錄(1.35 GB)分頁直接當掉(數字見 README「紀錄讀取」)。
@@ -15,7 +15,7 @@
 //  - 第一個換行之前(沒有換行則到結尾)若是一個完整的 JSON 物件且 kind 為字串 → JSON Lines;否則當作單一 JSON 文件。
 
 import type { OwnShipState } from '../types/state.js';
-import { JsonLinesReplayBuilder, SessionReplayBuilder, invalidJsonReplay, notSessionRecordReplay, unrecognizedReplay, type ReplayDataOf, type ReplayStateBase, type StateProjection } from './record-replay.js';
+import { JsonLinesReplayBuilder, SessionReplayBuilder, invalidJsonReplay, notSessionRecordReplay, unrecognizedReplay, type ReplayDataOf, type ReplayStateBase, type ReplayStateStoreFactory, type StateProjection } from './record-replay.js';
 import { SESSION_RECORD_FORMAT, type SessionRecord } from './session-record.js';
 
 const C_TAB = 9;
@@ -334,7 +334,8 @@ const P_UNKNOWN = 4; // 無法辨識
 
 /**
  * 紀錄的分段解析器:push() 依序餵入文字片段(切在哪裡都可以),finish() 取得結果。
- * project:狀態投影(省略 = 保留完整狀態)。
+ * project:狀態投影(省略 = 保留完整狀態)。stores:自備的狀態存放(record-replay.ts ReplayStateStore;給了就不用 project)——
+ * 兩種格式的建構器各取一個,只有產生結果的那一個會被 finish()(重播檢視:lib/replay-states.ts)。
  */
 export class ReplayStreamParser<S extends ReplayStateBase = OwnShipState> implements TopLevelSink {
   private phase = P_LEAD;
@@ -364,9 +365,9 @@ export class ReplayStreamParser<S extends ReplayStateBase = OwnShipState> implem
   /** 第一行之後的內容全是 JSON 空白 */
   private restJsonWs = true;
 
-  constructor(project?: StateProjection<S>) {
-    this.session = new SessionReplayBuilder<S>(project);
-    this.jsonl = new JsonLinesReplayBuilder<S>(project);
+  constructor(project?: StateProjection<S>, stores?: ReplayStateStoreFactory<S>) {
+    this.session = new SessionReplayBuilder<S>(stores ? stores() : project);
+    this.jsonl = new JsonLinesReplayBuilder<S>(stores ? stores() : project);
   }
 
   push(chunk: string): void {
@@ -513,8 +514,8 @@ export class ReplayStreamParser<S extends ReplayStateBase = OwnShipState> implem
 }
 
 /** 整份文字一次解析(已經有文字在手上時;結果與分段餵入相同)。 */
-export function parseReplayText<S extends ReplayStateBase = OwnShipState>(text: string, project?: StateProjection<S>): ReplayStreamResult<S> {
-  const p = new ReplayStreamParser<S>(project);
+export function parseReplayText<S extends ReplayStateBase = OwnShipState>(text: string, project?: StateProjection<S>, stores?: ReplayStateStoreFactory<S>): ReplayStreamResult<S> {
+  const p = new ReplayStreamParser<S>(project, stores);
   p.push(text);
   return p.finish();
 }
@@ -557,6 +558,12 @@ export function yieldToEventLoop(): Promise<void> {
  * 以 Blob.stream() 讀:整個檔案只開啟一次。不能改成每段各自 Blob.slice().arrayBuffer() —— Chromium 每次讀取都核對檔案的修改時間,
  * 核心仍在寫入的紀錄(build/records 下正在變大的 .jsonl)在選取之後又被寫入,第二段起就會以 NotReadableError 失敗
  * (實測:slice 分次讀失敗;stream 讀到選取當下的大小為止,與原本一次 file.text() 相同)。沒有 stream() 的環境才退回 slice。
+ *
+ * 讀到的位元組比 blob.size 少 = 讀取失敗:檔案在讀取途中被截短(別的程序把它覆寫成較短的內容)時,Chromium 的 stream **不報錯**,
+ * 交出一部分就結束(實測:337 MB 的紀錄讀到 20% 時截成 4 KB,stream 交出 73 MB 後 done、沒有 error;原本一次 file.text() 會以
+ * NotReadableError 失敗)。不核對的話半份紀錄會被當成讀完的整份(30 分鐘的練習顯示成 6 分半;第三十一輪審查 MEM-2)。
+ * 這時擲出 name 為 NotReadableError 的錯誤(recordReadErrorText 有中文說明)。核心仍在寫入(只會變長)的紀錄讀到選取當下的大小,不受影響。
+ * 只核對 stream 這條路:退回 slice 的那條路,瀏覽器在檔案被改動時本來就會以 NotReadableError 失敗(見上)。
  */
 export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, bytesRead: number) => void, chunkBytes = RECORD_CHUNK_BYTES, yieldEveryMs = RECORD_YIELD_MS): Promise<void> {
   const decoder = new TextDecoder('utf-8');
@@ -587,6 +594,7 @@ export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, b
       await reader.cancel().catch(() => undefined);
       throw err;
     }
+    if (read < size) throw shortReadError(read, size);
   } else {
     for (let offset = 0; offset < size; offset += chunkBytes) {
       const end = Math.min(size, offset + chunkBytes);
@@ -598,19 +606,28 @@ export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, b
   if (tail) onChunk(tail, size);
 }
 
+/** 讀到的位元組比檔案大小少(讀取途中檔案被截短):與瀏覽器讀不到檔案時相同的錯誤名稱,呼叫端以 recordReadErrorText 顯示說明。 */
+function shortReadError(read: number, size: number): Error {
+  const err = new Error(`檔案只讀到 ${read} / ${size} 位元組(讀取途中檔案被截短或改動)`);
+  err.name = 'NotReadableError';
+  return err;
+}
+
 export interface ParseReplayBlobOptions<S extends ReplayStateBase> {
   project?: StateProjection<S>;
+  /** 自備的狀態存放(給了就不用 project;見 ReplayStreamParser) */
+  stores?: ReplayStateStoreFactory<S>;
   /** 一段文字的位元組上限(預設 RECORD_CHUNK_BYTES) */
   chunkBytes?: number;
   /** 連續工作多久(毫秒)讓出主執行緒一次(預設 RECORD_YIELD_MS;0 = 每段之後都讓出,Infinity = 不讓出) */
   yieldEveryMs?: number;
-  /** 每讀完一段呼叫一次(已讀位元組、總位元組) */
+  /** 每讀完一段呼叫一次(已讀位元組、總位元組);擲出例外即停止讀取(parseReplayBlob 以同一個例外拒絕) */
   onProgress?: (bytesRead: number, totalBytes: number) => void;
 }
 
 /** 分段讀取並解析一份紀錄(Blob / File):不把整份紀錄讀成一個字串;讀取中定時讓出主執行緒(頁面不會整段停住,進度畫得出來)。 */
 export async function parseReplayBlob<S extends ReplayStateBase = OwnShipState>(blob: Blob, options: ParseReplayBlobOptions<S> = {}): Promise<ReplayStreamResult<S>> {
-  const parser = new ReplayStreamParser<S>(options.project);
+  const parser = new ReplayStreamParser<S>(options.project, options.stores);
   await forEachBlobTextChunk(
     blob,
     (text, read) => {
@@ -621,4 +638,21 @@ export async function parseReplayBlob<S extends ReplayStateBase = OwnShipState>(
     options.yieldEveryMs,
   );
   return parser.finish();
+}
+
+/** 讀取中顯示進度的檔案大小下限(位元組;小檔案一閃而過,不顯示)。講評報告頁與重播檢視共用。 */
+export const RECORD_PROGRESS_MIN_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 讀檔失敗的說明。NotReadableError:檔案在選取之後被改動(瀏覽器以選取當下的修改時間核對),最常見的是核心仍在寫入這份紀錄
+ * (build/records 下正在變大的 .jsonl)——重新選取一次通常就能讀到當下的內容;其餘錯誤照原樣顯示。
+ */
+export function recordReadErrorText(err: unknown): string {
+  if (typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'NotReadableError') return '檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)';
+  return String(err);
+}
+
+/** 位元組 → MB 的顯示文字(10 MB 以下一位小數)。 */
+export function megabytesText(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0);
 }

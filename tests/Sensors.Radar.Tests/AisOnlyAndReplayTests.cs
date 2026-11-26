@@ -136,6 +136,14 @@ public class AisOnlyAndReplayTests
         await display.ConnectAsync(new Uri($"ws://localhost:{port}/radar/x"), cts.Token);
         using var replay = new ClientWebSocket();
         await replay.ConnectAsync(new Uri($"ws://localhost:{port}/radar/replay"), cts.Token);
+        // ConnectAsync 在客戶端收到 101 回應時就完成;伺服端在 AcceptWebSocketAsync 回來之後才把連線登記進客戶端表
+        // (RadarWebSocketServer.HandleClientAsync),兩者之間有空檔 —— 等到兩條連線都登記了再斷言(受 cts 60 s 上限;
+        // 原寫法緊接著斷言,機器忙碌時讀到 0:第三十一輪主控程序的全套測試遇過一次)
+        while (server.ClientCount("x") < 1 || server.ClientCount("replay") < 1)
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            await Task.Delay(5, cts.Token);
+        }
         Assert.Equal(1, server.ClientCount("x"));
         Assert.Equal(1, server.ClientCount("replay")); // 重播接收端不算雷達顯示客戶端(ClientIds("x") 不含它)
 

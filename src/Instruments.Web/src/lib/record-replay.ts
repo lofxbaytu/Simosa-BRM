@@ -16,6 +16,9 @@
 // 兩種格式各有一個逐筆的建構器(JsonLinesReplayBuilder 逐行、SessionReplayBuilder 逐筆狀態):整份文字的 parseReplay() 與
 // 分段讀取的 record-stream.ts(ReplayStreamParser;講評報告頁不把整份紀錄讀成一個字串)共用同一份邏輯,結果相同。
 // 建構器可帶「狀態投影」:解析後每筆狀態只留呼叫端需要的欄位(講評報告頁只需要講評累計讀取的欄位,見 debrief.ts DebriefState)。
+// 狀態放在「狀態存放」(ReplayStateStore)裡:預設是一個陣列(ArrayStateStore;每筆都留,可帶投影);重播檢視改用
+// lib/replay-states.ts 的 ReplayHistoryStore(保留的筆數有上限、超過才降採樣,摘要 / 航跡 / 事件位置仍以全部狀態計算)。
+// 倒帶的判斷與丟棄(狀態、事件、rewinds[])都在建構器裡,存放端只負責「加入一筆 / 丟掉 t 之後的 / 全部丟掉」,兩種存放的倒帶結果相同。
 //
 // 事件(events):與教官站即時事件流相同的列 — 同一個碰墊連續的低速接觸合併成一列(SimEvent.merged;規則見 lib/event-merge.ts)。
 // 核心 JSON Lines 紀錄仍是逐筆的 fenderContact,讀入時經同一個 EventStore 合併(倒帶時合併列截到倒帶點);教官站紀錄版本 6 起
@@ -97,6 +100,74 @@ export interface ReplayStateBase {
 
 /** 狀態投影:解析出的完整狀態 → 要保留的欄位(回傳的物件會被長期持有;省略 = 保留完整狀態) */
 export type StateProjection<S extends ReplayStateBase> = (state: OwnShipState) => S;
+
+/**
+ * 建構器存放狀態的地方(練習最終的歷史;倒帶的舊分支由建構器呼叫 dropAfter / clear 丟掉)。
+ * length / first / last 指的是**全部**狀態(存放端可以只保留其中一部分給 finish();倒帶判斷、丟棄筆數、tStart / tEnd 都以全部狀態為準)。
+ */
+export interface ReplayStateStore<S extends ReplayStateBase> {
+  /** 目前歷史的狀態筆數 */
+  readonly length: number;
+  /** 第一筆狀態(只需要 t / tick);沒有狀態時 undefined */
+  first(): ReplayStateBase | undefined;
+  /** 最後一筆狀態(只需要 t / tick);沒有狀態時 undefined */
+  last(): ReplayStateBase | undefined;
+  /** 加入一筆解析出的完整狀態(要保留哪些欄位、保留哪幾筆由存放端決定) */
+  push(state: OwnShipState): void;
+  /** 丟棄 t > t 的狀態(倒帶:與 Array.filter((x) => x.t <= t) 相同);回傳丟棄的筆數 */
+  dropAfter(t: number): number;
+  /** 全部丟棄(重設,或重新開始解析) */
+  clear(): void;
+  /** 讀完:要放進 ReplayData.states 的狀態(依時間遞增) */
+  finish(): S[];
+}
+
+/** 每個建構器各要一個存放(分段解析器同時準備兩種格式的建構器,只有其中一個會用到) */
+export type ReplayStateStoreFactory<S extends ReplayStateBase> = () => ReplayStateStore<S>;
+
+/** 預設的狀態存放:每一筆都留在陣列裡(可帶投影)。講評報告頁與 parseReplay() 用這一種。 */
+export class ArrayStateStore<S extends ReplayStateBase = OwnShipState> implements ReplayStateStore<S> {
+  private states: S[] = [];
+
+  constructor(private readonly project?: StateProjection<S>) {}
+
+  get length(): number {
+    return this.states.length;
+  }
+
+  first(): S | undefined {
+    return this.states[0];
+  }
+
+  last(): S | undefined {
+    return this.states[this.states.length - 1];
+  }
+
+  push(state: OwnShipState): void {
+    this.states.push(this.project ? this.project(state) : (state as unknown as S));
+  }
+
+  dropAfter(t: number): number {
+    const n = this.states.length;
+    this.states = this.states.filter((x) => x.t <= t);
+    return n - this.states.length;
+  }
+
+  clear(): void {
+    this.states = [];
+  }
+
+  finish(): S[] {
+    return this.states;
+  }
+}
+
+/** 建構器的狀態去向:投影(存進預設的陣列)或自備的存放;省略 = 保留完整狀態的陣列。 */
+export type ReplayStateTarget<S extends ReplayStateBase> = StateProjection<S> | ReplayStateStore<S>;
+
+function storeOf<S extends ReplayStateBase>(target: ReplayStateTarget<S> | undefined): ReplayStateStore<S> {
+  return typeof target === 'object' ? target : new ArrayStateStore<S>(target);
+}
 
 export interface ReplayDataOf<S> {
   source: 'simcore-jsonl' | 'instructor-json';
@@ -187,14 +258,14 @@ export function notSessionRecordReplay<S>(): ReplayDataOf<S> {
  * rewindTick:restore 指令要求的 tick(已知時倒帶點 = rewindTick × dt,而非倒帶後第一筆狀態的 t)。
  * dropEvents:丟棄 t > 倒帶點的事件並回傳丟棄的事件數(核心紀錄:事件在 EventStore 裡,合併列截到倒帶點;省略時直接濾 data.events)。
  */
-function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, s: S, rewindTick?: number, dropEvents?: (t: number) => number): void {
-  const prev = data.states[data.states.length - 1];
+function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, store: ReplayStateStore<S>, s: OwnShipState, rewindTick?: number, dropEvents?: (t: number) => number): void {
+  const prev = store.last();
   if (prev && wentBack(prev, s)) {
     const known = rewindTick !== undefined && Number.isFinite(rewindTick) && rewindTick <= s.tick;
     const tick = known ? rewindTick : s.tick;
     const t = known ? tick * data.header.dt : s.t;
-    const nStates = data.states.length;
-    data.states = data.states.filter((x) => x.t <= t);
+    const from = prev.t;
+    const droppedStates = store.dropAfter(t);
     let droppedEvents: number;
     if (dropEvents) droppedEvents = dropEvents(t);
     else {
@@ -202,9 +273,9 @@ function pushState<S extends ReplayStateBase>(data: ReplayDataOf<S>, s: S, rewin
       data.events = data.events.filter((e) => e.t <= t);
       droppedEvents = nEvents - data.events.length;
     }
-    data.rewinds.push({ t, tick, from: prev.t, droppedStates: nStates - data.states.length, droppedEvents });
+    data.rewinds.push({ t, tick, from, droppedStates, droppedEvents });
   }
-  data.states.push(s);
+  store.push(s);
 }
 
 /** s 的 tick(沒有 tick 時比 t)比前一筆 prev 小:倒帶或重設之後的第一筆狀態。 */
@@ -212,11 +283,13 @@ function wentBack(prev: ReplayStateBase, s: ReplayStateBase): boolean {
   return Number.isFinite(s.tick) && Number.isFinite(prev.tick) ? s.tick < prev.tick : s.t < prev.t;
 }
 
-function finishTimes<S extends ReplayStateBase>(data: ReplayDataOf<S>): ReplayDataOf<S> {
-  if (data.states.length > 0) {
-    data.tStart = data.states[0]!.t;
-    data.tEnd = data.states[data.states.length - 1]!.t;
+/** 讀完:狀態由存放端交出,tStart / tEnd 取全部狀態的第一筆與最後一筆(存放端只保留一部分時也一樣)。 */
+function finishStates<S extends ReplayStateBase>(data: ReplayDataOf<S>, store: ReplayStateStore<S>): ReplayDataOf<S> {
+  if (store.length > 0) {
+    data.tStart = store.first()!.t;
+    data.tEnd = store.last()!.t;
   }
+  data.states = store.finish();
   return data;
 }
 
@@ -239,7 +312,12 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
    */
   private afterReset: SimEvent[] | null = null;
 
-  constructor(private readonly project?: StateProjection<S>) {}
+  private readonly store: ReplayStateStore<S>;
+
+  /** target:狀態投影或自備的狀態存放(省略 = 每筆保留完整狀態)。 */
+  constructor(target?: ReplayStateTarget<S>) {
+    this.store = storeOf(target);
+  }
 
   /** 事件進 EventStore;有待確認的重設時先暫存(見 afterReset)。 */
   private pushEvent(ev: SimEvent): void {
@@ -349,19 +427,21 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
           return;
         }
         this.prev = parsed.state;
-        const s = this.project ? this.project(parsed.state) : (parsed.state as unknown as S);
+        const s = parsed.state;
+        const store = this.store;
         const fresh = this.afterReset;
         this.afterReset = null;
-        const last = data.states[data.states.length - 1];
+        const last = store.last();
         if (fresh && last && wentBack(last, s)) {
           // 重設生效:舊分支的狀態與事件全部作廢(倒帶點照舊記在重設後第一筆狀態),重設之後才發的事件放回
           const droppedEvents = this.eventStore.dropAfter(Number.NEGATIVE_INFINITY);
-          data.rewinds.push({ t: s.t, tick: s.tick, from: last.t, droppedStates: data.states.length, droppedEvents });
-          data.states = [s];
+          data.rewinds.push({ t: s.t, tick: s.tick, from: last.t, droppedStates: store.length, droppedEvents });
+          store.clear();
+          store.push(s);
           for (const ev of fresh) this.eventStore.push(ev);
         } else {
           if (fresh) for (const ev of fresh) this.eventStore.push(ev);
-          pushState(data, s, this.pendingRewindTick, this.dropEvents);
+          pushState(data, store, s, this.pendingRewindTick, this.dropEvents);
         }
         this.pendingRewindTick = undefined;
         break;
@@ -397,7 +477,7 @@ export class JsonLinesReplayBuilder<S extends ReplayStateBase = OwnShipState> {
     if (this.afterReset) for (const ev of this.afterReset) this.eventStore.push(ev);
     this.afterReset = null;
     this.data.events = [...this.eventStore.all()];
-    return finishTimes(this.data);
+    return finishStates(this.data, this.store);
   }
 }
 
@@ -415,13 +495,18 @@ export function parseJsonLines(text: string): ReplayData {
 export class SessionReplayBuilder<S extends ReplayStateBase = OwnShipState> {
   private data: ReplayDataOf<S> = empty('instructor-json', []);
   private prev: OwnShipState | undefined;
+  private readonly store: ReplayStateStore<S>;
 
-  constructor(private readonly project?: StateProjection<S>) {}
+  /** target:狀態投影或自備的狀態存放(省略 = 每筆保留完整狀態)。 */
+  constructor(target?: ReplayStateTarget<S>) {
+    this.store = storeOf(target);
+  }
 
   /** 丟掉已加入的狀態重新開始(JSON 的重複鍵以後者為準)。 */
   resetStates(): void {
     this.data = empty('instructor-json', []);
     this.prev = undefined;
+    this.store.clear();
   }
 
   addState(raw: unknown, i: number): void {
@@ -431,7 +516,7 @@ export class SessionReplayBuilder<S extends ReplayStateBase = OwnShipState> {
       return;
     }
     this.prev = parsed.state;
-    pushState(this.data, this.project ? this.project(parsed.state) : (parsed.state as unknown as S));
+    pushState(this.data, this.store, parsed.state);
   }
 
   /** rest:紀錄的頂層物件(states 欄不讀;呼叫端已確認 format 與 states 為陣列)。 */
@@ -484,7 +569,7 @@ export class SessionReplayBuilder<S extends ReplayStateBase = OwnShipState> {
       data.events = mergeEventRows(dropRewoundEvents(events, data.rewinds));
     }
     if (obj.coreSummary) data.summary = parseAssessmentSummary(obj.coreSummary);
-    return finishTimes(data);
+    return finishStates(data, this.store);
   }
 }
 

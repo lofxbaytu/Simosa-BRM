@@ -217,6 +217,39 @@ describe('講評報告頁:紀錄分段讀取', () => {
     expect((await (await openReportStore()).get<{ name?: string }>(LAST_RECORD_KEY))?.name).toBe('good.jsonl');
   });
 
+  it('讀取途中檔案被截短(stream 交出一部分就結束、不報錯;第三十一輪審查 MEM-2):當作讀取失敗,不把半份紀錄當成整份載入', async () => {
+    const E01 = fixtureText('record-E01-core.jsonl');
+    const app = await mount();
+    await app.openFiles([new File([E07], 'good.jsonl')]);
+    const bytes = new TextEncoder().encode(E01);
+    const cut = Math.floor(bytes.byteLength * 0.4);
+    // 檔案大小是選取當下的(完整的 E01),stream 只交出前四成就結束(實測 Chromium:讀取途中檔案被別的程序截短時就是這樣)
+    const short = {
+      name: 'cut.jsonl',
+      size: bytes.byteLength,
+      stream: () =>
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(bytes.subarray(0, cut));
+            c.close();
+          },
+        }),
+    } as unknown as File;
+    await app.openFiles([short]);
+    await app.updateComplete;
+    expect(app.fileErrors).toEqual(['無法載入「cut.jsonl」:檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)']);
+    expect(app.messageLevel).toBe('error');
+    // 原本載入的紀錄與另存的那一份不動
+    expect(app.data?.header.scenarioId).toBe('E07_steering_failure');
+    expect(app.recordName).toBe('good.jsonl');
+    expect((await (await openReportStore()).get<{ name?: string }>(LAST_RECORD_KEY))?.name).toBe('good.jsonl');
+    // 對照:同樣的內容若就是整個檔案(大小相符;例如核心仍在寫入、最後一行還沒寫完的紀錄),照常載入
+    await app.openFiles([new File([bytes.subarray(0, cut)], 'partial.jsonl')]);
+    expect(app.recordName).toBe('partial.jsonl');
+    expect(app.data?.header.scenarioId).toBe('E01_baseline');
+    expect(app.messageLevel).toBe('info');
+  });
+
   it('還原最近紀錄還沒讀完時使用者又開了別的紀錄:較早開始、較晚讀完的還原結果作廢,不蓋掉後來開的紀錄', async () => {
     const store = await openReportStore();
     // 讀得很慢的最近紀錄(E01;每段 60 ms 才回來)

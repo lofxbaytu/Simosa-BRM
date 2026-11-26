@@ -10,12 +10,15 @@
 // /_status/release.json:版本相同、版本不同、船上降版、船上沒有發行版狀態、取不到;頁面與核心在同一台時不發跨來源請求;沒有 preflight、沒有 console error);
 // 既有安裝的網址形式(沒有 shipWeb 參數,由 ?ws= 的主機推得 http://<主機>:8080;另開一個帶 --host-resolver-rules 的 Chromium)與
 // 1093×614 展開船上降版的說明時執行控制不被蓋住、點得到(審查後修正)。
+// 重播檢視讀大檔(第三十一輪):超過上限(7201 筆)的核心紀錄分段讀取、讀取中顯示百分比,資訊列寫明降採樣,時間軸 / 逐筆 / 事件跳轉可用,
+// 講評摘要與航跡以全部狀態計算(完整教官站的「重播檢視」分頁與 ?mode=replay 都走同一個元件)。
+// 審查後修正:降採樣時時間軸的方向鍵走逐筆;超過上限後倒帶回到上限以內的紀錄每一筆都在、沒有降採樣的說明。
 import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
-import { ROOT, bridgeUrl, instructorUrl, shipWebBase, webBase, type E2eEnv } from '../support/env.ts';
+import { OUT, ROOT, bridgeUrl, instructorUrl, shipWebBase, webBase, type E2eEnv } from '../support/env.ts';
 import { freePort } from '../support/processes.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
 import { INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, probeLayout } from '../support/layout.ts';
@@ -603,6 +606,48 @@ test('重播檢視載入 E14 核心紀錄(逐筆的 fenderContact,1366×768):事
   errors.expectNone();
 });
 
+test('警報列看得到字:講評摘要的逾時 / 失敗列與航跡圖目標船小表的 CPA 警報列沒有整列的紅底,列內每一格的字色都與底色不同', async ({ page, env }) => {
+  // 第三十一輪主控程序驗收時發現(2026-10 起就有):共用樣式的 .alarm(徽章:紅底)也套到 <tr class="alarm">,
+  // 而列內的數值由元件標成警報色 —— 紅底紅字,逾時 / 失敗列的數值與 CPA 警報中的目標船整列都看不到。
+  // 夾具:E08(講評摘要有逾時的必要事件與未確認的警報)、E02(結尾有 3 艘目標船在 CPA 警報中)。
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const alarmRows = (host: string) =>
+    page.locator(`brm-replay-view ${host}`).evaluate((el) => {
+      const transparent = (c: string) => c === 'transparent' || /^rgba\(\s*0,\s*0,\s*0,\s*0\s*\)$/.test(c);
+      return [...el.shadowRoot!.querySelectorAll('tr.alarm')].map((tr) => {
+        const rowBg = getComputedStyle(tr).backgroundColor;
+        const cells = [...tr.children].map((td) => {
+          const cs = getComputedStyle(td);
+          return { text: (td.textContent ?? '').trim(), color: cs.color, bg: cs.backgroundColor };
+        });
+        return {
+          text: (tr.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 40),
+          rowBg,
+          rowBgTransparent: transparent(rowBg),
+          // 有字的格子裡,字色與它自己或整列的底色相同的(看不到字)
+          invisible: cells.filter((c) => c.text !== '' && (c.color === rowBg || (!transparent(c.bg) && c.color === c.bg))).map((c) => c.text),
+        };
+      });
+    });
+  for (const [fixture, host, minRows] of [
+    ['record-E08-core.jsonl', 'brm-debrief-summary', 3],
+    ['record-E02_coastal_traffic_strait-core.jsonl', 'brm-track-plot', 3],
+  ] as const) {
+    await page.locator('brm-replay-view input.file-input').setInputFiles(path.join(ROOT, 'src/Instruments.Web/tests/fixtures', fixture));
+    // 讀取中另有一項 .info.loading(「讀取中…」),與資訊列同時存在:只看資訊列
+    await expect(page.locator('brm-replay-view .toolbar .info:not(.loading)')).toContainText(fixture, { timeout: 15_000 });
+    // 跳到結尾:目標船小表的警報列依「到目前時刻為止的事件」決定
+    await page.locator('brm-replay-view input.slider').press('End');
+    await expect.poll(async () => (await alarmRows(host)).length, { message: `${fixture}:${host} 的警報列數` }).toBeGreaterThanOrEqual(minRows);
+    const rows = await alarmRows(host);
+    expect(rows.filter((r) => !r.rowBgTransparent).map((r) => `${r.text}:${r.rowBg}`), `${fixture}:${host} 的警報列不該有整列的底色`).toEqual([]);
+    expect(rows.filter((r) => r.invisible.length > 0).map((r) => `${r.text}:${r.invisible.join(' | ')}`), `${fixture}:${host} 的警報列裡字色與底色相同的格子`).toEqual([]);
+  }
+  errors.expectNone();
+});
+
 test('發行版本與降版提醒:頁首顯示發行版與軟體更新包版次(simosa-web 只送網頁需要的欄位);沒有狀態檔時不顯示、沒有 console error;降版時警示徽章、可展開說明,版面判定通過;駕駛台頁不顯示', async ({ page, env, core }) => {
   // 第三十輪:simosa-pkg status 的 releaseVersion / releaseDowngrade 原本只有下指令才看得到。啟動腳本把 status --json 存成狀態檔,
   // simosa-web(--status-file;global-setup 指到同樣形式的檔)以 /_status/release.json 提供,教官站頁首顯示。
@@ -1130,4 +1175,267 @@ test('既有安裝的教官站網址(沒有 shipWeb 參數):由 ?ws= 的主機�
     await browser.close();
     await ensureRunning(core);
   }
+});
+
+test('重播檢視讀超過上限的核心紀錄(當場合成 9,000 筆、約 27 MB;1366×768):讀取中顯示百分比,資訊列寫明降採樣,時間軸 / 逐筆 / 事件跳轉可用,版面判定通過', async ({ page, env }) => {
+  // 第三十一輪:重播檢視原本 file.text() 整份讀成字串再整份解析、每筆保留完整狀態(2 小時的核心紀錄 1.35 GB 讀到 +1.2 GB 時分頁當掉)。
+  // 現在分段讀取(lib/replay-states.ts);顯示用的狀態最多 7201 筆,超過時每 N 筆取 1 筆並在資訊列寫明,摘要 / 事件 / 航跡仍以全部狀態計算。
+  // 合成:E13 夾具(拖船、泊位、時間表事件)的狀態行循環複製成 25 Hz × 9,000 筆(360 s),原本的事件 / summary / footer 行照 tick 的位置放回。
+  test.setTimeout(120_000);
+  const lines = fs.readFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E13_tug_berthing_mailiao-core.jsonl'), 'utf8').split('\n').filter((l) => l.trim());
+  const header = lines.find((l) => l.startsWith('{"kind":"header"'))!;
+  const states = lines.filter((l) => l.startsWith('{"kind":"state"')).map((l) => JSON.parse(l) as { kind: string; state: { t: number; tick: number; rudder: number; pos: { x: number; y: number } } });
+  const events = lines.filter((l) => l.startsWith('{"kind":"event"')).map((l) => ({ line: l, tick: (JSON.parse(l) as { tick: number }).tick }));
+  const tail = lines.filter((l) => l.startsWith('{"kind":"summary"') || l.startsWith('{"kind":"footer"'));
+  expect(states.length).toBeGreaterThan(0);
+  expect(events.length).toBeGreaterThan(3);
+  const COUNT = 9000;
+  const record = path.join(OUT, 'tmp', 'replay-over-limit.jsonl');
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  const fd = fs.openSync(record, 'w');
+  let bytes = fs.writeSync(fd, `${header}\n`);
+  let nextEvent = 0;
+  let hardOver = 0;
+  for (let k = 1; k <= COUNT; ) {
+    const batch: string[] = [];
+    for (let i = 0; i < 500 && k <= COUNT; i++, k++) {
+      const tick = 2 * k;
+      // 核心在同一個 tick 先寫事件行、再寫狀態行
+      while (nextEvent < events.length && events[nextEvent]!.tick <= tick) batch.push(events[nextEvent++]!.line);
+      const s = states[k % states.length]!;
+      s.state.tick = tick;
+      s.state.t = 0.04 * k;
+      s.state.pos.x = 3 * 0.04 * k;
+      s.state.pos.y = k % 2 ? 6 : 0;
+      // 奇數筆滿舵(每 2 筆取 1 筆留下的是奇數筆之外的那些:序號 0 = k 1 …;摘要要算全部)
+      s.state.rudder = k % 2 === 0 ? 35 : 0;
+      if (k % 2 === 0) hardOver++;
+      batch.push(JSON.stringify(s));
+    }
+    bytes += fs.writeSync(fd, `${batch.join('\n')}\n`);
+  }
+  bytes += fs.writeSync(fd, `${tail.join('\n')}\n`);
+  fs.closeSync(fd);
+  expect(nextEvent, '夾具的事件都在合成的時間範圍內').toBe(events.length);
+  expect(bytes).toBeGreaterThan(8 * 1024 * 1024);
+
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const view = page.locator('brm-replay-view');
+  // 重播檢視自己的工具列(航跡圖裡也有一個 .toolbar,排在後面)
+  const toolbar = view.locator('.toolbar').first();
+  // 先載入一份小紀錄:讀大檔的期間原本的紀錄還在、頁面可以操作
+  await view.locator('input.file-input').setInputFiles(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E14_unberthing_no_tug-core.jsonl'));
+  await expect(view.locator('.toolbar .info').last()).toContainText('E14_unberthing_no_tug');
+  // 頁面內:記下工具列出現過的讀取進度與當時資訊列顯示的紀錄(MutationObserver),以及各畫格(requestAnimationFrame)看到的進度 ——
+  // 畫格看得到小於 100% 的進度,表示讀取中有讓出主執行緒、畫面有在更新(不是整段停住到讀完)
+  await page.evaluate(() => {
+    const w = window as unknown as { __progress: string[]; __during: string[]; __frames: string[]; __stop: () => void };
+    w.__progress = [];
+    w.__during = [];
+    w.__frames = [];
+    const root = document.querySelector('brm-instructor-app')!.shadowRoot!.querySelector('brm-replay-view')!.shadowRoot!;
+    const loadingText = (): string => root.querySelector('.toolbar .loading')?.textContent ?? '';
+    new MutationObserver(() => {
+      const t = loadingText();
+      if (t && w.__progress[w.__progress.length - 1] !== t) {
+        w.__progress.push(t);
+        w.__during.push(root.querySelector('.toolbar')?.textContent ?? '');
+      }
+    }).observe(root, { subtree: true, childList: true, characterData: true });
+    let raf = 0;
+    const frame = (): void => {
+      const t = loadingText();
+      if (t && w.__frames[w.__frames.length - 1] !== t) w.__frames.push(t);
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    w.__stop = () => cancelAnimationFrame(raf);
+  });
+  await view.locator('input.file-input').setInputFiles(record);
+  const decimated = view.locator('.toolbar .decimated');
+  await expect(decimated).toHaveText('狀態筆數超過 7,201:畫面每 2 筆取 1 筆(約每 0.08 秒一筆,⏮ ⏭ 逐筆同此間隔);摘要、事件、航跡仍以全部 9,000 筆計算', { timeout: 60_000 });
+  await expect(toolbar).toContainText('replay-over-limit.jsonl · SimCore JSON Lines · E13_tug_berthing_mailiao');
+  await expect(toolbar).toContainText('9000 筆狀態 · ');
+  await expect(view.locator('.toolbar .loading')).toHaveCount(0);
+  await expect(view.locator('.toolbar .error')).toHaveCount(0);
+  const seen = await page.evaluate(() => {
+    const w = window as unknown as { __progress: string[]; __during: string[]; __frames: string[]; __stop: () => void };
+    w.__stop();
+    return { progress: w.__progress, during: w.__during, frames: w.__frames };
+  });
+  const total = (bytes / 1048576).toFixed(bytes < 10 * 1048576 ? 1 : 0);
+  const percents = seen.progress.map((t) => new RegExp(`^讀取 replay-over-limit\\.jsonl… (\\d+)%\\(共 ${total} MB\\)$`).exec(t)).filter((m): m is RegExpExecArray => m !== null).map((m) => Number(m[1]));
+  expect(percents.length, `讀取中出現過的進度文字:${seen.progress.join(' | ')}`).toBeGreaterThanOrEqual(2);
+  expect([...percents].sort((a, b) => a - b), '進度遞增').toEqual(percents);
+  expect(percents.filter((p) => p < 100).length, '工具列出現過小於 100% 的進度').toBeGreaterThanOrEqual(1);
+  const framePercents = seen.frames.map((t) => /… (\d+)%/.exec(t)).filter((m): m is RegExpExecArray => m !== null).map((m) => Number(m[1]));
+  expect(framePercents.filter((p) => p < 100).length, `畫格看到的進度(讀取中有讓出主執行緒):${seen.frames.join(' | ')}`).toBeGreaterThanOrEqual(1);
+  expect(seen.during.every((t) => t.includes('E14_unberthing_no_tug')), '讀取中原本載入的紀錄還在').toBe(true);
+
+  // 時間軸:範圍是全部狀態的第一筆到最後一筆;拖到中間
+  const time = view.locator('.timeline .t');
+  await expect(time).toHaveText('00:00 / 06:00');
+  const slider = view.locator('.timeline input.slider');
+  await slider.fill('180');
+  await expect(time).toHaveText('03:00 / 06:00');
+  // 逐筆:鈕的說明寫了間隔;一次走一筆留下的狀態(0.08 秒)。由整數秒的時刻起逐筆 3 次、退 1 次
+  const next = view.locator('.timeline .btn-row button[title="下一筆(約 0.08 秒)"]');
+  const prev = view.locator('.timeline .btn-row button[title="上一筆(約 0.08 秒)"]');
+  await expect(next).toHaveCount(1);
+  await expect(prev).toHaveCount(1);
+  const now = () => view.evaluate((el) => (el as unknown as { time: number }).time);
+  const shownTick = () => view.evaluate((el) => (el.shadowRoot!.querySelector('brm-conning-bar') as unknown as { state: { tick: number } }).state.tick);
+  // 留下的是序號 0、2、4 …(k = 1、3、5 …,t = 0.04、0.12、0.20 …)與最後一筆;t = 180 落在 k = 4500(沒留下),顯示的是 k = 4499
+  expect(await shownTick()).toBe(2 * 4499);
+  await next.click();
+  expect(await now()).toBeCloseTo(0.04 * 4501, 6);
+  expect(await shownTick()).toBe(2 * 4501);
+  await next.click();
+  await next.click();
+  expect(await now()).toBeCloseTo(0.04 * 4505, 6);
+  await prev.click();
+  expect(await now()).toBeCloseTo(0.04 * 4503, 6);
+  expect(await shownTick()).toBe(2 * 4503);
+  // 時間軸的方向鍵(審查後修正 MEM-4):降採樣時走逐筆,每按一次換一筆留下的狀態。原本滑桿一格 0.04 秒、留下的狀態相隔 0.08 秒,
+  // 第一次按下去(180.12 → 180.16,k = 4504 沒留下)畫面不變;2 小時的紀錄要按 32 次才換一筆
+  await slider.focus();
+  await page.keyboard.press('ArrowRight');
+  expect(await shownTick()).toBe(2 * 4505);
+  await page.keyboard.press('ArrowRight');
+  expect(await shownTick()).toBe(2 * 4507);
+  expect(await now()).toBeCloseTo(0.04 * 4507, 6);
+  await page.keyboard.press('ArrowLeft');
+  expect(await shownTick()).toBe(2 * 4505);
+  await expect(time).toHaveText('03:00 / 06:00');
+  // 滑桿的位置跟著時刻;PageDown 等其他按鍵照舊由瀏覽器處理(往回一大步)
+  expect(Number(await slider.inputValue())).toBeCloseTo(0.04 * 4505, 2);
+  await page.keyboard.press('PageDown');
+  expect(await now()).toBeLessThan(0.04 * 4505 - 1);
+  // 事件跳轉:點事件串流的列跳到事件的時刻(不是留下的狀態的時刻);時間軸上的事件標記也點得到
+  const stream = view.locator('brm-event-stream');
+  const row = stream.locator('.list .item').last();
+  await row.scrollIntoViewIfNeeded();
+  const rowTime = (await row.locator('.time').innerText()).trim();
+  await row.click();
+  await expect(time).toHaveText(`${rowTime} / 06:00`);
+  expect(await now()).toBeLessThan(60);
+  const marks = view.locator('.marks .mark:not(.phase)');
+  expect(await marks.count()).toBeGreaterThan(3);
+  await slider.fill('300');
+  await expect(time).toHaveText('05:00 / 06:00');
+  await marks.last().click({ position: { x: 1, y: 6 }, force: true });
+  await expect(time).not.toHaveText('05:00 / 06:00');
+  // 最後一筆一律保留:拖到底顯示 k = 9000
+  await slider.fill('360');
+  await expect(time).toHaveText('06:00 / 06:00');
+  expect(await shownTick()).toBe(2 * COUNT);
+  // 講評摘要與航跡以全部狀態計算:狀態 9,000 筆、滿舵次數 = 全部狀態中的次數(留下來的狀態都不是滿舵的那些);航跡每 1 秒一點
+  const derived = await view.evaluate((el) => {
+    const root = el.shadowRoot!;
+    const summary = (root.querySelector('brm-debrief-summary') as unknown as { summary: { samples: number; hardOverCount: number } }).summary;
+    const data = (el as unknown as { data: { states: Array<{ rudder: number }>; track: unknown[]; stateStats: { total: number; shown: number; stride: number } } }).data;
+    return { samples: summary.samples, hardOver: summary.hardOverCount, track: data.track.length, stats: data.stateStats, shownHardOver: data.states.filter((s) => Math.abs(s.rudder) >= 34.5).length };
+  });
+  expect(derived.stats).toMatchObject({ total: COUNT, shown: 4501, stride: 2 });
+  expect(derived.samples).toBe(COUNT);
+  expect(derived.hardOver).toBe(hardOver);
+  expect(derived.shownHardOver, '留下來顯示的狀態中滿舵的只有另外保留的最後一筆').toBe(1);
+  expect(derived.track).toBeGreaterThanOrEqual(355);
+  // 版面:資訊列多了降採樣的說明(折成多行)後,時間軸、播放 / 逐筆鈕、事件串流篩選鈕仍不必捲動就點得到
+  const report = await page.evaluate(probeLayout, REPLAY_LAYOUT);
+  expect(layoutFailures(report), '重播檢視 1366×768(超過上限的紀錄,資訊列有降採樣說明)的版面問題').toEqual([]);
+  const box = (await decimated.boundingBox())!;
+  expect(box.width, '降採樣的說明沒有被壓成一字一行').toBeGreaterThan(200);
+  // 其他視窗(1366×768 在 125 % 縮放的 1093×614、1920×1080):說明多佔一行後版面判定仍通過
+  for (const [width, height] of [[1093, 614], [1920, 1080]] as const) {
+    await page.setViewportSize({ width, height });
+    await expect(decimated).toBeVisible();
+    expect(layoutFailures(await page.evaluate(probeLayout, REPLAY_LAYOUT)), `重播檢視 ${width}×${height}(超過上限的紀錄)的版面問題`).toEqual([]);
+  }
+  await page.setViewportSize({ width: 1366, height: 768 });
+  // 播放照常
+  const play = view.locator('.timeline button.play');
+  await slider.fill('10');
+  await play.click();
+  await expect(play).toHaveText('暫停');
+  await expect.poll(now).toBeGreaterThan(10.2);
+  await play.click();
+  await expect(play).toHaveText('播放');
+  errors.expectNone();
+  fs.rmSync(record, { force: true });
+});
+
+test('完整教官站的「重播檢視」分頁讀同一種紀錄(1366×768):與 ?mode=replay 相同的資訊列與時間軸;切回即時再切回來,紀錄與時刻還在', async ({ page, env, core }) => {
+  // 重播檢視在完整教官站是常駐的元件(以 hidden 切換):檔案選擇走同一條分段讀取的路。核心照常連線。
+  test.setTimeout(120_000);
+  await ensureRunning(core);
+  const lines = fs.readFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E01-core.jsonl'), 'utf8').split('\n').filter((l) => l.trim());
+  const header = lines.find((l) => l.startsWith('{"kind":"header"'))!;
+  const states = lines.filter((l) => l.startsWith('{"kind":"state"')).map((l) => JSON.parse(l) as { kind: string; state: { t: number; tick: number } });
+  const record = path.join(OUT, 'tmp', 'replay-over-limit-full.jsonl');
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  const out: string[] = [header];
+  for (let k = 0; k < 7300; k++) {
+    const s = states[k % states.length]!;
+    s.state.tick = 2 * k;
+    s.state.t = 0.04 * k;
+    out.push(JSON.stringify(s));
+  }
+  fs.writeFileSync(record, `${out.join('\n')}\n`);
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env));
+  await waitConnected(page);
+  await page.locator('button.view-replay').click();
+  const view = page.locator('brm-replay-view');
+  const toolbar = view.locator('.toolbar').first();
+  await view.locator('input.file-input').setInputFiles(record);
+  await expect(view.locator('.toolbar .decimated')).toHaveText('狀態筆數超過 7,201:畫面每 2 筆取 1 筆(約每 0.08 秒一筆,⏮ ⏭ 逐筆同此間隔);摘要、事件、航跡仍以全部 7,300 筆計算', { timeout: 60_000 });
+  await expect(toolbar).toContainText('7300 筆狀態 · ');
+  const time = view.locator('.timeline .t');
+  await expect(time).toHaveText('00:00 / 04:51');
+  await view.locator('.timeline input.slider').fill('120');
+  await expect(time).toHaveText('02:00 / 04:51');
+  const report = await page.evaluate(probeLayout, REPLAY_LAYOUT);
+  expect(layoutFailures(report), '完整教官站的重播檢視分頁 1366×768(超過上限的紀錄)的版面問題').toEqual([]);
+  // 切回即時、再切回重播:載入的紀錄與時間軸位置不變
+  await page.locator('.seg[aria-label="檢視"] button', { hasText: '即時' }).click();
+  await expect(view).toBeHidden();
+  await page.locator('button.view-replay').click();
+  await expect(view).toBeVisible();
+  await expect(time).toHaveText('02:00 / 04:51');
+  await expect(toolbar).toContainText('7300 筆狀態 · ');
+
+  // 審查後修正(DATA-1 / MEM-1):超不超過上限看練習最終的歷史。同樣的 7,300 筆之後倒帶回 tick 2000(第 1,001 筆)再跑 2,000 筆:
+  // 最終 3,001 筆 < 7,201 → 每一筆都在、沒有降採樣的說明、逐筆一次 0.04 秒(原本沿用倒帶前的間隔:1,501 筆、每 2 筆取 1 筆)
+  const rewound = path.join(OUT, 'tmp', 'replay-rewound-under-limit.jsonl');
+  const more: string[] = [...out, JSON.stringify({ kind: 'input', tick: 2 * 7299, command: { type: 'restore', args: { tick: 2000 } } })];
+  for (let k = 1001; k <= 3000; k++) {
+    const s = states[k % states.length]!;
+    s.state.tick = 2 * k;
+    s.state.t = 0.04 * k;
+    more.push(JSON.stringify(s));
+  }
+  fs.writeFileSync(rewound, `${more.join('\n')}\n`);
+  await view.locator('input.file-input').setInputFiles(rewound);
+  await expect(toolbar).toContainText('replay-rewound-under-limit.jsonl · SimCore JSON Lines', { timeout: 60_000 });
+  await expect(toolbar).toContainText('3001 筆狀態 · 1 筆輸入');
+  await expect(view.locator('.toolbar .decimated')).toHaveCount(0);
+  await expect(time).toHaveText('00:00 / 02:00');
+  const rewindMark = view.locator('.marks .mark.rewind');
+  await expect(rewindMark).toHaveCount(1);
+  expect(await rewindMark.getAttribute('title')).toContain('丟棄 6299 筆狀態');
+  const stats = await view.evaluate((el) => (el as unknown as { data: { states: unknown[]; stateStats: { total: number; shown: number; stride: number } } }).data.stateStats);
+  expect(stats).toMatchObject({ total: 3001, shown: 3001, stride: 1 });
+  const nextPlain = view.locator('.timeline .btn-row button[title="下一筆"]');
+  await expect(nextPlain).toHaveCount(1);
+  await nextPlain.click();
+  await nextPlain.click();
+  expect(await view.evaluate((el) => (el as unknown as { time: number }).time)).toBeCloseTo(0.08, 6);
+  expect(await view.evaluate((el) => (el.shadowRoot!.querySelector('brm-conning-bar') as unknown as { state: { tick: number } }).state.tick)).toBe(4);
+  errors.expectNone();
+  fs.rmSync(record, { force: true });
+  fs.rmSync(rewound, { force: true });
 });

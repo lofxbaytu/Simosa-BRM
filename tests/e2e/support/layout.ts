@@ -469,6 +469,8 @@ export const SIMPLE_RUN_LAYOUT: LayoutSpec = {
 export const REPLAY_LAYOUT: LayoutSpec = {
   keys: [
     { name: '重播「播放 / 暫停」', host: 'brm-replay-view', inner: '.timeline button.play' },
+    { name: '重播逐筆 / 播放鈕', host: 'brm-replay-view', inner: '.timeline .btn-row button', min: 3 },
+    { name: '重播的檔案選擇', host: 'brm-replay-view', inner: '.toolbar input.file-input' },
     { name: '重播時間軸', host: 'brm-replay-view', inner: '.timeline input.slider' },
     { name: '事件串流篩選鈕', host: 'brm-event-stream', inner: '.filters button', min: 6 },
   ],

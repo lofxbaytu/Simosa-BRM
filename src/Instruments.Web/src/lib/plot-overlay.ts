@@ -196,18 +196,43 @@ export function overlayFromHeaderScenario(raw: unknown): PlotOverlay {
   return base;
 }
 
+/** 航跡圖上要標的事件:warning / alarm 與時間表觸發、檢查點、報告點;其餘(info)不標。回傳嚴重度,不標的回傳 null。 */
+function markSeverity(e: SimEvent): EventSeverity | null {
+  const sev = eventSeverity(e);
+  if (sev === 'info' && e.kind !== 'timelineTriggered' && e.kind !== 'checkpointPassed' && e.kind !== 'reportPointPassed') return null;
+  return sev;
+}
+
 /** 事件標記:以事件時刻的自船位置(狀態序列內插前一筆)為座標;只標 warning/alarm 與時間表觸發。 */
 export function eventMarks(events: readonly SimEvent[], states: readonly Pick<OwnShipState, 't' | 'pos'>[], tMax = Number.POSITIVE_INFINITY): OverlayEventMark[] {
   const out: OverlayEventMark[] = [];
   if (states.length === 0) return out;
   for (const e of events) {
     if (e.t > tMax) continue;
-    const sev = eventSeverity(e);
-    if (sev === 'info' && e.kind !== 'timelineTriggered' && e.kind !== 'checkpointPassed' && e.kind !== 'reportPointPassed') continue;
+    const sev = markSeverity(e);
+    if (sev === null) continue;
     const i = stateIndexAt(states, e.t);
     if (i < 0) continue;
     const s = states[i]!;
     out.push({ x: s.pos.x, y: s.pos.y, t: e.t, severity: sev, kind: e.kind });
+  }
+  return out;
+}
+
+/**
+ * 事件標記,事件發生時的自船位置已另外算好(positions 與 events 同索引;null = 沒有位置,不標):重播檢視的狀態可能已降採樣,
+ * 位置在載入時由全部狀態查出(lib/replay-states.ts eventPositions),結果與 eventMarks(events, 全部狀態, tMax) 相同。
+ */
+export function eventMarksAt(events: readonly SimEvent[], positions: readonly ({ x: number; y: number } | null)[], tMax = Number.POSITIVE_INFINITY): OverlayEventMark[] {
+  const out: OverlayEventMark[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i]!;
+    if (e.t > tMax) continue;
+    const sev = markSeverity(e);
+    if (sev === null) continue;
+    const p = positions[i];
+    if (!p) continue;
+    out.push({ x: p.x, y: p.y, t: e.t, severity: sev, kind: e.kind });
   }
   return out;
 }

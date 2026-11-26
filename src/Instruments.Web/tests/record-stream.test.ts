@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { debriefState, summarize } from '../src/lib/debrief.js';
 import { parseReplay } from '../src/lib/record-replay.js';
-import { RECORD_YIELD_MS, ReplayStreamParser, TopLevelObjectScanner, forEachBlobTextChunk, isJsWhitespace, parseReplayBlob, parseReplayText, yieldToEventLoop, type TopLevelSink } from '../src/lib/record-stream.js';
+import { RECORD_YIELD_MS, ReplayStreamParser, TopLevelObjectScanner, forEachBlobTextChunk, isJsWhitespace, parseReplayBlob, parseReplayText, recordReadErrorText, yieldToEventLoop, type TopLevelSink } from '../src/lib/record-stream.js';
 import { SESSION_RECORD_FORMAT } from '../src/lib/session-record.js';
 import type { OwnShipState } from '../src/types/state.js';
 import { fixtureText, mutate, randomChunks, rng, sessionRecordText, syntheticSessionRecord } from './support/record-corpus.js';
@@ -374,6 +374,49 @@ describe('Blob 分段解碼', () => {
       ),
     ).rejects.toThrow('解析失敗');
     expect(chunks).toBe(1);
+  });
+
+  it('stream 交出的位元組比 blob.size 少(讀取途中檔案被截短:Chromium 不報錯、交出一部分就結束;第三十一輪審查 MEM-2):以 NotReadableError 拒絕;大小相符時照常', async () => {
+    const text = fixtureText('record-E07-core.jsonl');
+    const bytes = new TextEncoder().encode(text);
+    /** 大小是完整的檔案,stream 只交出前 n 個位元組(每段 pieces 位元組)就結束 */
+    const early = (n: number, piece = 3000) =>
+      ({
+        size: bytes.byteLength,
+        stream: () => {
+          let off = 0;
+          return new ReadableStream<Uint8Array>({
+            pull(c) {
+              if (off >= n) return c.close();
+              c.enqueue(bytes.subarray(off, Math.min(n, off + piece)));
+              off += piece;
+            },
+          });
+        },
+      }) as unknown as Blob;
+    for (const n of [0, 1, 4096, bytes.byteLength - 1]) {
+      let last = 0;
+      const err = await forEachBlobTextChunk(early(n), (_t, read) => void (last = read), 1000).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, `只交出 ${n} 位元組`).toBeInstanceOf(Error);
+      expect((err as Error).name).toBe('NotReadableError');
+      expect((err as Error).message).toBe(`檔案只讀到 ${n} / ${bytes.byteLength} 位元組(讀取途中檔案被截短或改動)`);
+      // 已經交出的那些照常交給解析端(之後才知道不夠);呼叫端顯示的是讀取失敗的中文說明
+      expect(last).toBe(n);
+      expect(recordReadErrorText(err)).toBe('檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)');
+    }
+    await expect(parseReplayBlob(early(40_000))).rejects.toMatchObject({ name: 'NotReadableError' });
+    // 大小相符:照常(與全文解析相同)
+    expect((await parseReplayBlob(early(bytes.byteLength))).data).toStrictEqual(parseReplay(text));
+    // 最後一行不完整但大小相符(核心仍在寫入的紀錄讀到選取當下的大小):不是讀取失敗,壞行記在 errors
+    const partial = new Blob([bytes.subarray(0, 40_000)]);
+    const res = await parseReplayBlob(partial);
+    expect(res.data.states.length).toBeGreaterThan(0);
+    expect(res.data.errors).toHaveLength(1);
+    // 空檔:沒有讀到東西也不是讀取失敗
+    expect((await parseReplayBlob(new Blob([]))).data.errors[0]).toMatch(/無法辨識/);
   });
 
   it('parseReplayBlob:小段(7 位元組)讀取含中文的核心紀錄與教官站紀錄,結果與全文解析相同;空檔案 = 無法辨識', async () => {
