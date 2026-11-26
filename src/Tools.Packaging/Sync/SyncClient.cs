@@ -149,7 +149,7 @@ public static class SyncClient
         }
         if (o.PullRecords)
         {
-            var incoming = Path.Combine(o.Store.Root, "incoming");
+            var incoming = o.Store.IncomingDir;
             foreach (var p in outstanding.Where(p => !o.Store.Has(p.PackageId, p.Sha256)))
             {
                 await SyncProtocol.WriteAsync(s, new GetRecordMessage { PackageId = p.PackageId }, ct).ConfigureAwait(false);
@@ -187,25 +187,19 @@ public static class SyncClient
             }
         }
 
-        // 4. 已備份回報 → 船端清理
-        if (o.SendBackupReport && outstanding.Count > 0)
+        // 4. 已備份回報 → 船端清理 → 標記船上已刪除
+        //    有可以回報的紀錄包才做(先不取鎖查一次:沒有的話這一步不碰帳冊的鎖,備份紀錄庫進行中的同步不必等它)。
+        //    整段在一條專用的執行緒上同步執行:帳冊的鎖要在同一條執行緒取得與放開,不能跨 await
+        var outstandingIds = outstanding.Select(p => p.PackageId).ToList();
+        if (o.SendBackupReport && outstanding.Count > 0 && o.Store.HasBackupReportFor(ch.ShipId, outstandingIds))
         {
-            var created = o.Store.CreateBackupReport(ch.ShipId, o.InstructorKey, outstanding.Select(p => p.PackageId));
-            if (created is { } c)
+            var (reportId, res) = await Task.Factory.StartNew(() => SendBackupReport(o, s, ch.ShipId, outstandingIds, ct), ct, TaskCreationOptions.LongRunning, TaskScheduler.Default).ConfigureAwait(false);
+            if (res is not null)
             {
-                var bytes = c.Document.ToBytes();
-                await SyncProtocol.WriteAsync(s, new FileHeader { Type = SyncTypes.BackupReport, Name = c.Report.ReportId + ".sbbak", Size = bytes.Length, Sha256 = Sha256Hex.Of(bytes) }, ct).ConfigureAwait(false);
-                await s.WriteAsync(bytes, ct).ConfigureAwait(false);
-                await s.FlushAsync(ct).ConfigureAwait(false);
-                var res = SyncProtocol.As<CleanupResultMessage>(Expect(await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false), SyncTypes.CleanupResult)).Result;
                 report.Cleanup = res;
-                if (res.Ok)
-                {
-                    o.Store.MarkShipDeleted(c.Report.ReportId, res.Deleted, ch.ShipId);
-                    retentionWarnings = res.Warnings; // 清理後的保留上限警告(及無法刪除的檔案)取代清理前的
-                }
+                if (res.Ok) retentionWarnings = res.Warnings; // 清理後的保留上限警告(及無法刪除的檔案)取代清理前的
                 else report.Warnings.AddRange(res.Warnings);
-                o.Log?.WriteLine($"  已備份回報 {c.Report.ReportId}:" + (res.Ok ? $"船上刪除 {res.Deleted.Count} 個紀錄包,保留 {res.Retained.Count} 個" : Shown(string.Join(";", res.Errors), 800)));
+                o.Log?.WriteLine($"  已備份回報{(reportId is null ? "" : " " + reportId)}:" + (res.Ok ? $"船上刪除 {res.Deleted.Count} 個紀錄包,保留 {res.Retained.Count} 個" : Shown(string.Join(";", res.Errors), 800)));
             }
         }
 
@@ -251,6 +245,42 @@ public static class SyncClient
         try { await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false); }
         catch (Exception ex) when (ex is IOException or EndOfStreamException) { }
         return report;
+    }
+
+    /// <summary>
+    /// 第 4 步:「查帳冊產生已備份回報 → 送到船上 → 船上依回報刪除 → 教官端標記船上已刪除」整段持有紀錄庫帳冊的鎖
+    /// (<see cref="RecordStore.LockLedger"/>;同步執行,由呼叫端放在一條專用的執行緒上)。
+    /// <para>
+    /// 原本是船上回覆「已刪除」之後才取鎖做標記:另一個行程佔著帳冊超過等待上限(備份紀錄庫複製到很慢的外接碟、另一個視窗匯入很大的紀錄包)時,
+    /// 船上已經刪了、教官端卻沒有記到,而且下一次同步補不回來(船上的待回傳清單已經沒有這些紀錄包)— 帳冊永遠停在「船上 保留」。
+    /// 現在先拿到鎖才送:拿不到就<b>不送</b>(船上什麼都不刪),回傳一個沒有回報編號、<see cref="CleanupResult.Ok"/> 為 false 的結果 —
+    /// 列為這次同步失敗的項目(結束碼 1),同步的其餘步驟照常,下一次同步會再送。持有期間船上處理回報(通常不到一秒;
+    /// 船上另一個視窗的指令佔著船上的狀態鎖時最多等它 120 秒),同一個紀錄庫的其他行程等這一段結束。
+    /// </para>
+    /// 回傳 (回報編號, 船上的結果);進了鎖才發現沒有可以回報的紀錄包時兩者都是 null。
+    /// </summary>
+    internal static (string? ReportId, CleanupResult? Result) SendBackupReport(SyncOptions o, Stream s, string shipId, List<string> outstandingIds, CancellationToken ct)
+    {
+        IDisposable ledgerLock;
+        try
+        {
+            ledgerLock = o.Store.LockLedger();
+        }
+        catch (IOException ex) when (StateLock.IsBusy(ex))
+        {
+            return (null, new CleanupResult { Errors = { $"這次沒有送出(船上的紀錄包都還在,下一次同步會再送)— {ex.Message}" } });
+        }
+        using (ledgerLock)
+        {
+            if (o.Store.CreateBackupReport(shipId, o.InstructorKey, outstandingIds) is not { } c) return (null, null);
+            var bytes = c.Document.ToBytes();
+            SyncProtocol.WriteAsync(s, new FileHeader { Type = SyncTypes.BackupReport, Name = c.Report.ReportId + ".sbbak", Size = bytes.Length, Sha256 = Sha256Hex.Of(bytes) }, ct).GetAwaiter().GetResult();
+            s.WriteAsync(bytes, ct).AsTask().GetAwaiter().GetResult();
+            s.FlushAsync(ct).GetAwaiter().GetResult();
+            var res = SyncProtocol.As<CleanupResultMessage>(Expect(SyncProtocol.ReadAsync(s, ct).GetAwaiter().GetResult(), SyncTypes.CleanupResult)).Result;
+            if (res.Ok) o.Store.MarkShipDeleted(c.Report.ReportId, res.Deleted, shipId);   // 鎖已經在手上(同一條執行緒重入),不會等不到
+            return (c.Report.ReportId, res);
+        }
     }
 
     private static JsonObject Expect(JsonObject msg, string type)

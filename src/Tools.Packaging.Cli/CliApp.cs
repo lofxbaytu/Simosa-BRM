@@ -166,7 +166,18 @@ public sealed class CliApp
     /// </summary>
     private void LockWaitNotice(string message) => _err.WriteLine($"注意:{message}");
 
-    private InstallLayout Layout(CliArgs a) => new(a.Get("root") ?? InstallLayout.DefaultRoot()) { LockNotice = LockWaitNotice };
+    /// <summary>船上狀態鎖的等待上限(測試用;null = <see cref="InstallLayout.LockTimeout"/> 的預設 120 秒)</summary>
+    internal TimeSpan? ShipLockTimeout { get; init; }
+
+    /// <summary>serve 的停止訊號(測試用:指令列以 Ctrl+C 結束,測試沒有主控台可按)</summary>
+    internal CancellationToken ServeStop { get; init; }
+
+    private InstallLayout Layout(CliArgs a)
+    {
+        var layout = new InstallLayout(a.Get("root") ?? InstallLayout.DefaultRoot()) { LockNotice = LockWaitNotice };
+        if (ShipLockTimeout is { } timeout) layout.LockTimeout = timeout;
+        return layout;
+    }
 
     private RecordStore StoreOf(CliArgs a)
     {
@@ -330,23 +341,34 @@ public sealed class CliApp
                 var file = ReadPath(a, "--file", a.Require("file"));
                 using var k = TrustedKey.Parse(File.ReadAllText(file), file, KeyRoles.Primary);
                 if (!KeyRoles.IsSigner(k.Role)) throw new CliUsageException("信任清單只接受 role 為 primary 或 backup 的公鑰");
-                Directory.CreateDirectory(layout.TrustedKeysDir);
-                var dest = Path.Combine(layout.TrustedKeysDir, Path.GetFileName(file));
-                File.WriteAllText(dest, KeyFiles.WithMeta(k.PublicKeyPem, new Dictionary<string, string?> { ["role"] = k.Role, ["name"] = k.Name, ["holder"] = k.Holder, ["keyId"] = k.KeyId }, "Simosa BRM 信任公鑰"));
-                layout.Audit().Write(AuditEvents.TrustManualChange, new { action = "add", k.KeyId, k.Name, k.Role, admin = a.Get("admin") ?? System.Environment.UserName });
+                // 寫進信任清單的這一段在船上的狀態鎖裡(docs/design/packaging-sync.md 第 5.2 節):套用信任清單更新包是「複製現行的 config/ → 整個換上去」,
+                // 同一時間手動加入的金鑰若落在複製與替換之間,會寫進被換下來的那一份 — 指令印「已加入信任清單」而清單裡沒有(實測 80 次有 6 至 9 次)。
+                // 等不到鎖時照原本的錯誤處理(「錯誤:另一個 simosa-pkg 正在使用…」,結束碼 1),清單沒有改
+                using (layout.AcquireLock())
+                {
+                    Directory.CreateDirectory(layout.TrustedKeysDir);
+                    var dest = Path.Combine(layout.TrustedKeysDir, Path.GetFileName(file));
+                    File.WriteAllText(dest, KeyFiles.WithMeta(k.PublicKeyPem, new Dictionary<string, string?> { ["role"] = k.Role, ["name"] = k.Name, ["holder"] = k.Holder, ["keyId"] = k.KeyId }, "Simosa BRM 信任公鑰"));
+                    layout.Audit().Write(AuditEvents.TrustManualChange, new { action = "add", k.KeyId, k.Name, k.Role, admin = a.Get("admin") ?? System.Environment.UserName });
+                }
                 _out.WriteLine($"已加入信任清單:{k.Describe()}");
                 return 0;
             }
             case "remove":
             {
                 var id = a.Require("key-id");
-                using var t = TrustStore.LoadDirectory(layout.TrustedKeysDir);
-                var k = t.Keys.FirstOrDefault(x => x.KeyId.StartsWith(id, StringComparison.OrdinalIgnoreCase)) ?? throw new IOException($"信任清單沒有金鑰 {id}");
-                if (t.Keys.Count(x => x.Role == KeyRoles.Backup && x.KeyId != k.KeyId) == 0 && !a.Flag("force"))
-                    throw new InvalidOperationException("移除後將沒有備援金鑰(--force 強制)");
-                File.Delete(k.FilePath!);
-                layout.Audit().Write(AuditEvents.TrustManualChange, new { action = "remove", k.KeyId, k.Name, k.Role, admin = a.Get("admin") ?? System.Environment.UserName });
-                _out.WriteLine($"已自信任清單移除:{k.Describe()}");
+                // 「讀清單 → 檢查 → 刪除」整段在船上的狀態鎖裡:與套用信任清單更新包同時執行時,原本會刪到被換下來的那一份
+                // (指令印「已自信任清單移除」而那把金鑰仍被信任;實測 80 次有 3 至 8 次),或讓套用以「Could not find file」失敗
+                using (layout.AcquireLock())
+                {
+                    using var t = TrustStore.LoadDirectory(layout.TrustedKeysDir);
+                    var k = t.Keys.FirstOrDefault(x => x.KeyId.StartsWith(id, StringComparison.OrdinalIgnoreCase)) ?? throw new IOException($"信任清單沒有金鑰 {id}");
+                    if (t.Keys.Count(x => x.Role == KeyRoles.Backup && x.KeyId != k.KeyId) == 0 && !a.Flag("force"))
+                        throw new InvalidOperationException("移除後將沒有備援金鑰(--force 強制)");
+                    File.Delete(k.FilePath!);
+                    layout.Audit().Write(AuditEvents.TrustManualChange, new { action = "remove", k.KeyId, k.Name, k.Role, admin = a.Get("admin") ?? System.Environment.UserName });
+                    _out.WriteLine($"已自信任清單移除:{k.Describe()}");
+                }
                 return 0;
             }
             default: throw new CliUsageException($"未知的 trust 子指令:{sub}");
@@ -763,7 +785,7 @@ public sealed class CliApp
         layout.LockNotice = m => _out.WriteLine($"[serve] {m}");   // 同步服務:寫進自己的紀錄(build/logs/sync.log)
         var ship = new ShipNode(layout);
         _ = DeviceKeyStore.LoadInfo(layout);
-        using var cts = new CancellationTokenSource();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ServeStop);
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
         var server = new SyncServer(ship, ip, port, _out);
         server.Start();

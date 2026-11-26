@@ -707,6 +707,66 @@ if ($Stage -contains 'packaging') {
             Show-File $serveOut 12
             if ((Test-Path $serveErr) -and (Get-Item $serveErr).Length -gt 0) { Show-File $serveErr 12 }
         }
+        # 6) 狀態鎖(docs\design\packaging-sync.md 第 5.2 節):另一個行程獨占開啟 state\.lock 時,要改狀態的指令等它放開
+        #    (等超過 3 秒在 stderr 印一行「注意:…」),只讀的 status 不等。由本腳本自己獨占開啟鎖定檔,代表「同步服務或另一個視窗的指令還沒有結束」。
+        #    Windows 上的共用違規、等待與中文輸出只有這裡是真實行程(單元測試是同一個行程內開第二個控制代碼)。都是軟性檢查。
+        $lockPath = Join-Path $inst 'state\.lock'
+        $waitOut = Join-Path $work 'lockwait.out.txt'; $waitErr = Join-Path $work 'lockwait.err.txt'
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        # 讀一個可能還被子程序開著寫的檔(讀不到 = 空字串)
+        function Read-Shared([string]$Path) {
+            if (-not (Test-Path -LiteralPath $Path)) { return '' }
+            try {
+                $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                try { return (New-Object System.IO.StreamReader($fs, $utf8)).ReadToEnd() } finally { $fs.Dispose() }
+            } catch { return '' }
+        }
+        $held = $null; $waiter = $null; $rsHeld = $null; $statusSec = -1.0; $heldSec = 0.0; $stillWaiting = $false; $noticedWhileHeld = $false; $waitExit = $null; $lockError = ''
+        try {
+            $held = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $waiter = Start-Process -FilePath 'dotnet' -ArgumentList ('"' + $pkgDll + '" records pack --root "' + $inst + '"') -WorkingDirectory $inst -PassThru -WindowStyle Hidden -RedirectStandardOutput $waitOut -RedirectStandardError $waitErr
+            $null = $waiter.Handle
+            $t0 = $sw.Elapsed.TotalSeconds
+            $rsHeld = Invoke-Pkg @('status', '--root', $inst, '--json') 60 2
+            $statusSec = $sw.Elapsed.TotalSeconds - $t0
+            # 佔住到等的一方印出「注意:另一個 simosa-pkg…」為止(等超過 3 秒才印;只比對其中的英文字),最多 40 秒
+            $noticedWhileHeld = Wait-Until { (Read-Shared $waitErr) -match 'simosa-pkg' } 40
+            $stillWaiting = -not $waiter.HasExited
+            $heldSec = $sw.Elapsed.TotalSeconds
+        } catch {
+            $lockError = "$($_.Exception.Message)"
+        } finally {
+            if ($held) { $held.Dispose() }
+        }
+        if ($waiter) {
+            if ($waiter.WaitForExit(90000)) { $waitExit = $waiter.ExitCode } else { & taskkill.exe /PID $waiter.Id /T /F 2>&1 | Out-Null }
+        }
+        $waitErrText = Read-Shared $waitErr
+        Show-Tail 'simosa-pkg records pack(state\.lock 被佔住時;stdout)' (Read-Shared $waitOut) 4
+        Show-Tail 'simosa-pkg records pack(state\.lock 被佔住時;stderr)' $waitErrText 4
+        [void](Check '狀態鎖被另一個行程佔住時:status --json 不等(只讀的指令不取鎖)' {
+            if ($lockError) { throw "沒有做成:${lockError}" }
+            if ($null -eq $rsHeld -or $rsHeld.TimedOut) { throw '逾時' }
+            if ($rsHeld.ExitCode -ne 0) { throw "結束碼 $($rsHeld.ExitCode)" }
+            if ($statusSec -gt 30) { throw ("花了 {0:n1} 秒" -f $statusSec) }
+            return ("{0:n1} 秒" -f $statusSec)
+        } -Soft)
+        [void](Check '狀態鎖被另一個行程佔住時:records pack 等它放開,放開後完成(結束碼 0)' {
+            if ($lockError) { throw "沒有做成:${lockError}" }
+            if (-not $stillWaiting) { throw ("鎖還被佔著({0:n1} 秒)records pack 就結束了;stderr:{1}" -f $heldSec, $waitErrText.Trim()) }
+            if ($null -eq $waitExit) { throw '放開鎖 90 秒後 records pack 還沒有結束' }
+            if ($waitExit -ne 0) { throw "結束碼 ${waitExit};stderr:$($waitErrText.Trim())" }
+            return ("佔住 {0:n1} 秒" -f $heldSec)
+        } -Soft)
+        [void](Check '等鎖超過 3 秒時 stderr 有一行「注意:另一個 simosa-pkg 正在使用…(最多 120 秒)…」(Windows 上的中文輸出)' {
+            if ($lockError) { throw "沒有做成:${lockError}" }
+            if (-not $noticedWhileHeld) { throw "佔住鎖 40 秒內 stderr 沒有出現那一行;stderr:$($waitErrText.Trim())" }
+            $line = @($waitErrText -split "`r?`n" | Where-Object { $_ -match 'simosa-pkg' } | Select-Object -First 1)
+            if ("$line" -notmatch '^注意:另一個 simosa-pkg 正在使用這台筆電的更新包與紀錄狀態') { throw "那一行的中文不是預期的字:${line}" }
+            if ("$line" -notmatch '最多 120 秒') { throw "那一行沒有「最多 120 秒」:${line}" }
+            return "$line"
+        } -Soft)
         $rs3 = Invoke-Pkg @('status', '--root', $inst) 300 14
         [void](Check '最後 status' { if ($rs3.ExitCode -ne 0) { throw "結束碼 $($rs3.ExitCode)" } })
         $rfin = Invoke-Pkg @('verify-install', '--root', $inst) 600 12

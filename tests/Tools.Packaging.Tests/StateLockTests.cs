@@ -25,13 +25,13 @@ public sealed class StateLockTests : IDisposable
     private static readonly DateTime Start = new(2026, 11, 20, 1, 0, 0, DateTimeKind.Utc);
 
     /// <summary>代表另一個行程:獨占開啟鎖定檔(與 StateLock 自己的開法相同)</summary>
-    private static FileStream OtherProcessHolds(string lockPath)
+    internal static FileStream OtherProcessHolds(string lockPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
         return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
 
-    private static bool CanOpenExclusively(string lockPath)
+    internal static bool CanOpenExclusively(string lockPath)
     {
         try
         {
@@ -43,6 +43,14 @@ public sealed class StateLockTests : IDisposable
             return false;
         }
     }
+
+    /// <summary>
+    /// 在自己的執行緒上執行會等鎖(阻塞)的工作,不佔用執行緒集區:同時跑的測試多時,集區被等鎖的工作佔滿,別的 Task.Run 會晚一兩秒才開始 —
+    /// 「佔住鎖固定幾秒、期間另一個工作應該等滿 3 秒」這種寫法就會偶爾失敗(全套測試跑過一次這樣的失敗)。
+    /// </summary>
+    internal static Task<T> OnOwnThread<T>(Func<T> work) => Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    internal static Task OnOwnThread(Action work) => Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private StateLockSpec Spec(string path, int timeoutMs = 300, Action<string>? notice = null, int noticeAfterMs = 100) => new()
     {
@@ -200,6 +208,53 @@ public sealed class StateLockTests : IDisposable
         using (OldStyle(path)) { }                                             // 新版放開後舊版可以取得
     }
 
+    [Fact]
+    public async Task Acquire_ContendingWithOldDeleteOnCloseLockers_NeverFailsAndNeverOverlaps()
+    {
+        // 舊版每次放開都把鎖定檔從路徑上刪掉(Linux):新版在「開到檔、鎖不到」的瞬間檔案可能已經不在 — 這不是別的 IO 錯誤,要當成被佔用重試;
+        // 新版鎖到的也可能是已經不在路徑上的檔,而路徑上已經是另一個持有者新建的檔 — 要發現並重來,否則兩邊同時在裡面
+        // (加上「是不是路徑上的那一個」的檢查之前,這項測試約三次有一次看到兩個持有者同時在裡面)。
+        // 三個舊式的持有者與兩個新式的持有者搶同一個鎖 3 秒:沒有人以例外結束,任何時候只有一個人在裡面。
+        // 只在非 Windows 跑:Windows 上被開啟中的檔不會從路徑上消失(沒有這個問題),而這種密集的搶法在 Windows 上會不會餓死其中一方沒有實測過
+        if (OperatingSystem.IsWindows()) return;
+        var path = _env.PathIn("locks", "mixed", ".lock");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var inside = 0;
+        var overlaps = 0;
+        var entered = new int[5];
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        void Critical(int who)
+        {
+            if (Interlocked.Increment(ref inside) != 1) Interlocked.Increment(ref overlaps);
+            entered[who]++;
+            Thread.SpinWait(5000);
+            Interlocked.Decrement(ref inside);
+        }
+        var oldStyle = Enumerable.Range(0, 3).Select(who => Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    using (new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose)) Critical(who);
+                }
+                catch (IOException) { Thread.Sleep(1); }                      // 舊版:被佔用就稍後再試
+            }
+        }));
+        var newStyle = Enumerable.Range(3, 2).Select(who => Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                using (StateLock.Acquire(new StateLockSpec { Path = path, Timeout = TimeSpan.FromSeconds(30), BusyMessage = _ => "忙", AccessDeniedGrace = TimeSpan.FromSeconds(2) }))
+                    Critical(who);
+                Thread.Sleep(1);
+            }
+        }));
+        await Task.WhenAll(oldStyle.Concat(newStyle));                        // 有人丟例外(例如把「檔案剛被舊版刪掉」當成別的 IO 錯誤)就在這裡失敗
+        Assert.Equal(0, overlaps);
+        Assert.True(entered[0] + entered[1] + entered[2] > 0 && entered[3] + entered[4] > 0, $"新舊兩種持有者都應該進去過:{string.Join(",", entered)}");
+    }
+
     // ── PackageJson.SaveAtomic:暫存檔名 ───────────────────
 
     [Fact]
@@ -298,7 +353,6 @@ public sealed class StateLockTests : IDisposable
         var ship = _env.NewShip();
         var sbrec = PackOne(ship, "r1");
         var store = new RecordStore(_env.PathIn("store")) { LedgerLockTimeout = TimeSpan.FromMilliseconds(300) };
-        var notices = new List<string>();
         using (OtherProcessHolds(store.LedgerLockPath))
         {
             // 匯入:列為這個紀錄包的錯誤(與其他匯入失敗相同:Ok = false → 指令列結束碼 1),沒有解開任何東西
@@ -329,13 +383,7 @@ public sealed class StateLockTests : IDisposable
             Assert.False(store.Has("x", new string('a', 64)));
             // 兩船版次清單是另一把鎖:帳冊被佔著時照常更新
             Assert.True(store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", Version = "1" }).Saved);
-
-            // 等超過幾秒時的通知(指令列印一行「注意:…」)
-            store.LockNotice = notices.Add;
-            store.LedgerLockTimeout = TimeSpan.FromSeconds(4);
-            Assert.Throws<IOException>(() => store.MarkBackedUp(null, "T"));
         }
-        Assert.Equal(new[] { "另一個 simosa-pkg 正在使用這個紀錄庫的帳冊(匯入紀錄包、標記備份或備份紀錄庫),等它結束(最多 4 秒)…" }, notices);
         // 放開之後照常匯入
         store.LedgerLockTimeout = TimeSpan.FromSeconds(30);
         Assert.True(store.Import(sbrec, enrollUnknownDevice: true).Ok);
@@ -350,7 +398,9 @@ public sealed class StateLockTests : IDisposable
         store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", Version = "1" });
         Assert.True(File.Exists(store.LedgerLockPath) && File.Exists(store.FleetLockPath));
 
-        // 兩船版次清單的鎖被另一個行程佔著也不影響備份(不複製它);備份持有帳冊的鎖,結束時在同一條執行緒重入做標記
+        // 兩船版次清單的鎖被另一個行程一直佔著也不讓備份失敗(鎖定檔不複製;版次清單等到上限後照沒有鎖的作法複製並比對 —
+        // 等它寫完再複製的情形見 StateLockReviewTests);備份持有帳冊的鎖,結束時在同一條執行緒重入做標記
+        store.FleetLockTimeout = TimeSpan.FromMilliseconds(300);
         using (OtherProcessHolds(store.FleetLockPath))
         {
             var (target, marked) = store.Backup(_env.PathIn("backup"));
@@ -431,23 +481,59 @@ public sealed class StateLockTests : IDisposable
     }
 
     [Fact]
-    public async Task ShipLockHeldBriefly_ApplyWaitsThenCompletes_AndTheWaitIsAnnouncedOnce()
+    public async Task Cli_LockHeldBriefly_CommandsWaitThenComplete_AndPrintOneNoticeLine()
     {
+        // 指令列:等鎖超過 3 秒印一行「注意:…」(stderr),等到之後照常完成、結束碼 0;輸出的其餘部分與沒有等的時候相同
         var ship = _env.NewShip();
-        var notices = new List<string>();
-        ship.LockNotice = m => { lock (notices) notices.Add(m); };
         using var key = _env.Primary();
         var pkg = _env.SoftwarePackage("2026.10.1", key);
-        Task<UpdateApplyResult> waiting;
-        using (OtherProcessHolds(ship.LockPath))
+        var storeDir = _env.PathIn("store");
+        var store = new RecordStore(storeDir);
+        Assert.True(store.Import(PackOne(ship, "r1"), enrollUnknownDevice: true).Ok);
+        (int Code, string Out, string Err) Cli(params string[] args)
         {
-            waiting = Task.Run(() => new UpdateApplier(ship).Apply(pkg));
-            await Task.Delay(3600);                                                              // 超過通知的門檻(3 秒)
-            Assert.False(waiting.IsCompleted);
-            Assert.False(File.Exists(ship.InstalledStatePath));
+            var o = new StringWriter();
+            var e = new StringWriter();
+            return (new CliApp(o, e).Run(args), o.ToString(), e.ToString());
         }
-        Assert.True((await waiting.WaitAsync(TimeSpan.FromSeconds(30))).Ok);
-        Assert.Equal(new[] { "另一個 simosa-pkg 正在使用這台筆電的更新包與紀錄狀態(同步服務正在處理教官筆電的同步,或另一個視窗的指令還沒有結束),等它結束(最多 120 秒)…" }, notices);
+        // 在自己的執行緒上執行一個指令;第二個回傳值讀「到目前為止的 stderr」(指令還在等鎖的時候就看得到那一行「注意:…」)
+        (Task<(int Code, string Out, string Err)> Done, Func<string> ErrSoFar) Start(params string[] args)
+        {
+            var o = new StringWriter();
+            var buffer = new StringWriter();
+            var e = TextWriter.Synchronized(buffer);
+            string ErrSoFar()
+            {
+                lock (e) return buffer.ToString();
+            }
+            return (OnOwnThread(() => (new CliApp(o, e).Run(args), o.ToString(), ErrSoFar())), ErrSoFar);
+        }
+        Task<(int Code, string Out, string Err)> apply, mark;
+        using (OtherProcessHolds(ship.LockPath))
+        using (OtherProcessHolds(store.LedgerLockPath))
+        {
+            (apply, var applyErr) = Start("apply", pkg, "--root", ship.Root, "--operator", "t");
+            (mark, var markErr) = Start("store", "mark-backed-up", "--all", "--target", "T", "--store", storeDir, "--root", ship.Root);
+            // 佔住鎖到兩個指令都印出「注意:…」為止(等超過 3 秒才印)。不靠固定的秒數:原本固定佔 3.6 秒,機器忙、指令晚 0.6 秒以上才開始等的話
+            // 就等不滿 3 秒、不印那一行(全套測試跑過一次這樣的失敗)。沒有印的話最多等 30 秒,由下面的斷言指出來
+            for (var i = 0; i < 600 && !(applyErr().Contains("注意:") && markErr().Contains("注意:")) && !apply.IsCompleted && !mark.IsCompleted; i++) await Task.Delay(50);
+            Assert.False(apply.IsCompleted || mark.IsCompleted);
+            Assert.False(File.Exists(ship.InstalledStatePath));
+            Assert.Null(store.LoadLedger().Packages.Single().BackedUpUtc);
+        }
+        var applied = await apply.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(0, applied.Code);
+        Assert.Contains("已套用 software 更新包 2026.10.1", applied.Out);
+        Assert.Equal("注意:另一個 simosa-pkg 正在使用這台筆電的更新包與紀錄狀態(同步服務正在處理教官筆電的同步,或另一個視窗的指令還沒有結束),等它結束(最多 120 秒)…",
+                     applied.Err.Trim());
+        var marked = await mark.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(0, marked.Code);
+        Assert.Contains("已標記 1 個紀錄包完成岸上備份", marked.Out);
+        Assert.Equal("注意:另一個 simosa-pkg 正在使用這個紀錄庫的帳冊(匯入紀錄包、標記備份或備份紀錄庫),等它結束(最多 60 秒)…", marked.Err.Trim());
+
+        // 沒有人佔著時不印
+        var again = Cli("store", "mark-backed-up", "--all", "--store", storeDir, "--root", ship.Root);
+        Assert.Equal((0, ""), (again.Code, again.Err));
     }
 
     [Fact]
@@ -625,7 +711,13 @@ public sealed class StateLockTests : IDisposable
         UsbTransfer.InstructorExport(store, usb2, new[] { _env.SoftwarePackage("2026.10.2", key) }, key);
         Assert.DoesNotContain(Directory.GetFiles(usb2, "*", SearchOption.AllDirectories), f => f.Contains(".lock", StringComparison.Ordinal));
 
-        // 安裝模式核對(verify-install):三個鎖定檔都在執行期資料的位置,不算多出的檔、沒有提醒
+        // 稽核紀錄附加寫入的鎖定檔(船上 state/audit.jsonl.lock、紀錄庫 audit.jsonl.lock)也留著
+        var shipAuditLock = ship.Audit().LockPath;
+        var storeAuditLock = store.Audit.LockPath;
+        Assert.True(File.Exists(shipAuditLock) && File.Exists(storeAuditLock));
+        Assert.Equal((0L, 0L), (new FileInfo(shipAuditLock).Length, new FileInfo(storeAuditLock).Length));
+
+        // 安裝模式核對(verify-install):這些鎖定檔都在執行期資料的位置,不算多出的檔、沒有提醒
         var report = InstalledVerifier.Verify(ship.Root);
         Assert.True(report.Ok, string.Join("; ", report.Errors.Select(e => $"[{e.Category}] {e.Path} {e.Detail}")));
         Assert.DoesNotContain(report.Errors.Concat(report.Notices), e => (e.Path ?? "").Contains(".lock", StringComparison.Ordinal) || (e.Detail ?? "").Contains(".lock", StringComparison.Ordinal));
@@ -634,7 +726,7 @@ public sealed class StateLockTests : IDisposable
         Assert.Equal(0, new CliApp(cliOut, cliErr).Run(new[] { "verify-install", "--root", ship.Root }));
         Assert.DoesNotContain(".lock", cliOut.ToString() + cliErr);
         // 一般模式的發行清單(release manifest)在使用中的安裝根目錄重建時也不會把鎖定檔列進去的位置:state/、store/ 都是執行期資料
-        foreach (var lockFile in new[] { ship.LockPath, store.LedgerLockPath, store.FleetLockPath })
+        foreach (var lockFile in new[] { ship.LockPath, store.LedgerLockPath, store.FleetLockPath, shipAuditLock, storeAuditLock })
         {
             var rel = Path.GetRelativePath(ship.Root, lockFile).Replace('\\', '/');
             Assert.NotNull(InstalledPaths.FindRuntimeData(rel, InstalledPaths.DefaultComparison));

@@ -164,16 +164,19 @@ public sealed class ImportResult
 /// &lt;store&gt;/records/&lt;ship&gt;/&lt;yyyy&gt;/&lt;packageId&gt;/…       解開的紀錄與報告
 /// &lt;store&gt;/devices/&lt;ship&gt;/&lt;deviceId&gt;.pem             已登錄的船上筆電裝置公鑰
 /// &lt;store&gt;/store-ledger.json  &lt;store&gt;/fleet-versions.json  &lt;store&gt;/audit.jsonl
-/// &lt;store&gt;/store-ledger.json.lock  &lt;store&gt;/fleet-versions.json.lock   跨行程鎖定檔(0 位元組,留著不刪;<see cref="StateLock"/>)
+/// &lt;store&gt;/incoming/*.sbrec                               直連同步下載中的紀錄包(驗證、匯入後刪除;不備份)
+/// &lt;store&gt;/store-ledger.json.lock  &lt;store&gt;/fleet-versions.json.lock  &lt;store&gt;/audit.jsonl.lock   跨行程鎖定檔(0 位元組,留著不刪;<see cref="StateLock"/>)
 /// </code>
 /// 匯入時驗證裝置簽章與每檔雜湊;未登錄的裝置預設拒絕(--enroll-device 首次登錄並記入稽核)。
 /// <para>
 /// 兩個行程同時用同一個紀錄庫(一邊直連同步、一邊匯入隨身碟;兩支隨身碟同時匯入;匯入的同時標記備份或備份紀錄庫)時,
-/// 「讀 → 改 → 寫」以兩把鎖跨行程序列化(docs/design/packaging-sync.md 第 5.2 節):
+/// 「讀 → 改 → 寫」以鎖定檔跨行程序列化(docs/design/packaging-sync.md 第 5.2 節):
 /// <see cref="LedgerLockPath"/> 保護帳冊 store-ledger.json 與 records/ 之下匯入中的資料夾(<see cref="Import"/> 的「查帳冊 → 解開 → 記帳」、
-/// <see cref="MarkBackedUp"/>、<see cref="MarkShipDeleted"/>、<see cref="Backup"/> 的整段複製);<see cref="FleetLockPath"/> 保護兩船版次清單
-/// (<see cref="UpdateFleet"/>)。兩把都要時先帳冊、後版次清單(目前沒有同時持有兩把的程式路徑)。只讀的方法(<see cref="LoadLedger"/>、
-/// <see cref="LoadFleet"/>、<see cref="Has"/>、<see cref="FindDevice"/>、<see cref="CreateBackupReport"/>)不取鎖。
+/// <see cref="MarkBackedUp"/>、<see cref="MarkShipDeleted"/>、<see cref="Backup"/> 的整段複製、直連同步「產生已備份回報 → 船上刪除 → 標記船上已刪除」
+/// 的整段 <see cref="LockLedger"/>);<see cref="FleetLockPath"/> 保護兩船版次清單(<see cref="UpdateFleet"/>);稽核紀錄的每一行另有自己的鎖
+/// (<see cref="AuditLog.LockPath"/>)。取得順序固定:帳冊 → 版次清單 → 稽核紀錄(<see cref="Backup"/> 持有帳冊的鎖時,複製版次清單與稽核紀錄的那一刻
+/// 各取它們的鎖)。只讀的方法(<see cref="LoadLedger"/>、<see cref="LoadFleet"/>、<see cref="Has"/>、<see cref="FindDevice"/>、
+/// <see cref="CreateBackupReport"/>)不取鎖;已在紀錄庫的紀錄包再匯入一次也不取鎖(不寫任何東西)。
 /// </para>
 /// </summary>
 public sealed class RecordStore
@@ -190,6 +193,8 @@ public sealed class RecordStore
     public string Root { get; }
     public string RecordsDir => Path.Combine(Root, "records");
     public string DevicesDir => Path.Combine(Root, "devices");
+    /// <summary>直連同步取回的紀錄包先下載到這裡,驗證、匯入之後刪除(下載中的檔由同步的行程開著);不是資料,<see cref="Backup"/> 不複製</summary>
+    public string IncomingDir => Path.Combine(Root, "incoming");
     public string LedgerPath => Path.Combine(Root, "store-ledger.json");
     public string FleetPath => Path.Combine(Root, "fleet-versions.json");
     public AuditLog Audit => new(Path.Combine(Root, "audit.jsonl"), _clock);
@@ -221,12 +226,30 @@ public sealed class RecordStore
     /// </summary>
     internal TimeSpan LedgerLockTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
+    private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     /// <summary>這個紀錄庫的鎖定檔(<see cref="Backup"/> 不複製:不是資料,而且被獨占開啟時複製會失敗)</summary>
     private bool IsLockFile(string file)
+        => string.Equals(file, FleetLockPath, PathComparison) || string.Equals(file, LedgerLockPath, PathComparison) || string.Equals(file, Audit.LockPath, PathComparison);
+
+    /// <summary>
+    /// 帳冊或兩船版次清單寫到一半的暫存檔(<see cref="PackageJson.SaveAtomic{T}"/>:紀錄庫根目錄的 <c>store-ledger.json.&lt;8 位十六進位&gt;.tmp</c>、
+    /// <c>fleet-versions.json.&lt;…&gt;.tmp</c>,以及舊版固定的 <c>&lt;檔&gt;.tmp</c>)。<see cref="Backup"/> 不複製:不是資料,
+    /// 而且另一個行程(同步的最後一步、隨身碟匯入)改名之後它就不在了 — 列舉到、要複製時已經不在,備份會以「Could not find file」失敗。
+    /// </summary>
+    private bool IsStateTempFile(string file)
     {
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        return string.Equals(file, FleetLockPath, comparison) || string.Equals(file, LedgerLockPath, comparison);
+        if (!file.EndsWith(".tmp", PathComparison) || !string.Equals(Path.GetDirectoryName(file), Root.TrimEnd(Path.DirectorySeparatorChar), PathComparison)) return false;
+        var name = Path.GetFileName(file);
+        return name.StartsWith(Path.GetFileName(LedgerPath) + ".", PathComparison) || name.StartsWith(Path.GetFileName(FleetPath) + ".", PathComparison);
     }
+
+    /// <summary>
+    /// 直連同步正在下載(或下載後等著匯入)的紀錄包 <see cref="IncomingDir"/>。<see cref="Backup"/> 不複製:同步取回一個大的紀錄包的期間備份紀錄庫,
+    /// 原本備份會以「The process cannot access the file '…/incoming/….sbrec' because it is being used by another process」失敗,
+    /// 或把這個暫存的檔(還沒有驗證、匯入後就刪除)一起備份進去(真實行程實測 4 回合都發生)。
+    /// </summary>
+    private bool IsIncomingFile(string file) => file.StartsWith(IncomingDir + Path.DirectorySeparatorChar, PathComparison);
 
     /// <summary>鎖定檔打不開時的訊息:原本只有「Access to the path '…lock' is denied」,操作人員會以為是鎖定檔的問題 — 指到紀錄庫</summary>
     private string StoreNotWritable(string detail) => $"紀錄庫 {Root} 寫不進去(資料夾唯讀或沒有寫入權限):{detail}";
@@ -294,6 +317,23 @@ public sealed class RecordStore
         AccessDeniedMessage = StoreNotWritable,
         WaitingMessage = $"另一個 simosa-pkg 正在使用這個紀錄庫的帳冊(匯入紀錄包、標記備份或備份紀錄庫),等它結束(最多 {LedgerLockTimeout.TotalSeconds:0} 秒)…", Notice = LockNotice,
     });
+
+    /// <summary>
+    /// 持有帳冊的鎖一段時間(放開用 Dispose;必須在同一條執行緒放開,中間不可跨 await)。給「讀帳冊 → 做一件帳冊以外、不能重來的事 → 寫帳冊」的呼叫端用:
+    /// 直連同步送出已備份回報 — 船上依回報刪除之後,教官端一定要記得到「船上已刪除」,所以先拿到鎖才送;拿不到就不送(船上不刪,下次同步再送)。
+    /// 持有期間這個物件的 <see cref="MarkShipDeleted"/> 等方法在同一條執行緒重入,不會把自己卡死。等不到丟 <see cref="IOException"/>(<see cref="StateLock.IsBusy"/>)。
+    /// </summary>
+    public IDisposable LockLedger() => AcquireLedgerLock();
+
+    /// <summary>
+    /// 帳冊裡有沒有這個紀錄包:有而且內容相同 → 那一筆;有但內容不同 → 丟 <see cref="InvalidDataException"/>;沒有 → null。
+    /// </summary>
+    private static StoredPackage? FindImported(StoreLedger ledger, string packageId, string sha256)
+    {
+        var existing = ledger.Packages.FirstOrDefault(p => p.PackageId == packageId);
+        if (existing is not null && !Sha256Hex.Equal(existing.Sha256, sha256)) throw new InvalidDataException($"紀錄包 {packageId} 已存在但內容不同");
+        return existing;
+    }
 
     private static string Safe(string s)
     {
@@ -380,21 +420,26 @@ public sealed class RecordStore
             var missing = listed.Keys.Where(k => !seen.Contains(k)).ToList();
             if (missing.Count > 0) throw new InvalidDataException($"紀錄包缺少檔案:{string.Join(", ", missing)}");
 
+            ImportResult Known(StoredPackage existing)
+            {
+                r.Ok = true;
+                r.AlreadyImported = true;
+                r.Directory = existing.Directory;
+                r.Manifest = m;
+                return r;
+            }
+
+            // 已在紀錄庫(同一個紀錄包、內容相同)不寫任何東西,所以先不取鎖查一次:隨身碟上留著以前的紀錄包是常態 — 帳冊被另一個行程佔著
+            // (備份紀錄庫可到幾分鐘)時不必每一個舊紀錄包各等到逾時再列為錯誤;唯讀的紀錄庫(鎖定檔建立不了)再匯入一次也照常回報「已在紀錄庫」。
+            // 內容不同照舊報錯。帳冊裡還沒有的才取鎖,取到之後再查一次(等鎖的期間另一個行程可能剛匯入同一包)
+            if (FindImported(LoadLedger(), m.PackageId, pkgSha) is { } already) return Known(already);
+
             // 「查帳冊 → 解開到 records/ → 記帳」整段在帳冊的鎖裡:兩個行程同時匯入(兩支隨身碟,或一邊直連同步)時,
             // 原本各自讀到同一份帳冊、後寫的把先寫的那一筆蓋掉(兩邊都印「已匯入」;實測 20 次有 8 至 12 次)。等不到鎖是 IOException,列為這個紀錄包的錯誤
             using (AcquireLedgerLock())
             {
                 var ledger = LoadLedger();
-                var existing = ledger.Packages.FirstOrDefault(p => p.PackageId == m.PackageId);
-                if (existing is not null)
-                {
-                    if (!Sha256Hex.Equal(existing.Sha256, pkgSha)) throw new InvalidDataException($"紀錄包 {m.PackageId} 已存在但內容不同");
-                    r.Ok = true;
-                    r.AlreadyImported = true;
-                    r.Directory = existing.Directory;
-                    r.Manifest = m;
-                    return r;
-                }
+                if (FindImported(ledger, m.PackageId, pkgSha) is { } existing) return Known(existing);
                 if (enrolled is not null)
                 {
                     using var reg = RegisterDevice(m.ShipId, m.DeviceId, enrolled.PublicKeyPem);
@@ -480,26 +525,75 @@ public sealed class RecordStore
         var stamp = Now.ToString("yyyyMMdd'T'HHmmss");
         var dest = Path.Combine(targetDir, $"simosa-store-backup-{stamp}");
         var importedBefore = LoadLedger().Packages.Select(p => p.PackageId).ToList();
+        var audit = Audit;
         foreach (var file in System.IO.Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
         {
-            // 鎖定檔(0 位元組)不是資料:帳冊的那一個此刻由這個行程獨占開啟、兩船版次清單的那一個可能有另一個行程正在同步,複製會失敗
-            if (IsLockFile(file)) continue;
+            // 鎖定檔(0 位元組)不是資料:帳冊的那一個此刻由這個行程獨占開啟、兩船版次清單的那一個可能有另一個行程正在同步,複製會失敗。
+            // 帳冊 / 版次清單寫到一半的暫存檔也不是資料(另一個行程改名之後就不在了);直連同步下載中的紀錄包(incoming/)也不是
+            if (IsLockFile(file) || IsStateTempFile(file) || IsIncomingFile(file)) continue;
             var rel = Path.GetRelativePath(Root, file);
             var to = Path.Combine(dest, rel);
             System.IO.Directory.CreateDirectory(Path.GetDirectoryName(to)!);
-            File.Copy(file, to, overwrite: true);
-            if (!Sha256Hex.Equal(Sha256Hex.OfFile(file), Sha256Hex.OfFile(to))) throw new IOException($"備份後雜湊不符:{rel}");
+            // 兩船版次清單與稽核紀錄不在帳冊的鎖的範圍內:備份進行中,另一個行程仍可能更新版次清單(同步的最後一步、只有 status.json 的隨身碟匯入)
+            // 或附加稽核紀錄(同步產生已備份回報、被拒絕的匯入)— 複製到一半被改就是「備份後雜湊不符」(實測 230 次備份有 2 次;
+            // 備份暫停在複製途中時同步一次則必然)。複製這兩個檔的那一刻各取它們自己的鎖(順序:帳冊 → 版次清單 → 稽核紀錄);
+            // 取不到(另一個行程佔著超過上限、舊版的 simosa-pkg 不認得鎖)時照原本的作法複製,比對不符再複製一次,三次都不符才失敗
+            if (string.Equals(file, FleetPath, PathComparison))
+            {
+                using (TryAcquireFleetLock()) CopyVerified(file, to, rel, attempts: 3);
+            }
+            else if (string.Equals(file, audit.Path, PathComparison))
+            {
+                using (audit.TryLock()) CopyVerified(file, to, rel, attempts: 3);
+            }
+            else CopyVerified(file, to, rel, attempts: 1);
         }
         return (dest, MarkBackedUp(importedBefore, dest));
     }
 
+    /// <summary><see cref="Backup"/> 複製兩船版次清單時用:取不到鎖不讓備份失敗(回傳 null,照沒有鎖的作法複製並比對)</summary>
+    private IDisposable? TryAcquireFleetLock()
+    {
+        try
+        {
+            return AcquireFleetLock();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>測試掛勾:<see cref="Backup"/> 每複製一個檔之後、比對雜湊之前呼叫(參數:相對紀錄庫的路徑)— 模擬另一個行程在這一瞬間改了來源檔</summary>
+    internal Action<string>? AfterBackupCopy { get; init; }
+
+    /// <summary>複製一個檔並比對雜湊;不符時重新複製,到 <paramref name="attempts"/> 次都不符丟「備份後雜湊不符」</summary>
+    private void CopyVerified(string file, string to, string rel, int attempts)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            File.Copy(file, to, overwrite: true);
+            AfterBackupCopy?.Invoke(rel);
+            if (Sha256Hex.Equal(Sha256Hex.OfFile(file), Sha256Hex.OfFile(to))) return;
+            if (attempt >= attempts) throw new IOException($"備份後雜湊不符:{rel}");
+        }
+    }
+
+    /// <summary>已備份、而且船上仍保留(還沒有標記船上已刪除)的紀錄包;<paramref name="onlyIds"/> 不為 null 時只看其中列的</summary>
+    private List<StoredPackage> Reportable(string shipId, IEnumerable<string>? onlyIds)
+    {
+        var only = onlyIds?.ToHashSet(StringComparer.Ordinal);
+        return LoadLedger().Packages.Where(p => string.Equals(p.ShipId, shipId, StringComparison.OrdinalIgnoreCase) && p.BackedUpUtc is not null && p.ShipDeletedUtc is null
+                                                && (only is null || only.Contains(p.PackageId))).ToList();
+    }
+
+    /// <summary>有沒有可以列進已備份回報的紀錄包(只讀帳冊,不取鎖、不寫稽核紀錄;<see cref="CreateBackupReport"/> 會不會回傳 null)</summary>
+    public bool HasBackupReportFor(string shipId, IEnumerable<string>? onlyIds = null) => Reportable(shipId, onlyIds).Count > 0;
+
     /// <summary>產生指定船舶的已備份回報(列出已備份、且船上仍保留的紀錄包;<paramref name="onlyIds"/> 為船上回報的清單)。無可回報者回傳 null。</summary>
     public (SignedDocument Document, BackupReport Report)? CreateBackupReport(string shipId, IKeyProvider key, IEnumerable<string>? onlyIds = null)
     {
-        var only = onlyIds?.ToHashSet(StringComparer.Ordinal);
-        var l = LoadLedger();
-        var pkgs = l.Packages.Where(p => string.Equals(p.ShipId, shipId, StringComparison.OrdinalIgnoreCase) && p.BackedUpUtc is not null && p.ShipDeletedUtc is null
-                                         && (only is null || only.Contains(p.PackageId))).ToList();
+        var pkgs = Reportable(shipId, onlyIds);
         if (pkgs.Count == 0) return null;
         var now = Now;
         var report = new BackupReport

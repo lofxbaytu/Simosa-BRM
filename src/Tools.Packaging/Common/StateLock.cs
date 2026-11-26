@@ -27,6 +27,13 @@ public sealed class StateLockSpec
     /// </summary>
     public TimeSpan AccessDeniedGrace { get; init; } = TimeSpan.Zero;
 
+    /// <summary>
+    /// 開不了鎖定檔、而原因不是「被別人獨占開啟」的 IO 錯誤(建立不了檔:磁碟或 inode 用完、開啟的檔案太多、裝置錯誤…)連續多久之後丟出原本的例外。
+    /// 這類錯誤先短暫重試(舊版的 simosa-pkg 放開並刪除鎖定檔的瞬間也會出現一次),但不當成被佔用一路等到 <see cref="Timeout"/> —
+    /// 否則操作人員等了一兩分鐘之後看到的是「另一個 simosa-pkg 正在使用…」,真正的原因(例如 No space left on device)看不到。
+    /// </summary>
+    public TimeSpan OtherErrorGrace { get; init; } = TimeSpan.FromSeconds(2);
+
     /// <summary>等了 <see cref="NoticeAfter"/> 還沒有拿到時,呼叫一次 <see cref="Notice"/>(參數是這句話)— 讓操作人員知道指令為什麼沒有動靜;null = 不通知</summary>
     public string? WaitingMessage { get; init; }
 
@@ -42,11 +49,13 @@ public sealed class StateLockSpec
 ///   不會留下過期的鎖 — 鎖是「有沒有人獨占開啟」,不是檔案在不在。鎖定檔用完不刪除(關閉時刪除會讓等待中的行程鎖到已經不在路徑上的檔)。</item>
 /// <item><b>被佔用</b>:每隔幾十毫秒重試,到 <see cref="StateLockSpec.Timeout"/> 為止;防毒或索引程式短暫開著鎖定檔時也是同一條路(重試,不直接失敗)。
 ///   等不到時丟 <see cref="IOException"/>(型別就是 IOException:呼叫端與指令列原有的處理、結束碼都不變),訊息由 <see cref="StateLockSpec.BusyMessage"/> 產生;
-///   <see cref="IsBusy"/> 可以分辨它與其他 IO 錯誤。</item>
+///   <see cref="IsBusy"/> 可以分辨它與其他 IO 錯誤。只有「開得到、鎖不到」(<see cref="IsSharingViolation"/>)才算被佔用:鎖定檔建立不了
+///   (磁碟或 inode 用完…)這類錯誤短暫重試(<see cref="StateLockSpec.OtherErrorGrace"/>)後丟出原本的例外,不等到逾時、也不說成「另一個 simosa-pkg」。</item>
 /// <item><b>同一個行程</b>:獨占開啟在同一個行程內也互斥,所以同一把鎖在行程內只開一次檔 — 同一條執行緒重複取得(例如備份紀錄庫的過程中標記已備份)
 ///   只增加計數,不會把自己卡死;別的執行緒要等(與跨行程相同的等待上限與訊息)。取得與放開必須在同一條執行緒(以 using 包住一段同步的程式;不可跨 await)。</item>
-/// <item><b>兩把以上的鎖</b>:一律依固定的順序取得(紀錄庫:先帳冊 <c>store-ledger.json.lock</c>、後兩船版次清單 <c>fleet-versions.json.lock</c>;
-///   船上只有一把 <c>state/.lock</c>;船上與紀錄庫的鎖不會同時持有)。</item>
+/// <item><b>兩把以上的鎖</b>:一律依固定的順序取得 — 紀錄庫:帳冊 <c>store-ledger.json.lock</c> → 兩船版次清單 <c>fleet-versions.json.lock</c> →
+///   稽核紀錄 <c>audit.jsonl.lock</c>;船上:狀態鎖 <c>state/.lock</c> → 稽核紀錄 <c>state/audit.jsonl.lock</c>。稽核紀錄的鎖永遠最後取得
+///   (<see cref="AuditLog"/>;拿著它的時候不再取別的鎖)。同一個行程不會同時持有船上的鎖與紀錄庫的鎖。</item>
 /// </list>
 /// 只讀的指令(status、verify-install、store list、records list…)不取鎖。
 /// </summary>
@@ -87,9 +96,12 @@ public sealed class StateLock : IDisposable
             catch (Exception ex) when (ex is IOException or ObjectDisposedException) { }   // 通知寫不出去不影響取鎖
         }
 
-        IOException Busy()
+        // last:最後一次開不了鎖定檔的例外(放進 InnerException)。它不是「被獨占開啟」時,在訊息尾附上它的說明 — 那才是真正的原因
+        IOException Busy(Exception? last)
         {
-            var ex = new IOException(spec.BusyMessage(spec.Timeout));
+            var message = spec.BusyMessage(spec.Timeout);
+            if (last is not null && !IsSharingViolation(last)) message += $"(開啟鎖定檔時最後一次的錯誤:{last.Message})";
+            var ex = new IOException(message, last);
             ex.Data[BusyKey] = true;
             return ex;
         }
@@ -102,7 +114,7 @@ public sealed class StateLock : IDisposable
             {
                 NotifyOnce();
                 var rest = spec.Timeout - clock.Elapsed;
-                if (rest <= TimeSpan.Zero || !Monitor.TryEnter(gate, rest)) throw Busy();
+                if (rest <= TimeSpan.Zero || !Monitor.TryEnter(gate, rest)) throw Busy(null);
             }
         }
         try
@@ -119,27 +131,43 @@ public sealed class StateLock : IDisposable
         return new StateLock(gate);
     }
 
-    private static FileStream OpenExclusive(StateLockSpec spec, string full, Stopwatch clock, Action notifyOnce, Func<IOException> busy)
+    /// <summary>
+    /// 這個例外是不是「檔案被別人獨占開啟」(共用違規)。Windows:ERROR_SHARING_VIOLATION(32)或 ERROR_LOCK_VIOLATION(33);
+    /// Linux / macOS:.NET 對 flock 回 EWOULDBLOCK 時丟的 <see cref="IOException"/>,HResult 是原始的 errno(Linux 11、macOS / BSD 35)。
+    /// 其他的 IO 錯誤(No space left on device、Too many open files…)回傳 false。
+    /// </summary>
+    internal static bool IsSharingViolation(Exception ex)
+    {
+        if (ex.GetType() != typeof(IOException)) return false;
+        if (OperatingSystem.IsWindows())
+        {
+            var code = unchecked((uint)ex.HResult);   // 0x8007xxxx:Win32 錯誤碼
+            return code >> 16 == 0x8007 && (code & 0xFFFF) is 32 or 33;
+        }
+        return ex.HResult is 11 or 35;
+    }
+
+    private static FileStream OpenExclusive(StateLockSpec spec, string full, Stopwatch clock, Action notifyOnce, Func<Exception?, IOException> busy)
     {
         // 與 PackageJson.SaveAtomic 相同:資料夾被移走時重建,不因為多了鎖定檔而改成失敗
-        if (Path.GetDirectoryName(full) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
+        var dir = Path.GetDirectoryName(full);
+        if (dir is { Length: > 0 }) Directory.CreateDirectory(dir);
+        Stopwatch? deniedSince = null;   // 連續「存取被拒」的起點(中間成功開到檔或遇到共用違規就重算)
+        Stopwatch? otherSince = null;    // 連續「不是被佔用的 IO 錯誤」的起點(中間成功開到檔或遇到共用違規就重算)
         while (true)
         {
             try
             {
                 var stream = new FileStream(full, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
-                // Linux:舊版的 simosa-pkg 以「關閉時刪除」持有同一個鎖定檔時,它放開的瞬間檔案已從路徑上移除,這裡鎖到的可能是那個已經不在路徑上的檔
-                // (下一個行程會另建新檔、同時取得);檔案不在路徑上就放開重來。Windows 上被開啟中的檔不會這樣
-                if (!OperatingSystem.IsWindows() && !File.Exists(full))
-                {
-                    stream.Dispose();
-                    continue;
-                }
-                return stream;
+                if (OperatingSystem.IsWindows() || IsTheFileOnThePath(stream, full)) return stream;
+                stream.Dispose();        // 鎖到的是已經不在路徑上的檔:放開重來(不算等待失敗)
+                deniedSince = null;
+                otherSince = null;
             }
             catch (UnauthorizedAccessException ex)
             {
-                if (clock.Elapsed < spec.AccessDeniedGrace && clock.Elapsed < spec.Timeout)
+                deniedSince ??= Stopwatch.StartNew();
+                if (deniedSince.Elapsed < spec.AccessDeniedGrace && clock.Elapsed < spec.Timeout)
                 {
                     Thread.Sleep(20 + Random.Shared.Next(40));
                     continue;
@@ -147,12 +175,48 @@ public sealed class StateLock : IDisposable
                 if (spec.AccessDeniedMessage is null) throw;
                 throw new UnauthorizedAccessException(spec.AccessDeniedMessage(ex.Message), ex);
             }
-            catch (IOException) when (File.Exists(full))   // 被佔用(鎖定檔不存在時的 IOException 是別的原因,例如資料夾不在,不重試)
+            // 被佔用:重試。鎖定檔不存在時的 IOException 是別的原因(例如資料夾不在),不重試 — 例外:Linux 上舊版的 simosa-pkg 以「關閉時刪除」
+            // 持有同一個檔時,我們開到它、鎖不到,而它在這一瞬間放開並把檔案從路徑上移除(這時檔案不在、資料夾在):也是被佔用,重試(下一次開檔會重建)
+            catch (IOException ex) when (File.Exists(full) || (!OperatingSystem.IsWindows() && ex.GetType() == typeof(IOException) && Directory.Exists(dir)))
             {
-                if (clock.Elapsed >= spec.Timeout) throw busy();
-                if (clock.Elapsed >= spec.NoticeAfter) notifyOnce();
+                deniedSince = null;
+                if (IsSharingViolation(ex)) otherSince = null;
+                else
+                {
+                    // 不是「開得到、鎖不到」:鎖定檔建立不了(磁碟或 inode 用完)、開啟的檔案太多、裝置錯誤… 短暫重試後丟出原本的例外 —
+                    // 一路等到逾時再說「另一個 simosa-pkg 正在使用…」的話,真正的原因看不到(原本沒有鎖定檔時是立刻報 No space left on device)
+                    otherSince ??= Stopwatch.StartNew();
+                    if (otherSince.Elapsed >= spec.OtherErrorGrace) throw;
+                }
+                if (clock.Elapsed >= spec.Timeout) throw busy(ex);
+                if (clock.Elapsed >= spec.NoticeAfter && otherSince is null) notifyOnce();
                 Thread.Sleep(20 + Random.Shared.Next(40));
             }
+        }
+    }
+
+    /// <summary>
+    /// Linux / macOS:剛鎖到的檔是不是路徑上的那一個。舊版的 simosa-pkg 以「關閉時刪除」持有同一個鎖定檔(state/.lock)時,它放開的瞬間檔案已從路徑上移除 —
+    /// 我們若在那之前開了檔、在那之後才鎖到,鎖到的是一個已經不在路徑上的檔,下一個行程會另建新檔、同時取得(.NET 對「關閉時刪除」的開啟自己有這項檢查,
+    /// 所以舊版之間沒有這個問題)。作法:把我們這個檔的修改時間設成一個隨機的時間,再看路徑上的檔是不是同一個時間 — 路徑上若是別的檔(舊版新建的、
+    /// 或另一個新版行程正在做同樣檢查的),時間不會相同。確認後把修改時間設回現在。Windows 上被開啟中的檔不會從路徑上消失,不必檢查。
+    /// 檔案系統不能設定時間等情形下無法確認,照舊當成是(與沒有舊版同時執行時相同)。
+    /// </summary>
+    private static bool IsTheFileOnThePath(FileStream stream, string full)
+    {
+        try
+        {
+            // 2 秒的倍數:FAT 類檔案系統的修改時間只有 2 秒的解析度
+            var token = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(2L * Random.Shared.NextInt64(1, 500_000_000));
+            File.SetLastWriteTimeUtc(stream.SafeFileHandle, token);
+            var mine = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+            var onPath = File.GetLastWriteTimeUtc(full);            // 以路徑查詢,不開檔;檔案不在時是 1601 年
+            File.SetLastWriteTimeUtc(stream.SafeFileHandle, DateTime.UtcNow);
+            return onPath == mine;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return File.Exists(full);
         }
     }
 

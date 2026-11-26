@@ -10,6 +10,9 @@
 #   船上筆電的版本(第三十一輪;教官筆電的教官站跨來源向船上的 simosa-web 取):/_status/release.json 的 CORS 標頭只給本機迴路位址的頁面
 #   (各種 Origin、只有這個網址有、HEAD)、ports.shipWeb → 教官站網址的 shipWeb 參數(ship_web_url / ship_web_page 與啟動腳本的輸出)。
 #   同步與隨身碟匯入時的降版提醒(第三十一輪):真實的 simosa-pkg serve + sync、export + import — 降版的船印出並保存提醒、處理後消失。
+#   狀態檔的跨行程鎖(第三十一輪;test_state_locks):兩個真實的 simosa-pkg 行程同時動同一個紀錄庫 / 同一個安裝根目錄 —
+#   兩支隨身碟同時匯入帳冊兩筆都在、匯入的同時標記備份兩邊的結果都在、同時 device init 只有一個產生金鑰、鎖被佔住時 records pack 與 trust add
+#   等待(並印一行「注意:…」)而 status 與已在紀錄庫的紀錄包再匯入一次不被擋住、鎖定檔不被 store backup 複製也不被 verify-install 當成多出的檔。
 # 用法:tools/launch/tests/launch-tests.sh [--only <測試名>] [--list]
 #   所有輸出留在專案內:build/test-tmp/launch/(設定檔、假 PID 檔)、build/logs-test*/(各測試的 log);埠自 LAUNCH_TEST_PORT_BASE(預設 18760)起。
 #   Windows 版(launch-common.ps1、stop-all.ps1)另見 launch-common.tests.ps1(pwsh 7 於 Linux 亦可執行)。
@@ -1072,7 +1075,125 @@ assert d["message"] == a[0], d["message"]' "$msg" || fail "fleet-versions.json �
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info test_web_status_file test_web_status_cors test_instructor_ship_web test_release_status_write test_release_status_launch test_sync_release_reminder)
+# ---- 狀態檔的跨行程鎖(docs/design/packaging-sync.md 第 5.2 節;單元測試 tests/Tools.Packaging.Tests/StateLockTests)----
+# 全部是真實的 simosa-pkg 行程(沒有起同步服務,不占埠)。修改前:(1) 20 次有 8 至 12 次帳冊只記到一筆、(2) 20 次有 7 次少一邊的結果、
+# (3) 20 次有 18 次兩個 device init 都說成功(4 次留下不能用的金鑰)、(4) 等鎖時沒有任何訊息;trust add 不取鎖(與套用信任清單更新包同時執行時
+# 80 次有 6 至 9 次加入的金鑰不在清單裡);已在紀錄庫的紀錄包再匯入一次也要等帳冊的鎖(被佔住時 60 秒後列為錯誤)。
+test_state_locks() {
+  local pkg; pkg="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll simosa-pkg Tools.Packaging.Cli simosa-pkg.dll '$ROOT'")" || fail "找不到/無法建置 simosa-pkg" || return 1
+  local d="$TMP/statelocks" q="$TMP/statelocks/prep.out" i p1 p2 c1 c2 c3 c4 s n h1 h2 w1 w2 s1 s2 known
+  rm -rf "$d"; mkdir -p "$d/instructor" "$d/keys" "$d/ship-FSB1/app" "$d/ship-FSB1/data" "$d/ship-FSB1/tools" "$d/ship-FSB2"
+  local I=(dotnet "$pkg")
+  sl_record() {  # sl_record <船上資料夾> <檔名> <船舶>:合成一個有 footer 的練習紀錄(與 tests/Tools.Packaging.Tests/TestEnv.WriteRecord 相同的內容)
+    python3 -I -c 'import hashlib, json, os, sys
+path, ship = sys.argv[1], sys.argv[2]
+lines = [json.dumps({"kind": "header", "version": 2, "createdUtc": "2026-11-20T01:00:00.0000000Z", "shipId": ship, "loading": "ballast", "seed": 1, "dt": 0.02, "dynamics": "test", "scenario": {"id": "E01_baseline", "name": "E01"}, "participants": None}, separators=(",", ":")),
+         "{\"kind\":\"state\",\"state\":{\"t\":300.0,\"tick\":15000}}", "{\"kind\":\"state\",\"state\":{\"t\":600.0,\"tick\":30000}}"]
+h = hashlib.sha256()
+for l in lines: h.update(l.encode("utf-8") + b"\n")
+lines.append(json.dumps({"kind": "footer", "finalTick": 30000, "stateHash": "00", "lines": 3, "inputs": 0, "sha256": h.hexdigest().upper()}, separators=(",", ":")))
+os.makedirs(os.path.dirname(path), exist_ok=True)
+open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")' "$1/build/records/$2.jsonl" "$3"
+  }
+  sl_ledger() { python3 -I -c 'import json,sys; j=json.load(open(sys.argv[1],encoding="utf-8")); exec(sys.argv[2])' "$1/store-ledger.json" "$2" 2>&1; }
+  {
+    # FSB1 是「安裝版」(發行清單;最後以 verify-install 核對),FSB2 只需要裝置金鑰與一個紀錄包
+    echo "app 1" > "$d/ship-FSB1/app/version.txt" && echo "data 1" > "$d/ship-FSB1/data/readme.txt" &&
+    cp -r "$(dirname "$pkg")" "$d/ship-FSB1/tools/updater" && find "$d/ship-FSB1" -name '*.pdb' -delete &&
+    "${I[@]}" release manifest --dir "$d/ship-FSB1" --version 2026.12.1 --runtime linux-x64 &&
+    "${I[@]}" keygen --out "$d/keys/extra" --name "lock-test" --role backup --password test-pw &&
+    for s in FSB1 FSB2; do
+      "${I[@]}" device init --root "$d/ship-$s" --ship "$s" --device-id "$s-LOCKTEST" --pem && sl_record "$d/ship-$s" "rec-$s" "$s" &&
+      "${I[@]}" export --to "$d/usb-$s" --role ship --root "$d/ship-$s" || exit 1
+    done
+  } > "$q" 2>&1 || fail "前置(發行清單、裝置金鑰、紀錄包、匯出到隨身碟)失敗:$(tail -8 "$q")" || return 1
+
+  # (1) 兩艘船各一支隨身碟,兩個教官端行程同時匯入同一個紀錄庫:兩個紀錄包都要記進帳冊
+  for ((i = 1; i <= 6; i++)); do
+    rm -rf "$d/instructor/store"
+    "${I[@]}" import --from "$d/usb-FSB1" --role instructor --store "$d/instructor/store" --root "$d/instructor" --enroll-device > "$d/a.out" 2> "$d/a.err" & p1=$!
+    "${I[@]}" import --from "$d/usb-FSB2" --role instructor --store "$d/instructor/store" --root "$d/instructor" --enroll-device > "$d/b.out" 2> "$d/b.err" & p2=$!
+    wait "$p1"; c1=$?; wait "$p2"; c2=$?
+    n="$(sl_ledger "$d/instructor/store" 'print(",".join(sorted(p["shipId"] for p in j["packages"])))')"
+    [[ $c1 == 0 && $c2 == 0 && "$n" == "FSB1,FSB2" ]] || fail "同時匯入兩支隨身碟(第 $i 次):結束碼 $c1 / $c2,帳冊裡的紀錄包:$n(應為 FSB1,FSB2);$(cat "$d/a.err" "$d/b.err")" || return 1
+  done
+
+  # (4) 船上的狀態鎖與紀錄庫帳冊的鎖各被另一個行程佔住(python 以 flock 佔住鎖定檔,代表同步服務正在打包、另一個視窗正在備份紀錄庫),
+  #     佔到等鎖的 records pack 印出「注意:…」為止才放開 — 不靠固定的秒數:機器忙的時候指令啟動得慢,固定佔 4 秒時等的一方可能等不滿 3 秒、
+  #     不印那一行(8 個忙碌迴圈 / 4 核下 10 次有 2 至 3 次因此失敗)。
+  #     會改狀態的 records pack、trust add 等到放開後照常完成(結束碼 0);只讀的 status、已在紀錄庫的紀錄包再匯入一次在鎖還被佔著的時候就做完。
+  #     等的這幾秒同時做第 (2)、(3) 步(另一個紀錄庫、另一個船上資料夾,互不相干),整項測試不必多等
+  sl_record "$d/ship-FSB1" rec-second FSB1
+  sl_hold() {  # sl_hold <鎖定檔> <旗標檔>:佔住到 $d/release 出現(最多 120 秒)
+    python3 -I -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644); fcntl.flock(fd, fcntl.LOCK_EX); open(sys.argv[2], "w").close()
+t = time.time()
+while not os.path.exists(sys.argv[3]) and time.time() - t < 120: time.sleep(0.05)' "$1" "$2" "$d/release" &
+    HELPERS+=("$!")
+  }
+  rm -f "$d/release" "$d/held-ship" "$d/held-ledger"
+  sl_hold "$d/ship-FSB1/state/.lock" "$d/held-ship"; h1=$!
+  sl_hold "$d/instructor/store/store-ledger.json.lock" "$d/held-ledger"; h2=$!
+  for ((i = 0; i < 100; i++)); do [[ -f "$d/held-ship" && -f "$d/held-ledger" ]] && break; sleep 0.1; done
+  [[ -f "$d/held-ship" && -f "$d/held-ledger" ]] || fail "佔不到鎖定檔(python flock)" || return 1
+  "${I[@]}" records pack --root "$d/ship-FSB1" > "$d/wait.out" 2> "$d/wait.err" & w1=$!
+  "${I[@]}" trust add --root "$d/ship-FSB1" --file "$d/keys/extra.pub.pem" --admin test > "$d/trust.out" 2> "$d/trust.err" & w2=$!
+  HELPERS+=("$w1" "$w2")   # 中途失敗(return 1)時由 cleanup_helpers 一併結束
+  timeout 30 "${I[@]}" status --root "$d/ship-FSB1" --json > "$d/status.out" 2> "$d/status.err"; s1=$?
+  known="$(ls "$d/usb-FSB1/simosa-transfer/from-ship/FSB1/"*.sbrec | head -n 1)"
+  timeout 30 "${I[@]}" store import "$known" --store "$d/instructor/store" --root "$d/instructor" > "$d/again.out" 2> "$d/again.err"; c3=$?
+  # (2) 一個行程匯入 FSB2 的隨身碟,另一個同時標記備份(FSB1 已在庫;另一個紀錄庫 store2 — 第 (4) 步佔住的是 store 的帳冊):帳冊要有兩筆,而且「已標記 N 個」與帳冊裡有備份時間的筆數相同
+  for ((i = 1; i <= 6; i++)); do
+    rm -rf "$d/instructor/store2"
+    "${I[@]}" import --from "$d/usb-FSB1" --role instructor --store "$d/instructor/store2" --root "$d/instructor" --enroll-device > "$d/pre.out" 2>&1 || fail "前置匯入失敗:$(cat "$d/pre.out")" || return 1
+    "${I[@]}" import --from "$d/usb-FSB2" --role instructor --store "$d/instructor/store2" --root "$d/instructor" --enroll-device > "$d/a.out" 2> "$d/a.err" & p1=$!
+    "${I[@]}" store mark-backed-up --all --target T --store "$d/instructor/store2" --root "$d/instructor" > "$d/b.out" 2> "$d/b.err" & p2=$!
+    wait "$p1"; c1=$?; wait "$p2"; c2=$?
+    n="$(sl_ledger "$d/instructor/store2" 'print(len(j["packages"]), sum(1 for p in j["packages"] if p.get("backedUpUtc")), sum(1 for p in j["packages"] if p["shipId"] == "FSB1" and p.get("backedUpUtc")))')"
+    s="$(grep -o '已標記 [0-9]* 個' "$d/b.out")"
+    [[ $c1 == 0 && $c2 == 0 && ( "$n" == "2 1 1" && "$s" == "已標記 1 個" || "$n" == "2 2 1" && "$s" == "已標記 2 個" ) ]] \
+      || fail "匯入的同時標記備份(第 $i 次):結束碼 $c1 / $c2,帳冊(筆數 有備份時間 FSB1 有備份時間)= $n,標記的行程說「$s」;$(cat "$d/a.err" "$d/b.err")" || return 1
+  done
+
+  # (3) 兩個行程同時 device init:只有一個產生金鑰,另一個看到「已存在」(結束碼 1);之後金鑰可用(第 (4) 步的兩個指令這時正在等鎖)
+  for ((i = 1; i <= 4; i++)); do
+    rm -rf "$d/fresh"; mkdir -p "$d/fresh"
+    "${I[@]}" device init --root "$d/fresh" --ship FSB3 --device-id FSB3-LOCKTEST --pem > "$d/a.out" 2> "$d/a.err" & p1=$!
+    "${I[@]}" device init --root "$d/fresh" --ship FSB3 --device-id FSB3-LOCKTEST --pem > "$d/b.out" 2> "$d/b.err" & p2=$!
+    wait "$p1"; c1=$?; wait "$p2"; c2=$?
+    [[ $((c1 + c2)) == 1 ]] && grep -q "^錯誤:裝置金鑰已存在" "$d/a.err" "$d/b.err" || fail "同時 device init(第 $i 次):應該一個成功、一個「裝置金鑰已存在」,結束碼 $c1 / $c2;$(cat "$d/a.err" "$d/b.err")" || return 1
+    sl_record "$d/fresh" rec FSB3 && "${I[@]}" records pack --root "$d/fresh" > "$d/pack.out" 2>&1 && grep -q "^已打包 " "$d/pack.out" || fail "同時 device init(第 $i 次)之後裝置金鑰應該可用:$(cat "$d/pack.out")" || return 1
+  done
+
+  # (4 續) 等 records pack 印出「注意:…」(等鎖超過 3 秒才印);這時鎖還被佔著,兩個等鎖的指令都還沒有結束
+  for ((i = 0; i < 900; i++)); do grep -q "^注意:" "$d/wait.err" 2>/dev/null && break; kill -0 "$w1" 2>/dev/null || break; sleep 0.1; done
+  kill -0 "$w1" 2>/dev/null && kill -0 "$w2" 2>/dev/null && kill -0 "$h1" 2>/dev/null && [[ ! -e "$d/ship-FSB1/config/trusted-keys/extra.pub.pem" ]]; s=$?
+  touch "$d/release"
+  wait "$w1"; s2=$?; wait "$w2"; c4=$?; wait "$h1" "$h2" 2>/dev/null
+  [[ $s1 == 0 ]] && grep -q '"shipId": "FSB1"' "$d/status.out" || fail "鎖被佔住時 status 應該照常完成、不必等鎖放開(結束碼 $s1):$(cat "$d/status.err")" || return 1
+  [[ $c3 == 0 && ! -s "$d/again.err" ]] && grep -q " 已在紀錄庫$" "$d/again.out" \
+    || fail "帳冊的鎖被佔住時,已在紀錄庫的紀錄包再匯入一次應該立刻回報「已在紀錄庫」(結束碼 $c3):$(cat "$d/again.out" "$d/again.err")" || return 1
+  [[ $s == 0 ]] || fail "船上的狀態鎖被佔住時 records pack 與 trust add 都應該還在等(信任清單還沒有被改):$(cat "$d/wait.out" "$d/wait.err" "$d/trust.out" "$d/trust.err")" || return 1
+  [[ $s2 == 0 ]] && grep -q "^已打包 " "$d/wait.out" || fail "鎖放開之後 records pack 應該照常完成(結束碼 $s2):$(cat "$d/wait.out" "$d/wait.err")" || return 1
+  [[ "$(cat "$d/wait.err")" == "注意:另一個 simosa-pkg 正在使用這台筆電的更新包與紀錄狀態(同步服務正在處理教官筆電的同步,或另一個視窗的指令還沒有結束),等它結束(最多 120 秒)…" ]] \
+    || fail "等鎖超過 3 秒時 stderr 應該只有一行「注意:…」:$(cat "$d/wait.err")" || return 1
+  [[ $c4 == 0 ]] && grep -q "^已加入信任清單:lock-test" "$d/trust.out" && "${I[@]}" trust list --root "$d/ship-FSB1" 2>/dev/null | grep -q "extra.pub.pem" \
+    || fail "鎖放開之後 trust add 應該照常完成、金鑰在信任清單裡(結束碼 $c4):$(cat "$d/trust.out" "$d/trust.err")" || return 1
+
+  # (5) 鎖定檔是留著的空檔:store backup 不複製、verify-install 不當成多出的檔
+  [[ -f "$d/ship-FSB1/state/.lock" && ! -s "$d/ship-FSB1/state/.lock" && -f "$d/instructor/store/store-ledger.json.lock" && ! -s "$d/instructor/store/store-ledger.json.lock" && -f "$d/instructor/store/fleet-versions.json.lock"
+     && -f "$d/ship-FSB1/state/audit.jsonl.lock" && ! -s "$d/ship-FSB1/state/audit.jsonl.lock" && -f "$d/instructor/store/audit.jsonl.lock" && ! -s "$d/instructor/store/audit.jsonl.lock" ]] \
+    || fail "用過之後鎖定檔應該留著(0 位元組):$(ls -la "$d/ship-FSB1/state" "$d/instructor/store")" || return 1
+  "${I[@]}" store backup --to "$d/backup" --store "$d/instructor/store" --root "$d/instructor" > "$d/backup.out" 2> "$d/backup.err"; c1=$?
+  [[ $c1 == 0 ]] && grep -q "標記 2 個紀錄包完成岸上備份" "$d/backup.out" || fail "store backup 應該成功並標記 2 個紀錄包(結束碼 $c1):$(cat "$d/backup.out" "$d/backup.err")" || return 1
+  [[ -z "$(find "$d/backup" -name '*.lock' -o -name '*.tmp' -o -name '*.importing')" && -n "$(find "$d/backup" -name 'store-ledger.json')" ]] || fail "備份裡不應該有鎖定檔或半成品:$(find "$d/backup" | head -20)" || return 1
+  dotnet "$d/ship-FSB1/tools/updater/simosa-pkg.dll" verify-install --root "$d/ship-FSB1" > "$d/verify.out" 2> "$d/verify.err"; c1=$?
+  [[ $c1 == 0 ]] || fail "verify-install 應該通過(結束碼 $c1):$(cat "$d/verify.out" "$d/verify.err")" || return 1
+  grep -q "\.lock" "$d/verify.out" "$d/verify.err" && { fail "verify-install 不應該提到鎖定檔:$(cat "$d/verify.out" "$d/verify.err")"; return 1; }
+  return 0
+}
+
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info test_web_status_file test_web_status_cors test_instructor_ship_web test_release_status_write test_release_status_launch test_sync_release_reminder test_state_locks)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers

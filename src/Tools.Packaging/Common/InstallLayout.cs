@@ -18,6 +18,7 @@ namespace SimosaBRM.Packaging.Common;
 /// &lt;root&gt;/state/outbox/*.sbrec      已簽章、待回傳的紀錄包
 /// &lt;root&gt;/state/records-ledger.json 紀錄包帳冊(打包/取回/備份/刪除)
 /// &lt;root&gt;/state/.lock               船上狀態的跨行程鎖定檔(0 位元組,留著不刪;<see cref="AcquireLock"/>)
+/// &lt;root&gt;/state/audit.jsonl.lock    稽核紀錄附加寫入的跨行程鎖定檔(0 位元組,留著不刪;<see cref="AuditLog.LockPath"/>)
 /// </code>
 /// 哪些位置是執行期資料(安裝模式核對時不算「清單沒有的檔案」)、哪些是程式目錄,集中定義在 <see cref="InstalledPaths"/>。
 /// </summary>
@@ -119,9 +120,11 @@ public sealed class InstallLayout
     /// <summary>
     /// 取得船上的狀態鎖 <see cref="LockPath"/>(state/.lock;共用的 <see cref="StateLock"/>);放開用 Dispose。
     /// <list type="bullet">
-    /// <item>範圍:同一時間只有一個行程(同步服務 serve,或另一個視窗的 apply / rollback / import / export / records pack / records accept-report / device init)
-    ///   在改 state/ 之下的狀態(installed.json、installed-files.json、records-ledger.json、previous/、outbox/、staging/)、替換 app/、data/、config/ 元件、
-    ///   依已備份回報刪除紀錄,或產生裝置金鑰。每一個步驟(套用一個更新包、打包一次、處理一份回報、記一次訪船)各自取得、做完就放開 —
+    /// <item>範圍:同一時間只有一個行程(同步服務 serve,或另一個視窗的 apply / rollback / import / export / records pack / records accept-report / device init /
+    ///   trust add / trust remove)在改 state/ 之下的狀態(installed.json、installed-files.json、records-ledger.json、previous/、outbox/、staging/)、
+    ///   替換 app/、data/、config/ 元件、依已備份回報刪除紀錄、產生裝置金鑰,或手動加入 / 移除信任公鑰(config/trusted-keys/ —
+    ///   套用信任清單更新包會整個換掉 config/,不在同一把鎖裡的話手動改的那一筆會落在被換下來的那一份)。
+    ///   持有這把鎖時可以再取稽核紀錄的鎖(<see cref="AuditLog.LockPath"/>),反過來不行。每一個步驟(套用一個更新包、打包一次、處理一份回報、記一次訪船)各自取得、做完就放開 —
     ///   直連同步的一整段不會一直佔著,另一個視窗的指令可以排在兩個步驟之間。</item>
     /// <item>等多久:持有的時間通常不到一秒,但套用大的更新包(複製整個元件)、打包錄影(每 1 GB 約半分鐘)可以到幾分鐘。
     ///   最多等 <see cref="LockTimeout"/>(預設 120 秒;原本是 30 秒,而且等不到時只有一句英文的「The process cannot access the file …」);
