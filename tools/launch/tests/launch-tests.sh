@@ -9,6 +9,7 @@
 #   以真實的 simosa-pkg 做出降版後從「安裝版」資料夾啟動教官筆電腳本(狀態檔 → simosa-web → 降版資訊);
 #   船上筆電的版本(第三十一輪;教官筆電的教官站跨來源向船上的 simosa-web 取):/_status/release.json 的 CORS 標頭只給本機迴路位址的頁面
 #   (各種 Origin、只有這個網址有、HEAD)、ports.shipWeb → 教官站網址的 shipWeb 參數(ship_web_url / ship_web_page 與啟動腳本的輸出)。
+#   同步與隨身碟匯入時的降版提醒(第三十一輪):真實的 simosa-pkg serve + sync、export + import — 降版的船印出並保存提醒、處理後消失。
 # 用法:tools/launch/tests/launch-tests.sh [--only <測試名>] [--list]
 #   所有輸出留在專案內:build/test-tmp/launch/(設定檔、假 PID 檔)、build/logs-test*/(各測試的 log);埠自 LAUNCH_TEST_PORT_BASE(預設 18760)起。
 #   Windows 版(launch-common.ps1、stop-all.ps1)另見 launch-common.tests.ps1(pwsh 7 於 Linux 亦可執行)。
@@ -916,7 +917,132 @@ PY
   return 0
 }
 
-TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info test_web_status_file test_web_status_cors test_instructor_ship_web test_release_status_write test_release_status_launch)
+# ---- 同步與隨身碟匯入時的降版提醒(使用者 2026-11-25 的選擇;docs/design/packaging-sync.md 第 5.1 節末「同步與隨身碟匯入時的降版提醒」)----
+# 全部是真實的程序:「安裝版」船上資料夾(tools/updater 的 simosa-pkg、manifest.json)以真實的 simosa-pkg 做出降版
+# (2026.12.1 套用軟體更新包 2026.12.2 後以 2026.11.1 重新安裝)→ 船上真的起 simosa-pkg serve → 教官端真的跑 simosa-pkg sync:
+# 輸出有哪一艘船與船上 status 相同的降版說明、結束碼 0,fleet-versions.json 有 releaseVersion / releaseDowngrade,store list 顯示保存的提醒;
+# 隨身碟途徑同樣真的 export(船上)再 import(教官端);船上以夠新的安裝程式(2026.12.3)重新安裝後再同步 / 再走一次隨身碟,提醒消失。
+test_sync_release_reminder() {
+  # 不論哪一步失敗,都要結束船上的同步服務(留著會占住同步埠)
+  local rc=0
+  SERVE_PID=""
+  sync_release_reminder_body || rc=$?
+  [[ -n "$SERVE_PID" ]] && kill -KILL "$SERVE_PID" 2>/dev/null
+  return $rc
+}
+sync_release_reminder_body() {
+  local pkg; pkg="$(bash -c "source '$LAUNCH/launch-common.sh'; find_dll simosa-pkg Tools.Packaging.Cli simosa-pkg.dll '$ROOT'")" || fail "找不到/無法建置 simosa-pkg" || return 1
+  local d="$TMP/syncrel" r="$TMP/syncrel/ship" q="$TMP/syncrel/prep.out"
+  rm -rf "$d"; mkdir -p "$r" "$d/keys" "$d/src/app" "$d/instructor"
+  local key="$d/keys/dev.key.pem" store="$d/instructor/store" store_usb="$d/instructor/store-usb" usb="$d/usb"
+  local S=(dotnet "$r/tools/updater/simosa-pkg.dll")   # 船上:安裝版自己的 simosa-pkg
+  local I=(dotnet "$pkg")                               # 教官端:儲存庫建置的 simosa-pkg(紀錄庫與根目錄都在測試資料夾)
+  sr_release() {  # sr_release <版本>:$d/rel-<版本>/(app/、tools/updater、data/、manifest.json;與真的發行版一樣不含 state/、build/)
+    local rel="$d/rel-$1"
+    mkdir -p "$rel/app" "$rel/data" "$rel/tools"
+    echo "app $1" > "$rel/app/version.txt"; echo "data $1" > "$rel/data/readme.txt"
+    cp -r "$(dirname "$pkg")" "$rel/tools/updater"
+    find "$rel" -name '*.pdb' -delete
+    dotnet "$pkg" release manifest --dir "$rel" --version "$1" --runtime linux-x64
+  }
+  sr_install() {  # 與安裝程式相同:先清空程式目錄 app/ 與 tools/updater/,再放入發行版的檔案(config/、data/、state/ 不清)
+    rm -rf "$r/app" "$r/tools/updater"
+    cp -r "$d/rel-$1/." "$r/"
+  }
+  sr_serve() {  # 船上的同步服務(真實的 simosa-pkg serve;PID 放 SERVE_PID),等同步埠開啟
+    : > "$d/serve.log"
+    ( exec "${S[@]}" serve --root "$r" --listen 127.0.0.1 --port "$SYNC" >> "$d/serve.log" 2>&1 ) &
+    SERVE_PID=$!; HELPERS+=("$SERVE_PID")
+    local i; for ((i = 0; i < 80; i++)); do tcp_open "$SYNC" && return 0; kill -0 "$SERVE_PID" 2>/dev/null || return 1; sleep 0.25; done
+    return 1
+  }
+  sr_serve_stop() { [[ -n "$SERVE_PID" ]] && { kill -INT "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null; }; SERVE_PID=""; }
+  sr_sync() {  # sr_sync <名稱>:教官端真的跑 simosa-pkg sync;stdout / stderr 存 $d/<名稱>.out / .err,結束碼放 CODE
+    SIMOSA_KEY_PASSWORD=test-pw "${I[@]}" sync --ship 127.0.0.1 --port "$SYNC" --key "$key" --store "$store" --root "$d/instructor" --enroll-device > "$d/$1.out" 2> "$d/$1.err"; CODE=$?
+  }
+  sr_usb() {  # sr_usb <名稱>:船上真的 export 到隨身碟資料夾,教官端真的 import;教官端的輸出存 $d/<名稱>.out / .err,結束碼放 CODE
+    "${S[@]}" export --to "$usb" --role ship --root "$r" > "$d/$1.export.out" 2>&1 || { CODE=$?; return 1; }
+    "${I[@]}" import --from "$usb" --role instructor --store "$store_usb" --root "$d/instructor" --enroll-device > "$d/$1.out" 2> "$d/$1.err"; CODE=$?
+  }
+  sr_fleet() {  # sr_fleet <紀錄庫> <python 斷言(j = FSB1 的項目)> [參數…]
+    local st="$1" expr="$2"; shift 2
+    python3 -I -c 'import json,sys; j=json.load(open(sys.argv[1],encoding="utf-8"))["ships"]["FSB1"]; a=sys.argv[3:]; exec(sys.argv[2])' "$st/fleet-versions.json" "$expr" "$@"
+  }
+  {
+    sr_release 2026.12.1 && sr_release 2026.11.1 && sr_release 2026.12.3 && sr_install 2026.12.1 &&
+    "${S[@]}" keygen --out "$d/keys/dev" --name "sync-test" --role primary --password test-pw &&
+    "${S[@]}" trust add --root "$r" --file "$d/keys/dev.pub.pem" --admin test &&
+    "${S[@]}" device init --root "$r" --ship FSB1 --device-id FSB1-SYNCTEST --pem &&
+    echo "app 2026.12.2" > "$d/src/app/version.txt" &&
+    "${S[@]}" pack --kind software --version 2026.12.2 --summary "sync test" --out "$d/sw.sbupd" --key "$key" --key-password test-pw --dir "app/=$d/src/app" &&
+    "${S[@]}" apply "$d/sw.sbupd" --root "$r" --operator test
+  } > "$q" 2>&1 || fail "前置(發行版、金鑰、更新包、套用)失敗:$(tail -8 "$q")" || return 1
+
+  # (1) 沒有降版(發行版 2026.12.1 上套用軟體更新包 2026.12.2):一行帶出發行版與軟體更新包版次,沒有警告
+  sr_serve || fail "simosa-pkg serve 未啟動:$(tail -5 "$d/serve.log")" || return 1
+  sr_sync normal
+  [[ $CODE == 0 ]] && grep -qx "FSB1 船上筆電:發行版 2026.12.1,軟體更新包 2026.12.2" "$d/normal.out" && grep -qx "同步完成" "$d/normal.out" \
+    || fail "沒有降版時 sync 應印「FSB1 船上筆電:發行版 2026.12.1,軟體更新包 2026.12.2」(結束碼 $CODE):$(cat "$d/normal.out" "$d/normal.err")" || return 1
+  grep -q "降版\|沒有回報" "$d/normal.out" "$d/normal.err" && { fail "沒有降版時不應有降版或沒有回報的訊息:$(cat "$d/normal.out" "$d/normal.err")"; return 1; }
+  sr_fleet "$store" 'assert j["releaseReported"] is True and j["releaseVersion"] == "2026.12.1" and "releaseDowngrade" not in j and j["via"] == "tcp", j' \
+    || fail "沒有降版時 fleet-versions.json 應有 releaseReported / releaseVersion、沒有 releaseDowngrade:$(cat "$store/fleet-versions.json")" || return 1
+  sr_serve_stop
+
+  # (2) 以較舊的安裝程式(2026.11.1)重新安裝:降版。船上 status 的警告就是教官端要印的說明
+  sr_install 2026.11.1
+  "${S[@]}" status --root "$r" > "$d/ship-status.out" 2> "$d/ship-status.err" || fail "船上 status 失敗:$(cat "$d/ship-status.err")" || return 1
+  local msg; msg="$(grep '^警告:降版:' "$d/ship-status.err" | head -n 1)"; msg="${msg#警告:}"
+  [[ "$msg" == "降版:目前的發行版 2026.11.1 比先前安裝的發行版 2026.12.1、曾套用的軟體更新包 2026.12.2 舊"* ]] || fail "船上 status 應有降版警告:$(cat "$d/ship-status.err")" || return 1
+  sr_serve || fail "simosa-pkg serve(降版後)未啟動:$(tail -5 "$d/serve.log")" || return 1
+  sr_sync down
+  [[ $CODE == 0 ]] || fail "降版只是提醒,sync 的結束碼應為 0,實際 $CODE:$(cat "$d/down.err")" || return 1
+  grep -qx "FSB1 船上筆電:發行版 2026.11.1(有降版提醒,見下方的警告)" "$d/down.out" && grep -qx "同步完成" "$d/down.out" || fail "sync 的輸出應有降版的摘要行與「同步完成」:$(cat "$d/down.out")" || return 1
+  grep -qxF "警告:船上筆電 FSB1(裝置 FSB1-SYNCTEST)有降版提醒(與在船上執行 simosa-pkg status 看到的說明相同)— ${msg}。船上處理之後再同步一次(或再匯入一次隨身碟),教官筆電保存的這則提醒才會消失" "$d/down.err" \
+    || fail "sync 的警告應寫明哪一艘船,說明與船上 status 的警告一字不差:$(cat "$d/down.err")" || return 1
+  grep -q "版本不低於 2026.12.2 的安裝程式重新安裝" "$d/down.err" || fail "警告應寫明怎麼處理:$(cat "$d/down.err")" || return 1
+  sr_fleet "$store" 'd = j["releaseDowngrade"]
+assert j["releaseReported"] is True and j["releaseVersion"] == "2026.11.1" and j["via"] == "tcp" and j["deviceId"] == "FSB1-SYNCTEST", j
+assert (d["releaseVersion"], d["basisVersion"], d["previousReleaseVersion"], d["softwareVersion"], d["softwareStale"]) == ("2026.11.1", "2026.12.2", "2026.12.1", "2026.12.2", True), d
+assert d["message"] == a[0], d["message"]' "$msg" || fail "fleet-versions.json 應保存降版資訊(與船上 status 相同的欄位與說明):$(cat "$store/fleet-versions.json")" || return 1
+  # 與船上 status --json 的 releaseDowngrade 是同一份欄位與內容
+  "${S[@]}" status --root "$r" --json > "$d/ship-status.json" 2>/dev/null
+  python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); b=json.load(open(sys.argv[2],encoding="utf-8"))["ships"]["FSB1"]; assert a["releaseVersion"] == b["releaseVersion"] and a["releaseDowngrade"] == b["releaseDowngrade"], (a.get("releaseDowngrade"), b.get("releaseDowngrade"))' \
+    "$d/ship-status.json" "$store/fleet-versions.json" || fail "fleet-versions.json 的 releaseVersion / releaseDowngrade 應與船上 status --json 相同" || return 1
+  # store list:保存的提醒也顯示(沒有重新同步)
+  "${I[@]}" store list --store "$store" --root "$d/instructor" > "$d/list.out" 2> "$d/list.err"; CODE=$?
+  [[ $CODE == 0 ]] && grep -q "^版次 FSB1:.*;發行版 2026.11.1(有降版提醒))$" "$d/list.out" && grep -qF "有降版提醒(與在船上執行 simosa-pkg status 看到的說明相同)— ${msg}。" "$d/list.err" && grep -q "直連同步時保存的提醒" "$d/list.err" \
+    || fail "store list 應顯示保存的降版提醒(結束碼 $CODE):$(cat "$d/list.out" "$d/list.err")" || return 1
+
+  # (3) 隨身碟途徑:船上真的匯出(status.json)、教官端真的匯入 — 同樣的提醒,句尾註明 status.json 沒有簽章
+  sr_usb usb-down || fail "隨身碟匯出 / 匯入失敗(結束碼 $CODE):$(cat "$d/usb-down.export.out" "$d/usb-down.err" 2>/dev/null)" || return 1
+  [[ $CODE == 0 && -f "$usb/simosa-transfer/from-ship/FSB1/status.json" ]] || fail "隨身碟匯入的結束碼應為 0(實際 $CODE),隨身碟上應有 status.json" || return 1
+  grep -qx "FSB1 船上筆電:發行版 2026.11.1(有降版提醒,見下方的警告)" "$d/usb-down.out" || fail "隨身碟匯入的輸出應有降版的摘要行:$(cat "$d/usb-down.out")" || return 1
+  grep -qxF "警告:船上筆電 FSB1(裝置 FSB1-SYNCTEST)有降版提醒(與在船上執行 simosa-pkg status 看到的說明相同)— ${msg}。船上處理之後再同步一次(或再匯入一次隨身碟),教官筆電保存的這則提醒才會消失(這是隨身碟上 status.json 的內容;這個檔沒有簽章,以船上的 simosa-pkg status 為準)" "$d/usb-down.err" \
+    || fail "隨身碟匯入的警告應與直連相同並註明 status.json 沒有簽章:$(cat "$d/usb-down.err")" || return 1
+  sr_fleet "$store_usb" 'assert j["via"] == "usb" and j["releaseReported"] is True and j["releaseVersion"] == "2026.11.1" and j["releaseDowngrade"]["basisVersion"] == "2026.12.2" and j["releaseDowngrade"]["message"] == a[0], j' "$msg" \
+    || fail "隨身碟途徑的 fleet-versions.json 應保存降版資訊:$(cat "$store_usb/fleet-versions.json")" || return 1
+  sr_serve_stop
+
+  # (4) 船上處理掉(以不低於比較基準 2026.12.2 的安裝程式 2026.12.3 重新安裝):下一次同步 / 隨身碟匯入提醒消失,保存的也不在了
+  sr_install 2026.12.3
+  sr_serve || fail "simosa-pkg serve(處理後)未啟動:$(tail -5 "$d/serve.log")" || return 1
+  sr_sync fixed
+  [[ $CODE == 0 ]] && grep -qx "FSB1 船上筆電:發行版 2026.12.3" "$d/fixed.out" || fail "處理後 sync 應印「FSB1 船上筆電:發行版 2026.12.3」(結束碼 $CODE):$(cat "$d/fixed.out" "$d/fixed.err")" || return 1
+  grep -q "降版" "$d/fixed.out" "$d/fixed.err" && { fail "處理後不應再有降版提醒:$(cat "$d/fixed.out" "$d/fixed.err")"; return 1; }
+  sr_fleet "$store" 'assert j["releaseVersion"] == "2026.12.3" and "releaseDowngrade" not in j, j' || fail "處理後 fleet-versions.json 不應再有 releaseDowngrade:$(cat "$store/fleet-versions.json")" || return 1
+  "${I[@]}" store list --store "$store" --root "$d/instructor" > "$d/list2.out" 2> "$d/list2.err"
+  grep -q ";發行版 2026.12.3)$" "$d/list2.out" || fail "處理後 store list 應為發行版 2026.12.3:$(cat "$d/list2.out")" || return 1
+  grep -q "降版" "$d/list2.out" "$d/list2.err" && { fail "處理後 store list 不應再有降版提醒:$(cat "$d/list2.out" "$d/list2.err")"; return 1; }
+  sr_usb usb-fixed || fail "處理後的隨身碟匯出 / 匯入失敗(結束碼 $CODE)" || return 1
+  [[ $CODE == 0 ]] && grep -qx "FSB1 船上筆電:發行版 2026.12.3" "$d/usb-fixed.out" || fail "處理後隨身碟匯入應印「FSB1 船上筆電:發行版 2026.12.3」(結束碼 $CODE):$(cat "$d/usb-fixed.out" "$d/usb-fixed.err")" || return 1
+  grep -q "降版" "$d/usb-fixed.out" "$d/usb-fixed.err" && { fail "處理後隨身碟匯入不應再有降版提醒:$(cat "$d/usb-fixed.out" "$d/usb-fixed.err")"; return 1; }
+  sr_fleet "$store_usb" 'assert j["releaseVersion"] == "2026.12.3" and "releaseDowngrade" not in j, j' || fail "處理後隨身碟途徑的 fleet-versions.json 不應再有 releaseDowngrade" || return 1
+  sr_serve_stop
+  tcp_open "$SYNC" && { fail "測試結束後同步埠 $SYNC 不應仍有服務"; return 1; }
+  return 0
+}
+
+TESTS=(test_port_busy_fails test_simcore_death_detected test_stop_all_keep_sync test_instructor_ship_ip test_web_sigint_exit0 test_logs_alt_cleanup test_instructor_check_wifi_flag test_stop_file_graceful test_console_loopback test_port_busy_vhf_media_fails test_nmea_options_passed test_traceability_numbers test_git_info test_web_status_file test_web_status_cors test_instructor_ship_web test_release_status_write test_release_status_launch test_sync_release_reminder)
 if [[ $LIST == 1 ]]; then printf '%s\n' "${TESTS[@]}"; exit 0; fi
 command -v dotnet >/dev/null || { echo "找不到 dotnet" >&2; exit 2; }
 cleanup_helpers

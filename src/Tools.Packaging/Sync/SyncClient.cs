@@ -35,6 +35,11 @@ public sealed class SyncReport
     public List<PulledPackage> Pulled { get; set; } = new();
     public CleanupResult? Cleanup { get; set; }
     public ShipStatus? Status { get; set; }
+    /// <summary>
+    /// 船上回報的發行版狀態(發行版本、降版提醒;沒有回報、讀不懂也在這裡分清楚)。<see cref="Status"/> 的 ReleaseVersion / ReleaseDowngrade
+    /// 是同一份通過檢查的值。降版只是提醒,不影響 <see cref="Ok"/>(結束碼不變)。
+    /// </summary>
+    public ShipReleaseReport? Release { get; set; }
     public List<string> Warnings { get; set; } = new();
     public bool Ok => Updates.All(u => u.Ok) && Pulled.All(p => p.Ok) && (Cleanup is null || Cleanup.Ok);
 }
@@ -194,13 +199,21 @@ public static class SyncClient
 
         // 5. 狀態 → 兩船版次清單
         await SyncProtocol.WriteAsync(s, new { type = SyncTypes.Status }, ct).ConfigureAwait(false);
-        var status = SyncProtocol.As<ShipStatus>(Expect(await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false), SyncTypes.StatusResult));
+        var statusMessage = Expect(await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false), SyncTypes.StatusResult);
+        // 發行版本與降版資訊:statusResult 沒有自己的簽章(來源只由握手時的裝置金鑰簽章與同一條連線保證),內容當成不可信的輸入。
+        // 這兩欄先寬鬆讀取(型別、格式不對只記為「讀不懂」)再從訊息拿掉,其餘欄位照舊解析 — 它們的型別不對不會讓同步在最後一步失敗
+        var release = ShipReleaseReport.Read(statusMessage);
+        ShipReleaseReport.RemoveFields(statusMessage);
+        var status = SyncProtocol.As<ShipStatus>(statusMessage) with { ReleaseVersion = release.ReleaseVersion, ReleaseDowngrade = release.Downgrade };
         report.Status = status;
-        o.Store.UpdateFleet(new ShipVersionEntry
+        report.Release = release;
+        var entry = new ShipVersionEntry
         {
             ShipId = ch.ShipId, DeviceId = ch.DeviceId, Version = status.Version, PackageId = status.PackageId, Components = status.Components,
             ParameterSet = status.ParameterSet, Environment = status.Environment, Via = "tcp",
-        });
+        };
+        release.ApplyTo(entry);
+        o.Store.UpdateFleet(entry);
         await SyncProtocol.WriteAsync(s, new { type = SyncTypes.Bye }, ct).ConfigureAwait(false);
         try { await SyncProtocol.ReadAsync(s, ct).ConfigureAwait(false); }
         catch (Exception ex) when (ex is IOException or EndOfStreamException) { }

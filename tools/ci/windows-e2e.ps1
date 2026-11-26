@@ -687,6 +687,20 @@ if ($Stage -contains 'packaging') {
                 if (Test-Path $store2) { Remove-Item -Recurse -Force $store2 }
                 $rsync = Invoke-Pkg @('sync', '--ship', '127.0.0.1', '--port', '7300', '--key', (Join-Path $keys 'dev-primary.key.pem'), '--store', $store2, '--enroll-device') 300 16
                 [void](Check 'sync(教官端經直連取回紀錄包)' { if ($rsync.TimedOut) { throw '逾時' }; if ($rsync.ExitCode -ne 0) { throw "結束碼 $($rsync.ExitCode)" } } -Soft)
+                # 同步後教官端的兩船版次清單保存船上的發行版狀態(docs\design\packaging-sync.md 第 5.1 節末「同步與隨身碟匯入時的降版提醒」):
+                # 剛安裝、沒有以較舊的安裝程式重新安裝過 → releaseReported = true、releaseVersion = 安裝的版本、沒有 releaseDowngrade。
+                # 只比對檔案內容(JSON),不比對 sync 的中文輸出。
+                [void](Check 'sync 後 fleet-versions.json 保存船上的發行版(releaseReported、releaseVersion;沒有降版)' {
+                    $fleetPath = Join-Path $store2 'fleet-versions.json'
+                    if (-not (Test-Path $fleetPath)) { throw "沒有 ${fleetPath}" }
+                    $fleet = [System.IO.File]::ReadAllText($fleetPath, (New-Object System.Text.UTF8Encoding($false))) | ConvertFrom-Json
+                    $entry = $fleet.ships.FSB1
+                    if ($null -eq $entry) { throw 'fleet-versions.json 沒有 FSB1 的項目' }
+                    if ($entry.releaseReported -ne $true) { throw "releaseReported = $($entry.releaseReported)(預期 true)" }
+                    if ("$($entry.releaseVersion)" -ne $version) { throw "releaseVersion = $($entry.releaseVersion)(預期 ${version})" }
+                    if ($null -ne $entry.releaseDowngrade) { throw '剛安裝不應有降版資訊' }
+                    return "發行版 $($entry.releaseVersion)"
+                } -Soft)
             }
         } finally {
             if (-not $serve.HasExited) { & taskkill.exe /PID $serve.Id /T /F 2>&1 | Out-Null }

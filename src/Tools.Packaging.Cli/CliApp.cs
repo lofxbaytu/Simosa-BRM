@@ -655,7 +655,14 @@ public sealed class CliApp
                 foreach (var p in store.LoadLedger().Packages)
                     _out.WriteLine($"{p.ShipId} {p.PackageId} {p.Directory} 匯入 {p.ImportedUtc:yyyy-MM-dd} 備份 {(p.BackedUpUtc is { } b ? b.ToString("yyyy-MM-dd") : "未")} 船上 {(p.ShipDeletedUtc is null ? "保留" : "已刪除")}");
                 foreach (var (ship, v) in store.LoadFleet().Ships)
-                    _out.WriteLine($"版次 {ship}:{v.Version}(參數集 {v.ParameterSet?.Version},更新於 {v.UpdatedUtc:yyyy-MM-dd},經 {v.Via};環境 {(v.Environment is { } env ? $"{env.Describe()}(收集於 {env.CollectedUtc:yyyy-MM-dd})" : "未回報")})");
+                {
+                    // 保存的發行版狀態(上一次同步 / 隨身碟匯入時船上回報的):同一行帶出發行版,有降版提醒時另列警告
+                    var release = ShipReleaseReport.FromEntry(v);
+                    // 文字欄位是同步時船上回報、原樣存進 fleet-versions.json 的(隨身碟途徑連船舶識別都沒有簽章):印出之前去掉控制字元並截斷
+                    _out.WriteLine($"版次 {Shown(ship)}:{Shown(v.Version)}(參數集 {Shown(v.ParameterSet?.Version)},更新於 {v.UpdatedUtc:yyyy-MM-dd},經 {Shown(v.Via, 16)};環境 {(v.Environment is { } env ? $"{Shown(env.Describe(), 300)}(收集於 {env.CollectedUtc:yyyy-MM-dd})" : "未回報")};{release.Describe(brief: true)})");
+                    var saved = $"這是 {v.UpdatedUtc:yyyy-MM-dd} {(v.Via == "usb" ? "匯入隨身碟" : "直連同步")}時保存的提醒{(v.Via == "usb" ? ";隨身碟上的 status.json 沒有簽章,以船上的 simosa-pkg status 為準" : "")}";
+                    foreach (var w in release.Warnings(ShipReleaseReport.ShipLabel(string.IsNullOrEmpty(v.ShipId) ? ship : v.ShipId, v.DeviceId), saved)) _err.WriteLine($"警告:{w}");
+                }
                 return 0;
             default: throw new CliUsageException($"未知的 store 子指令:{sub}");
         }
@@ -766,10 +773,30 @@ public sealed class CliApp
             Host = host, Port = a.Int("port", layout.Config.Port), InstructorKey = key, Store = store, PushPackages = a.All("push").Select(p => ReadPath(a, "--push", p)).ToList(),
             EnrollDevice = a.Flag("enroll-device"), PullRecords = !a.Flag("no-pull"), SendBackupReport = !a.Flag("no-report"), Log = _out,
         }).GetAwaiter().GetResult();
-        if (report.Status is { } st) _out.WriteLine($"{report.ShipId} 現行版本 {st.Version ?? "(初始)"},參數集 {st.ParameterSet?.Version ?? "—"},待回傳紀錄包 {st.OutstandingRecordPackages}{(st.Environment is { } env ? $";環境 {env.Describe()}" : "")}");
+        // 這一行的文字欄位都來自船上的 statusResult(沒有自己的簽章):印出之前去掉控制字元並截斷(合法的內容不受影響)
+        if (report.Status is { } st) _out.WriteLine($"{Shown(report.ShipId)} 現行版本 {Shown(st.Version ?? "(初始)")},參數集 {Shown(st.ParameterSet?.Version ?? "—")},待回傳紀錄包 {st.OutstandingRecordPackages}{(st.Environment is { } env ? $";環境 {Shown(env.Describe(), 300)}" : "")}");
+        // 船上的發行版與降版提醒(沒有開教官站、只做同步時也看得到;降版只是提醒,結束碼不變)
+        if (report.Release is { } release) PrintShipRelease(report.ShipId, report.DeviceId, release, source: null);
         foreach (var w in report.Warnings) _err.WriteLine($"警告:{w}");
         _out.WriteLine(report.Ok ? "同步完成" : "同步完成,但有項目失敗(見上方訊息)");
         return report.Ok ? 0 : 1;
+    }
+
+    /// <summary>船上回報的文字(statusResult / status.json / fleet-versions.json 裡原樣保存的欄位)印到終端機之前:去掉控制字元並截斷。</summary>
+    private static string Shown(string? text, int max = 64) => UntrustedText.Clean(text, max);
+
+    /// <summary>隨身碟途徑的提醒句尾:status.json 沒有簽章(直連的 statusResult 至少來自握手時驗證過裝置金鑰的那條連線)</summary>
+    private const string UsbStatusSource = "這是隨身碟上 status.json 的內容;這個檔沒有簽章,以船上的 simosa-pkg status 為準";
+
+    /// <summary>
+    /// 教官端同步 / 隨身碟匯入後印船上的發行版狀態(docs/design/packaging-sync.md 第 5.1 節末):stdout 一行摘要
+    /// (「FSB1 船上筆電:發行版 2026.11.31」;船上沒有回報時說明是較舊的軟體);有降版或有讀不懂的內容時 stderr 另列「警告:」。
+    /// 文字都由 <see cref="ShipReleaseReport"/> 產生(版本只有通過檢查的數字、降版說明與船上 status 同一個出處),船舶與裝置識別去掉控制字元。
+    /// </summary>
+    private void PrintShipRelease(string? shipId, string? deviceId, ShipReleaseReport release, string? source)
+    {
+        _out.WriteLine($"{ShipReleaseReport.ShipLabel(shipId)} 船上筆電:{release.Describe()}");
+        foreach (var w in release.Warnings(ShipReleaseReport.ShipLabel(shipId, deviceId), source)) _err.WriteLine($"警告:{w}");
     }
 
     private string Role(CliArgs a) => a.Get("role") ?? Layout(a).Config.Role;
@@ -805,6 +832,8 @@ public sealed class CliApp
         {
             r = UsbTransfer.InstructorImport(StoreOf(a), from, a.Flag("enroll-device"));
             foreach (var i in r.Imported.Where(i => i.Ok)) _out.WriteLine(i.AlreadyImported ? $"{i.PackageId} 已在紀錄庫" : $"已匯入 {i.PackageId} → {i.Directory}");
+            // 隨身碟上各船 status.json 的發行版與降版提醒(與直連同步印的相同;status.json 沒有簽章,提醒的句尾註明)
+            foreach (var s in r.ShipReleases) PrintShipRelease(s.ShipId, s.DeviceId, s.Release, UsbStatusSource);
         }
         foreach (var w in r.Written) _out.WriteLine($"已寫入 {w}");
         foreach (var w in r.Warnings) _err.WriteLine($"警告:{w}");

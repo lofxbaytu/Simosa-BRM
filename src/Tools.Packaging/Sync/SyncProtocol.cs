@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using SimosaBRM.Packaging.Common;
 
 namespace SimosaBRM.Packaging.Sync;
@@ -239,7 +240,13 @@ public sealed record ShipStatus
     /// <summary>船上筆電環境版次(作業系統 / .NET / WebView2 Runtime;規劃書第 5.5 節兩船版次清單)。舊版船端沒有此欄位時為 null。</summary>
     public EnvironmentInfo? Environment { get; init; }
     public List<string> Warnings { get; init; } = new();
-    /// <summary>安裝根目錄 manifest.json 的發行版本(沒有或讀不到時 null;舊版船端沒有此欄位)。</summary>
+    /// <summary>
+    /// 安裝根目錄 manifest.json 的發行版本(沒有或讀不到時 null)。<b>這個鍵一律寫出</b>(null 也寫成 <c>"releaseVersion": null</c>,
+    /// 不像其他欄位那樣省略):教官端同步時以「有沒有這個鍵」分辨「船上回報了、沒有發行清單」與「船上的軟體較舊、沒有回報」
+    /// (<see cref="ShipReleaseReport"/>)。加入這兩個欄位之前的船端沒有這個鍵;之後、到這項修改之前的建置在沒有發行清單時省略它
+    /// (教官端那時當成沒有回報)。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? ReleaseVersion { get; init; }
     /// <summary>
     /// 降版(套用更新包之後以較舊的安裝程式重新安裝過;判斷與安裝模式核對相同,<see cref="Release.InstalledVerifier.DetectDowngrade(string, out string?)"/>,

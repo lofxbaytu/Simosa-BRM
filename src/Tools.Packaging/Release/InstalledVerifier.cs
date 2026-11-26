@@ -94,6 +94,25 @@ public sealed class ReleaseDowngrade
     public bool SoftwareStale { get; set; }
     /// <summary>給人看的說明(核對的「狀態」提醒與 status 的警告用同一段文字)</summary>
     public string Message { get; set; } = "";
+
+    /// <summary>
+    /// 降版說明的唯一出處:安裝模式核對的「狀態」提醒、<c>simosa-pkg status</c> 的警告,以及教官端同步 / 隨身碟匯入時
+    /// 依船上回報的版本重新產生的提醒(<see cref="Sync.ShipReleaseReport"/>)都由這裡組出,不另寫一套說法。
+    /// <paramref name="previousRelease"/>、<paramref name="software"/>、<paramref name="highestApplied"/> 只給「比目前的發行版新」的項目
+    /// (不比它新的給 null;<see cref="DowngradeRecord.Evaluate"/> 的結果);<paramref name="software"/> 不為 null 表示 status 顯示的軟體版次不是實際執行的程式。
+    /// </summary>
+    public static string Describe(string releaseVersion, string? previousRelease, string? software, string? highestApplied, string basisVersion)
+    {
+        var parts = new List<string>();
+        if (previousRelease is not null) parts.Add($"先前安裝的發行版 {previousRelease}");
+        if (software is not null) parts.Add($"曾套用的軟體更新包 {software}");
+        if (highestApplied is not null && highestApplied != software && highestApplied != previousRelease) parts.Add($"被安裝覆蓋的軟體更新包最高版本 {highestApplied}");
+        return $"降版:目前的發行版 {releaseVersion} 比{string.Join("、", parts)} 舊 — 套用更新包之後以較舊的安裝程式(或較舊的發行版)重新安裝過。"
+               + (software is not null ? $"simosa-pkg status 顯示的軟體版次 {software} 不是實際執行的程式(實際執行的是發行版 {releaseVersion} 的程式)。" : "")
+               + $"這不算錯誤(以較舊版本的安裝程式回到舊版是允許的作法),請訪船船長確認;若不是刻意回到舊版,請以版本不低於 {basisVersion} 的安裝程式重新安裝,"
+               + "或請岸上派送版本更高的軟體更新包。這則提醒會一直保留(之後套用圖資、情境或參數更新包也一樣),"
+               + $"直到套用新的軟體更新包、或以版本不低於 {basisVersion} 的安裝程式重新安裝為止";
+    }
 }
 
 public sealed class InstallCheckRelease
@@ -549,20 +568,12 @@ public static class InstalledVerifier
     public static ReleaseDowngrade? DetectDowngrade(string? releaseVersion, InstalledFiles reconciled, InstalledState installed)
     {
         if (reconciled.Downgrade is not { } record || record.Evaluate(releaseVersion, installed) is not { } d) return null;
-        var parts = new List<string>();
-        if (d.PreviousReleaseVersion is { } previous) parts.Add($"先前安裝的發行版 {previous}");
-        if (d.SoftwareVersion is { } software) parts.Add($"曾套用的軟體更新包 {software}");
-        if (d.HighestAppliedVersion is { } highest && highest != d.SoftwareVersion && highest != d.PreviousReleaseVersion) parts.Add($"被安裝覆蓋的軟體更新包最高版本 {highest}");
-        var stale = d.SoftwareVersion is not null;
         return new ReleaseDowngrade
         {
             ReleaseVersion = d.ReleaseVersion, BasisVersion = d.BasisVersion, PreviousReleaseVersion = record.PreviousReleaseVersion,
-            SoftwareVersion = record.SoftwareVersion, HighestVersion = record.HighestAppliedVersion, SoftwareStale = stale,
-            Message = $"降版:目前的發行版 {d.ReleaseVersion} 比{string.Join("、", parts)} 舊 — 套用更新包之後以較舊的安裝程式(或較舊的發行版)重新安裝過。"
-                      + (stale ? $"simosa-pkg status 顯示的軟體版次 {d.SoftwareVersion} 不是實際執行的程式(實際執行的是發行版 {d.ReleaseVersion} 的程式)。" : "")
-                      + $"這不算錯誤(以較舊版本的安裝程式回到舊版是允許的作法),請訪船船長確認;若不是刻意回到舊版,請以版本不低於 {d.BasisVersion} 的安裝程式重新安裝,"
-                      + "或請岸上派送版本更高的軟體更新包。這則提醒會一直保留(之後套用圖資、情境或參數更新包也一樣),"
-                      + $"直到套用新的軟體更新包、或以版本不低於 {d.BasisVersion} 的安裝程式重新安裝為止",
+            SoftwareVersion = record.SoftwareVersion, HighestVersion = record.HighestAppliedVersion, SoftwareStale = d.SoftwareVersion is not null,
+            // 說明的文字只有一個出處(教官端同步時依船上回報的版本重新產生的提醒也用它)
+            Message = ReleaseDowngrade.Describe(d.ReleaseVersion, d.PreviousReleaseVersion, d.SoftwareVersion, d.HighestAppliedVersion, d.BasisVersion),
         };
     }
 

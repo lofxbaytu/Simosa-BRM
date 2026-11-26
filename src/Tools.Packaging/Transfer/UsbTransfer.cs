@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using SimosaBRM.Packaging.Common;
 using SimosaBRM.Packaging.Crypto;
 using SimosaBRM.Packaging.Records;
@@ -14,7 +16,12 @@ public sealed class UsbReport
     public CleanupResult? Cleanup { get; set; }
     public List<string> Warnings { get; set; } = new();
     public List<string> Errors { get; set; } = new();
+    /// <summary>教官端匯入:隨身碟上各船 status.json 的發行版狀態(已寫進兩船版次清單的船;CLI 逐船印一行摘要與降版提醒)</summary>
+    public List<UsbShipRelease> ShipReleases { get; set; } = new();
 }
+
+/// <summary>隨身碟上一艘船的 status.json 所回報的發行版狀態(船舶與裝置識別是 status.json 自己寫的,沒有簽章)。</summary>
+public sealed record UsbShipRelease(string ShipId, string? DeviceId, ShipReleaseReport Release);
 
 /// <summary>
 /// 專用隨身碟備援(網路線直連不可用時;規劃書第 5.5 節)。隨身碟上只放已簽章的檔案:
@@ -23,7 +30,7 @@ public sealed class UsbReport
 /// &lt;dir&gt;/simosa-transfer/to-ship/&lt;ship&gt;/*.sbbak         教官 → 船:已備份回報
 /// &lt;dir&gt;/simosa-transfer/from-ship/&lt;ship&gt;/*.sbrec       船 → 教官:紀錄包
 /// &lt;dir&gt;/simosa-transfer/from-ship/&lt;ship&gt;/*.sbcln       船 → 教官:清理通知(處理已備份回報後;裝置金鑰簽章)
-/// &lt;dir&gt;/simosa-transfer/from-ship/&lt;ship&gt;/status.json   船 → 教官:版次(資訊用,未簽章)
+/// &lt;dir&gt;/simosa-transfer/from-ship/&lt;ship&gt;/status.json   船 → 教官:版次、發行版本與降版資訊(資訊用,未簽章)
 /// </code>
 /// 船端套用與教官端匯入時都完整驗證簽章,與直連相同;清理通知讓教官紀錄庫標記「船上已刪除」,不再重複產生回報。
 /// </summary>
@@ -202,13 +209,53 @@ public static class UsbTransfer
             {
                 try
                 {
-                    var st = PackageJson.Load<ShipStatus>(statusPath, "status.json");
+                    var (st, release) = ReadShipStatusFile(statusPath);
                     if (st.ShipId is { } sid)
-                        store.UpdateFleet(new ShipVersionEntry { ShipId = sid, DeviceId = st.DeviceId, Version = st.Version, PackageId = st.PackageId, Components = st.Components, ParameterSet = st.ParameterSet, Environment = st.Environment, Via = "usb" });
+                    {
+                        var entry = new ShipVersionEntry { ShipId = sid, DeviceId = st.DeviceId, Version = st.Version, PackageId = st.PackageId, Components = st.Components, ParameterSet = st.ParameterSet, Environment = st.Environment, Via = "usb" };
+                        release.ApplyTo(entry);
+                        store.UpdateFleet(entry);
+                        rep.ShipReleases.Add(new UsbShipRelease(sid, st.DeviceId, release));
+                    }
                 }
-                catch (InvalidDataException ex) { rep.Warnings.Add(ex.Message); }
+                // status.json 沒有簽章,內容(含解析失敗時例外訊息裡的鍵名片段)可能被改過:印出之前去掉控制字元並截斷
+                catch (InvalidDataException ex) { rep.Warnings.Add(UntrustedText.Clean(ex.Message, 400)); }
             }
         }
         return rep;
+    }
+
+    /// <summary>隨身碟 status.json 的大小上限:與直連 statusResult 的訊息上限相同(實際約 1–3 KiB)</summary>
+    public const int MaxStatusFileBytes = SyncProtocol.MaxMessageBytes;
+
+    /// <summary>
+    /// 讀隨身碟上的 status.json(船上 <see cref="ShipExport"/> 寫的 <c>simosa-pkg status --json</c>;沒有簽章)。發行版本與降版資訊由
+    /// <see cref="ShipReleaseReport.Read"/> 寬鬆讀取(型別、格式不對只記為讀不懂),其餘欄位照舊解析;檔案太大、不是 JSON 物件或其餘欄位型別不對時
+    /// 丟 <see cref="InvalidDataException"/>(呼叫端列為警告,不影響紀錄包的匯入與結束碼)。開頭的 UTF-8 BOM 略過(與 <see cref="PackageJson.Load{T}"/> 相同)。
+    /// </summary>
+    internal static (ShipStatus Status, ShipReleaseReport Release) ReadShipStatusFile(string path)
+    {
+        var what = $"status.json({path})";
+        var size = new FileInfo(path).Length;
+        if (size > MaxStatusFileBytes) throw new InvalidDataException($"{what} 有 {size} 位元組,超過上限 {MaxStatusFileBytes},略過");
+        ReadOnlySpan<byte> bytes = File.ReadAllBytes(path);
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) bytes = bytes[3..];
+        try
+        {
+            if (JsonNode.Parse(bytes) is not JsonObject obj) throw new InvalidDataException($"{what} 不是 JSON 物件");
+            var release = ShipReleaseReport.Read(obj);
+            ShipReleaseReport.RemoveFields(obj);
+            var status = obj.Deserialize<ShipStatus>(PackageJson.Options) ?? throw new InvalidDataException($"{what} 為空");
+            return (status with { ReleaseVersion = release.ReleaseVersion, ReleaseDowngrade = release.Downgrade }, release);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"{what} 不是有效的 JSON:{ex.Message}", ex);
+        }
+        catch (Exception ex) when (ex is not InvalidDataException && ShipReleaseReport.IsJsonAccessError(ex))
+        {
+            // 重複的鍵、字串含不合法的 UTF-8 等(System.Text.Json 的 JsonNode 在存取時才檢查)
+            throw new InvalidDataException($"{what} 的內容無法解析({ex.GetType().Name})", ex);
+        }
     }
 }

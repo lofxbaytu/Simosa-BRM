@@ -52,6 +52,25 @@ public sealed class ShipVersionEntry
     public EnvironmentInfo? Environment { get; set; }
     public DateTime UpdatedUtc { get; set; }
     public string? Via { get; set; }
+
+    // ── 船上回報的發行版狀態(statusResult / status.json 的 releaseVersion、releaseDowngrade;docs/design/packaging-sync.md 第 7 節)。
+    //    由 Sync.ShipReleaseReport 檢查後寫入:只有通過檢查的數字版本與教官端自己產生的說明,沒有船上送來的任意文字。
+    //    與其他欄位一樣每次同步整筆取代(不沿用上一次的值:降版處理掉之後,下一次同步保存的提醒就不在了)。
+
+    /// <summary>
+    /// 船上這次同步有沒有回報發行版狀態:true = 有;false = 沒有(船上的軟體是加入這兩個欄位之前的版本);
+    /// null(檔案裡沒有這個鍵)= 這筆是加入本欄位之前的教官端軟體寫的,不知道。
+    /// </summary>
+    public bool? ReleaseReported { get; set; }
+    /// <summary>船上安裝根目錄 manifest.json 的發行版本(1 至 4 段數字;船上沒有發行清單、沒有回報或讀不懂時 null)</summary>
+    public string? ReleaseVersion { get; set; }
+    /// <summary>
+    /// 船上的降版(套用更新包之後以較舊的安裝程式重新安裝過);欄位與 <c>simosa-pkg status --json</c> 的 releaseDowngrade 相同,
+    /// 其中的 <c>message</c> 是教官端依版本欄位重新產生的。沒有降版(或沒有回報)時 null。
+    /// </summary>
+    public Release.ReleaseDowngrade? ReleaseDowngrade { get; set; }
+    /// <summary>船上回報了、但教官端讀不懂(型別或格式不符)的欄位名稱(releaseVersion、releaseDowngrade);都讀得懂時 null</summary>
+    public List<string>? ReleaseUnreadable { get; set; }
 }
 
 public sealed class ImportResult
@@ -111,6 +130,8 @@ public sealed class RecordStore
             // 船端未回報 environment(舊版船端、舊格式的隨身碟 status.json)時沿用上次已知值:筆電的 OS/.NET/WebView2 不因軟體回復而改變,
             // 陳舊與否由 EnvironmentInfo.CollectedUtc 判斷(docs/design/packaging-sync.md 第 7 節)
             if (entry.Environment is null && f.Ships.TryGetValue(entry.ShipId, out var previous)) entry.Environment = previous.Environment;
+            // 發行版狀態(releaseReported / releaseVersion / releaseDowngrade / releaseUnreadable)不沿用上一次的值:
+            // 「這次沒有回報」「這次沒有降版」都要如實取代,保存的降版提醒才會在處理掉之後的下一次同步消失
             f.Ships[entry.ShipId] = entry;
             PackageJson.SaveAtomic(FleetPath, f);
         }
