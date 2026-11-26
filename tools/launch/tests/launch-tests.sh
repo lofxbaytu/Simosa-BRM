@@ -165,6 +165,18 @@ test_web_sigint_exit0() {
   local i; for ((i = 0; i < 40; i++)); do tcp_open "$WEB" && break; sleep 0.25; done
   tcp_open "$WEB" || fail "simosa-web 未開啟埠 $WEB:$(cat "$log")" || return 1
   kill -INT "$pid"
+  # 等它結束,最多 20 秒(原本是不設限的 wait)。整套測試若是從非互動的 shell 以「&」或 nohup 丟到背景執行,子程序會繼承「忽略 SIGINT」,
+  # simosa-web 收不到訊號、永遠不結束,這個測試就卡住不動;等不到時明確失敗並說明原因(先看 /proc 的 SigIgn 確認是不是這種情形)
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null && ((waited < 80)); do sleep 0.25; waited=$((waited + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    local why="simosa-web 沒有處理 SIGINT"
+    local ign; ign="$(awk '/^SigIgn:/ {print $2}' "/proc/$pid/status" 2>/dev/null || true)"
+    [[ -n "$ign" ]] && (((16#$ign >> 1) & 1)) && why="這個程序繼承了「忽略 SIGINT」(SigIgn=$ign):測試是從非互動的 shell 以「&」或 nohup 丟到背景執行的,請改在前景執行"
+    kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    fail "SIGINT 後 20 秒仍未結束:$why;log:$(tail -5 "$log")"
+    return 1
+  fi
   local code=0; wait "$pid" || code=$?
   [[ $code == 0 ]] || fail "SIGINT 後結束碼應為 0,實際 $code;log:$(tail -5 "$log")" || return 1
   grep -q "Unhandled exception" "$log" && { fail "log 不得有 Unhandled exception:$(tail -5 "$log")"; return 1; }
