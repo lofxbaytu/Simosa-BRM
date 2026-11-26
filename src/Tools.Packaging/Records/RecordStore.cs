@@ -164,8 +164,17 @@ public sealed class ImportResult
 /// &lt;store&gt;/records/&lt;ship&gt;/&lt;yyyy&gt;/&lt;packageId&gt;/…       解開的紀錄與報告
 /// &lt;store&gt;/devices/&lt;ship&gt;/&lt;deviceId&gt;.pem             已登錄的船上筆電裝置公鑰
 /// &lt;store&gt;/store-ledger.json  &lt;store&gt;/fleet-versions.json  &lt;store&gt;/audit.jsonl
+/// &lt;store&gt;/store-ledger.json.lock  &lt;store&gt;/fleet-versions.json.lock   跨行程鎖定檔(0 位元組,留著不刪;<see cref="StateLock"/>)
 /// </code>
 /// 匯入時驗證裝置簽章與每檔雜湊;未登錄的裝置預設拒絕(--enroll-device 首次登錄並記入稽核)。
+/// <para>
+/// 兩個行程同時用同一個紀錄庫(一邊直連同步、一邊匯入隨身碟;兩支隨身碟同時匯入;匯入的同時標記備份或備份紀錄庫)時,
+/// 「讀 → 改 → 寫」以兩把鎖跨行程序列化(docs/design/packaging-sync.md 第 5.2 節):
+/// <see cref="LedgerLockPath"/> 保護帳冊 store-ledger.json 與 records/ 之下匯入中的資料夾(<see cref="Import"/> 的「查帳冊 → 解開 → 記帳」、
+/// <see cref="MarkBackedUp"/>、<see cref="MarkShipDeleted"/>、<see cref="Backup"/> 的整段複製);<see cref="FleetLockPath"/> 保護兩船版次清單
+/// (<see cref="UpdateFleet"/>)。兩把都要時先帳冊、後版次清單(目前沒有同時持有兩把的程式路徑)。只讀的方法(<see cref="LoadLedger"/>、
+/// <see cref="LoadFleet"/>、<see cref="Has"/>、<see cref="FindDevice"/>、<see cref="CreateBackupReport"/>)不取鎖。
+/// </para>
 /// </summary>
 public sealed class RecordStore
 {
@@ -185,7 +194,9 @@ public sealed class RecordStore
     public string FleetPath => Path.Combine(Root, "fleet-versions.json");
     public AuditLog Audit => new(Path.Combine(Root, "audit.jsonl"), _clock);
     private DateTime Now => _clock.GetUtcNow().UtcDateTime;
-    private static readonly object Gate = new();
+
+    /// <summary>等鎖超過幾秒還沒有拿到時的通知(指令列印一行,讓操作人員知道為什麼沒有動靜);null = 不通知</summary>
+    public Action<string>? LockNotice { get; set; }
 
     public StoreLedger LoadLedger() => File.Exists(LedgerPath) ? PackageJson.Load<StoreLedger>(LedgerPath, "store-ledger.json") : new StoreLedger();
     private void SaveLedger(StoreLedger l) => PackageJson.SaveAtomic(LedgerPath, l);
@@ -195,11 +206,30 @@ public sealed class RecordStore
     /// <summary>這份船上狀態在船上產生的時間(<see cref="ShipVersionEntry.StatusUtcOf"/>,以紀錄庫的時鐘判斷合不合理)</summary>
     public DateTime? StatusUtcOf(EnvironmentInfo? environment) => ShipVersionEntry.StatusUtcOf(environment, Now);
 
-    /// <summary>跨行程鎖定檔(0 位元組,留在紀錄庫裡;見 <see cref="UpdateFleet"/>)</summary>
+    /// <summary>兩船版次清單的跨行程鎖定檔(0 位元組,留在紀錄庫裡;見 <see cref="UpdateFleet"/>)</summary>
     public string FleetLockPath => FleetPath + ".lock";
 
     /// <summary>等另一個行程放開兩船版次清單的時間上限(一次更新只要幾毫秒)</summary>
     internal TimeSpan FleetLockTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>帳冊的跨行程鎖定檔(0 位元組,留在紀錄庫裡;保護 store-ledger.json 與 records/ 之下匯入中的資料夾)</summary>
+    public string LedgerLockPath => LedgerPath + ".lock";
+
+    /// <summary>
+    /// 等另一個行程放開帳冊的時間上限。持有的時間:標記只要幾毫秒;匯入一個紀錄包是解開它的時間(含錄影時可到一分鐘上下);
+    /// 備份紀錄庫是整個複製的時間(可到幾分鐘)。直連同步的教官端在一次同步中間等它,所以要比船端等下一則訊息的上限(2 分鐘)短。
+    /// </summary>
+    internal TimeSpan LedgerLockTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>這個紀錄庫的鎖定檔(<see cref="Backup"/> 不複製:不是資料,而且被獨占開啟時複製會失敗)</summary>
+    private bool IsLockFile(string file)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return string.Equals(file, FleetLockPath, comparison) || string.Equals(file, LedgerLockPath, comparison);
+    }
+
+    /// <summary>鎖定檔打不開時的訊息:原本只有「Access to the path '…lock' is denied」,操作人員會以為是鎖定檔的問題 — 指到紀錄庫</summary>
+    private string StoreNotWritable(string detail) => $"紀錄庫 {Root} 寫不進去(資料夾唯讀或沒有寫入權限):{detail}";
 
     /// <summary>
     /// 把一艘船的狀態寫進兩船版次清單(整筆取代該船項目;另一艘船的項目不動)。
@@ -215,9 +245,8 @@ public sealed class RecordStore
     /// </summary>
     public FleetUpdate UpdateFleet(ShipVersionEntry entry, bool skipIfOlder = false)
     {
-        lock (Gate)
+        using (AcquireFleetLock())
         {
-            using var crossProcess = AcquireFleetLock();
             var now = Now;
             entry.Sanitize();
             if (entry.ShipId.Length == 0) throw new InvalidDataException("沒有船舶識別,無法寫進兩船版次清單 fleet-versions.json");
@@ -241,34 +270,30 @@ public sealed class RecordStore
     }
 
     /// <summary>
-    /// 獨占開啟鎖定檔(FileShare.None;Windows 是共用違規、Linux 是 flock,行程結束時作業系統自動放開,不會留下過期的鎖)。
-    /// 被別的行程佔用時每隔幾十毫秒重試,超過 <see cref="FleetLockTimeout"/> 丟 <see cref="IOException"/>。鎖定檔不刪除
-    /// (關閉時刪除會讓第三個行程鎖到另一個檔案);<see cref="Backup"/> 不複製它。
+    /// 取得兩船版次清單的鎖(共用的 <see cref="StateLock"/>:獨占開啟鎖定檔,行程結束時作業系統自動放開,不會留下過期的鎖;鎖定檔不刪除)。
+    /// 被別的行程佔用時每隔幾十毫秒重試,超過 <see cref="FleetLockTimeout"/> 丟 <see cref="IOException"/>;<see cref="Backup"/> 不複製鎖定檔。
     /// </summary>
-    private FileStream AcquireFleetLock()
+    private StateLock AcquireFleetLock() => StateLock.Acquire(new StateLockSpec
     {
-        System.IO.Directory.CreateDirectory(Root);   // 與 SaveAtomic 相同:紀錄庫資料夾被移走時重建,不因為多了鎖定檔而改成失敗
-        var deadline = System.Environment.TickCount64 + (long)FleetLockTimeout.TotalMilliseconds;
-        while (true)
-        {
-            try
-            {
-                return new FileStream(FleetLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                // 紀錄庫資料夾唯讀、沒有權限(或鎖定檔本身唯讀):原本的訊息只有「Access to the path '…fleet-versions.json.lock' is denied」,
-                // 操作人員會以為是鎖定檔的問題。例外的型別不變(呼叫端與 CLI 的處理、結束碼都與原本相同),訊息改成指到紀錄庫
-                throw new UnauthorizedAccessException($"紀錄庫 {Root} 寫不進去(資料夾唯讀或沒有寫入權限):{ex.Message}", ex);
-            }
-            catch (IOException) when (File.Exists(FleetLockPath))   // 被佔用(鎖定檔不存在時的 IOException 是別的原因,例如資料夾不在,不重試)
-            {
-                if (System.Environment.TickCount64 >= deadline)
-                    throw new IOException($"另一個 simosa-pkg 正在更新兩船版次清單({FleetLockPath} 被佔用超過 {FleetLockTimeout.TotalSeconds:0} 秒),這次沒有寫入;請等它結束後再執行一次");
-                Thread.Sleep(20 + Random.Shared.Next(40));
-            }
-        }
-    }
+        Path = FleetLockPath, Timeout = FleetLockTimeout,
+        BusyMessage = t => $"另一個 simosa-pkg 正在更新兩船版次清單({FleetLockPath} 被佔用超過 {t.TotalSeconds:0} 秒),這次沒有寫入;請等它結束後再執行一次",
+        AccessDeniedMessage = StoreNotWritable,
+        WaitingMessage = "另一個 simosa-pkg 正在更新這個紀錄庫的兩船版次清單,等它結束…", Notice = LockNotice,
+    });
+
+    /// <summary>
+    /// 取得帳冊的鎖(<see cref="LedgerLockPath"/>)。等不到(<see cref="LedgerLockTimeout"/>)丟 <see cref="IOException"/>:
+    /// <see cref="Import"/> 把它列為這個紀錄包的錯誤(與其他匯入失敗相同的結束碼),其餘呼叫端照原本的 IO 錯誤處理。
+    /// 同一條執行緒可以重複取得(<see cref="Backup"/> 持有時呼叫 <see cref="MarkBackedUp"/>)。
+    /// </summary>
+    private StateLock AcquireLedgerLock() => StateLock.Acquire(new StateLockSpec
+    {
+        Path = LedgerLockPath, Timeout = LedgerLockTimeout,
+        BusyMessage = t => $"另一個 simosa-pkg 正在使用這個紀錄庫的帳冊(正在匯入紀錄包、標記備份或備份紀錄庫;{LedgerLockPath} 被佔用超過 {t.TotalSeconds:0} 秒),"
+                           + "這次沒有寫入;請等它結束後再執行一次",
+        AccessDeniedMessage = StoreNotWritable,
+        WaitingMessage = $"另一個 simosa-pkg 正在使用這個紀錄庫的帳冊(匯入紀錄包、標記備份或備份紀錄庫),等它結束(最多 {LedgerLockTimeout.TotalSeconds:0} 秒)…", Notice = LockNotice,
+    });
 
     private static string Safe(string s)
     {
@@ -355,7 +380,9 @@ public sealed class RecordStore
             var missing = listed.Keys.Where(k => !seen.Contains(k)).ToList();
             if (missing.Count > 0) throw new InvalidDataException($"紀錄包缺少檔案:{string.Join(", ", missing)}");
 
-            lock (Gate)
+            // 「查帳冊 → 解開到 records/ → 記帳」整段在帳冊的鎖裡:兩個行程同時匯入(兩支隨身碟,或一邊直連同步)時,
+            // 原本各自讀到同一份帳冊、後寫的把先寫的那一筆蓋掉(兩邊都印「已匯入」;實測 20 次有 8 至 12 次)。等不到鎖是 IOException,列為這個紀錄包的錯誤
+            using (AcquireLedgerLock())
             {
                 var ledger = LoadLedger();
                 var existing = ledger.Packages.FirstOrDefault(p => p.PackageId == m.PackageId);
@@ -420,7 +447,7 @@ public sealed class RecordStore
     /// </summary>
     public List<string> MarkBackedUp(IEnumerable<string>? packageIds, string? target)
     {
-        lock (Gate)
+        using (AcquireLedgerLock())
         {
             var l = LoadLedger();
             var ids = packageIds?.ToHashSet(StringComparer.Ordinal);
@@ -446,13 +473,17 @@ public sealed class RecordStore
         var targetFull = Path.GetFullPath(targetDir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (targetFull.StartsWith(Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new IOException("備份目的地不可位於紀錄庫之內");
+        // 整段複製在帳冊的鎖裡:另一個行程同時匯入時,原本會複製到解開到一半的資料夾(records/…/<包>.importing)或正在寫的 .sbrec —
+        // 備份以「Could not find a part of the path」「雜湊不符」失敗,或把半成品一起備份進去(實測 20 次有 3 次)。
+        // 現在匯入中就等它做完;備份進行中的匯入 / 同步則等備份結束(等不到時報錯,請備份完再做)
+        using var ledgerLock = AcquireLedgerLock();
         var stamp = Now.ToString("yyyyMMdd'T'HHmmss");
         var dest = Path.Combine(targetDir, $"simosa-store-backup-{stamp}");
         var importedBefore = LoadLedger().Packages.Select(p => p.PackageId).ToList();
         foreach (var file in System.IO.Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
         {
-            // 兩船版次清單的鎖定檔(0 位元組)不是資料:另一個行程正在同步時它被獨占開啟,複製會失敗
-            if (string.Equals(file, FleetLockPath, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) continue;
+            // 鎖定檔(0 位元組)不是資料:帳冊的那一個此刻由這個行程獨占開啟、兩船版次清單的那一個可能有另一個行程正在同步,複製會失敗
+            if (IsLockFile(file)) continue;
             var rel = Path.GetRelativePath(Root, file);
             var to = Path.Combine(dest, rel);
             System.IO.Directory.CreateDirectory(Path.GetDirectoryName(to)!);
@@ -486,7 +517,7 @@ public sealed class RecordStore
     /// <summary>船上回報已刪除(直連 cleanupResult,或隨身碟上的裝置簽章清理通知)後記錄;<paramref name="shipId"/> 不為 null 時只標記該船的紀錄包。</summary>
     public void MarkShipDeleted(string reportId, IEnumerable<string> packageIds, string? shipId = null)
     {
-        lock (Gate)
+        using (AcquireLedgerLock())
         {
             var l = LoadLedger();
             var ids = packageIds.ToHashSet(StringComparer.Ordinal);

@@ -160,16 +160,22 @@ public sealed class CliApp
 
     // ── 共用 ──────────────────────────────────────────────
 
-    private static InstallLayout Layout(CliArgs a) => new(a.Get("root") ?? InstallLayout.DefaultRoot());
+    /// <summary>
+    /// 等另一個 simosa-pkg 放開鎖定檔超過幾秒時印一行(stderr),讓操作人員知道指令為什麼沒有動靜(docs/design/packaging-sync.md 第 5.2 節);
+    /// 沒有別的行程佔著時不會出現。等不到時的錯誤由各指令原本的錯誤處理印出(「錯誤:…」或該項目的「  - …」,結束碼 1)。
+    /// </summary>
+    private void LockWaitNotice(string message) => _err.WriteLine($"注意:{message}");
+
+    private InstallLayout Layout(CliArgs a) => new(a.Get("root") ?? InstallLayout.DefaultRoot()) { LockNotice = LockWaitNotice };
 
     private RecordStore StoreOf(CliArgs a)
     {
-        if (a.Get("store") is { } s) return new RecordStore(WritePath(a, "--store", s));
+        if (a.Get("store") is { } s) return new RecordStore(WritePath(a, "--store", s)) { LockNotice = LockWaitNotice };
         var layout = Layout(a);
         // packaging.json store:相對路徑以安裝根目錄為準(預設 store);絕對路徑在根目錄外的系統磁碟時拒絕
         return new RecordStore(layout.Config.Store is { Length: > 0 } cfg
             ? ConfigWritePath(a, "config/packaging.json 的 store", cfg)
-            : Path.Combine(layout.Root, "store"));
+            : Path.Combine(layout.Root, "store")) { LockNotice = LockWaitNotice };
     }
 
     // ── 本機資料守則:寫入位置(docs/ops/本機資料位置.md 第 4 節;判斷邏輯在 SimCore LocalDataGuard,各主控程式共用)──
@@ -754,6 +760,7 @@ public sealed class CliApp
         if (listen is null) _err.WriteLine("警告:未指定直連介面 IP(--listen 或 packaging.json listen),將綁定所有介面");
         var ip = listen is null ? IPAddress.Any : IPAddress.Parse(listen);
         var port = a.Int("port", layout.Config.Port);
+        layout.LockNotice = m => _out.WriteLine($"[serve] {m}");   // 同步服務:寫進自己的紀錄(build/logs/sync.log)
         var ship = new ShipNode(layout);
         _ = DeviceKeyStore.LoadInfo(layout);
         using var cts = new CancellationTokenSource();

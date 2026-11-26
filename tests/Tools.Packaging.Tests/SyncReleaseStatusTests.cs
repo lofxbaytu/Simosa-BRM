@@ -1057,7 +1057,9 @@ public sealed class SyncReleaseStatusTests : IDisposable
         Directory.CreateDirectory(broken);
         File.WriteAllBytes(Path.Combine(broken, "fleet-versions.json"), Array.Empty<byte>());
         var locked = _env.PathIn("store-locked");
-        Directory.CreateDirectory(Path.Combine(locked, "fleet-versions.json.tmp"));               // 暫存檔的位置被資料夾占住:寫不進去(不必靠檔案權限,root 也一樣)
+        // 目的地被一個(非空的)資料夾占住:讀的時候當成沒有這個檔,寫的時候換不上去(不必靠檔案權限,root 也一樣)。
+        // 原本是占住固定的暫存檔名 fleet-versions.json.tmp;PackageJson.SaveAtomic 的暫存檔名改成每次不同之後改占目的地
+        Directory.CreateDirectory(Path.Combine(locked, "fleet-versions.json", "occupied"));
         foreach (var (store, expect) in new[] { (broken, "錯誤:fleet-versions.json("), (locked, "錯誤:") })
         {
             var r = await SyncCli(server.Port, store);

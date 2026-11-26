@@ -36,6 +36,9 @@ public static class DeviceKeyStore
     public static DeviceInfo Initialize(InstallLayout layout, string shipId, string? deviceId = null, bool overwrite = false, bool forcePem = false, TimeProvider? clock = null)
     {
         if (string.IsNullOrWhiteSpace(shipId)) throw new ArgumentException("需提供船舶 ID");
+        // 「檢查有沒有 → 產生 → 寫入四個檔」整段在船上的狀態鎖裡:兩個行程同時 device init 時,原本兩邊都通過檢查、各產生一把金鑰,
+        // 私鑰檔與 device.json 可能各來自一邊(之後「裝置私鑰與 device.json 的 keyId 不符」,實測 20 次有 4 次)。現在後到的那一個看到「已存在」
+        using var stateLock = layout.AcquireLock();
         if (Exists(layout) && !overwrite) throw new InvalidOperationException("裝置金鑰已存在(更換須 --overwrite,且須重新登錄到教官筆電)");
         Directory.CreateDirectory(layout.DeviceDir);
         using var key = KeyFiles.CreateP256();

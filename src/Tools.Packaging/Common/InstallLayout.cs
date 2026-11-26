@@ -17,6 +17,7 @@ namespace SimosaBRM.Packaging.Common;
 /// &lt;root&gt;/state/previous/           上一版元件(rollback 用,只保留一層)
 /// &lt;root&gt;/state/outbox/*.sbrec      已簽章、待回傳的紀錄包
 /// &lt;root&gt;/state/records-ledger.json 紀錄包帳冊(打包/取回/備份/刪除)
+/// &lt;root&gt;/state/.lock               船上狀態的跨行程鎖定檔(0 位元組,留著不刪;<see cref="AcquireLock"/>)
 /// </code>
 /// 哪些位置是執行期資料(安裝模式核對時不算「清單沒有的檔案」)、哪些是程式目錄,集中定義在 <see cref="InstalledPaths"/>。
 /// </summary>
@@ -109,23 +110,36 @@ public sealed class InstallLayout
     public static string? FindInstalledRoot(string start, Func<string, bool> directoryExists)
         => RepositoryPaths.FindInstalledRoot(start, directoryExists);   // 與 Console.Serial 等共用同一份(SimCore)
 
-    /// <summary>取得排他鎖(同時只允許一個套用/打包/清理程序);釋放即解鎖。</summary>
-    public IDisposable AcquireLock()
+    /// <summary>等另一個行程放開船上狀態鎖的時間上限(見 <see cref="AcquireLock"/>)</summary>
+    public TimeSpan LockTimeout { get; set; } = TimeSpan.FromSeconds(120);
+
+    /// <summary>等鎖超過幾秒還沒有拿到時的通知(指令列印一行,讓操作人員知道為什麼沒有動靜;同步服務寫進自己的 log);null = 不通知</summary>
+    public Action<string>? LockNotice { get; set; }
+
+    /// <summary>
+    /// 取得船上的狀態鎖 <see cref="LockPath"/>(state/.lock;共用的 <see cref="StateLock"/>);放開用 Dispose。
+    /// <list type="bullet">
+    /// <item>範圍:同一時間只有一個行程(同步服務 serve,或另一個視窗的 apply / rollback / import / export / records pack / records accept-report / device init)
+    ///   在改 state/ 之下的狀態(installed.json、installed-files.json、records-ledger.json、previous/、outbox/、staging/)、替換 app/、data/、config/ 元件、
+    ///   依已備份回報刪除紀錄,或產生裝置金鑰。每一個步驟(套用一個更新包、打包一次、處理一份回報、記一次訪船)各自取得、做完就放開 —
+    ///   直連同步的一整段不會一直佔著,另一個視窗的指令可以排在兩個步驟之間。</item>
+    /// <item>等多久:持有的時間通常不到一秒,但套用大的更新包(複製整個元件)、打包錄影(每 1 GB 約半分鐘)可以到幾分鐘。
+    ///   最多等 <see cref="LockTimeout"/>(預設 120 秒;原本是 30 秒,而且等不到時只有一句英文的「The process cannot access the file …」);
+    ///   等不到丟 <see cref="IOException"/>(<see cref="StateLock.IsBusy"/>):指令列照原本的 IO 錯誤處理(「錯誤:…」、結束碼 1),
+    ///   同步服務把它回給教官端(<see cref="Sync.SyncServer"/>)。</item>
+    /// <item>檔名沿用原本的 state/.lock:舊版的 simosa-pkg 與新版仍然互相排除。舊版以「關閉時刪除」開啟,新版不刪(行程結束時作業系統自動放開,
+    ///   不會留下過期的鎖);Windows 上舊版放開的瞬間開檔可能得到「存取被拒」,先重試 2 秒才當成真的沒有權限。</item>
+    /// </list>
+    /// </summary>
+    public IDisposable AcquireLock() => StateLock.Acquire(new StateLockSpec
     {
-        Directory.CreateDirectory(StateDir);
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (true)
-        {
-            try
-            {
-                return new FileStream(LockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
-            }
-            catch (IOException) when (DateTime.UtcNow < deadline)
-            {
-                Thread.Sleep(100);
-            }
-        }
-    }
+        Path = LockPath, Timeout = LockTimeout, AccessDeniedGrace = TimeSpan.FromSeconds(2),
+        BusyMessage = t => $"另一個 simosa-pkg 正在使用這台筆電的更新包與紀錄狀態(同步服務正在處理教官筆電的同步,或另一個視窗正在套用、回復更新包、打包紀錄或匯入隨身碟),"
+                           + $"等了 {t.TotalSeconds:0} 秒還沒有結束,這一步沒有執行。請等它結束(教官筆電顯示「同步完成」,或另一個視窗的指令結束)後再執行一次(鎖定檔 {LockPath})",
+        WaitingMessage = "另一個 simosa-pkg 正在使用這台筆電的更新包與紀錄狀態(同步服務正在處理教官筆電的同步,或另一個視窗的指令還沒有結束),"
+                         + $"等它結束(最多 {LockTimeout.TotalSeconds:0} 秒)…",
+        Notice = LockNotice,
+    });
 }
 
 /// <summary>

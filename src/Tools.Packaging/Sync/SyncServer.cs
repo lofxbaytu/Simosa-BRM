@@ -224,7 +224,19 @@ public sealed class SyncServer : IAsyncDisposable
 
     private async Task SessionAsync(Stream stream, string? peer, AuditLog audit, string signerDesc, string signerRole, string deviceId, CancellationToken ct)
     {
-        var visit = _ship.Records.BeginVisit("tcp", peer);
+        int visit;
+        try
+        {
+            visit = _ship.Records.BeginVisit("tcp", peer);
+        }
+        catch (IOException ex) when (StateLock.IsBusy(ex))
+        {
+            // 船上另一個視窗的指令(套用更新包、打包紀錄、匯入隨身碟)佔著狀態鎖太久:回一則 error 讓教官端印出原因,
+            // 不要只是斷線(教官端原本只看到「Unable to read beyond the end of the stream」)
+            _log?.WriteLine($"[serve] {peer} 的同步沒有開始:{ex.Message}");
+            await Fail(stream, SyncErrors.Internal, BusyForInstructor, ct).ConfigureAwait(false);
+            return;
+        }
         audit.Write(AuditEvents.SyncSessionStart, new { peer, signer = signerDesc, visit });
         _log?.WriteLine($"[serve] {peer} 已驗證:{signerDesc}(訪船 #{visit})");
         await SyncProtocol.WriteAsync(stream, new WelcomeMessage { ShipId = _ship.ShipId, DeviceId = deviceId, Signer = signerDesc, SignerRole = signerRole, VisitSeq = visit }, ct).ConfigureAwait(false);
@@ -252,7 +264,17 @@ public sealed class SyncServer : IAsyncDisposable
                         if (!Sha256Hex.Equal(sha, hdr.Sha256))
                             result = new UpdateApplyResult { Errors = { "傳輸後雜湊不符" }, Message = "傳輸錯誤,未套用" };
                         else
-                            result = _ship.Updates.Apply(tmp, new UpdateApplyOptions { Via = "tcp", Operator = signerDesc });
+                        {
+                            try
+                            {
+                                result = _ship.Updates.Apply(tmp, new UpdateApplyOptions { Via = "tcp", Operator = signerDesc });
+                            }
+                            catch (IOException ex) when (StateLock.IsBusy(ex))
+                            {
+                                // 等不到船上的狀態鎖:這個更新包沒有套用,照一般的「未套用」回報(教官端結束碼 1),連線繼續
+                                result = new UpdateApplyResult { PackageId = hdr.PackageId, Errors = { BusyForInstructor }, Message = "船上正在執行別的指令,未套用" };
+                            }
+                        }
                         stats.updates.Add(new { result.PackageId, result.Version, result.Ok });
                         _log?.WriteLine($"[serve] 更新包 {hdr.Name}:{result.Message}");
                         await SyncProtocol.WriteAsync(stream, new UpdateResultMessage { Result = result }, ct).ConfigureAwait(false);
@@ -267,7 +289,7 @@ public sealed class SyncServer : IAsyncDisposable
                 {
                     var warnings = new List<string>();
                     try { _ship.Records.PackPending(); }
-                    catch (IOException ex) { warnings.Add(ex.Message); }
+                    catch (IOException ex) { warnings.Add(StateLock.IsBusy(ex) ? "新的紀錄這次沒有打包:" + BusyForInstructor : ex.Message); }
                     // 保留上限警告另列:教官端若接著送已備份回報,改用清理後(cleanupResult)的警告,避免把即將清理的紀錄包也列為超限
                     await SyncProtocol.WriteAsync(stream, new RecordListMessage { Packages = _ship.Records.Outstanding(), Warnings = warnings, RetentionWarnings = _ship.Records.RetentionWarnings() }, ct).ConfigureAwait(false);
                     break;
@@ -283,7 +305,15 @@ public sealed class SyncServer : IAsyncDisposable
                     }
                     await SyncProtocol.WriteAsync(stream, new FileHeader { Name = Path.GetFileName(path), PackageId = req.PackageId, Size = new FileInfo(path).Length, Sha256 = Sha256Hex.OfFile(path) }, ct).ConfigureAwait(false);
                     await SyncProtocol.WriteFileBytesAsync(stream, path, ct).ConfigureAwait(false);
-                    _ship.Records.MarkPulled(req.PackageId, peer);
+                    try
+                    {
+                        _ship.Records.MarkPulled(req.PackageId, peer);
+                    }
+                    catch (IOException ex) when (StateLock.IsBusy(ex))
+                    {
+                        // 紀錄包已經送出;只是船上的帳冊沒有記到「已取回」(records list 仍顯示未取回,下次同步教官端已有這一包、不會重送)
+                        _log?.WriteLine($"[serve] 紀錄包 {req.PackageId} 已送出,但沒有記為已取回:{ex.Message}");
+                    }
                     stats.pulled.Add(req.PackageId);
                     break;
                 }
@@ -295,9 +325,20 @@ public sealed class SyncServer : IAsyncDisposable
                     try
                     {
                         var sha = await SyncProtocol.ReadFileBytesAsync(stream, hdr.Size, tmp, 4 << 20, ct).ConfigureAwait(false);
-                        var result = Sha256Hex.Equal(sha, hdr.Sha256)
-                            ? _ship.Records.AcceptBackupReport(await File.ReadAllBytesAsync(tmp, ct).ConfigureAwait(false))
-                            : new CleanupResult { Errors = { "傳輸後雜湊不符" } };
+                        CleanupResult result;
+                        if (!Sha256Hex.Equal(sha, hdr.Sha256)) result = new CleanupResult { Errors = { "傳輸後雜湊不符" } };
+                        else
+                        {
+                            try
+                            {
+                                result = _ship.Records.AcceptBackupReport(await File.ReadAllBytesAsync(tmp, ct).ConfigureAwait(false));
+                            }
+                            catch (IOException ex) when (StateLock.IsBusy(ex))
+                            {
+                                // 等不到船上的狀態鎖:這份回報沒有處理(船上的紀錄都還在),教官端下次同步會再送一次
+                                result = new CleanupResult { Errors = { BusyForInstructor } };
+                            }
+                        }
                         stats.cleanup.AddRange(result.Deleted);
                         await SyncProtocol.WriteAsync(stream, new CleanupResultMessage { Result = result }, ct).ConfigureAwait(false);
                     }
@@ -317,6 +358,9 @@ public sealed class SyncServer : IAsyncDisposable
             }
         }
     }
+
+    /// <summary>等不到船上狀態鎖時回給教官端的說明(教官端看的:是船上在忙,等它結束後再同步一次;細節留在船上的同步服務紀錄)</summary>
+    private const string BusyForInstructor = "船上筆電另一個 simosa-pkg 的指令(套用或回復更新包、打包紀錄、匯入隨身碟)還沒有結束,船上這一步沒有執行;請等船上的指令結束後再同步一次";
 
     private static async Task Fail(Stream s, string code, string message, CancellationToken ct)
         => await SyncProtocol.WriteAsync(s, new ErrorMessage { Code = code, Message = message }, ct).ConfigureAwait(false);
