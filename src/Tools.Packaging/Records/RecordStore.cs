@@ -301,7 +301,7 @@ public sealed class RecordStore
         Path = FleetLockPath, Timeout = FleetLockTimeout,
         BusyMessage = t => $"另一個 simosa-pkg 正在更新兩船版次清單({FleetLockPath} 被佔用超過 {t.TotalSeconds:0} 秒),這次沒有寫入;請等它結束後再執行一次",
         AccessDeniedMessage = StoreNotWritable,
-        WaitingMessage = "另一個 simosa-pkg 正在更新這個紀錄庫的兩船版次清單,等它結束…", Notice = LockNotice,
+        WaitingMessage = $"另一個 simosa-pkg 正在更新這個紀錄庫的兩船版次清單,等它結束(最多 {FleetLockTimeout.TotalSeconds:0} 秒)…", Notice = LockNotice,
     });
 
     /// <summary>
