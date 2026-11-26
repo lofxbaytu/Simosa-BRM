@@ -922,6 +922,8 @@ PY
 # (2026.12.1 套用軟體更新包 2026.12.2 後以 2026.11.1 重新安裝)→ 船上真的起 simosa-pkg serve → 教官端真的跑 simosa-pkg sync:
 # 輸出有哪一艘船與船上 status 相同的降版說明、結束碼 0,fleet-versions.json 有 releaseVersion / releaseDowngrade,store list 顯示保存的提醒;
 # 隨身碟途徑同樣真的 export(船上)再 import(教官端);船上以夠新的安裝程式(2026.12.3)重新安裝後再同步 / 再走一次隨身碟,提醒消失。
+# 審查後修正:隨身碟的摘要與警告句尾寫明這份狀態在船上產生的時間;隨身碟上留著的舊 status.json(比直連同步的結果舊)不採用、已處理的提醒不會又出現;
+# 兩個教官端行程同時更新兩船版次清單(兩支隨身碟同時匯入)時兩艘船的項目都在。
 test_sync_release_reminder() {
   # 不論哪一步失敗,都要結束船上的同步服務(留著會占住同步埠)
   local rc=0
@@ -963,6 +965,9 @@ sync_release_reminder_body() {
   sr_usb() {  # sr_usb <名稱>:船上真的 export 到隨身碟資料夾,教官端真的 import;教官端的輸出存 $d/<名稱>.out / .err,結束碼放 CODE
     "${S[@]}" export --to "$usb" --role ship --root "$r" > "$d/$1.export.out" 2>&1 || { CODE=$?; return 1; }
     "${I[@]}" import --from "$usb" --role instructor --store "$store_usb" --root "$d/instructor" --enroll-device > "$d/$1.out" 2> "$d/$1.err"; CODE=$?
+  }
+  sr_status_time() {  # 隨身碟上 FSB1 的 status.json 在船上產生的時間(environment.collectedUtc → 「2026-11-26 05:09Z」;$1 = 1 時含秒)
+    python3 -I -c 'import json,sys; t=json.load(open(sys.argv[1],encoding="utf-8"))["environment"]["collectedUtc"]; print(t[:10]+" "+(t[11:19] if sys.argv[2]=="1" else t[11:16])+"Z")' "$usb/simosa-transfer/from-ship/FSB1/status.json" "${1:-0}"
   }
   sr_fleet() {  # sr_fleet <紀錄庫> <python 斷言(j = FSB1 的項目)> [參數…]
     local st="$1" expr="$2"; shift 2
@@ -1016,9 +1021,10 @@ assert d["message"] == a[0], d["message"]' "$msg" || fail "fleet-versions.json �
   # (3) 隨身碟途徑:船上真的匯出(status.json)、教官端真的匯入 — 同樣的提醒,句尾註明 status.json 沒有簽章
   sr_usb usb-down || fail "隨身碟匯出 / 匯入失敗(結束碼 $CODE):$(cat "$d/usb-down.export.out" "$d/usb-down.err" 2>/dev/null)" || return 1
   [[ $CODE == 0 && -f "$usb/simosa-transfer/from-ship/FSB1/status.json" ]] || fail "隨身碟匯入的結束碼應為 0(實際 $CODE),隨身碟上應有 status.json" || return 1
-  grep -qx "FSB1 船上筆電:發行版 2026.11.1(有降版提醒,見下方的警告)" "$d/usb-down.out" || fail "隨身碟匯入的輸出應有降版的摘要行:$(cat "$d/usb-down.out")" || return 1
-  grep -qxF "警告:船上筆電 FSB1(裝置 FSB1-SYNCTEST)有降版提醒(與在船上執行 simosa-pkg status 看到的說明相同)— ${msg}。船上處理之後再同步一次(或再匯入一次隨身碟),教官筆電保存的這則提醒才會消失(這是隨身碟上 status.json 的內容;這個檔沒有簽章,以船上的 simosa-pkg status 為準)" "$d/usb-down.err" \
-    || fail "隨身碟匯入的警告應與直連相同並註明 status.json 沒有簽章:$(cat "$d/usb-down.err")" || return 1
+  local when; when="船上於 $(sr_status_time) 產生"   # 隨身碟上的檔可能是很久以前匯出的:摘要與警告都寫明這份狀態在船上產生的時間
+  grep -qxF "FSB1 船上筆電:發行版 2026.11.1(有降版提醒,見下方的警告)(隨身碟上的狀態,${when})" "$d/usb-down.out" || fail "隨身碟匯入的輸出應有降版的摘要行(含狀態的產生時間):$(cat "$d/usb-down.out")" || return 1
+  grep -qxF "警告:船上筆電 FSB1(裝置 FSB1-SYNCTEST)有降版提醒(與在船上執行 simosa-pkg status 看到的說明相同)— ${msg}。船上處理之後再同步一次(或再匯入一次隨身碟),教官筆電保存的這則提醒才會消失(這是隨身碟上 status.json 的內容,${when};這個檔沒有簽章,以船上的 simosa-pkg status 為準)" "$d/usb-down.err" \
+    || fail "隨身碟匯入的警告應與直連相同並註明狀態的產生時間與 status.json 沒有簽章:$(cat "$d/usb-down.err")" || return 1
   sr_fleet "$store_usb" 'assert j["via"] == "usb" and j["releaseReported"] is True and j["releaseVersion"] == "2026.11.1" and j["releaseDowngrade"]["basisVersion"] == "2026.12.2" and j["releaseDowngrade"]["message"] == a[0], j' "$msg" \
     || fail "隨身碟途徑的 fleet-versions.json 應保存降版資訊:$(cat "$store_usb/fleet-versions.json")" || return 1
   sr_serve_stop
@@ -1033,11 +1039,35 @@ assert d["message"] == a[0], d["message"]' "$msg" || fail "fleet-versions.json �
   "${I[@]}" store list --store "$store" --root "$d/instructor" > "$d/list2.out" 2> "$d/list2.err"
   grep -q ";發行版 2026.12.3)$" "$d/list2.out" || fail "處理後 store list 應為發行版 2026.12.3:$(cat "$d/list2.out")" || return 1
   grep -q "降版" "$d/list2.out" "$d/list2.err" && { fail "處理後 store list 不應再有降版提醒:$(cat "$d/list2.out" "$d/list2.err")"; return 1; }
+  # (4b) 隨身碟上還留著第 (3) 步(降版時)匯出的 status.json:匯入到剛直連同步過的紀錄庫 — 比已有的舊,不採用,已處理掉的提醒不會又出現
+  local stale; stale="$(sr_status_time 1)"
+  cp "$store/fleet-versions.json" "$d/fleet-before-stale.json"
+  "${I[@]}" import --from "$usb" --role instructor --store "$store" --root "$d/instructor" --enroll-device > "$d/usb-stale.out" 2> "$d/usb-stale.err"; CODE=$?
+  [[ $CODE == 0 ]] && grep -q "^FSB1 船上筆電:隨身碟上的狀態是船上於 ${stale} 產生的,比教官筆電已有的(船上於 .*Z 產生,直連同步時取得)舊,沒有採用;教官筆電保存的版次與提醒不變(simosa-pkg store list 可以再看)$" "$d/usb-stale.out" \
+    || fail "隨身碟上較舊的 status.json 應不採用並說明(結束碼 $CODE):$(cat "$d/usb-stale.out" "$d/usb-stale.err")" || return 1
+  grep -q "降版" "$d/usb-stale.out" "$d/usb-stale.err" && { fail "較舊的 status.json 的降版提醒不應再印出來:$(cat "$d/usb-stale.out" "$d/usb-stale.err")"; return 1; }
+  cmp -s "$store/fleet-versions.json" "$d/fleet-before-stale.json" || fail "較舊的 status.json 不應改動 fleet-versions.json:$(cat "$store/fleet-versions.json")" || return 1
   sr_usb usb-fixed || fail "處理後的隨身碟匯出 / 匯入失敗(結束碼 $CODE)" || return 1
-  [[ $CODE == 0 ]] && grep -qx "FSB1 船上筆電:發行版 2026.12.3" "$d/usb-fixed.out" || fail "處理後隨身碟匯入應印「FSB1 船上筆電:發行版 2026.12.3」(結束碼 $CODE):$(cat "$d/usb-fixed.out" "$d/usb-fixed.err")" || return 1
+  [[ $CODE == 0 ]] && grep -qxF "FSB1 船上筆電:發行版 2026.12.3(隨身碟上的狀態,船上於 $(sr_status_time) 產生)" "$d/usb-fixed.out" || fail "處理後隨身碟匯入應印「FSB1 船上筆電:發行版 2026.12.3(隨身碟上的狀態,…)」(結束碼 $CODE):$(cat "$d/usb-fixed.out" "$d/usb-fixed.err")" || return 1
   grep -q "降版" "$d/usb-fixed.out" "$d/usb-fixed.err" && { fail "處理後隨身碟匯入不應再有降版提醒:$(cat "$d/usb-fixed.out" "$d/usb-fixed.err")"; return 1; }
   sr_fleet "$store_usb" 'assert j["releaseVersion"] == "2026.12.3" and "releaseDowngrade" not in j, j' || fail "處理後隨身碟途徑的 fleet-versions.json 不應再有 releaseDowngrade" || return 1
   sr_serve_stop
+
+  # (5) 兩個教官端行程同時更新同一個 fleet-versions.json(兩艘船各一支隨身碟、同時匯入):兩艘船的項目都要在。
+  #     原本「讀 → 改 → 寫」只在行程內互斥,後寫的會把先寫的那艘船整筆蓋掉(兩邊都結束碼 0;實測 30 次約有 4–12 次)
+  local usb2="$d/usb-fsb2" race="$d/instructor/store-race" i p1 p2 c1 c2 ships
+  mkdir -p "$usb2/simosa-transfer/from-ship"
+  cp -r "$usb/simosa-transfer/from-ship/FSB1" "$usb2/simosa-transfer/from-ship/FSB2"
+  rm -f "$usb2/simosa-transfer/from-ship/FSB2/"*.sbrec
+  python3 -I -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p,encoding="utf-8")); j["shipId"]="FSB2"; j["deviceId"]="FSB2-SYNCTEST"; json.dump(j,open(p,"w",encoding="utf-8"),ensure_ascii=False)' "$usb2/simosa-transfer/from-ship/FSB2/status.json"
+  for ((i = 1; i <= 12; i++)); do
+    rm -f "$race/fleet-versions.json"
+    "${I[@]}" import --from "$usb" --role instructor --store "$race" --root "$d/instructor" --enroll-device > "$d/race-a.out" 2> "$d/race-a.err" & p1=$!
+    "${I[@]}" import --from "$usb2" --role instructor --store "$race" --root "$d/instructor" --enroll-device > "$d/race-b.out" 2> "$d/race-b.err" & p2=$!
+    wait "$p1"; c1=$?; wait "$p2"; c2=$?
+    ships="$(python3 -I -c 'import json,sys; print(",".join(sorted(json.load(open(sys.argv[1],encoding="utf-8"))["ships"])))' "$race/fleet-versions.json" 2>&1)"
+    [[ $c1 == 0 && $c2 == 0 && "$ships" == "FSB1,FSB2" ]] || fail "同時匯入兩支隨身碟(第 $i 次):結束碼 $c1 / $c2,fleet-versions.json 的船:$ships(應為 FSB1,FSB2);$(cat "$d/race-a.err" "$d/race-b.err")" || return 1
+  done
   tcp_open "$SYNC" && { fail "測試結束後同步埠 $SYNC 不應仍有服務"; return 1; }
   return 0
 }

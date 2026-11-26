@@ -81,6 +81,7 @@ public sealed class CliApp
                [--enroll-device] [--no-pull] [--no-report]                           (教官筆電)
           export --to <隨身碟目錄> [--role ship|instructor] [--push <檔.sbupd>]... [--key|--cert] [--ship <ID>]...
           import --from <隨身碟目錄> [--role ship|instructor] [--enroll-device]
+          (教官筆電的 sync 與 import 結束時印出各船的發行版;船上有降版時另列警告,並存進紀錄庫的 fleet-versions.json — store list 可以再看)
 
         共通:--root 安裝根目錄(預設 SIMOSA_INSTALL_ROOT → 程式所在的安裝/專案根目錄 → D:\Simosa BRM 或 G:\Simosa BRM;不會自動落到 C:);--store 預設 <root>/store;
               私鑰密碼可用 --key-password 或環境變數 SIMOSA_KEY_PASSWORD。
@@ -149,8 +150,10 @@ public sealed class CliApp
                                        or System.Net.Sockets.SocketException or ArgumentException
                                        or YamlDotNet.Core.YamlException or System.Text.Json.JsonException)
         {
-            // 參數集/情境 YAML 語法錯誤(YamlException,含行列)與型別錯誤(JsonException)也依約定回 1,不以未捕捉例外中止
-            _err.WriteLine($"錯誤:{ex.Message}");
+            // 參數集/情境 YAML 語法錯誤(YamlException,含行列)與型別錯誤(JsonException)也依約定回 1,不以未捕捉例外中止。
+            // sync 的錯誤訊息可能帶著船端送來的文字(握手時自稱的船舶 / 裝置識別、error 訊息、解析失敗時例外訊息裡的鍵名片段):
+            // 印出之前去掉控制 / 格式字元並截斷 — 合法的訊息不受影響,結束碼不變
+            _err.WriteLine($"錯誤:{(cmd == "sync" ? Shown(ex.Message, 1000) : ex.Message)}");
             return 1;
         }
     }
@@ -660,7 +663,10 @@ public sealed class CliApp
                     var release = ShipReleaseReport.FromEntry(v);
                     // 文字欄位是同步時船上回報、原樣存進 fleet-versions.json 的(隨身碟途徑連船舶識別都沒有簽章):印出之前去掉控制字元並截斷
                     _out.WriteLine($"版次 {Shown(ship)}:{Shown(v.Version)}(參數集 {Shown(v.ParameterSet?.Version)},更新於 {v.UpdatedUtc:yyyy-MM-dd},經 {Shown(v.Via, 16)};環境 {(v.Environment is { } env ? $"{Shown(env.Describe(), 300)}(收集於 {env.CollectedUtc:yyyy-MM-dd})" : "未回報")};{release.Describe(brief: true)})");
-                    var saved = $"這是 {v.UpdatedUtc:yyyy-MM-dd} {(v.Via == "usb" ? "匯入隨身碟" : "直連同步")}時保存的提醒{(v.Via == "usb" ? ";隨身碟上的 status.json 沒有簽章,以船上的 simosa-pkg status 為準" : "")}";
+                    // 句尾寫明兩個時間(都是 UTC,句尾的 Z;與 status 的「套用於 …Z」相同的寫法):船上回報這份狀態的時間(船上的時鐘)與教官筆電保存它的時間 —
+                    // 只寫保存的日期會把「很久以前匯出、今天才匯入」的隨身碟狀態看成今天的
+                    var reportedAt = ShipVersionEntry.StatusUtcOf(v.Environment, DateTime.UtcNow) is { } t ? $"船上於 {UtcText(t)} 回報、" : "";
+                    var saved = $"這是{reportedAt}教官筆電於 {UtcText(v.UpdatedUtc)} {(v.Via == "usb" ? "匯入隨身碟" : "直連同步")}時保存的提醒{(v.Via == "usb" ? ";隨身碟上的 status.json 沒有簽章,以船上的 simosa-pkg status 為準" : "")}";
                     foreach (var w in release.Warnings(ShipReleaseReport.ShipLabel(string.IsNullOrEmpty(v.ShipId) ? ship : v.ShipId, v.DeviceId), saved)) _err.WriteLine($"警告:{w}");
                 }
                 return 0;
@@ -768,35 +774,76 @@ public sealed class CliApp
         var host = layout.Config.Ships.TryGetValue(target, out var ip) ? ip : target;
         var store = StoreOf(a);   // 先檢查紀錄庫的寫入位置,再載入簽章金鑰
         using var key = SigningKey(a);
-        var report = SyncClient.SyncAsync(new SyncOptions
+        var report = new SyncReport();
+        try
         {
-            Host = host, Port = a.Int("port", layout.Config.Port), InstructorKey = key, Store = store, PushPackages = a.All("push").Select(p => ReadPath(a, "--push", p)).ToList(),
-            EnrollDevice = a.Flag("enroll-device"), PullRecords = !a.Flag("no-pull"), SendBackupReport = !a.Flag("no-report"), Log = _out,
-        }).GetAwaiter().GetResult();
-        // 這一行的文字欄位都來自船上的 statusResult(沒有自己的簽章):印出之前去掉控制字元並截斷(合法的內容不受影響)
-        if (report.Status is { } st) _out.WriteLine($"{Shown(report.ShipId)} 現行版本 {Shown(st.Version ?? "(初始)")},參數集 {Shown(st.ParameterSet?.Version ?? "—")},待回傳紀錄包 {st.OutstandingRecordPackages}{(st.Environment is { } env ? $";環境 {Shown(env.Describe(), 300)}" : "")}");
-        // 船上的發行版與降版提醒(沒有開教官站、只做同步時也看得到;降版只是提醒,結束碼不變)
-        if (report.Release is { } release) PrintShipRelease(report.ShipId, report.DeviceId, release, source: null);
-        foreach (var w in report.Warnings) _err.WriteLine($"警告:{w}");
+            SyncClient.SyncAsync(new SyncOptions
+            {
+                Host = host, Port = a.Int("port", layout.Config.Port), InstructorKey = key, Store = store, PushPackages = a.All("push").Select(p => ReadPath(a, "--push", p)).ToList(),
+                EnrollDevice = a.Flag("enroll-device"), PullRecords = !a.Flag("no-pull"), SendBackupReport = !a.Flag("no-report"), Log = _out,
+            }, report: report).GetAwaiter().GetResult();
+        }
+        catch when (report.Release is not null && !report.FleetSaved)
+        {
+            // 同步在最後一步失敗(船上狀態的其餘欄位讀不進來、fleet-versions.json 讀不進來或寫不進去):這次已經收到的發行版與降版提醒照樣印出來,
+            // 再由上層報錯(「錯誤:…」,結束碼與原本相同)— 提醒不跟著存檔一起不見
+            PrintSyncStatus(report);
+            throw;
+        }
+        PrintSyncStatus(report);
+        // 船端回報的警告(打包問題、保留上限)沒有簽章:印出之前同樣去掉控制字元並截斷 — 它們緊接在降版提醒之後,ANSI 跳脫序列可以把剛印的提醒從畫面上清掉
+        foreach (var w in report.Warnings) _err.WriteLine($"警告:{Shown(w, 600)}");
         _out.WriteLine(report.Ok ? "同步完成" : "同步完成,但有項目失敗(見上方訊息)");
         return report.Ok ? 0 : 1;
     }
 
-    /// <summary>船上回報的文字(statusResult / status.json / fleet-versions.json 裡原樣保存的欄位)印到終端機之前:去掉控制字元並截斷。</summary>
+    /// <summary>sync 結束時印船上的現行版本一行與發行版狀態(同步在最後一步失敗時也印已經收到的部分)。</summary>
+    private void PrintSyncStatus(SyncReport report)
+    {
+        // 這一行的文字欄位都來自船上的 statusResult(沒有自己的簽章):印出之前去掉控制字元並截斷(合法的內容不受影響)
+        if (report.Status is { } st) _out.WriteLine($"{Shown(report.ShipId)} 現行版本 {Shown(st.Version ?? "(初始)")},參數集 {Shown(st.ParameterSet?.Version ?? "—")},待回傳紀錄包 {st.OutstandingRecordPackages}{(st.Environment is { } env ? $";環境 {Shown(env.Describe(), 300)}" : "")}");
+        // 船上的發行版與降版提醒(沒有開教官站、只做同步時也看得到;降版只是提醒,結束碼不變)
+        if (report.Release is { } release) PrintShipRelease(report.ShipId, report.DeviceId, release, summaryNote: null, source: null, saved: report.FleetSaved);
+    }
+
+    /// <summary>船上回報的文字(statusResult / status.json / fleet-versions.json 裡保存的欄位、船端的警告與錯誤訊息)印到終端機之前:去掉控制字元並截斷。</summary>
     private static string Shown(string? text, int max = 64) => UntrustedText.Clean(text, max);
 
-    /// <summary>隨身碟途徑的提醒句尾:status.json 沒有簽章(直連的 statusResult 至少來自握手時驗證過裝置金鑰的那條連線)</summary>
-    private const string UsbStatusSource = "這是隨身碟上 status.json 的內容;這個檔沒有簽章,以船上的 simosa-pkg status 為準";
+    /// <summary>時間的寫法:UTC,句尾加 Z(與 status 的「套用於 2026-11-26 04:48Z」相同;台灣時間 = 加 8 小時)</summary>
+    private static string UtcText(DateTime utc, bool seconds = false) => seconds ? $"{utc:yyyy-MM-dd HH:mm:ss}Z" : $"{utc:yyyy-MM-dd HH:mm}Z";
 
     /// <summary>
     /// 教官端同步 / 隨身碟匯入後印船上的發行版狀態(docs/design/packaging-sync.md 第 5.1 節末):stdout 一行摘要
     /// (「FSB1 船上筆電:發行版 2026.11.31」;船上沒有回報時說明是較舊的軟體);有降版或有讀不懂的內容時 stderr 另列「警告:」。
     /// 文字都由 <see cref="ShipReleaseReport"/> 產生(版本只有通過檢查的數字、降版說明與船上 status 同一個出處),船舶與裝置識別去掉控制字元。
+    /// <paramref name="summaryNote"/>:接在摘要行後面的括號(隨身碟途徑:這份狀態在船上產生的時間);<paramref name="source"/>:接在警告句尾的來源說明;
+    /// <paramref name="saved"/> false:這次的內容沒有存進兩船版次清單(另列一則警告,原因由呼叫端接著印)。
     /// </summary>
-    private void PrintShipRelease(string? shipId, string? deviceId, ShipReleaseReport release, string? source)
+    private void PrintShipRelease(string? shipId, string? deviceId, ShipReleaseReport release, string? summaryNote, string? source, bool saved)
     {
-        _out.WriteLine($"{ShipReleaseReport.ShipLabel(shipId)} 船上筆電:{release.Describe()}");
+        _out.WriteLine($"{ShipReleaseReport.ShipLabel(shipId)} 船上筆電:{release.Describe()}{(summaryNote is null ? "" : $"({summaryNote})")}");
         foreach (var w in release.Warnings(ShipReleaseReport.ShipLabel(shipId, deviceId), source)) _err.WriteLine($"警告:{w}");
+        if (!saved)
+            _err.WriteLine($"警告:船上筆電 {ShipReleaseReport.ShipLabel(shipId)} 這次回報的內容沒有存進教官筆電的兩船版次清單 fleet-versions.json(原因見下方的訊息);simosa-pkg store list 顯示的仍是先前保存的內容");
+    }
+
+    /// <summary>
+    /// 隨身碟匯入:一艘船的 status.json。比教官筆電已有的舊 → 只印一行說明(不印它的提醒:那是過時的內容,教官筆電保存的不變);
+    /// 其餘照 <see cref="PrintShipRelease"/> 印,摘要與警告句尾註明這份狀態在船上產生的時間(隨身碟上的檔可能是很久以前匯出的)與沒有簽章。
+    /// </summary>
+    private void PrintUsbShipRelease(UsbShipRelease s)
+    {
+        if (s.Fleet is { Saved: false } skipped)
+        {
+            var how = skipped.Previous?.Via == "usb" ? "匯入隨身碟" : "直連同步";
+            _out.WriteLine($"{ShipReleaseReport.ShipLabel(s.ShipId)} 船上筆電:隨身碟上的狀態是船上於 {UtcText(skipped.StatusUtc ?? default, seconds: true)} 產生的,比教官筆電已有的(船上於 {UtcText(skipped.PreviousStatusUtc ?? default, seconds: true)} 產生,{how}時取得)舊,沒有採用;"
+                           + "教官筆電保存的版次與提醒不變(simosa-pkg store list 可以再看)");
+            return;
+        }
+        var when = s.StatusUtc is { } t ? $"船上於 {UtcText(t)} 產生"
+            : s.Fleet is { AgeUnknown: true } ? "沒有可用的產生時間,無法判斷是不是比教官筆電原有的舊"
+            : "沒有可用的產生時間";
+        PrintShipRelease(s.ShipId, s.DeviceId, s.Release, $"隨身碟上的狀態,{when}", $"這是隨身碟上 status.json 的內容,{when};這個檔沒有簽章,以船上的 simosa-pkg status 為準", saved: s.Fleet is not null);
     }
 
     private string Role(CliArgs a) => a.Get("role") ?? Layout(a).Config.Role;
@@ -822,7 +869,8 @@ public sealed class CliApp
     {
         var from = WritePath(a, "--from", a.Require("from"));   // 匯入時也寫回隨身碟(清理通知、待回傳紀錄包)並刪除已處理的檔案
         UsbReport r;
-        if (Role(a) == "ship")
+        var shipRole = Role(a) == "ship";
+        if (shipRole)
         {
             r = UsbTransfer.ShipImport(new ShipNode(ShipRecordsLayout(a)), from);   // 處理已備份回報時刪除 recordsDir 內的舊紀錄
             foreach (var u in r.Updates) PrintApply(u);
@@ -833,11 +881,13 @@ public sealed class CliApp
             r = UsbTransfer.InstructorImport(StoreOf(a), from, a.Flag("enroll-device"));
             foreach (var i in r.Imported.Where(i => i.Ok)) _out.WriteLine(i.AlreadyImported ? $"{i.PackageId} 已在紀錄庫" : $"已匯入 {i.PackageId} → {i.Directory}");
             // 隨身碟上各船 status.json 的發行版與降版提醒(與直連同步印的相同;status.json 沒有簽章,提醒的句尾註明)
-            foreach (var s in r.ShipReleases) PrintShipRelease(s.ShipId, s.DeviceId, s.Release, UsbStatusSource);
+            foreach (var s in r.ShipReleases) PrintUsbShipRelease(s);
         }
         foreach (var w in r.Written) _out.WriteLine($"已寫入 {w}");
-        foreach (var w in r.Warnings) _err.WriteLine($"警告:{w}");
-        foreach (var e in r.Errors) _err.WriteLine($"  - {e}");
+        // 教官端匯入時,警告與錯誤裡可能有隨身碟上未經驗證的內容(驗證失敗的紀錄包 / 清理通知自己寫的船舶識別等):去掉控制字元並截斷再印
+        // — 它們緊接在降版提醒之後,ANSI 跳脫序列可以把剛印的提醒從畫面上清掉。船端匯入的輸出照舊
+        foreach (var w in r.Warnings) _err.WriteLine($"警告:{(shipRole ? w : Shown(w, 600))}");
+        foreach (var e in r.Errors) _err.WriteLine($"  - {(shipRole ? e : Shown(e, 600))}");
         var ok = r.Errors.Count == 0 && r.Updates.All(u => u.Ok);
         return ok ? 0 : 1;
     }

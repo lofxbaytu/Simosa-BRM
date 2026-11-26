@@ -4,8 +4,8 @@ using System.Text;
 namespace SimosaBRM.Packaging.Common;
 
 /// <summary>
-/// 對方提供、未經驗證的文字(船上 statusResult / 隨身碟 status.json 裡的船舶與裝置識別、解析失敗的訊息)印到終端機之前的處理:
-/// 去掉會改變終端機顯示的字元並截斷。與船端稽核用的 <c>SyncServer.Clip</c> 同一種作法(去控制字元、截斷加「…」),另外多去掉
+/// 對方提供、未經驗證的文字(船上 statusResult / 隨身碟 status.json 裡的船舶與裝置識別與其他文字欄位、解析失敗的訊息、
+/// 同步過程中船端送來的警告與錯誤訊息)印到終端機、寫進 fleet-versions.json 之前的處理:去掉會改變終端機顯示的字元並截斷。與船端稽核用的 <c>SyncServer.Clip</c> 同一種作法(去控制字元、截斷加「…」),另外多去掉
 /// 格式字元與行 / 段分隔字元 — 終端機上它們能把後面的文字倒過來排(U+202E)、藏起來(零寬字元)或另起一行冒充程式自己的輸出。
 /// <list type="bullet">
 /// <item>控制字元(Cc:含 ESC,ANSI 跳脫序列少了 ESC 只剩普通文字;CR / LF / TAB;C1 控制字元 U+0080–U+009F)</item>

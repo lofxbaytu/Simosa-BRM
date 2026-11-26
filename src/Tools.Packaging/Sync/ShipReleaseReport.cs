@@ -266,10 +266,16 @@ public sealed class ShipReleaseReport
                      + $"船上處理之後再同步一次(或再匯入一次隨身碟),教官筆電保存的這則提醒才會消失{tail}");
         if (Unreadable.Count > 0)
         {
-            var what = Unreadable.Contains(VersionField) ? (Unreadable.Contains(DowngradeField) ? "發行版本與降版資訊" : "發行版本") : "降版資訊";
+            var version = Unreadable.Contains(VersionField);
+            var what = version ? (Unreadable.Contains(DowngradeField) ? "發行版本與降版資訊" : "發行版本") : "降版資訊";
             // 降版資訊本身讀得懂(上面已列出提醒)時,不說「可能有降版提醒沒有顯示」
             var missed = Downgrade is null ? ",可能有降版提醒沒有顯示" : "";
-            list.Add($"船上筆電 {subject}回報的{what},教官筆電讀不懂(格式不符){missed};請在船上執行 simosa-pkg status 確認{tail}");
+            // 到船上確認的指令要真的看得到那一項:船上的 status(文字輸出)有降版時會印「警告:降版:…」,但不印發行版本;
+            // 發行版本在 verify-install 的第一行(「發行清單:版本 …」)
+            var check = new List<string>();
+            if (Downgrade is null) check.Add("simosa-pkg status(有降版時會印「警告:降版:…」)");
+            if (version) check.Add("simosa-pkg verify-install(第一行「發行清單:版本 …」是發行版本)");
+            list.Add($"船上筆電 {subject}回報的{what},教官筆電讀不懂(格式不符){missed};請在船上執行 {string.Join("與 ", check)}確認{tail}");
         }
         return list;
     }

@@ -164,7 +164,10 @@ public sealed class ShipReleaseReportTests
         if (r.ReleaseVersion is not null) Assert.True(ShipReleaseReport.IsVersion(r.ReleaseVersion));
         Assert.Contains("讀不懂", r.Describe());
         var warning = Assert.Single(r.Warnings("FSB1"));
-        Assert.Contains("教官筆電讀不懂(格式不符),可能有降版提醒沒有顯示;請在船上執行 simosa-pkg status 確認", warning);
+        // 到船上確認的指令要看得到那一項:有沒有降版看 status 的警告;發行版本在 verify-install 的第一行(status 的文字輸出不印發行版本)
+        Assert.Contains("教官筆電讀不懂(格式不符),可能有降版提醒沒有顯示;請在船上執行 simosa-pkg status(有降版時會印「警告:降版:…」)", warning);
+        Assert.Equal(unreadable.Contains("releaseVersion"), warning.Contains("與 simosa-pkg verify-install(第一行「發行清單:版本 …」是發行版本)"));
+        Assert.EndsWith("確認", warning);
         Assert.Contains(unreadable.Length == 2 ? "回報的發行版本與降版資訊," : unreadable[0] == "releaseVersion" ? "回報的發行版本," : "回報的降版資訊,", warning);
 
         // 拿掉這兩欄之後,其餘欄位照一般的方式解析(鍵名不分大小寫也要拿乾淨,否則型別不對的 "ReleaseVersion": 5 仍會讓解析失敗)
@@ -186,7 +189,7 @@ public sealed class ShipReleaseReportTests
         var warnings = r.Warnings("FSB1");
         Assert.Equal(2, warnings.Count);
         Assert.StartsWith("船上筆電 FSB1 有降版提醒", warnings[0]);
-        Assert.Equal("船上筆電 FSB1 回報的發行版本,教官筆電讀不懂(格式不符);請在船上執行 simosa-pkg status 確認", warnings[1]);
+        Assert.Equal("船上筆電 FSB1 回報的發行版本,教官筆電讀不懂(格式不符);請在船上執行 simosa-pkg verify-install(第一行「發行清單:版本 …」是發行版本)確認", warnings[1]);
         // 寫進該船項目再讀回(store list):同樣的摘要
         var entry = new ShipVersionEntry { ShipId = "FSB1" };
         r.ApplyTo(entry);
@@ -358,6 +361,205 @@ public sealed class ShipReleaseReportTests
         finally
         {
             PackagePaths.DeleteDirectory(dir);
+        }
+    }
+
+    // ── 審查後修正(2026-11-26):兩船版次清單的更新 ─────────────────
+
+    private static string NewStoreDir(string prefix)
+        => Path.Combine(SimCore.Ship.RepositoryPaths.FindRoot(), "build", "test-tmp", "packaging", prefix + "-" + Guid.NewGuid().ToString("N")[..8]);
+
+    private static EnvironmentInfo EnvAt(DateTime collectedUtc) => new() { Os = "Windows", Dotnet = ".NET 8", CollectedUtc = collectedUtc };
+
+    [Fact]
+    public void UpdateFleet_SkipIfOlder_KeepsTheNewerEntry_ButNeverGetsStuckOnUnknownOrImplausibleTimes()
+    {
+        // 審查 A-1 / B-1:隨身碟匯入(skipIfOlder)時,船上產生時間比已有的舊的狀態不取代;直連同步一律取代。
+        // 任一邊的時間不知道(沒有環境資訊)或不合理(比教官筆電現在的時間晚超過一天)時照原本的作法取代 — 不會因為一個寫著很久以後的時間的檔案而卡住
+        var root = NewStoreDir("fleet-age");
+        try
+        {
+            var now = new DateTime(2026, 11, 26, 6, 0, 0, DateTimeKind.Utc);
+            var store = new RecordStore(root, new ManualClock(new DateTimeOffset(now)));
+            ShipVersionEntry Entry(string version, DateTime? statusUtc, string via)
+                => new() { ShipId = "FSB1", Version = version, Environment = statusUtc is { } t ? EnvAt(t) : null, Via = via };
+            string Saved() => store.LoadFleet().Ships["FSB1"].Version!;
+
+            var first = store.UpdateFleet(Entry("direct", now.AddHours(-1), "tcp"));
+            Assert.True(first.Saved);
+            Assert.Null(first.Previous);
+            Assert.False(first.AgeUnknown);
+
+            // 較舊的隨身碟狀態:不取代,檔案內容原封不動;回傳兩邊的時間與原有的項目(顯示用)
+            var before = File.ReadAllText(store.FleetPath);
+            var older = store.UpdateFleet(Entry("stale", now.AddDays(-3), "usb"), skipIfOlder: true);
+            Assert.False(older.Saved);
+            Assert.Equal(now.AddDays(-3), older.StatusUtc);
+            Assert.Equal(now.AddHours(-1), older.PreviousStatusUtc);
+            Assert.Equal("tcp", older.Previous?.Via);
+            Assert.Equal(before, File.ReadAllText(store.FleetPath));
+
+            // 同一份狀態(時間相同)與較新的:取代
+            Assert.True(store.UpdateFleet(Entry("same", now.AddHours(-1), "usb"), skipIfOlder: true).Saved);
+            Assert.Equal("same", Saved());
+            Assert.True(store.UpdateFleet(Entry("newer", now.AddMinutes(-5), "usb"), skipIfOlder: true).Saved);
+            Assert.Equal("newer", Saved());
+
+            // 直連(不給 skipIfOlder):時間較舊也取代(拿到的是當下的狀態;船上時鐘可能被調回去過)
+            Assert.True(store.UpdateFleet(Entry("live", now.AddDays(-10), "tcp")).Saved);
+            Assert.Equal("live", Saved());
+
+            // 沒有環境資訊(較舊的船上軟體):無法判斷 → 取代,AgeUnknown;environment 沿用上次的
+            var unknown = store.UpdateFleet(Entry("no-time", null, "usb"), skipIfOlder: true);
+            Assert.True(unknown.Saved);
+            Assert.True(unknown.AgeUnknown);
+            Assert.Null(unknown.StatusUtc);
+            Assert.Equal("no-time", Saved());
+            Assert.Equal(now.AddDays(-10), store.LoadFleet().Ships["FSB1"].Environment!.CollectedUtc);
+
+            // 時間寫成很久以後(船上時鐘超前,或檔案被改過):當成不知道,照常取代 …
+            var future = store.UpdateFleet(Entry("future", now.AddYears(70), "usb"), skipIfOlder: true);
+            Assert.True(future.Saved);
+            Assert.Null(future.StatusUtc);
+            Assert.True(future.AgeUnknown);
+            // … 而且之後正常的狀態不會被它擋住(清單裡那個不合理的時間不拿來比較)
+            var afterFuture = store.UpdateFleet(Entry("normal", now.AddMinutes(-1), "usb"), skipIfOlder: true);
+            Assert.True(afterFuture.Saved);
+            Assert.Null(afterFuture.PreviousStatusUtc);
+            Assert.Equal("normal", Saved());
+            // 一天以內的超前(時區設錯、時鐘沒對準)仍當成可用的時間
+            Assert.Equal(now.AddHours(20), ShipVersionEntry.StatusUtcOf(EnvAt(now.AddHours(20)), now));
+            Assert.Null(ShipVersionEntry.StatusUtcOf(EnvAt(now.AddHours(25)), now));
+            Assert.Null(ShipVersionEntry.StatusUtcOf(EnvAt(default), now));                         // 沒有 collectedUtc(預設值)
+            Assert.Null(ShipVersionEntry.StatusUtcOf(null, now));
+
+            // 另一艘船的項目不受影響
+            store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB2", Version = "other", Environment = EnvAt(now.AddDays(-30)), Via = "usb" }, skipIfOlder: true);
+            Assert.Equal("normal", Saved());
+            Assert.Equal("other", store.LoadFleet().Ships["FSB2"].Version);
+        }
+        finally
+        {
+            PackagePaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void UpdateFleet_CleansAndBoundsTheTextTheShipReported_BeforeItIsWritten()
+    {
+        // 審查 A-3:船上狀態裡既有的文字欄位原本原樣存進 fleet-versions.json(長度不限、U+202E 原樣)。現在寫檔之前清理並截斷,清單項數設上限;合法的內容不變
+        var root = NewStoreDir("fleet-clean");
+        try
+        {
+            var store = new RecordStore(root);
+            var huge = new string('W', 500_000);
+            var components = Enumerable.Range(0, 200).ToDictionary(i => $"kind{i}\u001b[2J", i => new ComponentVersion { Version = "1.0\r\n同步完成", PackageId = "upd-x\u202e", Summary = huge });
+            var hostile = new ShipVersionEntry
+            {
+                ShipId = "FSB1", DeviceId = "LT\u001b]0;pwned\u0007\n" + huge, Version = "\u001b[2J9.9\r\n同步完成\u202e", PackageId = huge, Via = "usb",
+                Components = components,
+                ParameterSet = new ParameterSetRef { Id = "p\u0000", Version = "v1\n同步完成", Sha256 = huge, Path = huge, SourceRevisions = Enumerable.Range(0, 200).ToDictionary(i => $"DOC-{i}\u2028", i => (string?)huge) },
+                Environment = new EnvironmentInfo { Os = "\u001b[31mWindows\r\n" + huge, Dotnet = ".NET 8\u200b", WebView2 = huge, CollectedUtc = new DateTime(2026, 11, 9, 0, 0, 0, DateTimeKind.Utc) },
+            };
+            store.UpdateFleet(hostile);
+            var text = File.ReadAllText(store.FleetPath);
+            Assert.True(text.Length < 40_000, $"fleet-versions.json {text.Length} 字");
+            Assert.DoesNotContain("\\u001b", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\\r", text);
+            Assert.DoesNotContain("\\n", text);
+            foreach (var rune in text.EnumerateRunes())
+                Assert.False(rune.Value is not ('\n' or '\r') && System.Text.Rune.GetUnicodeCategory(rune) is System.Globalization.UnicodeCategory.Control or System.Globalization.UnicodeCategory.Format
+                    or System.Globalization.UnicodeCategory.LineSeparator or System.Globalization.UnicodeCategory.ParagraphSeparator, $"檔案含控制 / 格式字元 U+{rune.Value:X4}");
+            var saved = store.LoadFleet().Ships["FSB1"];
+            Assert.Equal("[2J9.9同步完成", saved.Version);
+            Assert.Equal("LT]0;pwned" + new string('W', 54) + "…", saved.DeviceId);
+            Assert.Equal(128 + 1, saved.PackageId!.Length);
+            Assert.Equal(ShipVersionEntry.MaxListedItems, saved.Components.Count);
+            Assert.Equal("1.0同步完成", saved.Components["kind0[2J"].Version);
+            Assert.Equal("upd-x", saved.Components["kind0[2J"].PackageId);
+            Assert.Equal(300 + 1, saved.Components["kind0[2J"].Summary!.Length);
+            Assert.Equal(("p", "v1同步完成"), (saved.ParameterSet!.Id, saved.ParameterSet.Version));
+            Assert.Equal(ShipVersionEntry.MaxListedItems, saved.ParameterSet.SourceRevisions.Count);
+            Assert.Equal("[31mWindows" + new string('W', 200 - 11) + "…", saved.Environment!.Os);
+            Assert.Equal(".NET 8", saved.Environment.Dotnet);
+            Assert.Equal(new DateTime(2026, 11, 9, 0, 0, 0, DateTimeKind.Utc), saved.Environment.CollectedUtc);
+
+            // 合法的內容一字不變
+            var env = new EnvironmentInfo { Os = "Microsoft Windows 10.0.26100", Dotnet = ".NET 8.0.11", WebView2 = "130.0.2849.56", CollectedUtc = new DateTime(2026, 11, 9, 1, 0, 0, DateTimeKind.Utc) };
+            var normal = new ShipVersionEntry
+            {
+                ShipId = "FSB2", DeviceId = "FSB2-LT01", Version = "2026.10.2", PackageId = "upd-20261017T050000-0a1b2c3d", Via = "tcp", Environment = env,
+                Components = new() { ["parameters"] = new ComponentVersion { Version = "2026.10.2", PackageId = "upd-1", AppliedUtc = new DateTime(2026, 10, 17, 5, 0, 0, DateTimeKind.Utc), Summary = "DWO-007 第 4 版" } },
+                ParameterSet = new ParameterSetRef { Id = "simosa-company-procedures", Version = "2026.10.2", Sha256 = new string('a', 64), Path = "data/parameters/company-procedures.yaml", SourceRevisions = new() { ["DWO-007"] = "4", ["DWO-009"] = null } },
+            };
+            var expected = PackageJson.ToText(normal);
+            store.UpdateFleet(normal);
+            var back = store.LoadFleet().Ships["FSB2"];
+            back.UpdatedUtc = default;
+            Assert.Equal(expected, PackageJson.ToText(back));
+
+            // 沒有船舶識別(清理後是空的)不寫
+            Assert.Throws<InvalidDataException>(() => store.UpdateFleet(new ShipVersionEntry { ShipId = "\u001b\u0000" }));
+            Assert.Equal(2, store.LoadFleet().Ships.Count);
+        }
+        finally
+        {
+            PackagePaths.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateFleet_WaitsForAnotherProcessHoldingTheLock_InsteadOfOverwritingItsUpdate()
+    {
+        // 審查 A-7:「讀 → 改 → 寫」原本只有行程內的 lock;兩個行程同時更新(一個直連同步、一個匯入另一艘船的隨身碟)時後寫的會把先寫的那艘船蓋掉。
+        // 現在以鎖定檔跨行程序列化。這裡以「另一個持有者獨占開啟鎖定檔」代表另一個行程(獨占開啟在同一個行程內也互斥)
+        var root = NewStoreDir("fleet-lock");
+        try
+        {
+            var store = new RecordStore(root);
+            store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", Version = "1" });
+            Assert.True(File.Exists(store.FleetLockPath));
+            Task<FleetUpdate> waiting;
+            using (new FileStream(store.FleetLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                // 另一個行程此時寫入 FSB2(它持有鎖定)
+                var other = store.LoadFleet();
+                waiting = Task.Run(() => store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", Version = "2" }));
+                await Task.Delay(400);
+                Assert.False(waiting.IsCompleted, "鎖定檔被佔用時 UpdateFleet 應該等待");
+                Assert.Equal("1", store.LoadFleet().Ships["FSB1"].Version);
+                other.Ships["FSB2"] = new ShipVersionEntry { ShipId = "FSB2", Version = "other" };
+                PackageJson.SaveAtomic(store.FleetPath, other);
+            }
+            Assert.True((await waiting.WaitAsync(TimeSpan.FromSeconds(10))).Saved);
+            var fleet = store.LoadFleet();
+            Assert.Equal("2", fleet.Ships["FSB1"].Version);
+            Assert.Equal("other", fleet.Ships["FSB2"].Version);                                    // 另一個行程寫的那艘船還在
+
+            // 等不到(另一個行程一直佔著):明確的錯誤,不寫入
+            store.FleetLockTimeout = TimeSpan.FromMilliseconds(300);
+            using (new FileStream(store.FleetLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var ex = Assert.Throws<IOException>(() => store.UpdateFleet(new ShipVersionEntry { ShipId = "FSB1", Version = "3" }));
+                Assert.Contains("另一個 simosa-pkg 正在更新兩船版次清單", ex.Message);
+                Assert.Equal("2", store.LoadFleet().Ships["FSB1"].Version);
+
+                // store backup 不複製鎖定檔(它被獨占開啟時複製會失敗),其餘檔案照常備份
+                var (target, _) = store.Backup(NewStoreDir("fleet-lock-backup"));
+                try
+                {
+                    Assert.True(File.Exists(Path.Combine(target, "fleet-versions.json")));
+                    Assert.False(File.Exists(Path.Combine(target, "fleet-versions.json.lock")));
+                }
+                finally
+                {
+                    PackagePaths.DeleteDirectory(Path.GetDirectoryName(target)!);
+                }
+            }
+        }
+        finally
+        {
+            PackagePaths.DeleteDirectory(root);
         }
     }
 }

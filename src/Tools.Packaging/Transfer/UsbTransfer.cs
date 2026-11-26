@@ -20,8 +20,20 @@ public sealed class UsbReport
     public List<UsbShipRelease> ShipReleases { get; set; } = new();
 }
 
-/// <summary>隨身碟上一艘船的 status.json 所回報的發行版狀態(船舶與裝置識別是 status.json 自己寫的,沒有簽章)。</summary>
-public sealed record UsbShipRelease(string ShipId, string? DeviceId, ShipReleaseReport Release);
+/// <summary>
+/// 隨身碟上一艘船的 status.json 所回報的發行版狀態(船舶與裝置識別是 status.json 自己寫的,沒有簽章;船舶識別已與所在的資料夾名稱核對)。
+/// </summary>
+public sealed record UsbShipRelease(string ShipId, string? DeviceId, ShipReleaseReport Release)
+{
+    /// <summary>船上產生這份 status.json 的時間(船上的時鐘;<see cref="RecordStore.StatusUtcOf"/>);沒有或不合理時 null</summary>
+    public DateTime? StatusUtc { get; init; }
+    /// <summary>
+    /// 寫進兩船版次清單的結果:<see cref="FleetUpdate.Saved"/> false = 比教官筆電已有的舊,沒有採用(CLI 只印一行說明,不印它的提醒);
+    /// null = 沒有存成(fleet-versions.json 讀不進來或寫不進去,原因在 <see cref="UsbReport.Warnings"/> / <see cref="UsbReport.Errors"/>)—
+    /// 這時 status.json 裡的發行版與降版提醒仍照常印出,不跟著存檔一起不見。
+    /// </summary>
+    public FleetUpdate? Fleet { get; set; }
+}
 
 /// <summary>
 /// 專用隨身碟備援(網路線直連不可用時;規劃書第 5.5 節)。隨身碟上只放已簽章的檔案:
@@ -205,24 +217,68 @@ public static class UsbTransfer
                 else File.Delete(f);
             }
             var statusPath = Path.Combine(shipDir, "status.json");
-            if (File.Exists(statusPath))
-            {
-                try
-                {
-                    var (st, release) = ReadShipStatusFile(statusPath);
-                    if (st.ShipId is { } sid)
-                    {
-                        var entry = new ShipVersionEntry { ShipId = sid, DeviceId = st.DeviceId, Version = st.Version, PackageId = st.PackageId, Components = st.Components, ParameterSet = st.ParameterSet, Environment = st.Environment, Via = "usb" };
-                        release.ApplyTo(entry);
-                        store.UpdateFleet(entry);
-                        rep.ShipReleases.Add(new UsbShipRelease(sid, st.DeviceId, release));
-                    }
-                }
-                // status.json 沒有簽章,內容(含解析失敗時例外訊息裡的鍵名片段)可能被改過:印出之前去掉控制字元並截斷
-                catch (InvalidDataException ex) { rep.Warnings.Add(UntrustedText.Clean(ex.Message, 400)); }
-            }
+            if (File.Exists(statusPath)) ImportShipStatus(store, Path.GetFileName(shipDir), statusPath, rep);
         }
         return rep;
+    }
+
+    /// <summary>
+    /// 教官端:讀一艘船的 status.json(沒有簽章),印出用的發行版狀態放進報告,並更新兩船版次清單。
+    /// <list type="bullet">
+    /// <item>船舶識別要與所在的資料夾名稱相同(不分大小寫;船上匯出時兩者是同一個值),而且不含控制字元、不超過 64 個字 — 否則不採用、列一則警告
+    /// (與清理通知的檢查相同):FSB1 資料夾裡改過的檔不能抹掉或種下 FSB2 保存的降版提醒。</item>
+    /// <item>比教官筆電已有的舊就不採用(<see cref="RecordStore.UpdateFleet"/> 的 skipIfOlder):隨身碟上會留著以前匯出的 status.json。</item>
+    /// <item>先把讀到的發行版狀態放進報告再存檔:fleet-versions.json 讀不進來(警告,與原本相同)或寫不進去(錯誤,結束碼與原本相同)時,
+    /// 這次讀到的降版提醒仍會印出來。</item>
+    /// </list>
+    /// </summary>
+    private static void ImportShipStatus(RecordStore store, string shipDirName, string statusPath, UsbReport rep)
+    {
+        ShipStatus st;
+        ShipReleaseReport release;
+        try
+        {
+            (st, release) = ReadShipStatusFile(statusPath);
+        }
+        // status.json 沒有簽章,內容(含解析失敗時例外訊息裡的鍵名片段)可能被改過:印出之前去掉控制字元並截斷
+        catch (InvalidDataException ex)
+        {
+            rep.Warnings.Add(UntrustedText.Clean(ex.Message, 400));
+            return;
+        }
+        var folder = UntrustedText.Clean(shipDirName, 64);
+        const string unsigned = "這個檔沒有簽章;船上匯出時寫的船舶識別一定與資料夾名稱相同。版次與降版提醒請以船上的 simosa-pkg status 為準";
+        if (string.IsNullOrEmpty(st.ShipId))
+        {
+            rep.Warnings.Add($"隨身碟上 from-ship/{folder}/status.json 沒有寫船舶識別,沒有採用({unsigned})");
+            return;
+        }
+        if (!string.Equals(st.ShipId, shipDirName, StringComparison.OrdinalIgnoreCase))
+        {
+            rep.Warnings.Add($"隨身碟上 from-ship/{folder}/status.json 寫的船舶是「{UntrustedText.Clean(st.ShipId, 64)}」,與所在的資料夾「{folder}」不符,沒有採用({unsigned})");
+            return;
+        }
+        if (UntrustedText.Clean(st.ShipId, 64) != st.ShipId)
+        {
+            rep.Warnings.Add($"隨身碟上 from-ship/{folder}/status.json 的船舶識別含有控制字元或超過 64 個字,沒有採用({unsigned})");
+            return;
+        }
+        var entry = new ShipVersionEntry { ShipId = st.ShipId, DeviceId = st.DeviceId, Version = st.Version, PackageId = st.PackageId, Components = st.Components, ParameterSet = st.ParameterSet, Environment = st.Environment, Via = "usb" };
+        release.ApplyTo(entry);
+        var item = new UsbShipRelease(st.ShipId, st.DeviceId, release) { StatusUtc = store.StatusUtcOf(st.Environment) };
+        rep.ShipReleases.Add(item);
+        try
+        {
+            item.Fleet = store.UpdateFleet(entry, skipIfOlder: true);
+        }
+        catch (InvalidDataException ex)
+        {
+            rep.Warnings.Add(UntrustedText.Clean(ex.Message, 400));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            rep.Errors.Add($"兩船版次清單 fleet-versions.json 寫不進去:{ex.Message}");
+        }
     }
 
     /// <summary>隨身碟 status.json 的大小上限:與直連 statusResult 的訊息上限相同(實際約 1–3 KiB)</summary>
