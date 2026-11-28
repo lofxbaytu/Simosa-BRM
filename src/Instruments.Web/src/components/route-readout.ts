@@ -123,6 +123,73 @@ export class RouteReadout extends LitElement {
           flex-basis: 100%;
         }
       }
+      /* conning 條兩列(方塊約 107 至 135 px 高;兩列時航線方塊至少約 215 px 寬,conning-bar.ts 的第二列比例)。原本標題、偏移、位置條加四列
+         比方塊高 16 至 99 px(原本的欄寬只有 126 至 182 px,「偏右 / 偏左」被擠成直排、下方各列折成兩行),最後一至三列在方塊下緣之外。
+         - 偏移的數值、左右、限值在同一行(限值靠右);放不下(偏移五位數以上)時限值換到下一行。數值的行高 = 字級,字級另以方塊高度設上限(20cqb);
+         - 位置條上下的間距 3 → 2 px;
+         - 下方各列的行高固定 13 px:「下一航點」一列用整個方塊寬度(名稱與距離放不下時換到標籤的下一行);「方位 / 航段」一列;
+           「速限」與「能見度」排在同一列(各佔左右一半;只有其中一項時佔整列)—— 四列變三列 */
+      @container style(--brm-conning-single: 0) {
+        .xtd {
+          flex-wrap: wrap;
+          gap: 0 4px;
+        }
+        .xtd .value.mid {
+          font-size: clamp(18px, min(1.6vw, 20cqb), 28px);
+        }
+        .xtd .side {
+          white-space: nowrap;
+          line-height: 13px;
+        }
+        .xtd .label {
+          margin-left: auto;
+          line-height: 13px;
+        }
+        .bar {
+          margin: 2px 0;
+        }
+        .rows {
+          grid-template-columns: auto minmax(0, 1fr) auto auto;
+          gap: 0 6px;
+          line-height: 13px;
+        }
+        .rows .label {
+          line-height: 13px;
+        }
+        .rows .v {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+        .rows .wp {
+          grid-column: 1 / -1;
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 0 6px;
+          min-width: 0;
+        }
+        .rows .wp .v {
+          margin-left: auto;
+        }
+        .rows .label.k-brg {
+          grid-column: 1 / span 2;
+        }
+        .rows .v.k-brg {
+          grid-column: 3 / span 2;
+        }
+        .rows .label.k-vis {
+          padding-left: 6px;
+        }
+        /* 只有「速限」或只有「能見度」時,數值佔到方塊的右緣 */
+        .rows:not(:has(.k-lim)) .label.k-vis {
+          padding-left: 0;
+        }
+        .rows:not(:has(.k-lim)) .v.k-vis,
+        .rows:not(:has(.k-vis)) .v.k-lim {
+          grid-column: 2 / -1;
+        }
+      }
     `,
   ];
 
@@ -151,9 +218,9 @@ export class RouteReadout extends LitElement {
           : html`<div class="label muted">${r ? 'XTD --' : '無航線'}</div>`}
         <div class="rows">
           ${r?.nextWaypoint ? html`<span class="wp"><span class="label">下一航點</span><span class="v">${r.nextWaypoint}${r.distanceToWaypoint_nm !== undefined ? html` <span class="nb">${r.distanceToWaypoint_nm.toFixed(2)} nm</span>` : nothing}</span></span>` : nothing}
-          ${r?.bearingToWaypoint_deg !== undefined ? html`<span class="label">方位 / 航段</span><span class="v"><span class="nb">${formatHeading(r.bearingToWaypoint_deg)}${r.legCourse_deg !== undefined ? ` / ${formatHeading(r.legCourse_deg)}` : ''}</span></span>` : nothing}
-          ${r?.speedLimit_kn !== undefined ? html`<span class="label">速限</span><span class="v"><span class="nb">${r.speedLimit_kn} kn</span></span>` : nothing}
-          ${this.visibility !== undefined ? html`<span class="label">能見度</span><span class="v ${this.visibility < 1 ? 'warning' : ''}"><span class="nb">${this.visibility.toFixed(1)} nm</span></span>` : nothing}
+          ${r?.bearingToWaypoint_deg !== undefined ? html`<span class="label k-brg">方位 / 航段</span><span class="v k-brg"><span class="nb">${formatHeading(r.bearingToWaypoint_deg)}${r.legCourse_deg !== undefined ? ` / ${formatHeading(r.legCourse_deg)}` : ''}</span></span>` : nothing}
+          ${r?.speedLimit_kn !== undefined ? html`<span class="label k-lim">速限</span><span class="v k-lim"><span class="nb">${r.speedLimit_kn} kn</span></span>` : nothing}
+          ${this.visibility !== undefined ? html`<span class="label k-vis">能見度</span><span class="v k-vis ${this.visibility < 1 ? 'warning' : ''}"><span class="nb">${this.visibility.toFixed(1)} nm</span></span>` : nothing}
         </div>
       </div>
     `;

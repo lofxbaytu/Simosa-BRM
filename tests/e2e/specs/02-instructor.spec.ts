@@ -16,6 +16,8 @@
 // 1920×1080(conning 條單列;第三十一輪):重播檢視載入 E20 夾具與航線偏移很大的紀錄(當場合成),讀數列各方塊不被水平裁切,字距加大 3 % 仍通過。
 // 審查後補:重播檢視載入 E17b 夾具(情境庫唯一的 12 格)浪向玫瑰與船速方塊的中文標籤照常顯示;完整教官站 1920×945 / 1920×800
 // (瀏覽器沒有全螢幕,conning 條只有 170 / 150 px 高)平常的數值下內容不比方塊高。
+// conning 條兩列(視窗 ≤ 1900 px;第三十一輪):完整教官站 1366×768 / 1536×864(另 1536×730 與 1900×700)合成的平常數值與狀態、
+// 教官站按「凍結」後駕駛台與教官站的時間方塊(真實流程)、重播檢視載入有流場與航線的夾具(E06b),讀數列各方塊不被方塊邊界水平或垂直裁切。
 import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -24,9 +26,9 @@ import { chromium } from '@playwright/test';
 import { OUT, ROOT, bridgeUrl, instructorUrl, shipWebBase, webBase, type E2eEnv } from '../support/env.ts';
 import { freePort } from '../support/processes.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
-import { CONNING_NONE, CONNING_UNDERWAY, CONNING_USUAL } from '../support/conning-values.ts';
-import { INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, overrideConning, probeConning, probeLayout } from '../support/layout.ts';
-import { PageErrors, expectConningSingleRow, scenarioLoadButton, waitConnected } from '../support/pages.ts';
+import { CONNING_NONE, CONNING_ROLL, CONNING_TWO_ROW_ASTERN, CONNING_TWO_ROW_ROUTE, CONNING_TWO_ROW_SEA, CONNING_TWO_ROW_STATUSES, CONNING_UNDERWAY, CONNING_USUAL } from '../support/conning-values.ts';
+import { BRIDGE_LAYOUT, INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, overrideConning, probeConning, probeLayout } from '../support/layout.ts';
+import { PageErrors, expectConningSingleRow, expectConningTwoRows, scenarioLoadButton, waitConnected } from '../support/pages.ts';
 
 /** 與 tests/SimCore.Tests/ScenarioLoadRejectionTests.cs 相同的兩個結構 error:多邊形只有 2 點、hardFail 引用不存在的區域 */
 const INVALID_INLINE = {
@@ -851,6 +853,151 @@ test('重播檢視載入 E09 核心紀錄夾具、時間軸最後(航線偏移�
   await page.setViewportSize({ width: 1366, height: 768 });
   await expect.poll(async () => (await page.evaluate(probeConning)).rows).toBe(2);
   expect(layoutFailures(await page.evaluate(probeLayout, REPLAY_LAYOUT)), '重播檢視 1366×768(E09 夾具,時間軸最後)的版面問題').toEqual([]);
+  errors.expectNone();
+});
+
+test('完整教官站 1366×768 與 1536×864(conning 條兩列 11 與 13 格;另 1536×730 與 1900×700):平常會出現的數值與狀態下,讀數列各方塊不被方塊邊界水平或垂直裁切', async ({ page, env, core }) => {
+  // 第三十一輪:完整教官站給 conning 條的高度是三個頁面裡最矮的(30vh,下限 220 px:1366×768 時每個方塊 112 px 高)。原本平常的數值下
+  // 航向的「設定 / COG」、主機的車鐘位置與主機狀態被方塊下緣切掉 4 至 10 px,UKC 的「吃水 F/A」整列看不到,航線下方的幾列在方塊之外。
+  // 判定在 support/pages.ts 的 expectConningTwoRows。1536×730(瀏覽器沒有全螢幕:方塊 107 px 高而字級照視窗寬度是 24.6 px)
+  // 原本船速方塊四列比方塊高 5 至 7 px;1900×700(兩列裡最寬而最矮的)時時間方塊四列也比方塊高。
+  const errors = new PageErrors(page);
+  await ensureRunning(core);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env));
+  await waitConnected(page);
+  const tile = (tag: string) => page.locator(`brm-instructor-app brm-conning-bar ${tag}`).first();
+  await expect(tile('brm-heading').locator('.hdg .value')).toHaveText(/^\d{3}$/);
+  const extra11 = { route: CONNING_TWO_ROW_ROUTE, visibility_nm: 0.2 };
+  const extra13 = { ...extra11, ...CONNING_TWO_ROW_SEA, roll: CONNING_ROLL };
+  for (const size of [{ width: 1366, height: 768 }, { width: 1536, height: 864 }]) {
+    await page.setViewportSize(size);
+    for (const [name, cells, extra] of [['11 格(航線)', 11, extra11], ['13 格(航線、浪、橫搖)', 13, extra13]] as const) {
+      await test.step(`${size.width}×${size.height} ${name}`, async () => {
+        const label = `完整教官站 ${size.width}×${size.height} ${name}`;
+        // 各種狀態同時出現:感測器無效、凍結、擱淺、主機故障並 EFAS、艏側推不可用、最長的流場來源標示、99:59:59、西經
+        expect(await page.evaluate(overrideConning, { patch: { ...CONNING_NONE, ...CONNING_TWO_ROW_STATUSES, ...extra }, config: { rudderMax_deg: 35 }, setHeading: 288 })).toBe(cells);
+        await expect(tile('brm-clock').locator('.row.sim .value')).toHaveText('99:59:59 凍結');
+        const bar = await expectConningTwoRows(page, INSTRUCTOR_LAYOUT, `${label}、各種狀態`, { cells });
+        // 大字(航向、主機轉速、UKC)在這個高度以方塊高度設上限,不比修改前(3.2vw)小超過 10 %
+        const big = 0.9 * 3.2 * (size.width / 100);
+        for (const [tag, prefix] of [['brm-heading', '.hdg>.value.big'], ['brm-engine', '.top>.value.big'], ['brm-depth', '.main']] as const) {
+          const fonts = bar.tiles.find((t) => t.tag === tag)!.fonts;
+          const key = Object.keys(fonts).find((k) => k.startsWith(prefix))!;
+          expect(fonts[key], `${label}:${tag} 大字的字級(px)`).toBeGreaterThanOrEqual(big);
+        }
+        // 主機:車鐘位置與主機狀態整行在方塊的內容框裡(原本下緣被切掉)
+        const engine = await tile('brm-engine').evaluate((host) => {
+          const root = host.shadowRoot!;
+          const r = (sel: string) => root.querySelector(sel)!.getBoundingClientRect();
+          return { tile: r('.tile'), teleg: r('.bottom .teleg'), state: r('.bottom > :last-child'), svg: r('.bar svg') };
+        });
+        expect(engine.teleg.bottom, `${label}:車鐘位置的下緣在方塊的內容框裡`).toBeLessThanOrEqual(engine.tile.bottom - 5);
+        expect(engine.state.bottom, `${label}:主機狀態的下緣在方塊的內容框裡`).toBeLessThanOrEqual(engine.tile.bottom - 5);
+        expect(engine.svg.height, `${label}:轉速條的高度(px)`).toBeGreaterThanOrEqual(12);
+        // 倒俥、滿舵 70°、緊急全速倒車 -150 並「啟動中 100%」、艏側推 P 100%、航向可疑
+        expect(await page.evaluate(overrideConning, { patch: { ...CONNING_NONE, ...CONNING_TWO_ROW_ASTERN, ...extra }, config: { rudderMax_deg: 70 }, issues: ['heading'], setHeading: 359 })).toBe(cells);
+        await expect(tile('brm-engine').locator('.top .value.big')).toHaveText('-150');
+        await expectConningTwoRows(page, INSTRUCTOR_LAYOUT, `${label}、倒俥滿舵`, { cells });
+      });
+    }
+  }
+  // 1536×730(1536×864 的筆電、瀏覽器沒有全螢幕)與 1900×700(兩列裡最寬而最矮的:字級照視窗寬度到上限,方塊仍是 107 px 高):
+  // 10 格、船速兩位數;這個高度左欄的「載入」本來就要捲動,只判定 conning 條
+  for (const size of [{ width: 1536, height: 730 }, { width: 1900, height: 700 }]) {
+    await page.setViewportSize(size);
+    expect(await page.evaluate(overrideConning, { patch: { ...CONNING_NONE, ...CONNING_TWO_ROW_STATUSES }, config: { rudderMax_deg: 35 }, setHeading: 288 })).toBe(10);
+    const short = await expectConningTwoRows(page, INSTRUCTOR_LAYOUT, `完整教官站 ${size.width}×${size.height} 10 格、各種狀態`, { cells: 10, scope: 'conning' });
+    expect(short.height, `${size.width}×${size.height}:conning 條的高度(px;下限 220)`).toBeLessThanOrEqual(221);
+  }
+  errors.expectNone();
+});
+
+test('教官站按「凍結」後(真實流程;1366×768 與 1536×864,conning 條兩列):駕駛台與教官站的時間方塊顯示「凍結」,讀數列各方塊不被方塊邊界裁切', async ({ page, env, core, context }) => {
+  // 第三十一輪:凍結是教官平常就會按的。凍結後時間方塊的模擬時間後面多「凍結」兩個字;兩列時(視窗 ≤ 1900 px)原本這一列在較窄的時間方塊裡
+  // 被方塊右緣切掉(合成數值的清查),而且凍結與否,航向、主機、UKC 三個方塊在 1366×768 的教官站都有下緣被切掉。
+  // 這裡走真實流程:教官站的「凍結」鈕 → 核心的凍結狀態幀 → 教官站與駕駛台兩個頁面。情境用 E20(有航線,11 格)。
+  const errors = new PageErrors(page);
+  await ensureScenario(core, 'E20_comprehensive_assessment_kaohsiung');
+  await ensureRunning(core);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env));
+  await waitConnected(page);
+  const bridge = await context.newPage();
+  const bridgeErrors = new PageErrors(bridge);
+  await bridge.setViewportSize({ width: 1366, height: 768 });
+  await bridge.goto(bridgeUrl(env));
+  await waitConnected(bridge);
+  await page.bringToFront();
+  const panel = page.locator('brm-run-control');
+  const frozenEvent = core.waitEvent('frozen', 10_000);
+  await panel.locator('button.freeze').click();
+  try {
+    await frozenEvent;
+    const clocks = [
+      { name: '教官站', target: page, spec: INSTRUCTOR_LAYOUT, clock: page.locator('brm-instructor-app brm-conning-bar brm-clock').first() },
+      { name: '駕駛台', target: bridge, spec: BRIDGE_LAYOUT, clock: bridge.locator('brm-clock') },
+    ];
+    for (const size of [{ width: 1366, height: 768 }, { width: 1536, height: 864 }]) {
+      for (const { name, target, spec, clock } of clocks) {
+        await target.bringToFront();
+        await target.setViewportSize(size);
+        const label = `${name} ${size.width}×${size.height}(凍結後)`;
+        await expect(clock.locator('.row.sim .value'), `${label}:模擬時間後面有「凍結」`).toHaveText(/^\d\d:\d\d:\d\d 凍結$/);
+        await expectConningTwoRows(target, spec, label, { cells: 11 });
+        // 「凍結」與模擬時間在同一行,整段在方塊的內容框裡(方塊內距 8 px)
+        const sim = await clock.evaluate((host) => {
+          const root = host.shadowRoot!;
+          const r = (sel: string) => root.querySelector(sel)!.getBoundingClientRect();
+          return { tile: r('.tile'), time: r('.row.sim .value .nb'), frozen: r('.row.sim .value .label') };
+        });
+        expect(Math.abs(sim.frozen.bottom - sim.time.bottom), `${label}:「凍結」與模擬時間在同一行(下緣的差,px)`).toBeLessThan(6);
+        expect(sim.frozen.right, `${label}:「凍結」的右緣在方塊的內容框裡`).toBeLessThanOrEqual(sim.tile.right - 8);
+        expect(sim.time.left, `${label}:模擬時間的左緣在方塊的內容框裡`).toBeGreaterThanOrEqual(sim.tile.left + 8);
+      }
+    }
+    await page.bringToFront();
+    const resumedEvent = core.waitEvent('resumed', 10_000);
+    await panel.locator('button.resume').click();
+    await resumedEvent;
+    await expect(page.locator('brm-instructor-app brm-conning-bar brm-clock').first().locator('.row.sim .value')).toHaveText(/^\d\d:\d\d:\d\d$/);
+  } finally {
+    await ensureRunning(core);
+    await bridge.close();
+  }
+  errors.expectNone();
+  bridgeErrors.expectNone();
+});
+
+test('重播檢視載入 E06b 核心紀錄夾具(有流場來源、潮高與航線;conning 條兩列 11 格):1366×768、1536×864 與 1093×614 讀數列各方塊不被方塊邊界裁切', async ({ page, env }) => {
+  // 第三十一輪:重播檢視給 conning 條的高度與完整教官站相同(30vh,下限 220 px)。這份夾具有時變流場(標題「流(潮流)」)、潮高
+  // (UKC 方塊多一列,共四列)與航線(11 格);原本 1366×768 時航向的「設定 / COG」被切掉 4 px、UKC 的「吃水 F/A」整列在方塊下緣之外。
+  const errors = new PageErrors(page);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const view = page.locator('brm-replay-view');
+  await view.locator('input.file-input').setInputFiles(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E06b_tidal_stream-core.jsonl'));
+  const slider = view.locator('.timeline input.slider');
+  await expect(slider).toBeVisible({ timeout: 15_000 });
+  await expect(view.locator('brm-current .tile-title .zh')).toHaveText('流(潮流)');
+  await expect(view.locator('brm-depth .rows .row.tide')).toBeVisible();
+  const [min, max] = await slider.evaluate((el) => [Number((el as HTMLInputElement).min), Number((el as HTMLInputElement).max)] as const);
+  for (const [width, height, scope] of [[1366, 768, 'page'], [1536, 864, 'page'], [1093, 614, 'conning']] as const) {
+    await page.setViewportSize({ width, height });
+    for (const frac of [0, 0.5, 1]) {
+      await slider.fill(String(frac === 1 ? max : min + (max - min) * frac));
+      const label = `重播檢視 ${width}×${height}(E06b 夾具,時間軸 ${frac * 100}%)`;
+      await expectConningTwoRows(page, REPLAY_LAYOUT, label, { cells: 11, scope });
+      // UKC 方塊:四列(水深、潮高、Squat、吃水)都在方塊的內容框裡
+      const depth = await view.locator('brm-depth').evaluate((host) => {
+        const root = host.shadowRoot!;
+        const tile = root.querySelector('.tile')!.getBoundingClientRect();
+        return { tileBottom: tile.bottom, rows: [...root.querySelectorAll('.rows .row')].map((row) => ({ text: (row.textContent ?? '').trim().slice(0, 6), bottom: row.getBoundingClientRect().bottom })) };
+      });
+      expect(depth.rows.length, `${label}:UKC 方塊下方的列數`).toBe(4);
+      for (const row of depth.rows) expect(row.bottom, `${label}:UKC 方塊「${row.text}」的下緣在方塊的內容框裡`).toBeLessThanOrEqual(depth.tileBottom - 5);
+    }
+  }
   errors.expectNone();
 });
 

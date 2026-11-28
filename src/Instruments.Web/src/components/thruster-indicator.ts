@@ -67,6 +67,34 @@ export class ThrusterIndicator extends LitElement {
           flex-basis: 100%;
         }
       }
+      /* conning 條兩列:方塊窄於 240 px(與單列同一門檻;「實際 P 100% 令 P 100%」一行放不下 —— 數值的字級跟著視窗寬度變大,
+         1900 寬以下的艏側推方塊都窄於 240 px)時「實際」「令」各一行、數值靠右,不隨推力的位數(0% / S 45% / P 100%)在一行與兩行之間跳動;
+         240 px 以上兩組在同一行(各靠一邊)。原本兩組硬排在同一行,放不下時在標籤與數值之間折行(1366 寬以下),
+         CI 的字型下 7 欄時兩個「S 100%」並排比方塊寬。推力條吃剩下的高度(至少 14 px);各列的行高固定 */
+      @container style(--brm-conning-single: 0) {
+        .bar {
+          min-height: 14px;
+        }
+        .readouts {
+          gap: 0 8px;
+          line-height: 16px;
+          white-space: nowrap;
+        }
+        .tile > .label {
+          line-height: 13px;
+        }
+      }
+      @container style(--brm-conning-single: 0) and (max-width: 239px) {
+        .readouts {
+          flex-direction: column;
+        }
+        .readouts > span {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 0 4px;
+        }
+      }
     `,
   ];
 

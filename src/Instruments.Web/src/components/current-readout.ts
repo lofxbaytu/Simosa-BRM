@@ -81,6 +81,35 @@ export class CurrentReadout extends LitElement {
           font-size: clamp(11px, min(0.95vw, 10cqi), 18px);
         }
       }
+      /* conning 條兩列:
+         - 標題裡較長的流場來源標示(「流(流場網格·流場表)」)一行放不下時換到下一行(shared.ts 的 conningTileStyles);
+           原本不換行,1366 寬以下被方塊右緣切掉 12 至 45 px;
+         - 方塊 185 px 以下(與風方塊同一門檻)玫瑰圖縮成 28 px 並移到數值上方,兩列數值用滿方塊寬度(並排時數值列只剩約 75 px,
+           「流速 DRIFT 9.9 kn」放不下);
+         - 兩列數值的行高固定(標籤 13 px) */
+      @container style(--brm-conning-single: 0) {
+        .rows {
+          min-width: 0;
+        }
+        .rows .label {
+          line-height: 13px;
+        }
+      }
+      @container style(--brm-conning-single: 0) and (max-width: 185px) {
+        .body {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 2px;
+        }
+        .rose {
+          width: 28px;
+          height: 28px;
+          align-self: center;
+        }
+        .rows {
+          flex: 0 0 auto;
+        }
+      }
     `,
   ];
 

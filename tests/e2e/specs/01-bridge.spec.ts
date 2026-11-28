@@ -5,12 +5,17 @@
 // 2 筆警報完整可見、meta 不截斷);1280×720 的浮貼外力讀數放得下時不攔滑鼠(讀數中央的滾輪縮放、拖曳平移航跡圖);
 // 1920×1080(conning 條單列 10 至 13 格):真實核心的狀態與極端數值下讀數列各方塊不被水平裁切,字距加大 3 % 仍通過(第三十一輪);
 // 審查後補:顯示的內容沒有少(浪向玫瑰、船速方塊的中文標籤)、橫搖角警報等級看得到字、UKC 六個字元與沒有空白的長字串不被裁切。
+// 1366×768、1536×864 與 1093×614(conning 條兩列;船上文書筆電與教官筆電實際看到的排法):平常會出現的數值與狀態下
+// 讀數列各方塊不被方塊邊界水平或垂直裁切(第三十一輪)。
 import type { Locator, Page } from '@playwright/test';
 import { bridgeUrl, instructorUrl } from '../support/env.ts';
 import { ensureRunning, ensureScenario, expect, scenarioPath, test } from '../support/fixtures.ts';
-import { CONNING_NONE, CONNING_ROLL, CONNING_ROUTE, CONNING_ROUTE_USUAL, CONNING_SEA, CONNING_UNDERWAY, CONNING_USUAL, CONNING_WIDEST } from '../support/conning-values.ts';
-import { BRIDGE_LAYOUT, layoutFailures, overrideConning, probeLayout } from '../support/layout.ts';
-import { PageErrors, expectConningSingleRow, waitConnected } from '../support/pages.ts';
+import {
+  CONNING_NONE, CONNING_ROLL, CONNING_ROUTE, CONNING_ROUTE_USUAL, CONNING_SEA, CONNING_TWO_ROW_ASTERN, CONNING_TWO_ROW_ROUTE, CONNING_TWO_ROW_SEA,
+  CONNING_TWO_ROW_STATUSES, CONNING_UNDERWAY, CONNING_USUAL, CONNING_WIDEST,
+} from '../support/conning-values.ts';
+import { BRIDGE_LAYOUT, layoutFailures, overrideConning, probeLayout, type ConningReport } from '../support/layout.ts';
+import { PageErrors, expectConningSingleRow, expectConningTwoRows, waitConnected } from '../support/pages.ts';
 import type { CoreClient } from '../support/ws.ts';
 
 /** E09 強制觸發全船失電,等 ≥ 2 筆警報與 ≥ 2 個故障(header 折成兩行、右欄最吃高度的情況) */
@@ -412,3 +417,97 @@ test('操船台 1920×1080(conning 條單列 10 至 13 格):真實核心的狀�
   expect(ukcFont, 'UKC 1234.5 的字級(px)').toBeLessThan(41);
   errors.expectNone();
 });
+
+/** probeConning 量到的字級:鍵是「父元素的類別>數值的類別」,狀態類別(warning、caution、alarm…)在後面,以開頭比對 */
+function conningFont(bar: ConningReport, tag: string, prefix: string): number {
+  const tile = bar.tiles.find((t) => t.tag === tag);
+  expect(tile, tag).toBeDefined();
+  const key = Object.keys(tile!.fonts).find((k) => k.startsWith(prefix));
+  expect(key, `${tag} 的數值 ${prefix}(量到的:${Object.keys(tile!.fonts).join('、')})`).toBeDefined();
+  return tile!.fonts[key!]!;
+}
+
+test('操船台 1366×768、1536×864 與 1093×614(conning 條兩列 10 至 13 格):平常會出現的數值與狀態下,讀數列各方塊不被方塊邊界水平或垂直裁切,字距加大 3 % 仍通過', async ({ page, env, core }) => {
+  // 第三十一輪:視窗 ≤ 1900 px 時 conning 條排成兩列,每個方塊只有約 107 至 135 px 高。原本兩列共用 6 欄(有傾斜儀時 7 欄)的格線,
+  // 航向的「設定 / COG」、主機的車鐘位置與主機狀態、UKC 的「吃水 F/A」、航線下方的幾列在 1366×768 平常的數值下就被方塊下緣切掉;
+  // 流方塊標題裡較長的流場來源標示、時間方塊「GNSS 無效」的標題被方塊右緣切掉;13 格時浪、傾斜儀、航線三格放不下。
+  // 現在兩列各自分配寬度,各方塊依自己的寬度與高度排(行高固定、大字的字級以方塊高度設上限、圖形可以縮短)。
+  // 判定在 support/pages.ts 的 expectConningTwoRows(版面判定通過、排成兩列、內容不比方塊高、沒有被方塊邊界切掉的文字、
+  // 各方塊的圖形與文字都有顯示、文字不重疊、字距加大 3 % 後仍通過)。
+  const errors = new PageErrors(page);
+  await ensureScenario(core, 'E20_comprehensive_assessment_kaohsiung');
+  await ensureRunning(core);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto(bridgeUrl(env));
+  await waitConnected(page);
+  await expect(page.locator('brm-heading .hdg .value')).toHaveText(/^\d{3}$/);
+  await expect(page.locator('brm-vhf .pill')).toHaveText('已連線');
+  const sizes = [{ width: 1366, height: 768 }, { width: 1536, height: 864 }];
+  // 1) 真實核心目前的狀態(E20:有航線,11 格)
+  for (const size of sizes) {
+    await page.setViewportSize(size);
+    await expectConningTwoRows(page, BRIDGE_LAYOUT, `操船台 ${size.width}×${size.height}(核心目前的狀態)`, { cells: 11 });
+  }
+
+  // 2) 合成的數值(support/conning-values.ts 的 CONNING_TWO_ROW_*:平常會出現的位數與狀態)。選填欄位決定格數
+  const none = CONNING_NONE;
+  const route = CONNING_TWO_ROW_ROUTE;
+  const sea = CONNING_TWO_ROW_SEA;
+  const roll = CONNING_ROLL;
+  const combos: Array<{ name: string; cells: number; extra: Record<string, unknown> }> = [
+    { name: '10 格', cells: 10, extra: {} },
+    { name: '11 格(航線)', cells: 11, extra: { route, visibility_nm: 0.2 } },
+    { name: '12 格(航線、浪)', cells: 12, extra: { route, visibility_nm: 0.2, ...sea } },
+    { name: '13 格(航線、浪、橫搖)', cells: 13, extra: { route, visibility_nm: 0.2, ...sea, roll } },
+  ];
+  for (const size of sizes) {
+    await page.setViewportSize(size);
+    for (const combo of combos) {
+      await test.step(`${size.width}×${size.height} ${combo.name}`, async () => {
+        const label = `操船台 ${size.width}×${size.height} ${combo.name}`;
+        // 各種狀態同時出現:感測器無效、凍結、擱淺、主機故障並 EFAS、艏側推不可用、最長的流場來源標示、99:59:59、西經
+        expect(await page.evaluate(overrideConning, { patch: { ...none, ...CONNING_TWO_ROW_STATUSES, ...combo.extra }, config: { rudderMax_deg: 35 }, setHeading: 288 })).toBe(combo.cells);
+        await expect(page.locator('brm-clock .row.sim .value')).toHaveText('99:59:59 凍結');
+        await expect(page.locator('brm-clock .tile-title .zh')).toHaveText('時間與位置 GNSS 無效');
+        await expect(page.locator('brm-current .tile-title .zh')).toHaveText('流(流場網格·流場表)');
+        await expect(page.locator('brm-depth .rows .row').last()).toHaveText('吃水 F/A5.7 / 6.1');
+        await expect(page.locator('brm-engine .bottom')).toHaveText(/EFAS 緊急全速倒車\s*故障 100%/);
+        const bar = await expectConningTwoRows(page, BRIDGE_LAYOUT, `${label}、各種狀態`, { cells: combo.cells });
+        // 主要數值的字級不比修改前小超過 10 %(修改前:大字 3.2vw、迴轉率 / 船速 / 航線偏移 1.6vw、舵角 / 艏側推 / 時鐘 1.1vw)
+        const vw = size.width / 100;
+        expect(conningFont(bar, 'brm-heading', '.hdg>.value.big'), `${label}:航向的字級`).toBeGreaterThanOrEqual(0.9 * 3.2 * vw);
+        expect(conningFont(bar, 'brm-rot', '.tile>.readout.value.mid'), `${label}:迴轉率的字級`).toBeGreaterThanOrEqual(0.9 * 1.6 * vw);
+        expect(conningFont(bar, 'brm-speed', '.row>.value.mid'), `${label}:STW / SOG 的字級`).toBeGreaterThanOrEqual(0.9 * 1.6 * vw);
+        expect(conningFont(bar, 'brm-rudder', '>.value.small'), `${label}:舵角的字級`).toBeGreaterThanOrEqual(0.9 * 1.1 * vw);
+        expect(conningFont(bar, 'brm-engine', '.top>.value.big'), `${label}:主機轉速的字級`).toBeGreaterThanOrEqual(0.9 * 3.2 * vw);
+        expect(conningFont(bar, 'brm-thruster', '>.value.small'), `${label}:艏側推的字級`).toBeGreaterThanOrEqual(0.9 * 1.1 * vw);
+        expect(conningFont(bar, 'brm-depth', '.main'), `${label}:UKC 的字級`).toBeGreaterThanOrEqual(0.9 * 3.2 * vw);
+        expect(conningFont(bar, 'brm-clock', '.row>.value.small'), `${label}:時鐘的字級`).toBeGreaterThanOrEqual(0.9 * 1.1 * vw);
+        if ('route' in combo.extra) {
+          expect(conningFont(bar, 'brm-route', '.xtd>.value.mid'), `${label}:航線偏移的字級`).toBeGreaterThanOrEqual(0.9 * 1.6 * vw);
+          // 航線方塊:「L 偏左」沒有被擠成直排(一行),「速限」與「能見度」在同一列
+          const routeBoxes = await page.locator('brm-route').evaluate((host) => {
+            const root = host.shadowRoot!;
+            const r = (sel: string) => root.querySelector(sel)!.getBoundingClientRect();
+            return { side: r('.xtd .side'), limit: r('.rows .label.k-lim'), vis: r('.rows .label.k-vis') };
+          });
+          expect(routeBoxes.side.height, `${label}:「L 偏左」的高度(px;一行)`).toBeLessThan(20);
+          expect(Math.abs(routeBoxes.limit.top - routeBoxes.vis.top), `${label}:「速限」與「能見度」在同一列`).toBeLessThan(2);
+        }
+        // 倒俥、滿舵 70°、緊急全速倒車 -150 並「啟動中 100%」、艏側推 P 100%、航向可疑
+        expect(await page.evaluate(overrideConning, { patch: { ...none, ...CONNING_TWO_ROW_ASTERN, ...combo.extra }, config: { rudderMax_deg: 70 }, issues: ['heading'], setHeading: 359 })).toBe(combo.cells);
+        await expect(page.locator('brm-engine .top .value.big')).toHaveText('-150');
+        await expect(page.locator('brm-clock .row.sim .value')).toHaveText('23:59:59 凍結');
+        await expectConningTwoRows(page, BRIDGE_LAYOUT, `${label}、倒俥滿舵`, { cells: combo.cells });
+      });
+    }
+  }
+  // 3) 1093×614(1366×768 在 125 % 縮放;方塊 107 px 高,13 格時最窄):關鍵控制本來就要捲動(第 6 節),這裡只判定 conning 條
+  await page.setViewportSize({ width: 1093, height: 614 });
+  for (const [name, values, config] of [['各種狀態', CONNING_TWO_ROW_STATUSES, { rudderMax_deg: 35 }], ['倒俥滿舵', CONNING_TWO_ROW_ASTERN, { rudderMax_deg: 70 }]] as const) {
+    expect(await page.evaluate(overrideConning, { patch: { ...none, ...values, route, visibility_nm: 0.2, ...sea, roll }, config, setHeading: 288 })).toBe(13);
+    await expectConningTwoRows(page, BRIDGE_LAYOUT, `操船台 1093×614 13 格、${name}`, { cells: 13, scope: 'conning' });
+  }
+  errors.expectNone();
+});
+

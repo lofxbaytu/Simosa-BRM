@@ -25,6 +25,10 @@
 // 排成幾列、內容有沒有比方塊高(被方塊自己的 overflow: hidden 裁掉下緣)與各數值的字級;審查後另量「顯示的內容有沒有少」——
 // 各圖形(svg)的寬高、沒有畫出來的文字(display: none 等)、互相重疊的文字(內容比方塊高時,置中的內容會往上擠到標題列,
 // scrollHeight 看不出來)。overrideConning 把 conning 條顯示的狀態換成指定的值(極端數值、格數組合)。
+//
+// conning 條兩列(視窗 ≤ 1900 px;船上文書筆電 1366×768 與教官筆電 125 % 縮放的 1536×864 實際看到的排法)另量「文字有沒有被方塊邊界切掉」:
+// 每段文字的墨水範圍超出方塊的裁切框(.tile 的 overflow: hidden)多少 —— 兩列的方塊只有約 107 至 135 px 高,內容比方塊高時
+// 最後一列的下緣被切掉(判定 4 只看水平;scrollHeight 的容差是 4 px,而 2 至 3 px 的下緣已經切到字)。
 
 /** 關鍵控制:host 是 brm-* 元件的選擇器,inner 是其 shadow root 內的選擇器;至少要有 min 個(預設 1),每一個都必須不捲動就整個點得到 */
 export interface LayoutKeyControl {
@@ -531,6 +535,8 @@ export interface ConningTileReport {
   hiddenText: string[];
   /** 互相重疊的兩段文字(各自的墨水範圍相交超過 1.5 px;不含 SVG 內的文字與祖孫關係的元素) */
   overlaps: string[];
+  /** 被方塊邊界切掉的文字:墨水範圍超出方塊的裁切框(.tile 的邊框內緣)1 px 以上的那一邊與 px(不含 SVG 內的文字);整段在框外時註明「看不到」 */
+  clipped: string[];
 }
 
 export interface ConningReport {
@@ -580,6 +586,15 @@ export function probeConning(): ConningReport {
     // 基線 = 行框中線對齊字型的升降部,墨水 = 基線 − 實際升部 … 基線 + 實際降部(canvas measureText)
     const hiddenText: string[] = [];
     const inks: Array<{ left: number; right: number; top: number; bottom: number; text: string; parent: Element }> = [];
+    // 方塊的裁切框:.tile 是 overflow: hidden,內容超出它的邊框內緣(padding box)就看不到
+    const clip = { left: -Infinity, right: Infinity, top: -Infinity, bottom: Infinity };
+    if (inner) {
+      const ib = inner.getBoundingClientRect();
+      clip.left = ib.left + inner.clientLeft;
+      clip.top = ib.top + inner.clientTop;
+      clip.right = clip.left + inner.clientWidth;
+      clip.bottom = clip.top + inner.clientHeight;
+    }
     if (root) {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -602,6 +617,16 @@ export function probeConning(): ConningReport {
         }
       }
     }
+    const clipped: string[] = [];
+    for (const ink of inks) {
+      const sides: Array<[string, number, boolean]> = [
+        ['左', clip.left - ink.left, ink.right <= clip.left],
+        ['右', ink.right - clip.right, ink.left >= clip.right],
+        ['上', clip.top - ink.top, ink.bottom <= clip.top],
+        ['下', ink.bottom - clip.bottom, ink.top >= clip.bottom],
+      ];
+      for (const [side, px, gone] of sides) if (px > 1) clipped.push(`「${ink.text}」${side}緣被切 ${px.toFixed(1)} px${gone ? '(整段看不到)' : ''}`);
+    }
     const overlaps: string[] = [];
     for (let i = 0; i < inks.length; i++) {
       for (let j = i + 1; j < inks.length; j++) {
@@ -613,7 +638,7 @@ export function probeConning(): ConningReport {
         if (w > 1.5 && h > 1.5) overlaps.push(`「${p.text}」×「${q.text}」 ${w.toFixed(1)}×${h.toFixed(1)} px`);
       }
     }
-    out.tiles.push({ tag: tile.tagName.toLowerCase(), width: b.width, height: b.height, overflowY: inner ? inner.scrollHeight - inner.clientHeight : 0, fonts, graphics, hiddenText, overlaps });
+    out.tiles.push({ tag: tile.tagName.toLowerCase(), width: b.width, height: b.height, overflowY: inner ? inner.scrollHeight - inner.clientHeight : 0, fonts, graphics, hiddenText, overlaps, clipped });
   }
   out.rows = tops.size;
   return out;

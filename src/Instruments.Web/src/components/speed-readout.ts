@@ -47,6 +47,20 @@ export class SpeedReadout extends LitElement {
           font-size: clamp(18px, min(1.6vw, 22cqi), 28px);
         }
       }
+      /* conning 條兩列:四列的高度固定(STW / SOG 的行高 = 字級,COG / 漂角的行高 = 標籤的 13 px 與字級較大的一個),字級另以方塊高度
+         設上限 —— 視窗寬而矮(1536×730:方塊 107 px 高、字級照視窗寬度是 24.6 px)時四列原本比方塊高 5 至 7 px。
+         1366×768 與 1536×864 的字級不受這個上限影響(21.9 / 24.6 px) */
+      @container style(--brm-conning-single: 0) {
+        .rows .label {
+          line-height: 13px;
+        }
+        .rows .value.mid {
+          font-size: clamp(18px, min(1.6vw, 21cqb), 28px);
+        }
+        .rows .value.small {
+          font-size: clamp(12px, min(1.1vw, 15cqi, 14.5cqb), 20px);
+        }
+      }
     `,
   ];
 

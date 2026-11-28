@@ -1,4 +1,4 @@
-// 上排 conning 條:把各儀器方塊排成一列(視窗寬於 1900 px 時一列 10 至 13 格;1900 px 以下折成兩列)。
+// 上排 conning 條:把各儀器方塊排成一列(視窗寬於 1900 px 時一列 10 至 13 格;1900 px 以下折成兩列,兩列各自分配寬度)。
 // 核心有航線狀態(state.route)或能見度時加一格航線/能見度方塊(規劃書第 7.2 節 XTD/下一航點);
 // 有浪(state.waves)或船間交互作用(state.shipInteraction)時再加一格 SEA 方塊(physics-waves.md 第 5 節);
 // 有浪一階運動(state.waveMotion;情境 ship.seakeeping.enabled 且有浪,需求 R2)時 SEA 方塊多一列縱搖/升沉(契約上必與 state.waves 同時出現,
@@ -91,19 +91,118 @@ export class ConningBar extends LitElement {
       flex: 1.5 1 146px;
     }
     /* 寬度 ≤ 1900 px 折成兩列:單列時每格太窄 — 包含 1920×1080 筆電在 Windows 125% 縮放下的 1536 px。
-       app.ts / instructor-app.ts / replay-view.ts 同一門檻加高該列。兩列的格線與各方塊的排法和第三十一輪之前相同
-       (--brm-conning-single: 0,方塊裡單列專用的規則不套用) */
+       app.ts / instructor-app.ts / replay-view.ts 同一門檻加高該列(各頁給的高度不同;兩列時每個方塊只有約 107 至 135 px 高)。
+       兩列各自分配寬度(同一個 flex 容器折成兩行;docs/design/web-layout.md 第 2.5 節「兩列」):
+       - 第一列:航向、迴轉率、船速、舵角、主機、艏側推(比例與原本的 6 欄格線相同);13 格(有航線、有浪、有橫搖)時 UKC 也排在第一列(7 格);
+       - 第二列:其餘的方塊(UKC、風、流、浪、傾斜儀、時間、航線)依各自的比例分滿整列。
+       原本兩列共用一組欄寬(6 欄或 7 欄的格線),第二列的方塊拿到的是照第一列排的欄寬:文字最多的航線方塊只有 1.1 份(1093 寬時 126 至 143 px),
+       有傾斜儀時浪方塊只有 138 px,107 px 高的方塊裡再怎麼排都放不下(航線方塊的內容比方塊高 16 至 99 px),而格數不滿時第二列的最後一兩格是空的。
+       各方塊在兩列時的字級與排法寫在各元件的 @container style(--brm-conning-single: 0) 區塊裡(shared.ts 的 conningTileStyles 有說明) */
     @media (max-width: 1900px) {
       .bar {
-        display: grid;
+        flex-wrap: wrap;
+        align-content: space-between;
+        row-gap: 0;
+        /* 告訴各方塊「現在是兩列」:方塊裡兩列專用的規則以 @container style(--brm-conning-single: 0) 包住,單列專用的規則不套用 */
         --brm-conning-single: 0;
-        /* 兩列 × 6 格:第二列為 UKC / 風 / 流 / (浪) / 時間 / 航線,第 2 欄(ROT / 風)略加寬 */
-        grid-template-columns: 1.6fr 1.1fr 1.2fr 1.7fr 1.4fr 1.1fr;
-        grid-template-rows: 1fr 1fr;
       }
-      .bar.with-roll {
-        /* 有傾斜儀時兩列 × 7 格 */
-        grid-template-columns: 1.5fr 1.1fr 1.2fr 1.6fr 1.4fr 1.1fr 1.2fr;
+      /* 換行:order 1 的方塊在第一列,這個沒有高度的整列項目(order 2)把其後的方塊(order 3)推到下一列;
+         兩列的高度各是條高的一半減半個間距,三個 flex 行(第一列、換行項目、第二列)以 space-between 排,兩列之間剛好是 6 px */
+      .bar::before {
+        content: '';
+        order: 2;
+        flex: none;
+        width: 100%;
+        height: 0;
+      }
+      /* 兩列時方塊也是高度的容器(cqb、@container 的高度條件):方塊很矮,字級與排法要依方塊的寬度與高度一起決定。
+         方塊的高度由這裡給定(不由內容決定),所以可以是 size 容器;單列仍是 inline-size 容器 */
+      .bar > * {
+        container-type: size;
+        height: calc(50% - 3px);
+      }
+      brm-heading,
+      brm-rot,
+      brm-speed,
+      brm-rudder,
+      brm-engine,
+      brm-thruster {
+        order: 1;
+      }
+      brm-depth,
+      brm-wind,
+      brm-current,
+      brm-sea,
+      brm-inclinometer,
+      brm-clock,
+      brm-route {
+        order: 3;
+      }
+      /* 第一列(6 格):與原本格線的欄寬比例相同(1.6 : 1.1 : 1.2 : 1.7 : 1.4 : 1.1) */
+      brm-heading {
+        flex: 1.6 1 0%;
+      }
+      brm-rot {
+        flex: 1.1 1 0%;
+      }
+      brm-speed {
+        flex: 1.2 1 0%;
+      }
+      brm-rudder {
+        flex: 1.7 1 0%;
+      }
+      brm-engine {
+        flex: 1.4 1 0%;
+      }
+      brm-thruster {
+        flex: 1.1 1 0%;
+      }
+      /* 第二列:依各方塊的內容給比例(1093 px 寬、六個方塊時最窄約 135 px:風 / 流是玫瑰圖在上的直排,
+         浪、傾斜儀、航線的文字最多,分得最寬) */
+      brm-depth {
+        flex: 1.5 1 0%;
+      }
+      brm-wind {
+        flex: 1.3 1 0%;
+      }
+      brm-current {
+        flex: 1.4 1 0%;
+      }
+      brm-sea {
+        flex: 2 1 0%;
+      }
+      brm-inclinometer {
+        flex: 2 1 0%;
+      }
+      brm-clock {
+        flex: 1.65 1 0%;
+      }
+      brm-route {
+        flex: 2.15 1 0%;
+      }
+      /* 13 格:第二列放不下七個方塊(1093 px 寬時每個不到 150 px),UKC 排到第一列的最後;第一列七格的比例另給
+         (1093 px 寬時最窄的迴轉率 / 艏側推約 127 px) */
+      .bar.with-route.with-sea.with-roll brm-depth {
+        order: 1;
+        flex: 1.52 1 0%;
+      }
+      .bar.with-route.with-sea.with-roll brm-heading {
+        flex: 1.45 1 0%;
+      }
+      .bar.with-route.with-sea.with-roll brm-rot {
+        flex: 1.27 1 0%;
+      }
+      .bar.with-route.with-sea.with-roll brm-speed {
+        flex: 1.5 1 0%;
+      }
+      .bar.with-route.with-sea.with-roll brm-rudder {
+        flex: 1.64 1 0%;
+      }
+      .bar.with-route.with-sea.with-roll brm-engine {
+        flex: 1.67 1 0%;
+      }
+      .bar.with-route.with-sea.with-roll brm-thruster {
+        flex: 1.26 1 0%;
       }
     }
   `;

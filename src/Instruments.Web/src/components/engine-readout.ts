@@ -100,6 +100,53 @@ export class EngineReadout extends LitElement {
           flex-basis: 100%;
         }
       }
+      /* conning 條兩列(方塊約 107 至 135 px 高):轉速、轉速條、車鐘位置三列原本比方塊高 8 至 29 px,最後一列(車鐘位置與主機狀態)的下緣被切掉。
+         - 轉速(大字)的行高縮成 0.82(數字沒有降部);
+         - 轉速條平常 26 px 高,方塊不夠高時可以縮短(最少 12 px),把高度讓給文字;
+         - 最後一列的行高固定 16 px;方塊窄於 210 px(「EFAS 緊急全速倒車」與「啟動中 100%」一行放不下)時主機狀態固定在車鐘位置的下一行(靠右),
+           兩行的行高各 14 px、轉速條上下的間距 2 → 1 px,不隨車鐘位置與主機狀態的字數在一行與兩行之間跳動;
+         - 轉速的字級只在方塊很矮時以方塊高度設上限,讓轉速條至少約 20 px(210 px 以上 116cqb − 78px:方塊 107 px 高時 46 px;
+           窄於 210 px 時 116cqb − 85px:39 px)。1366×768 與 1536×864 的三個頁面都不受限 */
+      @container style(--brm-conning-single: 0) {
+        .top .value.big {
+          font-size: clamp(28px, min(3.2vw, calc(116cqb - 78px)), 56px);
+          line-height: 0.82;
+        }
+        .top .label {
+          line-height: 13px;
+          white-space: nowrap;
+        }
+        .bar {
+          flex: 0 1 26px;
+          min-height: 12px;
+        }
+        .bottom {
+          flex-wrap: wrap;
+          gap: 0 6px;
+          line-height: 16px;
+        }
+        .bottom .teleg {
+          white-space: nowrap;
+        }
+        .bottom > :last-child {
+          margin-left: auto;
+          white-space: nowrap;
+        }
+      }
+      @container style(--brm-conning-single: 0) and (max-width: 209px) {
+        .top .value.big {
+          font-size: clamp(28px, min(3.2vw, calc(116cqb - 85px)), 56px);
+        }
+        .bar {
+          margin: 1px 0;
+        }
+        .bottom {
+          line-height: 14px;
+        }
+        .bottom .teleg {
+          flex-basis: 100%;
+        }
+      }
     `,
   ];
 

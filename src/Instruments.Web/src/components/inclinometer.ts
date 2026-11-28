@@ -141,6 +141,62 @@ export class Inclinometer extends LitElement {
           font-size: clamp(12px, min(1.1vw, 12.2cqi), 20px);
         }
       }
+      /* conning 條兩列(方塊約 107 至 135 px 高):刻度在左、四項數值在右(單欄,各一行;「T / 速率」的數值在標籤的下一行,共五行、標籤的行高 13 px)。
+         原本刻度在上、數值在下:200 px 以下四項各一行,刻度(至少 40 px)加四行比方塊高 18 至 32 px,最後一兩行被方塊下緣切掉;
+         200 px 以上數值排兩欄,每欄放不下「T / 速率 12.5 s −10.5°/s」,被方塊右緣切掉 7 px 以上。
+         刻度是等比例縮放的圖形,吃剩下的寬度(兩列時傾斜儀至少約 200 px 寬,刻度約 70 px 寬以上) */
+      @container style(--brm-conning-single: 0) {
+        .tile {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-rows: auto minmax(0, 1fr);
+          column-gap: 8px;
+        }
+        .tile-title {
+          grid-column: 1 / -1;
+        }
+        .scale {
+          grid-column: 1;
+          grid-row: 2;
+          min-width: 0;
+          min-height: 0;
+        }
+        .readouts {
+          grid-column: 2;
+          grid-row: 2;
+          align-self: center;
+          grid-template-columns: auto;
+          gap: 0;
+          line-height: 13px;
+        }
+        .readouts > span {
+          display: flex;
+          flex-wrap: nowrap;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 0 6px;
+        }
+        .readouts .label {
+          line-height: 13px;
+        }
+        .readouts > span > .value {
+          margin-left: auto;
+          text-align: right;
+        }
+        /* 數值的行高 = 字級(標籤 13 px 與字級較大的一個決定列高);字級另以方塊高度設上限(13.5cqb / 橫搖角 16cqb:
+           方塊 107 px 高時 14.4 / 17.1 px,五行放得下;只在約 1600 px 以上寬而矮的視窗起作用,1366×768、1536×864 與 1536×730 不受影響) */
+        .readouts .value {
+          font-size: clamp(11px, min(0.9vw, 9cqi, 13.5cqb), 16px);
+        }
+        .readouts .value.main {
+          font-size: clamp(12px, min(1.1vw, 11cqi, 16cqb), 20px);
+        }
+        /* 「T / 速率」(第四項):數值固定在標籤的下一行(靠右),右欄的寬度不被「標籤 + 數值」一行的寬度撐寬 */
+        .readouts > span:nth-child(4) {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
     `,
   ];
 

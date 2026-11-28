@@ -43,6 +43,24 @@ export class ClockReadout extends LitElement {
           text-align: right;
         }
       }
+      /* conning 條兩列:四列的高度固定(標籤的行高 13 px、數值的行高 = 字級),時鐘與模擬時間的字級另以方塊高度設上限(16cqb:
+         方塊 107 px 高時 17 px;只有視窗很寬而很矮時起作用,1366×768 與 1536×864 不受影響)。標題帶「GNSS 無效」而一行放不下時換到下一行
+         (shared.ts 的 conningTileStyles;原本被方塊右緣切掉 4 至 38 px),四列加兩行的標題在 107 px 高的方塊裡放得下。
+         凍結時「凍結」接在模擬時間後面、同一行(兩列時時間方塊至少約 165 px 寬,放得下) */
+      @container style(--brm-conning-single: 0) {
+        .rows {
+          gap: 0;
+        }
+        .rows .label {
+          line-height: 13px;
+        }
+        .rows .value.small {
+          font-size: clamp(14px, min(1.1vw, 16cqb), 20px);
+        }
+        .pos .value.small {
+          font-size: clamp(11px, min(1.1vw, 10cqi, 16cqb), 20px);
+        }
+      }
     `,
   ];
 

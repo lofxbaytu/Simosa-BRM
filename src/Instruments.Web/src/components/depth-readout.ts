@@ -47,6 +47,66 @@ export class DepthReadout extends LitElement {
           font-size: clamp(28px, min(3.2vw, calc(130cqi / var(--ukc-chars, 6))), 56px);
         }
       }
+      /* conning 條兩列(方塊約 107 至 135 px 高):大字加下方三至四列(水深、潮高、Squat、吃水)原本比方塊高 20 至 31 px,
+         1366×768 時最後一列「吃水 F/A」整列在方塊下緣之外,看不到。
+         - 大字的行高縮成 0.82(數字沒有降部);下方各列的行高固定(方塊 115 px 高以下 12 px,125 px 以上 14 px,其間依高度)、
+           列與列之間不另留間距;
+         - 方塊 215 px 以上:下方各列排成兩欄(兩行);
+         - 方塊窄於 215 px:下方各列仍是單欄(三行;情境有潮汐時多「潮高」一列,四行);
+         - 大字的字級以方塊高度設上限(--ukc-h),只在方塊很矮時起作用:兩欄 119cqb − 64px(不受限);單欄三行 119cqb − 79px
+           (方塊 107 px 高時 48 px);單欄四行(有潮高)119cqb − 93px(107 px 時 34 px、112 px 時 40 px,120 px 以上不受限);
+         - 多一位數的值依方塊寬度再縮:100 m 以上(五個字元)不超過方塊寬度的 26.5%,1000 m 以上依字元數(方塊寬度的 130% 除以字元數),
+           與單列相同;
+         - 標題列的間距與「無效」標示的左右內距各少 2 px(13 格時 UKC 在第一列,只有約 155 px 寬,「UKC 龍骨下水深 m 無效」一行剛好放得下) */
+      @container style(--brm-conning-single: 0) {
+        .tile {
+          --ukc-h: calc(119cqb - 79px);
+        }
+        .tile:has(.row.tide) {
+          --ukc-h: calc(119cqb - 93px);
+        }
+        .tile-title {
+          column-gap: 4px;
+        }
+        .tile-title .alarm {
+          padding: 0 3px;
+        }
+        .main {
+          flex: 1 1 auto;
+          gap: 0 4px;
+        }
+        .main .value.big {
+          font-size: clamp(28px, min(3.2vw, var(--ukc-h)), 56px);
+          line-height: 0.82;
+        }
+        .main .value.big.long {
+          font-size: clamp(24px, min(3.2vw, 26.5cqi, var(--ukc-h)), 56px);
+        }
+        .main .value.big.xlong {
+          font-size: clamp(20px, min(3.2vw, calc(130cqi / var(--ukc-chars, 6)), var(--ukc-h)), 56px);
+        }
+        .main .label {
+          line-height: 13px;
+        }
+        .rows {
+          gap: 0;
+          line-height: clamp(12px, calc(20cqb - 11px), 14px);
+        }
+        .rows .label {
+          line-height: inherit;
+        }
+      }
+      @container style(--brm-conning-single: 0) and (min-width: 215px) {
+        .tile,
+        .tile:has(.row.tide) {
+          --ukc-h: calc(119cqb - 64px);
+        }
+        .rows {
+          display: grid;
+          grid-template-columns: minmax(max-content, 1fr) minmax(max-content, 1fr);
+          column-gap: 14px;
+        }
+      }
     `,
   ];
 

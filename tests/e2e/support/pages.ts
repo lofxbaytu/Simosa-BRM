@@ -60,24 +60,41 @@ export function conningHiddenContent(bar: ConningReport): string[] {
   return out;
 }
 
+/** conning 條裡被方塊邊界切掉的文字(墨水範圍超出方塊的裁切框 1 px 以上;layout.ts 的 probeConning) */
+const clippedText = (bar: ConningReport): string[] => bar.tiles.flatMap((t) => t.clipped.map((c) => `${t.tag} ${c}`));
+
+/** expectConningSingleRow / expectConningTwoRows 的選項 */
+export interface ConningExpectOptions {
+  /** conning 條的格數(有給時斷言) */
+  cells?: number;
+  /**
+   * 'page'(預設):整頁的版面判定(layout.ts 的判定 1–6)都要通過;
+   * 'conning':整頁的判定只看 conning 條的水平裁切(判定 4)—— 1093×614 等關鍵控制本來就要捲動的視窗用
+   */
+  scope?: 'page' | 'conning';
+}
+
 /**
- * conning 條單列(視窗寬於 1900 px)的判定(第三十一輪;docs/design/web-layout.md 第 2.5 節):
+ * conning 條的共用判定(單列與兩列):
  *  1. 整頁的版面判定(layout.ts 的判定 1–6,含判定 4:各方塊內的元素沒有水平裁切)通過;
- *  2. conning 條排成一列(cells 有給時格數相符),各方塊的內容不比方塊高、文字不互相重疊;
+ *  2. conning 條排成 rows 列(cells 有給時格數相符),各方塊的內容不比方塊高、文字不互相重疊;
  *  3. 顯示的內容沒有少:各方塊的圖形都有顯示、沒有被藏起來的文字(conningHiddenContent;修正不可以靠 display: none 把內容藏起來);
- *  4. 餘裕:把 conning 條所有文字的字距加大 3 %(代表比這台機器的字型更寬的字型;Windows 的字型在容器裡量不到)之後,
- *     判定 4 仍通過、內容仍不比方塊高、文字不互相重疊 —— 放不下的內容是換行,不是被方塊邊界切掉。
+ *  4. 兩列另判定:沒有被方塊邊界切掉的文字(每段文字的墨水範圍都在方塊的裁切框裡;兩列的方塊很矮,2 至 3 px 的下緣就切到字);
+ *  5. 餘裕:把 conning 條所有文字的字距加大 3 %(代表比這台機器的字型更寬的字型;Windows 的字型在容器裡量不到)之後,
+ *     判定 4 仍通過、內容仍不比方塊高、文字不互相重疊(兩列:也沒有被切掉的文字)—— 放不下的內容是換行或另有排法,不是被方塊邊界切掉。
  * 回傳字距還原後的量測(各方塊的寬度與數值的字級),供案例再斷言。
  */
-export async function expectConningSingleRow(page: Page, spec: LayoutSpec, label: string, cells?: number): Promise<ConningReport> {
+async function expectConning(page: Page, spec: LayoutSpec, label: string, rows: 1 | 2, options: ConningExpectOptions): Promise<ConningReport> {
   const report = await page.evaluate(probeLayout, spec);
-  expect(layoutFailures(report), `${label} 的版面問題`).toEqual([]);
+  if (options.scope === 'conning') expect(report.conning, `${label}:conning 條的水平裁切`).toEqual([]);
+  else expect(layoutFailures(report), `${label} 的版面問題`).toEqual([]);
   const bar = await page.evaluate(probeConning);
-  expect(bar.rows, `${label}:conning 條排成一列`).toBe(1);
-  if (cells !== undefined) expect(bar.tiles.length, `${label}:conning 條的格數`).toBe(cells);
+  expect(bar.rows, `${label}:conning 條排成${rows === 1 ? '一' : '兩'}列`).toBe(rows);
+  if (options.cells !== undefined) expect(bar.tiles.length, `${label}:conning 條的格數`).toBe(options.cells);
   expect(tallTiles(bar), `${label}:conning 條內容比方塊高的方塊`).toEqual([]);
   expect(overlappingText(bar), `${label}:conning 條互相重疊的文字`).toEqual([]);
   expect(conningHiddenContent(bar), `${label}:conning 條沒有顯示的內容`).toEqual([]);
+  if (rows === 2) expect(clippedText(bar), `${label}:conning 條被方塊邊界切掉的文字`).toEqual([]);
   // 完整教官站另有一條隱藏的 conning 條(重播檢視分頁),所以是「至少」這麼多格
   expect(await page.evaluate(widenConningText, 0.03), '加大字距的方塊數').toBeGreaterThanOrEqual(bar.tiles.length);
   try {
@@ -86,8 +103,26 @@ export async function expectConningSingleRow(page: Page, spec: LayoutSpec, label
     const wideBar = await page.evaluate(probeConning);
     expect(tallTiles(wideBar), `${label}:字距加大 3 % 之後 conning 條內容比方塊高的方塊`).toEqual([]);
     expect(overlappingText(wideBar), `${label}:字距加大 3 % 之後 conning 條互相重疊的文字`).toEqual([]);
+    if (rows === 2) expect(clippedText(wideBar), `${label}:字距加大 3 % 之後 conning 條被方塊邊界切掉的文字`).toEqual([]);
   } finally {
     await page.evaluate(widenConningText, 0);
   }
   return bar;
+}
+
+/**
+ * conning 條單列(視窗寬於 1900 px)的判定(第三十一輪;docs/design/web-layout.md 第 2.5 節):expectConning 的第 1、2、3、5 項。
+ * 回傳字距還原後的量測(各方塊的寬度與數值的字級),供案例再斷言。
+ */
+export async function expectConningSingleRow(page: Page, spec: LayoutSpec, label: string, cells?: number): Promise<ConningReport> {
+  return expectConning(page, spec, label, 1, cells === undefined ? {} : { cells });
+}
+
+/**
+ * conning 條兩列(視窗 ≤ 1900 px;船上文書筆電 1366×768 與教官筆電 125 % 縮放的 1536×864 實際看到的排法)的判定
+ * (第三十一輪;docs/design/web-layout.md 第 2.5 節「兩列」):expectConning 的五項都判定 —— 沒有水平裁切、內容不比方塊高、
+ * 沒有被方塊邊界切掉的文字、各方塊的圖形與文字都有顯示、文字不重疊,字距加大 3 % 後仍通過。
+ */
+export async function expectConningTwoRows(page: Page, spec: LayoutSpec, label: string, options: ConningExpectOptions = {}): Promise<ConningReport> {
+  return expectConning(page, spec, label, 2, options);
 }

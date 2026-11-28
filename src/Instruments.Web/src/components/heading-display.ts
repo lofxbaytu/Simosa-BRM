@@ -91,6 +91,28 @@ export class HeadingDisplay extends LitElement {
           margin-left: auto;
         }
       }
+      /* conning 條兩列(方塊約 107 至 135 px 高):大字、航向帶、「設定 / COG」三列加起來原本比方塊高 12 至 23 px,最後一列的下緣被切掉
+         (1366×768 的教官站與重播檢視、瀏覽器沒有全螢幕時更多)。大字的行高縮成 0.82(數字沒有降部);航向帶吃剩下的高度
+         (原本至少 36 px;1366×768 的教官站約 33 px,最少 24 px —— 字型的行高比預期大時由它讓,文字不被切掉);最後一列的行高固定 13 px。
+         大字的字級只在方塊很矮時以方塊高度設上限(119cqb − 86px:方塊 107 px 高時 41 px,航向帶還有約 30 px;
+         112 px 以上 —— 1366×768 與 1536×864 的三個頁面 —— 不受限) */
+      @container style(--brm-conning-single: 0) {
+        .hdg .value.big {
+          font-size: clamp(28px, min(3.2vw, 33cqi, calc(119cqb - 86px)), 56px);
+          line-height: 0.82;
+        }
+        .hdg .unit {
+          line-height: 13px;
+        }
+        .tape {
+          flex: 1 1 0;
+          min-height: 24px;
+        }
+        .sub {
+          line-height: 13px;
+          white-space: nowrap;
+        }
+      }
     `,
   ];
 

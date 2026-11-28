@@ -178,6 +178,92 @@ export class SeaReadout extends LitElement {
           display: block;
         }
       }
+      /* conning 條兩列(方塊約 107 至 135 px 高;兩列時浪方塊至少約 200 px 寬,conning-bar.ts 的第二列比例):
+         - 各列的行高固定 13 px;交互作用列:方塊窄於 290 px(「交互作用 ANCH1 超限」與「Y -123.4 t N -1234 t·m」一行放不下)時數值固定在
+           標籤的下一行(靠右),不隨目標船代號的長度、有沒有「超限」與數值的位數在一行與兩行之間跳動;290 px 以上放得下時同一行
+           (原本 215 px 以上不換行,1093 至 1152 寬時長數值被方塊右緣切掉)。側向力與艏搖力矩(樣板的 .nb)各自不拆開;
+         - 方塊窄於 236 px:浪向玫瑰 28 px,佔前兩列(Hs / Tp、來向 / 相對)的左側,縱搖 / 升沉用整個方塊寬度(一行)。
+           原本 215 px 以下玫瑰只佔第一列,加上交互作用的兩行之後比 107 px 高的方塊高;216 至 235 px 並排時縱搖 / 升沉折成兩行,也放不下;
+         - 236 px 以上:玫瑰 40 px 在左,三列數值在右(原本的排法);
+         - 數值的字級另以方塊高度設上限(13cqb / 12cqb:方塊 107 px 高時 13.9 / 12.8 px;只在視窗寬而矮時起作用 ——
+           字級照視窗寬度到 18 px 時三列數值加交互作用(目標船代號很長時標籤再多一行)比 107 px 高的方塊高、往上擠到標題列;
+           1366×768 與 1536×864 不受影響,1536×730 時小約 5 %) */
+      @container style(--brm-conning-single: 0) {
+        .rows {
+          line-height: 13px;
+        }
+        .rows .value {
+          font-size: clamp(11px, min(0.95vw, 8cqi, 13cqb), 18px);
+        }
+        .interaction .value,
+        .motion .value {
+          font-size: clamp(11px, min(0.85vw, 7.5cqi, 12cqb), 16px);
+        }
+        .rows .label,
+        .interaction .label {
+          line-height: 13px;
+        }
+        .motion {
+          row-gap: 0;
+        }
+        .interaction {
+          line-height: 13px;
+        }
+        .interaction .row {
+          flex-wrap: wrap;
+          row-gap: 0;
+        }
+        .interaction .value {
+          margin-left: auto;
+          white-space: normal;
+          text-align: right;
+        }
+        /* 標籤(「交互作用」、目標船代號、「超限」三段,樣板的 .nb)比方塊寬時在段與段之間換行,代號本身比方塊寬時才在字間換行
+           (情境的目標船代號沒有長度上限;情境庫最長 5 個字元,一行放得下) */
+        .interaction .label {
+          white-space: normal;
+          min-width: 0;
+        }
+        .interaction .label .nb {
+          max-width: 100%;
+          overflow-wrap: anywhere;
+        }
+      }
+      @container style(--brm-conning-single: 0) and (max-width: 289px) {
+        .interaction .value {
+          flex-basis: 100%;
+        }
+      }
+      @container style(--brm-conning-single: 0) and (max-width: 235px) {
+        .body {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          column-gap: 6px;
+          row-gap: 2px;
+          align-content: center;
+          align-items: center;
+        }
+        .rows {
+          display: contents;
+        }
+        .rose {
+          width: 28px;
+          height: 28px;
+          grid-column: 1;
+          grid-row: 1 / span 2;
+        }
+        .rows > :first-child {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .rows > :nth-child(2) {
+          grid-column: 2;
+          grid-row: 2;
+        }
+        .rows > :nth-child(n + 3) {
+          grid-column: 1 / -1;
+        }
+      }
     `,
   ];
 

@@ -1,6 +1,7 @@
-// conning 條單列(視窗寬於 1900 px)的排法(第三十一輪;docs/design/web-layout.md 第 2.5 節)。
-// happy-dom 不排版,這裡只釘住「樣式與樣板的結構」:版面本身(各方塊不被水平裁切、餘裕)由端對端測試以真實 Chromium 量測
-// (tests/e2e/specs/01-bridge.spec.ts「操船台 1920×1080(conning 條單列)…」、02-instructor.spec.ts 的兩個重播檢視案例)。
+// conning 條單列(視窗寬於 1900 px)與兩列(1900 px 以下)的排法(第三十一輪;docs/design/web-layout.md 第 2.5 節)。
+// happy-dom 不排版,這裡只釘住「樣式與樣板的結構」:版面本身(各方塊不被水平或垂直裁切、餘裕)由端對端測試以真實 Chromium 量測
+// (tests/e2e/specs/01-bridge.spec.ts「操船台 1920×1080(conning 條單列)…」「操船台 1366×768、1536×864 與 1093×614(conning 條兩列)…」、
+// 02-instructor.spec.ts 的重播檢視與完整教官站案例)。
 //  - brm-conning-bar:單列是 flex,13 個方塊各有「基本寬度 + 比例」,基本寬度的總和 = 13 格在 1901 px 視窗的可用寬度(1817 px);
 //    單列設 --brm-conning-single: 1,兩列(≤ 1900 px)改回格線並設 0;八種格數組合的每一格都有寬度規則;
 //  - 13 個方塊元件都帶 conningTileStyles(單列專用的規則以 @container style(--brm-conning-single: 1) 包住);
@@ -14,6 +15,12 @@
 //  - 沒有空白的長字串可以換行:標題的中文部分 overflow-wrap: anywhere,交互作用列的標籤三段各在 .nb 裡;
 //  - 航線方塊「下一航點」一列在 .wp 裡(平常 display: contents,單列時跨兩欄);主機的轉速條在單列可以縮短;
 //  - 傾斜儀的警報等級是警報色的字、沒有徽章的底色。
+// 兩列(檔尾「兩列的排法」):
+//  - brm-conning-bar:兩列是同一個 flex 容器折成兩行(order 1 的方塊在第一列,::before 的整列項目換行,order 3 的在第二列),設
+//    --brm-conning-single: 0;方塊是 size 容器、高度是條高的一半;第一列六格的比例與原本的格線相同,13 格時 UKC 排在第一列;
+//  - 13 個方塊都帶兩列的樣式查詢(@container style(--brm-conning-single: 0));兩列的規則沒有新增會讓內容看不到的宣告;
+//  - 各方塊兩列專用的規則(行高固定、大字的字級以方塊高度設上限、圖形可以縮短、排法只看方塊寬度)都包在兩列的樣式查詢裡;
+//  - 樣板的文字內容不變(航線方塊的標籤與數值多了 k-brg / k-lim / k-vis 類別,文字相同)。
 // @vitest-environment happy-dom
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { CSSResult, CSSResultGroup } from 'lit';
@@ -74,7 +81,13 @@ function rulesOf(css: string): CssRule[] {
   return out;
 }
 const SINGLE = '--brm-conning-single: 1';
+const TWO = '--brm-conning-single: 0';
 const inSingleRow = (r: CssRule): boolean => r.at.some((a) => a.includes(SINGLE));
+const inTwoRows = (r: CssRule): boolean => r.at.some((a) => a.includes(TWO));
+/** 某個方塊在兩列樣式查詢裡、選擇器相符的規則(多條時依原始碼順序);cond 有給時樣式查詢還要帶這個尺寸條件(例如 'max-width: 239px') */
+const twoRowRules = (tag: string, selector: string, cond?: string): CssRule[] =>
+  rulesOf(cssOf(tag)).filter((r) => inTwoRows(r) && r.selector.split(',').map((x) => x.trim()).includes(selector) && (cond === undefined ? r.at.every((a) => !a.includes(' and ')) : r.at.some((a) => a.includes(`(${cond})`))));
+const twoRowBody = (tag: string, selector: string, cond?: string): string => twoRowRules(tag, selector, cond).map((r) => r.body).join(' ');
 /** 某個方塊在單列樣式查詢裡、選擇器相符的規則的宣告(多條時接在一起) */
 const singleRowBody = (tag: string, selector: string): string =>
   rulesOf(cssOf(tag))
@@ -91,7 +104,9 @@ beforeAll(async () => {
 describe('brm-conning-bar 單列的格寬', () => {
   /** 樣式裡各方塊的 flex 規則:tag → { grow, basis } */
   function flexRules(): Map<string, { grow: number; basis: number }> {
-    const css = cssOf('brm-conning-bar');
+    // 只看兩列的媒體查詢之前(單列)的部分;兩列另有一組比例(檔尾「兩列的排法」)
+    const all = cssOf('brm-conning-bar');
+    const css = all.slice(0, all.indexOf('@media (max-width: 1900px)'));
     const out = new Map<string, { grow: number; basis: number }>();
     for (const m of css.matchAll(/(brm-[a-z-]+)\s*\{\s*flex:\s*([\d.]+)\s+1\s+(\d+)px;\s*\}/g)) out.set(m[1]!, { grow: Number(m[2]), basis: Number(m[3]) });
     return out;
@@ -110,17 +125,19 @@ describe('brm-conning-bar 單列的格寬', () => {
     }
   });
 
-  it('單列設 --brm-conning-single: 1(flex);兩列(≤ 1900 px)改回格線並設 0', () => {
+  it('單列設 --brm-conning-single: 1(flex);兩列(≤ 1900 px)設 0(同一個 flex 容器折成兩行)', () => {
     const css = cssOf('brm-conning-bar');
     const media = css.indexOf('@media (max-width: 1900px)');
     expect(media).toBeGreaterThan(0);
     const single = css.slice(0, media);
     const twoRows = css.slice(media);
     expect(single).toMatch(/\.bar\s*\{[^}]*display:\s*flex;[^}]*--brm-conning-single:\s*1;/);
-    expect(twoRows).toMatch(/\.bar\s*\{[^}]*display:\s*grid;[^}]*--brm-conning-single:\s*0;/);
-    expect(twoRows).toMatch(/grid-template-rows:\s*1fr 1fr;/);
-    // 單列不再有逐組合的欄寬樣板(原本八種組合各寫一份,「有浪、有橫搖、沒有航線」那一種對錯了格)
-    expect(single).not.toContain('grid-template-columns');
+    expect(single).not.toContain('--brm-conning-single: 0');
+    // 兩列:第三十一輪之前是 6 欄 / 7 欄 × 2 列的格線(兩列共用欄寬);現在兩列各自分配寬度(細節在檔尾「兩列的排法」)
+    expect(twoRows).toMatch(/\.bar\s*\{[^}]*flex-wrap:\s*wrap;[^}]*--brm-conning-single:\s*0;/);
+    expect(twoRows).not.toContain('--brm-conning-single: 1');
+    // 單列不再有逐組合的欄寬樣板(原本八種組合各寫一份,「有浪、有橫搖、沒有航線」那一種對錯了格);兩列也沒有
+    expect(css).not.toContain('grid-template-columns');
   });
 
   it('八種格數組合:每一格都有寬度規則,格序固定(浪、傾斜儀在流之後,時間在其後,航線最後)', async () => {
@@ -169,6 +186,7 @@ describe('各方塊單列專用的樣式', () => {
       for (const r of rulesOf(cssOf(tag))) {
         if (!hiding.test(r.body)) continue;
         expect(inSingleRow(r), `${tag} ${r.at.join(' ')} ${r.selector} { ${r.body} } 不在單列的樣式查詢裡`).toBe(false);
+        expect(inTwoRows(r), `${tag} ${r.at.join(' ')} ${r.selector} { ${r.body} } 不在兩列的樣式查詢裡`).toBe(false);
         found.push(`${tag} | ${r.at.join(' ')} | ${r.selector}`);
       }
     }
@@ -349,7 +367,8 @@ describe('不拆開的一段(.nb)與文字內容', () => {
     const wp = root.querySelector('.rows .wp')!;
     expect([...wp.children].map((c) => c.className)).toEqual(['label', 'v']);
     expect(text(wp)).toBe('下一航點ENTRANCE 123.46 nm');
-    expect([...root.querySelectorAll('.rows > *')].map((c) => c.className)).toEqual(['wp', 'label', 'v', 'label', 'v', 'label', 'v warning']);
+    // 「方位 / 航段」「速限」「能見度」的標籤與數值各帶 k-brg / k-lim / k-vis 類別(兩列時「速限」與「能見度」排在同一列用;單列的規則不看這些類別)
+    expect([...root.querySelectorAll('.rows > *')].map((c) => c.className.replace(/\s+/g, ' ').trim())).toEqual(['wp', 'label k-brg', 'v k-brg', 'label k-lim', 'v k-lim', 'label k-vis', 'v k-vis warning']);
     const rules = rulesOf(cssOf('brm-route'));
     const wpBase = rules.filter((r) => r.selector === '.rows .wp' && r.at.length === 0);
     expect(wpBase.map((r) => r.body)).toEqual(['display: contents;']);
@@ -403,5 +422,236 @@ describe('不拆開的一段(.nb)與文字內容', () => {
     expect([...period.querySelectorAll('.nb')].map((n) => text(n))).toEqual(['12.5 s', '−10.5°/s']);
     const none = await mount('brm-inclinometer', {});
     expect(text(none.shadowRoot!.querySelector('.roll-period'))).toBe('--');
+  });
+});
+
+describe('兩列(視窗 ≤ 1900 px)的排法', () => {
+  /** brm-conning-bar 兩列媒體查詢裡的規則 */
+  const barRules = (): CssRule[] => rulesOf(cssOf('brm-conning-bar')).filter((r) => r.at.some((a) => a.includes('max-width: 1900px')));
+  const barBody = (selector: string): string =>
+    barRules()
+      .filter((r) => r.selector.split(',').map((x) => x.trim()).includes(selector))
+      .map((r) => r.body)
+      .join(' ');
+  /** 「flex: 比例 1 0%」的比例 */
+  const grow = (body: string): number => Number(/flex:\s*([\d.]+)\s+1\s+0%/.exec(body)?.[1] ?? Number.NaN);
+  const ROW1 = ['brm-heading', 'brm-rot', 'brm-speed', 'brm-rudder', 'brm-engine', 'brm-thruster'];
+  const ROW2 = ['brm-depth', 'brm-wind', 'brm-current', 'brm-sea', 'brm-inclinometer', 'brm-clock', 'brm-route'];
+
+  it('brm-conning-bar:同一個 flex 容器折成兩行,::before 的整列項目換行;方塊是 size 容器、高度是條高的一半', () => {
+    const bar = barBody('.bar');
+    expect(bar).toMatch(/flex-wrap:\s*wrap/);
+    expect(bar).toMatch(/align-content:\s*space-between/);
+    expect(bar).toMatch(/row-gap:\s*0/);
+    expect(bar).toMatch(/--brm-conning-single:\s*0/);
+    const br = barBody('.bar::before');
+    expect(br).toMatch(/order:\s*2/);
+    expect(br).toMatch(/width:\s*100%/);
+    expect(br).toMatch(/height:\s*0/);
+    const tiles = barBody('.bar > *');
+    expect(tiles).toMatch(/container-type:\s*size/);
+    expect(tiles).toMatch(/height:\s*calc\(50% - 3px\)/);
+    // 單列仍是 inline-size 容器(規則在媒體查詢之外)
+    const base = rulesOf(cssOf('brm-conning-bar')).find((r) => r.selector === '.bar > *' && r.at.length === 0)!;
+    expect(base.body).toMatch(/container-type:\s*inline-size/);
+    // 第一列的方塊 order 1、第二列的 order 3;13 個方塊都分到其中一列
+    const orderOf = (tag: string): string => /order:\s*(\d)/.exec(barRules().find((r) => r.selector.split(',').map((x) => x.trim()).includes(tag) && /order:/.test(r.body))?.body ?? '')?.[1] ?? '';
+    for (const tag of ROW1) expect(orderOf(tag), `${tag} 在第一列`).toBe('1');
+    for (const tag of ROW2) expect(orderOf(tag), `${tag} 在第二列`).toBe('3');
+    expect([...ROW1, ...ROW2].sort()).toEqual([...TILES].sort());
+  });
+
+  it('第一列六格的比例與原本的格線相同(1.6 : 1.1 : 1.2 : 1.7 : 1.4 : 1.1);第二列每個方塊都有比例,文字最多的浪、傾斜儀、航線最寬', () => {
+    const flexOf = (tag: string): number => grow(barRules().find((r) => r.selector === tag && /flex:/.test(r.body))?.body ?? '');
+    expect(ROW1.map(flexOf)).toEqual([1.6, 1.1, 1.2, 1.7, 1.4, 1.1]);
+    const row2 = Object.fromEntries(ROW2.map((tag) => [tag, flexOf(tag)]));
+    for (const tag of ROW2) expect(row2[tag], `${tag} 的比例`).toBeGreaterThan(1);
+    for (const wide of ['brm-sea', 'brm-inclinometer', 'brm-route']) for (const narrow of ['brm-depth', 'brm-wind', 'brm-current', 'brm-clock']) expect(row2[wide]!, `${wide} 比 ${narrow} 寬`).toBeGreaterThan(row2[narrow]!);
+    // 六個方塊(12 格、或 13 格的第二列)時最窄的方塊在 1093 px 寬的視窗仍有 125 px 以上:列寬 1081 − 5 個間距
+    for (const six of [ROW2.filter((t) => t !== 'brm-inclinometer'), ROW2.filter((t) => t !== 'brm-depth')]) {
+      const sum = six.reduce((a, t) => a + row2[t]!, 0);
+      for (const tag of six) expect(((1081 - 30) * row2[tag]!) / sum, `${tag} 在 1093 px 寬、六個方塊時的寬度`).toBeGreaterThan(125);
+    }
+  });
+
+  it('13 格(有航線、有浪、有橫搖)時 UKC 排在第一列,第一列七格另給比例;其餘格數 UKC 在第二列', () => {
+    const special = barRules().filter((r) => r.selector.startsWith('.bar.with-route.with-sea.with-roll '));
+    expect(special.map((r) => r.selector.replace('.bar.with-route.with-sea.with-roll ', '')).sort()).toEqual([...ROW1, 'brm-depth'].sort());
+    const depth = special.find((r) => r.selector.endsWith('brm-depth'))!;
+    expect(depth.body).toMatch(/order:\s*1/);
+    for (const r of special) expect(grow(r.body), `${r.selector} 的比例`).toBeGreaterThan(1);
+    // 只有三個類別都有時才套用;沒有只看 .with-roll 的規則(原本有傾斜儀就是 7 欄)
+    expect(barRules().some((r) => /^\.bar\.with-roll\b/.test(r.selector))).toBe(false);
+  });
+
+  it('13 個方塊都帶兩列的樣式查詢:標題列的行高固定,放不下時中文標題換到下一行;兩列的規則沒有會讓內容看不到的宣告', () => {
+    const hiding = /display:\s*none|visibility:\s*hidden|overflow(-x|-y)?:\s*(hidden|clip)|text-overflow|clip-path|opacity:\s*0(\.0+)?\s*(;|$)|font-size:\s*0|!important/;
+    for (const tag of TILES) {
+      expect(cssOf(tag), `${tag} 的樣式含兩列的樣式查詢`).toContain(`@container style(${TWO})`);
+      expect(twoRowBody(tag, '.tile-title'), `${tag} 的標題列`).toMatch(/flex-wrap:\s*wrap/);
+      expect(twoRowBody(tag, '.tile-title'), `${tag} 的標題列`).toMatch(/line-height:\s*13px/);
+      const zh = twoRowBody(tag, '.tile-title .zh');
+      expect(zh, `${tag} 的中文標題`).toMatch(/margin-left:\s*auto/);
+      expect(zh, `${tag} 的中文標題`).toMatch(/white-space:\s*normal/);
+      expect(zh, `${tag} 的中文標題`).toMatch(/overflow-wrap:\s*anywhere/);
+      for (const r of rulesOf(cssOf(tag)).filter(inTwoRows)) {
+        expect(hiding.test(r.body), `${tag} ${r.at.join(' ')} ${r.selector} { ${r.body} }`).toBe(false);
+        // 兩列的規則不寫在單列的樣式查詢裡(兩組互不影響)
+        expect(inSingleRow(r), `${tag} ${r.selector}`).toBe(false);
+      }
+    }
+  });
+
+  it('大字(航向、主機轉速、UKC):行高 0.82,字級以方塊高度設上限(cqb)', () => {
+    const heading = twoRowBody('brm-heading', '.hdg .value.big');
+    expect(heading).toMatch(/font-size:\s*clamp\(28px, min\(3\.2vw, 33cqi, calc\(119cqb - 86px\)\), 56px\)/);
+    expect(heading).toMatch(/line-height:\s*0\.82/);
+    const engine = twoRowBody('brm-engine', '.top .value.big');
+    expect(engine).toMatch(/font-size:\s*clamp\(28px, min\(3\.2vw, calc\(116cqb - 78px\)\), 56px\)/);
+    expect(engine).toMatch(/line-height:\s*0\.82/);
+    // 窄於 210 px(主機狀態在車鐘位置的下一行,多一行)時上限低一點
+    expect(twoRowBody('brm-engine', '.top .value.big', 'max-width: 209px')).toMatch(/font-size:\s*clamp\(28px, min\(3\.2vw, calc\(116cqb - 85px\)\), 56px\)/);
+    // UKC:上限寫在 --ukc-h —— 單欄三行、單欄四行(有潮高一列)、兩欄(215 px 以上)各一個
+    const narrow = twoRowBody('brm-depth', '.main .value.big');
+    expect(narrow).toMatch(/font-size:\s*clamp\(28px, min\(3\.2vw, var\(--ukc-h\)\), 56px\)/);
+    expect(narrow).toMatch(/line-height:\s*0\.82/);
+    expect(twoRowBody('brm-depth', '.tile')).toMatch(/--ukc-h:\s*calc\(119cqb - 79px\)/);
+    expect(twoRowBody('brm-depth', '.tile:has(.row.tide)')).toMatch(/--ukc-h:\s*calc\(119cqb - 93px\)/);
+    expect(twoRowBody('brm-depth', '.tile', 'min-width: 215px')).toMatch(/--ukc-h:\s*calc\(119cqb - 64px\)/);
+    expect(twoRowBody('brm-depth', '.tile:has(.row.tide)', 'min-width: 215px')).toMatch(/--ukc-h:\s*calc\(119cqb - 64px\)/);
+    // 多一位數的值依方塊寬度再縮(與單列相同的比例),仍受方塊高度的上限
+    expect(twoRowBody('brm-depth', '.main .value.big.long')).toMatch(/26\.5cqi, var\(--ukc-h\)/);
+    expect(twoRowBody('brm-depth', '.main .value.big.xlong')).toMatch(/calc\(130cqi \/ var\(--ukc-chars, 6\)\), var\(--ukc-h\)/);
+    // 單列的規則沒有動
+    expect(singleRowBody('brm-heading', '.hdg .value.big')).toMatch(/clamp\(28px, min\(3\.2vw, 38cqi\), 56px\)/);
+    expect(singleRowBody('brm-engine', '.top .value.big')).toMatch(/clamp\(28px, min\(3\.2vw, 32\.5cqi\), 56px\)/);
+    expect(singleRowBody('brm-depth', '.main .value.big')).toMatch(/clamp\(28px, min\(3\.2vw, 33cqi\), 56px\)/);
+  });
+
+  it('圖形吃剩下的高度、可以縮短:航向帶、主機的轉速條、艏側推的推力條', () => {
+    const tape = twoRowBody('brm-heading', '.tape');
+    expect(tape).toMatch(/flex:\s*1 1 0/);
+    expect(tape).toMatch(/min-height:\s*24px/);
+    const bar = twoRowBody('brm-engine', '.bar');
+    expect(bar).toMatch(/flex:\s*0 1 26px/);
+    expect(bar).toMatch(/min-height:\s*12px/);
+    expect(twoRowBody('brm-thruster', '.bar')).toMatch(/min-height:\s*14px/);
+  });
+
+  it('文字列的行高固定(不隨字型的行高而變):各方塊的標籤與最後一列', () => {
+    expect(twoRowBody('brm-heading', '.sub')).toMatch(/line-height:\s*13px/);
+    expect(twoRowBody('brm-speed', '.rows .label')).toMatch(/line-height:\s*13px/);
+    expect(twoRowBody('brm-engine', '.bottom')).toMatch(/line-height:\s*16px/);
+    expect(twoRowBody('brm-thruster', '.readouts')).toMatch(/line-height:\s*16px/);
+    expect(twoRowBody('brm-depth', '.rows')).toMatch(/line-height:\s*clamp\(12px, calc\(20cqb - 11px\), 14px\)/);
+    expect(twoRowBody('brm-current', '.rows .label')).toMatch(/line-height:\s*13px/);
+    expect(twoRowBody('brm-clock', '.rows .label')).toMatch(/line-height:\s*13px/);
+    expect(twoRowBody('brm-sea', '.rows')).toMatch(/line-height:\s*13px/);
+    expect(twoRowBody('brm-sea', '.interaction')).toMatch(/line-height:\s*13px/);
+    expect(twoRowBody('brm-inclinometer', '.readouts')).toMatch(/line-height:\s*13px/);
+    expect(twoRowBody('brm-route', '.rows')).toMatch(/line-height:\s*13px/);
+  });
+
+  it('船速、時間、浪、傾斜儀:字級以方塊高度設上限(視窗寬而矮時各列不比方塊高)', () => {
+    expect(twoRowBody('brm-speed', '.rows .value.mid')).toMatch(/font-size:\s*clamp\(18px, min\(1\.6vw, 21cqb\), 28px\)/);
+    expect(twoRowBody('brm-speed', '.rows .value.small')).toMatch(/font-size:\s*clamp\(12px, min\(1\.1vw, 15cqi, 14\.5cqb\), 20px\)/);
+    expect(twoRowBody('brm-clock', '.rows .value.small')).toMatch(/font-size:\s*clamp\(14px, min\(1\.1vw, 16cqb\), 20px\)/);
+    expect(twoRowBody('brm-clock', '.pos .value.small')).toMatch(/font-size:\s*clamp\(11px, min\(1\.1vw, 10cqi, 16cqb\), 20px\)/);
+    expect(twoRowBody('brm-clock', '.rows')).toMatch(/gap:\s*0/);
+    // 浪與傾斜儀的數值也是(字級照視窗寬度到上限時,107 px 高的方塊放不下)
+    expect(twoRowBody('brm-sea', '.rows .value')).toMatch(/font-size:\s*clamp\(11px, min\(0\.95vw, 8cqi, 13cqb\), 18px\)/);
+    expect(twoRowBody('brm-sea', '.interaction .value')).toMatch(/font-size:\s*clamp\(11px, min\(0\.85vw, 7\.5cqi, 12cqb\), 16px\)/);
+    expect(twoRowBody('brm-inclinometer', '.readouts .value')).toMatch(/font-size:\s*clamp\(11px, min\(0\.9vw, 9cqi, 13\.5cqb\), 16px\)/);
+    expect(twoRowBody('brm-inclinometer', '.readouts .value.main')).toMatch(/font-size:\s*clamp\(12px, min\(1\.1vw, 11cqi, 16cqb\), 20px\)/);
+    // 風方塊沒有兩列專用的規則(原本就放得下;只有共用的標題列規則)
+    expect(rulesOf(cssOf('brm-wind')).filter((r) => inTwoRows(r) && !['.tile-title', '.tile-title .zh', '.nb'].includes(r.selector))).toEqual([]);
+    // 船速方塊省略標籤中文部分的規則仍只有 125 px 的那一條(兩列沒有新增)
+    expect(rulesOf(cssOf('brm-speed')).filter((r) => r.selector === '.label .zh').map((r) => r.at.join(' '))).toEqual(['@container (max-width: 125px)']);
+  });
+
+  it('排法只看方塊寬度(不隨數值的位數跳動):主機狀態、艏側推、UKC 下方各列、交互作用的數值', () => {
+    // 主機:窄於 210 px 時車鐘位置獨占一行(主機狀態在下一行、靠右)
+    expect(twoRowBody('brm-engine', '.bottom .teleg', 'max-width: 209px')).toMatch(/flex-basis:\s*100%/);
+    expect(twoRowBody('brm-engine', '.bottom > :last-child')).toMatch(/margin-left:\s*auto/);
+    // 艏側推:窄於 240 px 時「實際」「令」各一行(與單列同一門檻)
+    expect(twoRowBody('brm-thruster', '.readouts', 'max-width: 239px')).toMatch(/flex-direction:\s*column/);
+    expect(twoRowBody('brm-thruster', '.readouts > span', 'max-width: 239px')).toMatch(/justify-content:\s*space-between/);
+    // UKC:215 px 以上下方各列排兩欄
+    const rows = twoRowBody('brm-depth', '.rows', 'min-width: 215px');
+    expect(rows).toMatch(/display:\s*grid/);
+    expect(rows).toMatch(/grid-template-columns:\s*minmax\(max-content, 1fr\) minmax\(max-content, 1fr\)/);
+    // 浪:窄於 290 px 時交互作用的數值固定在標籤的下一行;窄於 236 px 時玫瑰圖佔前兩列的左側
+    expect(twoRowBody('brm-sea', '.interaction .value', 'max-width: 289px')).toMatch(/flex-basis:\s*100%/);
+    expect(twoRowBody('brm-sea', '.rose', 'max-width: 235px')).toMatch(/grid-row:\s*1 \/ span 2/);
+    expect(twoRowBody('brm-sea', '.rows > :nth-child(2)', 'max-width: 235px')).toMatch(/grid-column:\s*2/);
+    // 兩列沒有另外不顯示浪向玫瑰的規則(165 px 的門檻是原本就有的;兩列時浪方塊至少約 200 px 寬)
+    expect(rulesOf(cssOf('brm-sea')).filter((r) => r.selector === '.rose' && /display:\s*none/.test(r.body)).map((r) => r.at.join(' '))).toEqual(['@container (max-width: 165px)']);
+  });
+
+  it('流:185 px 以下玫瑰圖在數值上方(與風方塊同一門檻)', () => {
+    const body = twoRowBody('brm-current', '.body', 'max-width: 185px');
+    expect(body).toMatch(/flex-direction:\s*column/);
+    const rose = twoRowBody('brm-current', '.rose', 'max-width: 185px');
+    expect(rose).toMatch(/width:\s*28px/);
+    expect(rose).toMatch(/align-self:\s*center/);
+    expect(twoRowBody('brm-current', '.rows')).toMatch(/min-width:\s*0/);
+  });
+
+  it('傾斜儀:刻度在左、四項數值在右(單欄),「T / 速率」的數值在標籤的下一行', () => {
+    const tile = twoRowBody('brm-inclinometer', '.tile');
+    expect(tile).toMatch(/display:\s*grid/);
+    expect(tile).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\) auto/);
+    expect(twoRowBody('brm-inclinometer', '.tile-title')).toMatch(/grid-column:\s*1 \/ -1/);
+    expect(twoRowBody('brm-inclinometer', '.scale')).toMatch(/grid-column:\s*1/);
+    const readouts = twoRowBody('brm-inclinometer', '.readouts');
+    expect(readouts).toMatch(/grid-column:\s*2/);
+    expect(readouts).toMatch(/grid-template-columns:\s*auto/);
+    expect(twoRowBody('brm-inclinometer', '.readouts > span:nth-child(4)')).toMatch(/flex-direction:\s*column/);
+  });
+
+  it('航線:偏移、左右、限值同一行(放不下時限值換行);「速限」與「能見度」同一列;樣板的文字內容不變', async () => {
+    expect(twoRowBody('brm-route', '.xtd')).toMatch(/flex-wrap:\s*wrap/);
+    expect(twoRowBody('brm-route', '.xtd .side')).toMatch(/white-space:\s*nowrap/);
+    expect(twoRowBody('brm-route', '.xtd .label')).toMatch(/margin-left:\s*auto/);
+    expect(twoRowBody('brm-route', '.xtd .value.mid')).toMatch(/font-size:\s*clamp\(18px, min\(1\.6vw, 20cqb\), 28px\)/);
+    expect(twoRowBody('brm-route', '.rows')).toMatch(/grid-template-columns:\s*auto minmax\(0, 1fr\) auto auto/);
+    expect(twoRowBody('brm-route', '.rows .wp')).toMatch(/grid-column:\s*1 \/ -1/);
+    expect(twoRowBody('brm-route', '.rows .label.k-brg')).toMatch(/grid-column:\s*1 \/ span 2/);
+    expect(twoRowBody('brm-route', '.rows .v.k-brg')).toMatch(/grid-column:\s*3 \/ span 2/);
+    // 只有「速限」或只有「能見度」時數值佔到方塊的右緣
+    expect(twoRowBody('brm-route', '.rows:not(:has(.k-lim)) .v.k-vis')).toMatch(/grid-column:\s*2 \/ -1/);
+    expect(twoRowBody('brm-route', '.rows:not(:has(.k-vis)) .v.k-lim')).toMatch(/grid-column:\s*2 \/ -1/);
+    // 單列的規則不看這些類別
+    for (const r of rulesOf(cssOf('brm-route')).filter((r) => /k-(brg|lim|vis)/.test(r.selector))) expect(inTwoRows(r), r.selector).toBe(true);
+    // 樣板:文字內容與原本相同;各列的標籤與數值成對帶同一個類別
+    const el = await mount('brm-route', {
+      route: { nextWaypoint: 'APPROACH', xtd_m: -1568, xtdLimit_m: 1500, distanceToWaypoint_nm: 14.76, bearingToWaypoint_deg: 359, legCourse_deg: 359, speedLimit_kn: 12.5, complete: false },
+      visibility: 0.2,
+    });
+    const root = el.shadowRoot!;
+    expect(text(root.querySelector('.tile-title'))).toBe('ROUTE→ APPROACH');
+    expect(text(root.querySelector('.xtd'))).toBe('1568m L 偏左 限 1500 m');
+    expect(text(root.querySelector('.rows'))).toBe('下一航點APPROACH 14.76 nm 方位 / 航段359 / 359 速限12.5 kn 能見度0.2 nm');
+    for (const k of ['k-brg', 'k-lim', 'k-vis']) expect([...root.querySelectorAll(`.rows > .${k}`)].map((c) => c.classList[0])).toEqual(['label', 'v']);
+    // 沒有航線、只有能見度:只有「能見度」一列
+    const visOnly = await mount('brm-route', { visibility: 8 });
+    expect(text(visOnly.shadowRoot!.querySelector('.rows'))).toBe('能見度8.0 nm');
+    expect([...visOnly.shadowRoot!.querySelectorAll('.rows > *')].map((c) => c.className.replace(/\s+/g, ' ').trim())).toEqual(['label k-vis', 'v k-vis']);
+  });
+
+  it('八種格數組合的樣板:方塊的順序與文字不因兩列的排法而變(兩列與單列是同一份樣板,只靠樣式分列)', async () => {
+    const cfg = getShipConfig('FSB1');
+    const state = {
+      ...defaultState('FSB1'),
+      route: { nextWaypoint: 'FW1', xtd_m: 12, xtdLimit_m: 150 },
+      waves: { significantHeight_m: 2, peakPeriod_s: 7, direction_deg: 90, wavelength_m: 76 },
+      roll: { angle_deg: 1, rate_degps: 0, naturalPeriod_s: 9.8, staticHeel_deg: 0 },
+    } as OwnShipState;
+    const el = await mount('brm-conning-bar', { state, config: cfg, issues: [] });
+    const bar = el.shadowRoot!.querySelector('.bar')!;
+    expect([...bar.classList].sort()).toEqual(['bar', 'with-roll', 'with-route', 'with-sea']);
+    // 樣板裡 UKC 仍排在艏側推之後(DOM 順序不變);13 格時由樣式(order)排到第一列的最後
+    expect([...bar.children].map((t) => t.tagName.toLowerCase())).toEqual(TILES.filter((t) => t !== 'brm-clock' && t !== 'brm-route').concat(['brm-clock', 'brm-route']));
+    el.remove();
   });
 });
