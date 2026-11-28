@@ -1,6 +1,7 @@
 // 頁面層的共用步驟:等待連線、收集頁面錯誤(pageerror / console error)、Shadow DOM 內取值。
 // Playwright 的 CSS 定位器預設穿透 open shadow root(Lit 元件),故選擇器可直接寫元件內部的 class。
-import { expect, type ConsoleMessage, type Page } from '@playwright/test';
+import fs from 'node:fs';
+import { expect, type ConsoleMessage, type Locator, type Page } from '@playwright/test';
 import { layoutFailures, probeConning, probeLayout, widenConningText, type ConningReport, type LayoutSpec } from './layout.ts';
 
 /** 連線狀態藥丸(操船台/教官站 header .pill;STATUS_LABEL connected = 已連線) */
@@ -24,6 +25,53 @@ export class PageErrors {
   expectNone(): void {
     expect(this.errors, '頁面不應有未捕捉例外或 console.error').toEqual([]);
   }
+}
+
+/**
+ * 把真實的檔案拖進頁面上的元素(CDP Input.dispatchDragEvent:瀏覽器端建立真正的拖放資料,頁面拿得到檔案 handle —— getAsFileSystemHandle;
+ * 檔案對話框 showOpenFilePicker 給的是同一種物件,但原生對話框沒有辦法由 Playwright 操作)。
+ * 紀錄檔的來源是 handle 時,讀取失敗可以重新取得檔案再讀(src/Instruments.Web/src/lib/record-source.ts);`setInputFiles` 走的是一般的檔案輸入,做不到。
+ */
+export async function dropFiles(page: Page, target: Locator, files: string[]): Promise<void> {
+  const box = await target.boundingBox();
+  if (!box) throw new Error('dropFiles:目標元素不在畫面上');
+  const x = Math.round(box.x + box.width / 2);
+  const y = Math.round(box.y + Math.min(box.height / 2, 300));
+  const data = { items: [], files, dragOperationsMask: 1 };
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    for (const type of ['dragEnter', 'dragOver', 'drop'] as const) await cdp.send('Input.dispatchDragEvent', { type, x, y, data });
+  } finally {
+    await cdp.detach();
+  }
+}
+
+/**
+ * 「選取之後檔案被改動」的一般檔案輸入(不靠時機):攔下檔案輸入的 change 事件 → setInputFiles(瀏覽器建立 File)→ 先把這個 File 讀一段
+ * → 對檔案附加一行 → 把 change 事件放行。頁面讀到的是「選取後被改動」的 File(Chromium 一定讀不到:TypeError: network error)。
+ *
+ * 先讀一段的原因:瀏覽器記下「選取當下的修改時間」不是在 setInputFiles 回來之前同步完成的 —— 少了這一步,附加偶爾搶在它前面
+ * (實測這個做法 200 次裡 9 次),記下的就是附加之後的時間,頁面照常讀得到。讀成功一次代表已經記下(開啟時要拿它核對)。
+ * 檔案輸入在 Shadow DOM 裡也可以(change 事件不穿出 shadow root,所以攔在檔案輸入所在的根)。
+ */
+export async function selectThenModify(input: Locator, file: string, appendText: string): Promise<void> {
+  await input.evaluate((el) => {
+    const root = el.getRootNode();
+    const hold = (ev: Event): void => {
+      if (ev.target !== el) return;
+      ev.stopImmediatePropagation();
+      root.removeEventListener('change', hold, true);
+    };
+    root.addEventListener('change', hold, true);
+  });
+  await input.setInputFiles(file);
+  await input.evaluate(async (el) => {
+    const reader = (el as HTMLInputElement).files![0]!.stream().getReader();
+    await reader.read();
+    await reader.cancel();
+  });
+  fs.appendFileSync(file, appendText);
+  await input.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true })));
 }
 
 /** 字串中的第一個數字(例如「S 12.3°」→ 12.3;「---」→ NaN) */

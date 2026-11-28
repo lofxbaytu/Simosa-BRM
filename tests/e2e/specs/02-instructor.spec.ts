@@ -12,6 +12,10 @@
 // 1093×614 展開船上降版的說明時執行控制不被蓋住、點得到(審查後修正)。
 // 重播檢視讀大檔(第三十一輪):超過上限(7201 筆)的核心紀錄分段讀取、讀取中顯示百分比,資訊列寫明降採樣,時間軸 / 逐筆 / 事件跳轉可用,
 // 講評摘要與航跡以全部狀態計算(完整教官站的「重播檢視」分頁與 ?mode=replay 都走同一個元件)。
+// 重播檢視開啟核心仍在寫入的紀錄(第三十一輪):拖進來的紀錄(檔案 handle)每 20 ms 被附加也一次就載入(讀取失敗時重新取得檔案再讀);
+// 一般的檔案輸入選取後被改動時是中文說明(不是瀏覽器的英文錯誤)、原本的紀錄不動,重新選取就載入。
+// 審查後修正:拖進來的紀錄每一次取得檔案(getFile)的當下,工具列都還沒有為這次載入改過字(讀取說明要等讀到第一段才寫)。
+// 檔案拖到不接受檔案的地方(頁首、「即時」分頁、操船台):頁面的防護擋下來(dropEffect 是 none),拖進重播檢視照常載入(第三十一輪,主控程序驗收時補)。
 // 審查後修正:降採樣時時間軸的方向鍵走逐筆;超過上限後倒帶回到上限以內的紀錄每一筆都在、沒有降採樣的說明。
 // 1920×1080(conning 條單列;第三十一輪):重播檢視載入 E20 夾具與航線偏移很大的紀錄(當場合成),讀數列各方塊不被水平裁切,字距加大 3 % 仍通過。
 // 審查後補:重播檢視載入 E17b 夾具(情境庫唯一的 12 格)浪向玫瑰與船速方塊的中文標籤照常顯示;完整教官站 1920×945 / 1920×800
@@ -29,7 +33,7 @@ import { freePort } from '../support/processes.ts';
 import { ensureRunning, ensureScenario, expect, test } from '../support/fixtures.ts';
 import { CONNING_NONE, CONNING_ROLL, CONNING_TWO_ROW_ASTERN, CONNING_TWO_ROW_ROUTE, CONNING_TWO_ROW_SEA, CONNING_TWO_ROW_STATUSES, CONNING_UNDERWAY, CONNING_USUAL } from '../support/conning-values.ts';
 import { BRIDGE_LAYOUT, INSTRUCTOR_LAYOUT, REPLAY_LAYOUT, SIMPLE_RUN_LAYOUT, layoutFailures, overrideConning, probeConning, probeLayout } from '../support/layout.ts';
-import { PageErrors, expectConningSingleRow, expectConningTwoRows, scenarioLoadButton, waitConnected } from '../support/pages.ts';
+import { PageErrors, dropFiles, expectConningSingleRow, expectConningTwoRows, scenarioLoadButton, selectThenModify, waitConnected } from '../support/pages.ts';
 
 /** 與 tests/SimCore.Tests/ScenarioLoadRejectionTests.cs 相同的兩個結構 error:多邊形只有 2 點、hardFail 引用不存在的區域 */
 const INVALID_INLINE = {
@@ -1889,4 +1893,155 @@ test('完整教官站的「重播檢視」分頁讀同一種紀錄(1366×768):�
   errors.expectNone();
   fs.rmSync(record, { force: true });
   fs.rmSync(rewound, { force: true });
+});
+
+test('重播檢視開啟核心仍在寫入的紀錄:拖進來的(每 20 ms 被附加)一次就載入;一般的檔案輸入選取後被改動是中文說明、原本的紀錄不動,重新選取就載入', async ({ page, env }) => {
+  // 實測 Chromium:瀏覽器在取得檔案的當下記下修改時間,開啟時不同就讀不到(Blob.stream() 第一次 read() 就是「TypeError: network error」),
+  // 同一個 File 再讀幾次都一樣。拖放(與「紀錄檔」在支援的瀏覽器開的 showOpenFilePicker)拿到的是檔案 handle,重播檢視讀取失敗時重新取得檔案、
+  // 從頭重讀;一般的檔案輸入(setInputFiles)做不到,修正前畫面上是那句英文,每 20 ms 附加時約 2–8% 的機率遇到。
+  const dir = path.join(OUT, 'tmp');
+  fs.mkdirSync(dir, { recursive: true });
+  const src = fs.readFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E05-core.jsonl'), 'utf8').split('\n').filter((l) => l.trim());
+  const body = src.filter((l) => !l.startsWith('{"kind":"summary"') && !l.startsWith('{"kind":"footer"'));
+  const baseStates = body.filter((l) => l.startsWith('{"kind":"state"')).length;
+  const lastState = JSON.parse(body.filter((l) => l.startsWith('{"kind":"state"')).at(-1)!) as { state: { t: number; tick: number } };
+  const live = path.join(dir, 'replay-live-record.jsonl');
+  fs.writeFileSync(live, `${body.join('\n')}\n`);
+  let k = 0;
+  const nextLine = (): string => {
+    k++;
+    const s = structuredClone(lastState);
+    s.state.tick += 2 * k;
+    s.state.t += 0.04 * k;
+    return `${JSON.stringify(s)}\n`;
+  };
+  const errors = new PageErrors(page);
+  await page.goto(instructorUrl(env, { mode: 'replay' }));
+  const view = page.locator('brm-replay-view');
+  const toolbar = view.locator('.toolbar').first();
+  const input = view.locator('input.file-input');
+  const stats = () => view.evaluate((el) => (el as unknown as { data: { stateStats: { total: number } } | null }).data?.stateStats.total ?? null);
+
+  // 審查後修正:瀏覽器在 getFile() 的當下記下修改時間、開啟時核對;工具列的字每改一次,接下來主執行緒要忙 5–25 ms,落在兩者之間時要重讀的比例
+  // 是 4–6 倍(實測)。所以取得檔案的當下工具列不可以已經為這次載入改過字 —— 這裡記下每一次 getFile() 當下的讀取說明。
+  await view.evaluate((el) => {
+    const seen: string[] = [];
+    (window as unknown as { textAtGetFile: string[] }).textAtGetFile = seen;
+    const getFile = FileSystemFileHandle.prototype.getFile;
+    FileSystemFileHandle.prototype.getFile = function (this: FileSystemFileHandle) {
+      seen.push((el as unknown as { loadingText: string }).loadingText);
+      return getFile.call(this);
+    };
+  });
+
+  // (1) 拖進來,檔案每 20 ms 被附加一行:一次就載入,沒有錯誤訊息;連做幾次(練習進行中重讀同一份紀錄),每次讀到的都不比上一次少
+  const timer = setInterval(() => fs.appendFileSync(live, nextLine()), 20);
+  try {
+    let previous = baseStates - 1;
+    for (let round = 0; round < 5; round++) {
+      await view.evaluate((el) => ((el as unknown as { loadedMark: unknown }).loadedMark = (el as unknown as { data: unknown }).data));
+      await dropFiles(page, view, [live]);
+      await expect.poll(() => view.evaluate((el) => (el as unknown as { data: unknown; loadedMark: unknown }).data !== (el as unknown as { loadedMark: unknown }).loadedMark), { timeout: 15_000 }).toBe(true);
+      await expect(view.locator('.toolbar .error')).toHaveCount(0);
+      await expect(toolbar).toContainText('replay-live-record.jsonl · SimCore JSON Lines · E05');
+      const total = (await stats())!;
+      expect(total, `第 ${round + 1} 次讀到的狀態筆數`).toBeGreaterThan(previous);
+      previous = total;
+    }
+  } finally {
+    clearInterval(timer);
+  }
+  await expect(view.locator('input.slider')).toBeVisible();
+  const loaded = (await stats())!;
+  // 五次載入各至少取得一次檔案(讀取失敗而重讀的那幾次更多);每一次取得的當下工具列都沒有讀取說明
+  const textAtGetFile = await page.evaluate(() => (window as unknown as { textAtGetFile: string[] }).textAtGetFile);
+  expect(textAtGetFile.length).toBeGreaterThanOrEqual(5);
+  expect(textAtGetFile.filter((t) => t !== ''), '取得檔案的當下工具列已經寫了讀取說明').toEqual([]);
+  // 檔案輸入旁邊由瀏覽器畫的檔名跟著拖進來的紀錄(不是「未選擇任何檔案」)
+  expect(await input.evaluate((el) => (el as HTMLInputElement).files?.[0]?.name ?? null)).toBe('replay-live-record.jsonl');
+
+  // (2) 一般的檔案輸入,選取之後檔案被改動(不靠時機):中文說明,原本載入的紀錄不動
+  await selectThenModify(input, live, nextLine());
+  await expect(view.locator('.toolbar .error')).toHaveText('無法讀取「replay-live-record.jsonl」:檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)', { timeout: 15_000 });
+  await expect(view.locator('.toolbar .error')).not.toContainText(/network error|TypeError/);
+  expect(await stats()).toBe(loaded);
+  await expect(view.locator('input.slider')).toBeVisible();
+  // 照說明重新選取一次(檔案這時沒有在變動):載入,錯誤清掉,讀到剛才附加的那一行
+  const onDisk = fs.readFileSync(live, 'utf8').split('\n').filter((l) => l.startsWith('{"kind":"state"')).length;
+  await input.setInputFiles([]);
+  await input.setInputFiles(live);
+  await expect.poll(stats, { timeout: 15_000 }).toBe(onDisk);
+  await expect(view.locator('.toolbar .error')).toHaveCount(0);
+  expect(onDisk).toBeGreaterThan(loaded);
+  errors.expectNone();
+  fs.rmSync(live, { force: true });
+});
+
+test('檔案拖到不接受檔案的地方(完整教官站的頁首與「即時」分頁、操船台):頁面擋下來、不被換成那個檔案;拖進重播檢視照常載入', async ({ page, env, core }) => {
+  // 瀏覽器的預設行為:沒有人在 dragover 取消預設動作的地方,把檔案放下去 = 在這個分頁開啟那個檔案(練習進行中畫面整個被換掉)。
+  // 重播檢視現在接受把紀錄檔拖進來,拖錯地方的機會比以前多,所以各頁的進入點都裝了防護(src/Instruments.Web/src/lib/file-drop-guard.ts):
+  // 沒有人接受的檔案拖曳 → 取消預設動作、dropEffect 是 none。CDP 送的拖放事件不會觸發「在分頁開啟檔案」(那要真實的滑鼠拖放,實機確認),
+  // 這裡驗的是建置後的頁面確實裝了防護、而且不妨礙接受檔案的元件。
+  await ensureRunning(core);
+  const dir = path.join(OUT, 'tmp');
+  fs.mkdirSync(dir, { recursive: true });
+  const record = path.join(dir, 'stray-drop.jsonl');
+  fs.copyFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E05-core.jsonl'), record);
+  const errors = new PageErrors(page);
+  type Seen = Array<{ type: string; prevented: boolean; effect: string }>;
+  // 這個監聽比防護晚註冊在同一個 window 上,所以看到的是防護處理之後的結果
+  const watch = () =>
+    page.evaluate(() => {
+      const seen: Array<{ type: string; prevented: boolean; effect: string }> = [];
+      (window as unknown as { strayDrag: typeof seen }).strayDrag = seen;
+      for (const type of ['dragover', 'drop']) window.addEventListener(type, (ev) => seen.push({ type, prevented: ev.defaultPrevented, effect: (ev as DragEvent).dataTransfer?.dropEffect ?? '' }));
+    });
+  const take = () =>
+    page.evaluate(() => {
+      const w = window as unknown as { strayDrag: Seen };
+      const out = w.strayDrag.slice();
+      w.strayDrag.length = 0;
+      return out;
+    });
+  const expectBlocked = async (where: string): Promise<void> => {
+    const seen = await take();
+    expect(seen.filter((s) => s.type === 'dragover').length, `${where}:頁面收到 dragover`).toBeGreaterThan(0);
+    expect(seen.filter((s) => !s.prevented), `${where}:沒有被擋下的事件`).toEqual([]);
+    expect(seen.filter((s) => s.type === 'dragover' && s.effect !== 'none'), `${where}:dropEffect 應為 none`).toEqual([]);
+  };
+
+  // 完整教官站:頁首、「即時」分頁的中央
+  await page.goto(instructorUrl(env));
+  await waitConnected(page);
+  const url = page.url();
+  await watch();
+  await dropFiles(page, page.locator('brm-instructor-app header'), [record]);
+  await expectBlocked('教官站頁首');
+  await dropFiles(page, page.locator('brm-instructor-app'), [record]);
+  await expectBlocked('教官站「即時」分頁');
+  expect(page.url()).toBe(url);
+  await expect(page.locator('brm-instructor-app header')).toBeVisible();
+  await waitConnected(page);
+
+  // 「重播檢視」分頁:拖進去照常載入(防護不動接受檔案的元件:dropEffect 是 copy)
+  await page.locator('button.view-replay').click();
+  const view = page.locator('brm-replay-view');
+  await dropFiles(page, view, [record]);
+  await expect(view.locator('.toolbar').first()).toContainText('stray-drop.jsonl · SimCore JSON Lines · E05', { timeout: 15_000 });
+  const accepted = await take();
+  expect(accepted.filter((s) => !s.prevented)).toEqual([]);
+  expect(accepted.filter((s) => s.type === 'dragover' && s.effect !== 'copy')).toEqual([]);
+  expect(accepted.some((s) => s.type === 'drop')).toBe(true);
+
+  // 操船台(駕駛台筆電的主畫面)
+  await page.goto(bridgeUrl(env));
+  await waitConnected(page);
+  const bridge = page.url();
+  await watch();
+  await dropFiles(page, page.locator('brm-app'), [record]);
+  await expectBlocked('操船台');
+  expect(page.url()).toBe(bridge);
+  await expect(page.locator('brm-heading .hdg .value')).toHaveText(/^\d{3}$/);
+  errors.expectNone();
+  fs.rmSync(record, { force: true });
 });

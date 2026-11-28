@@ -11,12 +11,19 @@
 // 歷史,倒帶前曾經多長不算);超過的(25 Hz 的核心紀錄約 5 分鐘以上)每 N 筆取 1 筆,資訊列之後寫明間隔,⏮ ⏭ 逐筆的間隔跟著變大,時間軸的
 // 方向鍵也改走逐筆(滑桿一格 0.04 秒比留下的狀態密)。講評摘要、事件、輸入、標記、倒帶點、航跡與航跡圖上的事件位置都以**全部**狀態計算,
 // 不受降採樣影響。又選了別的檔案時,先前還沒讀完的那一次直接中止(後開的紀錄不會被先開的蓋掉)。讀取失敗(含讀取途中檔案被截短)時原本的紀錄不動。
+//
+// 核心仍在寫入的紀錄(lib/record-source.ts;實測見 README「紀錄讀取」):瀏覽器在選取檔案的當下記下修改時間,開啟時不同就讀不到,而且同一個 File
+// 再讀幾次都一樣。所以「紀錄檔」在瀏覽器支援時改開 showOpenFilePicker(拿到檔案 handle),紀錄檔也可以直接拖進來;這兩種來源讀取失敗時
+// 重新取得檔案、從頭重讀(新的解析器與狀態存放),重讀的進度寫明是重新讀取。不支援的環境是一般的檔案輸入:不重讀,顯示中文說明(請重新選取一次)。
+// 這兩種來源的讀取說明要等讀到第一段(檔案已經開啟)才更新:工具列的字每改一次,接下來主執行緒要忙 5–25 ms(那個畫格的工作),落在「取得檔案」與「開啟」之間時
+// 檔案被改動的機會跟著變大(審查時實測要重讀的比例是講評報告頁的 4–6 倍,重讀也常常再失敗;見 loadSource)。
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { tileStyles } from '../shared.js';
 import { instructorStyles, shortTime } from './instructor-shared.js';
 import { stateIndexAt, type ReplayRewind } from '../../lib/record-replay.js';
+import { blobRecordSource, dataTransferHasFiles, readRecordSource, RecordFilePicker, recordSourcesFromDataTransfer, type RecordReadRetryOptions, type RecordSource } from '../../lib/record-source.js';
 import { megabytesText, recordReadErrorText, RECORD_PROGRESS_MIN_BYTES } from '../../lib/record-stream.js';
 import { loadReplayBlob, loadReplayText, REPLAY_MAX_STATES, replayDisplayState, type ReplayStateStats, type ReplayViewData } from '../../lib/replay-states.js';
 import { TrackHistory, type TrackPoint } from '../../lib/track-history.js';
@@ -37,8 +44,11 @@ import { rowTime } from './event-stream.js';
 
 const PLAY_RATES = [0.25, 1, 4, 16];
 
-/** 讀取被後來的載入取代(loadBlob 的 onProgress 擲出,中止分段讀取) */
+/** 讀取被後來的載入取代(loadSource 的 onProgress 擲出,中止分段讀取) */
 class SupersededLoad extends Error {}
+
+/** 檔案輸入的 accept 與檔案對話框的副檔名(同一份) */
+const RECORD_EXTENSIONS = ['.jsonl', '.json', '.txt'] as const;
 
 @customElement('brm-replay-view')
 export class ReplayView extends LitElement {
@@ -257,8 +267,16 @@ export class ReplayView extends LitElement {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTickWall = 0;
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.addEventListener('dragover', this.onDragOver);
+    this.addEventListener('drop', this.onDrop);
+  }
+
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.removeEventListener('dragover', this.onDragOver);
+    this.removeEventListener('drop', this.onDrop);
     this.stopPlay();
   }
 
@@ -271,33 +289,87 @@ export class ReplayView extends LitElement {
   }
 
   /**
-   * 分段讀取並載入一份紀錄(檔案選擇器;Blob / File):只開一次 Blob.stream(),讀取中頁面仍可操作,原本載入的紀錄留到新的讀完才換掉。
-   * 回傳載入的資料;讀取失敗(說明顯示在工具列,原本的紀錄不動)或被後來的載入取代時回傳 null。
+   * 分段讀取並載入一份紀錄(Blob / File;一般的檔案輸入選的檔案、測試):只開一次 Blob.stream(),讀取中頁面仍可操作,原本載入的紀錄留到新的讀完才換掉。
+   * 回傳載入的資料;讀取失敗(說明顯示在工具列,原本的紀錄不動)或被後來的載入取代時回傳 null。這種來源讀取失敗時不重讀(見 loadSource)。
    */
-  async loadBlob(blob: Blob, name = ''): Promise<ReplayViewData | null> {
+  loadBlob(blob: Blob, name = ''): Promise<ReplayViewData | null> {
+    return this.loadSource(blobRecordSource(blob, name));
+  }
+
+  /**
+   * 載入一份紀錄(lib/record-source.ts 的來源)。可以重新取得檔案的來源(檔案對話框的 handle、拖放)讀取失敗時 —— 核心仍在寫入的紀錄偶爾在
+   * 開啟的瞬間被改動 —— 重新取得檔案、從頭重讀:每次都是全新的 loadReplayBlob(新的解析器與狀態存放;上一次讀到一半的東西沒有人留著)。
+   * 被後來的載入取代時不再重讀。retry:重讀的次數、等待與時鐘(由呼叫端注入;預設見 record-source.ts)。
+   *
+   * 工具列的讀取說明:
+   *  - 一般的檔案(不能重新取得):馬上寫「讀取中…」,8 MB 以上的再換成百分比(與原本相同)。
+   *  - 可以重新取得的來源:**讀到第一段之後才寫**(「讀取中…」或百分比),在那之前、以及一連串開啟就失敗的重讀之間,畫面都不更新。
+   *    瀏覽器在 getFile() 的當下記下修改時間、開啟時核對,這兩件事之間主執行緒在忙多久,檔案被改動的機會就有多大;而工具列的字每改一次,
+   *    Lit 的更新只要 0.1–0.3 ms,接下來那個畫格主執行緒卻要忙 5–25 ms(整個重播檢視跟著更新;沒有再細分是哪一部分),getFile() 的回覆
+   *    排在它後面。實測(真實 Chromium,進行中的紀錄拖進 ?mode=replay,每 20 ms 附加一行):
+   *    先寫「讀取中…」再取檔案時 300 次裡 50–62 次要重讀(講評報告頁 9–11 次),每次重讀前又改一次字,重讀也有四成再失敗;
+   *    改成現在的寫法後 300 次裡 16 次要重讀(講評報告頁 9 次),都是重讀 1 次就讀到(其餘數字見 README「紀錄讀取」)。
+   *  - 重讀的那幾次:進度寫「重新讀取 …(檔案在讀取時被改動,第 N 次重新讀取)」、從 0% 重新算(讀到一半才失敗時,原本的百分比留到重讀的第一段
+   *    讀到為止,最多約 0.5 秒;不會無聲地跳回 0%)。開啟就失敗的那幾次什麼都還沒有顯示,不必說明。
+   */
+  async loadSource(source: RecordSource, retry: RecordReadRetryOptions = {}): Promise<ReplayViewData | null> {
     const seq = ++this.loadSeq;
-    this.loadingText = '讀取中…';
-    let shownPct = -1;
+    const name = source.name;
+    if (!source.reopenable) this.loadingText = '讀取中…';
     try {
-      const data = await loadReplayBlob(blob, {
-        maxStates: this.maxStates,
-        onProgress: (read, total) => {
-          if (seq !== this.loadSeq) throw new SupersededLoad();
-          if (total < RECORD_PROGRESS_MIN_BYTES) return;
-          const pct = Math.floor((read / total) * 100);
-          if (pct === shownPct) return;
-          shownPct = pct;
-          this.loadingText = `讀取 ${name}… ${pct}%(共 ${megabytesText(total)} MB)`;
+      const { value: data, blob } = await readRecordSource(
+        source,
+        (blob, attempt) => {
+          const again = attempt > 1 ? `(檔案在讀取時被改動,第 ${attempt - 1} 次重新讀取)` : '';
+          let shownPct = -1;
+          // 這裡不可以先改字再讀(見上):loadReplayBlob 一呼叫就送出開啟,說明到 onProgress(已經讀到一段)才更新
+          return loadReplayBlob(blob, {
+            maxStates: this.maxStates,
+            onProgress: (read, total) => {
+              if (seq !== this.loadSeq) throw new SupersededLoad();
+              if (total < RECORD_PROGRESS_MIN_BYTES) {
+                // 小檔案不顯示百分比:只在第一段寫一次
+                if (shownPct < 0) {
+                  shownPct = 0;
+                  this.loadingText = attempt > 1 ? `重新讀取 ${name}…${again}` : '讀取中…';
+                }
+                return;
+              }
+              const pct = Math.floor((read / total) * 100);
+              if (pct === shownPct) return;
+              shownPct = pct;
+              this.loadingText = `${attempt > 1 ? '重新讀取' : '讀取'} ${name}… ${pct}%(共 ${megabytesText(total)} MB)${again}`;
+            },
+          });
         },
-      });
+        { ...retry, isCurrent: () => seq === this.loadSeq },
+      );
       if (seq !== this.loadSeq) return null;
       this.apply(data, name);
+      this.reflectFileInput(blob);
       return data;
     } catch (err) {
       if (seq !== this.loadSeq || err instanceof SupersededLoad) return null;
       this.loadingText = '';
       this.loadError = `無法讀取「${name}」:${recordReadErrorText(err)}`;
       return null;
+    }
+  }
+
+  /**
+   * 檔案輸入旁邊由瀏覽器畫的檔名跟著目前的紀錄:檔案對話框(showOpenFilePicker)或拖放載入的檔案不是檔案輸入自己選的,
+   * 不放進去的話紀錄已經載入了,它還寫著「未選擇任何檔案」。只是顯示用(不觸發 change);做不到的環境維持原樣。
+   */
+  private reflectFileInput(blob: Blob): void {
+    const input = this.renderRoot.querySelector<HTMLInputElement>('input.file-input');
+    if (!input || typeof File !== 'function' || !(blob instanceof File) || typeof DataTransfer !== 'function') return;
+    if (input.files?.[0] === blob) return;
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(blob);
+      input.files = dt.files;
+    } catch {
+      /* 維持原樣 */
     }
   }
 
@@ -337,13 +409,47 @@ export class ReplayView extends LitElement {
     await this.loadBlob(file, file.name);
   }
 
+  /** 檔案對話框(showOpenFilePicker;不支援或用不了時退回檔案輸入自己的對話框) */
+  private readonly picker = new RecordFilePicker();
+
   /**
-   * 開檔案對話框之前清掉上一次的選擇:同一個檔案再選一次也會觸發 change(核心仍在寫入的紀錄讀取失敗時要「重新選取一次」,
-   * 或練習還在進行、想重讀同一份紀錄的最新內容)。
+   * 按「紀錄檔」:瀏覽器支援時改開 showOpenFilePicker —— 拿到的是檔案 handle,核心仍在寫入的紀錄讀取失敗時可以重新取得檔案再讀
+   * (一般檔案輸入給的 File 做不到;見 lib/record-source.ts)。不支援時是檔案輸入自己的對話框:開之前清掉上一次的選擇,
+   * 同一個檔案再選一次也會觸發 change(讀取失敗時要「重新選取一次」,或練習還在進行、想重讀同一份紀錄的最新內容)。
    */
   private onFileClick(ev: Event): void {
-    (ev.target as HTMLInputElement).value = '';
+    const input = ev.target as HTMLInputElement;
+    input.value = '';
+    if (!this.picker.available) return;
+    ev.preventDefault();
+    void this.pickRecord(input);
   }
+
+  private async pickRecord(input: HTMLInputElement): Promise<void> {
+    const sources = await this.picker.pick({ description: '練習紀錄', extensions: RECORD_EXTENSIONS });
+    if (sources === null) {
+      // 這個環境的 showOpenFilePicker 用不了(picker.available 之後是 false):改開檔案輸入自己的對話框
+      input.click();
+      return;
+    }
+    const source = sources[0];
+    if (source) await this.loadSource(source);
+  }
+
+  /** 拖放紀錄檔:有檔案才接受(其他拖曳 —— 文字、時間軸 —— 不攔)。 */
+  private readonly onDragOver = (ev: DragEvent): void => {
+    if (!dataTransferHasFiles(ev.dataTransfer)) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+  };
+
+  private readonly onDrop = (ev: DragEvent): void => {
+    if (!ev.dataTransfer || !dataTransferHasFiles(ev.dataTransfer)) return;
+    ev.preventDefault();
+    // 來源要在事件處理函式裡同步取出(事件結束後 DataTransfer 就不能取用)
+    const pending = recordSourcesFromDataTransfer(ev.dataTransfer);
+    void pending.then((sources) => (sources[0] ? this.loadSource(sources[0]) : null));
+  };
 
   private displayState(d: ReplayViewData, index: number): OwnShipState {
     const c = this.shown;
@@ -460,7 +566,7 @@ export class ReplayView extends LitElement {
       <div class="toolbar">
         <label class="file">
           <span>紀錄檔</span>
-          <input class="file-input" type="file" accept=".jsonl,.json,.txt,application/json" @click=${this.onFileClick} @change=${this.onFile} />
+          <input class="file-input" type="file" accept=${`${RECORD_EXTENSIONS.join(',')},application/json`} @click=${this.onFileClick} @change=${this.onFile} />
         </label>
         ${this.loadingText ? html`<span class="info loading">${this.loadingText}</span>` : this.loadError ? html`<span class="error" role="alert">${this.loadError}</span>` : nothing}
         ${d
@@ -471,7 +577,7 @@ export class ReplayView extends LitElement {
               ${d.header.parameterSet ? html`<span class="param-set"> · 參數集 ${d.header.parameterSet.id ?? ''} ${d.header.parameterSet.version ?? ''}${d.header.parameterSet.resolved.length > 0 ? `(已解析 ${d.header.parameterSet.resolved.length} 個引用)` : ''}</span>` : nothing}
               ${d.summary?.assessment.score !== undefined ? html`<span class="param-set"> · 評分 ${Math.round(d.summary.assessment.score)}${d.summary.assessment.passed !== undefined ? (d.summary.assessment.passed ? '(通過)' : '(未通過)') : ''}</span>` : nothing}
             </span>${d.stateStats.stride > 1 ? html`<span class="decimated">${decimationText(d.stateStats)}</span>` : nothing}`
-          : html`<span class="info">選擇 SimCore 的 .jsonl 紀錄(src/SimCore/README.md 第 4 節)或教官站下載的 .json 紀錄</span>`}
+          : html`<span class="info">選擇 SimCore 的 .jsonl 紀錄(src/SimCore/README.md 第 4 節)或教官站下載的 .json 紀錄(也可以把檔案拖進這個畫面)</span>`}
       </div>
       ${d && d.states.length > 0
         ? html`<div class="timeline">

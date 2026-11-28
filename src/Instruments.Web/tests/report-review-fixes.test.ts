@@ -365,7 +365,7 @@ describe('(7) 損壞的教官站紀錄不丟未處理例外', () => {
     const roster = new File([JSON.stringify({ format: 'simosa-brm-roster', trainees: [{ id: 'T009', name: '甲' }], staff: [] })], 'roster.json');
     await app.openFiles([broken, roster]);
     expect(app.ws.session.trainees.map((t) => t.id)).toEqual(['T009']);
-    expect(app.fileErrors).toEqual(['無法載入「broken.json」:Error: 讀取失敗']);
+    expect(app.fileErrors).toEqual(['無法載入「broken.json」:無法讀取檔案(請重新選取一次;核心仍在寫入這份紀錄時也可以待練習結束後再開啟);原始錯誤:Error: 讀取失敗']);
     await app.updateComplete;
     expect(app.querySelector('.msg.error')!.textContent).toContain('broken.json');
     document.body.innerHTML = '';

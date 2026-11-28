@@ -12,6 +12,13 @@
 //  - 凍結中時刻相同的連續狀態:⏮ 退得過去(DATA-3);說明的秒數不是 0(DATA-2);
 //  - 降採樣時時間軸的方向鍵走逐筆,沒有降採樣時不攔截(MEM-4);
 //  - 讀取途中檔案被截短(stream 提早結束而不報錯):當作讀取失敗,原本的紀錄不動(MEM-2)。
+// 核心仍在寫入的紀錄(第三十一輪;lib/record-source.ts):可以重新取得檔案的來源(檔案對話框的 handle、拖放)讀取失敗時從頭重讀 ——
+//  第一次 read() 就失敗、讀到一半失敗都載得進來(與一次讀成功時相同),重讀的進度寫明是重新讀取;每次都失敗時讀到上限就結束、顯示中文說明;
+//  重讀期間又選了別的檔案時舊的不蓋掉新的;一般檔案輸入的 File 不重讀(顯示中文說明,不是瀏覽器的英文錯誤)。
+// 審查後修正(核心仍在寫入的紀錄):
+//  - 可以重新取得檔案的來源:每一次取得檔案的當下,工具列都還沒有為這次載入改過字、也沒有排著的重繪(讀取說明要等讀到第一段才寫;
+//    實測改一次字之後主執行緒要忙 5–25 ms,落在取得檔案與開啟之間時要重讀的比例是 4–6 倍);一般的檔案照舊馬上寫「讀取中…」;
+//  - 在「紀錄檔」上按兩下(對話框還開著又按一下):不停用 showOpenFilePicker、不另開檔案輸入自己的對話框,選到的檔案照常載入。
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readdirSync } from 'node:fs';
@@ -22,6 +29,7 @@ import { decimationText, stepIntervalText } from '../src/components/instructor/r
 import { summarize } from '../src/lib/debrief.js';
 import { overlayFromHeaderScenario } from '../src/lib/plot-overlay.js';
 import { parseReplay, trackPoints } from '../src/lib/record-replay.js';
+import type { RecordSource } from '../src/lib/record-source.js';
 import { replayDisplayState, type ReplayViewData } from '../src/lib/replay-states.js';
 import { sampleState } from '../src/lib/session-record.js';
 import { getShipConfig } from '../src/lib/ship-config.js';
@@ -160,6 +168,7 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = '';
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -346,7 +355,7 @@ describe('重播檢視:檔案分段讀取', () => {
     await broken.next(1);
     expect(await q).toBeNull();
     await el.updateComplete;
-    expect(el.shadowRoot!.querySelector('.toolbar .error')!.textContent).toBe('無法讀取「broken.jsonl」:Error: 讀取失敗');
+    expect(el.shadowRoot!.querySelector('.toolbar .error')!.textContent).toBe('無法讀取「broken.jsonl」:無法讀取檔案(請重新選取一次;核心仍在寫入這份紀錄時也可以待練習結束後再開啟);原始錯誤:Error: 讀取失敗');
     // 讀下一份的期間不顯示先前的錯誤(顯示讀取中);成功後錯誤清掉、換成新的紀錄
     const again = steppedBlob(enc.encode(E07), 1_000_000);
     const r = el.loadBlob(again.blob, 'again.jsonl');
@@ -414,6 +423,413 @@ describe('重播檢視:檔案分段讀取', () => {
     expect(el.shadowRoot!.querySelector('.hint')!.textContent).toBe('紀錄沒有狀態資料');
     expect(el.shadowRoot!.querySelector('input.slider')).toBeNull();
     expect((await el.loadBlob(new Blob([]), 'empty.jsonl'))?.states).toEqual([]);
+  });
+});
+
+/** 可以重新取得檔案的來源(檔案 handle、拖放):每次 open() 依序交出 blobs 的下一個(用完之後一直是最後一個)。 */
+function reopenableSource(name: string, blobs: readonly Blob[]): RecordSource & { opens: number } {
+  const src = {
+    name,
+    opens: 0,
+    reopenable: true,
+    open(): Promise<Blob> {
+      const b = blobs[Math.min(src.opens, blobs.length - 1)]!;
+      src.opens++;
+      return Promise.resolve(b);
+    },
+  };
+  return src;
+}
+
+/** Chromium 的 stream 讀不到檔案時的錯誤(檔案在選取後被改動) */
+const networkError = (): TypeError => new TypeError('network error');
+/** 不等待的重讀(測試不必真的等 0–300 ms) */
+const NO_WAIT = { sleep: () => Promise.resolve(), random: () => 0.5 };
+
+describe('重播檢視:核心仍在寫入的紀錄(讀取失敗時重新取得檔案再讀)', () => {
+  it('第一次 read() 就以 TypeError: network error 失敗:重新取得檔案、重讀成功 —— 畫面與一次讀成功時相同,沒有錯誤訊息', async () => {
+    const byText = await mountView();
+    byText.loadText(E07, 'live.jsonl');
+    await settle(byText);
+    const el = await mountView();
+    const stale = steppedBlob(enc.encode(E07), 20_000, { failAfter: 0, failWith: networkError() });
+    const fresh = steppedBlob(enc.encode(E07), 1_000_000);
+    const source = reopenableSource('live.jsonl', [stale.blob, fresh.blob]);
+    const p = el.loadSource(source, NO_WAIT);
+    await el.updateComplete;
+    // 可以重新取得的來源:讀到第一段之前工具列不更新(見下一個案例)
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')).toBeNull();
+    await stale.next(1); // 第一次 read() 失敗
+    await el.updateComplete;
+    // 開啟就失敗 → 重新取得檔案再讀:什麼都還沒有顯示過,不必說明;不是錯誤
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    expect(source.opens).toBe(2);
+    await fresh.next(1); // 重讀讀到第一段
+    await el.updateComplete;
+    // 重讀中:工具列寫明(不是錯誤)
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')!.textContent).toBe('重新讀取 live.jsonl…(檔案在讀取時被改動,第 1 次重新讀取)');
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    await fresh.next(1);
+    const data = await p;
+    expect(data).not.toBeNull();
+    await settle(el);
+    expect(source.opens).toBe(2);
+    expect(stale.state).toMatchObject({ opened: 1, delivered: 0 });
+    expect(fresh.state.opened).toBe(1);
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    expect(deepHtml(el.shadowRoot!)).toBe(deepHtml(byText.shadowRoot!));
+    expect(dataOf(el)).toStrictEqual(dataOf(byText));
+  }, 30_000);
+
+  it('讀到一半失敗(8 MB 以上、進度已經顯示):從頭重讀,進度寫明是重新讀取、從頭算起;載入的狀態不重複、不缺漏', async () => {
+    const byText = await mountView();
+    byText.loadText(E07, 'big.jsonl');
+    await settle(byText);
+    const el = await mountView();
+    el.loadText(E01, 'old.jsonl');
+    await el.updateComplete;
+    // 同一份 E07 的內容分成兩半,中間夾 9 MB 的空白行:前半讀完(狀態已經進了解析器)之後才失敗
+    const text = `${E07.trimEnd()}\n`;
+    const cutAt = text.indexOf('\n', Math.floor(text.length / 2)) + 1;
+    const head = enc.encode(text.slice(0, cutAt));
+    const tail = enc.encode(text.slice(cutAt));
+    const pad = new Uint8Array(9 * 1024 * 1024).fill(0x20);
+    pad[pad.byteLength - 1] = 0x0a;
+    const bytes = new Uint8Array(head.byteLength + pad.byteLength + tail.byteLength);
+    bytes.set(head, 0);
+    bytes.set(pad, head.byteLength);
+    bytes.set(tail, head.byteLength + pad.byteLength);
+    const piece = 3 * 1024 * 1024;
+    const total = (bytes.byteLength / 1048576).toFixed(1);
+    const pct = (n: number) => Math.floor((Math.min(bytes.byteLength, n * piece) / bytes.byteLength) * 100);
+    const first = steppedBlob(bytes, piece, { failAfter: 2, failWith: networkError() });
+    const second = steppedBlob(bytes, piece);
+    const source = reopenableSource('big.jsonl', [first.blob, second.blob]);
+    const p = el.loadSource(source, NO_WAIT);
+    const loading = () => el.shadowRoot!.querySelector('.toolbar .loading')?.textContent ?? '';
+    await first.next(2);
+    await el.updateComplete;
+    expect(loading()).toBe(`讀取 big.jsonl… ${pct(2)}%(共 ${total} MB)`);
+    expect(pct(2)).toBeGreaterThan(50);
+    await first.next(1); // 第三次 read() 失敗
+    await el.updateComplete;
+    // 重讀的第一段讀到之前,原本的百分比留著(取得檔案與開啟之間不改字);原本載入的紀錄不動
+    expect(source.opens).toBe(2);
+    expect(loading()).toBe(`讀取 big.jsonl… ${pct(2)}%(共 ${total} MB)`);
+    expect(toolbarText(el)).toContain('old.jsonl · SimCore JSON Lines');
+    // 進度不會無聲地跳回去:重讀的每一格百分比都寫明是重新讀取、從頭算起
+    const seen: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      await second.next(1);
+      await el.updateComplete;
+      seen.push(loading());
+    }
+    expect(seen).toEqual([1, 2, 3, 4].map((n) => `重新讀取 big.jsonl… ${pct(n)}%(共 ${total} MB)(檔案在讀取時被改動,第 1 次重新讀取)`));
+    expect(pct(1)).toBeLessThan(pct(2));
+    expect(pct(4)).toBe(100);
+    await second.next(1);
+    const data = await p;
+    await settle(el);
+    expect(first.state.delivered).toBe(2);
+    expect(source.opens).toBe(2);
+    // 前半在第一次已經解析過一遍:重讀用的是新的解析器與狀態存放,所以筆數與內容和一次讀成功時相同(不是 1.5 倍)
+    expect(data!.stateStats.total).toBe(dataOf(byText)!.stateStats.total);
+    expect(dataOf(el)).toStrictEqual(dataOf(byText));
+    expect(loading()).toBe('');
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    expect(toolbarText(el)).toContain('big.jsonl · SimCore JSON Lines · E07_steering_failure');
+  }, 30_000);
+
+  it('可以重新取得的來源:每一次取得檔案的當下,工具列都還沒有為這次載入改過字、也沒有排著的重繪(讀取說明要等讀到第一段才寫)', async () => {
+    // 瀏覽器在 getFile() 的當下記下修改時間、開啟時核對;實測工具列改一次字,接下來主執行緒要忙 5–25 ms,
+    // 落在兩者之間時要重讀的比例是 4–6 倍,重讀也常常再失敗(每次重讀前又改一次字)
+    const el = await mountView();
+    el.loadText(E01, 'old.jsonl');
+    await settle(el);
+    const loading = () => el.shadowRoot!.querySelector('.toolbar .loading')?.textContent ?? '';
+    /** 元件內部的狀態(工具列的讀取說明、有沒有排著的重繪) */
+    const inner = el as unknown as { loadingText: string; isUpdatePending: boolean };
+    const pending = () => inner.isUpdatePending;
+    const atOpen: Array<{ text: string; pending: boolean }> = [];
+    const atStream: Array<{ text: string; pending: boolean }> = [];
+    // 前三份一開啟就失敗,第四份讀得到;每次 open() 與 stream() 的當下記下工具列的狀態
+    const stale = () => ({ size: 250_000, stream: () => (atStream.push({ text: inner.loadingText, pending: pending() }), { getReader: () => ({ read: () => Promise.reject(networkError()), cancel: () => Promise.resolve() }) }) }) as unknown as Blob;
+    const good = steppedBlob(enc.encode(E07), 20_000);
+    const goodStream = good.blob.stream.bind(good.blob);
+    (good.blob as { stream: () => unknown }).stream = () => (atStream.push({ text: inner.loadingText, pending: pending() }), goodStream());
+    const blobs = [stale(), stale(), stale(), good.blob];
+    let opens = 0;
+    const source: RecordSource = {
+      name: 'live.jsonl',
+      reopenable: true,
+      open: () => {
+        atOpen.push({ text: inner.loadingText, pending: pending() });
+        return Promise.resolve(blobs[opens++]!);
+      },
+    };
+    // 等待(10、30 ms 那兩格)期間讓排著的更新跑完:改過字的話這裡就畫出來了
+    const p = el.loadSource(source, { random: () => 0.5, sleep: () => new Promise((r) => setTimeout(r, 2)) });
+    await good.next(1);
+    await el.updateComplete;
+    expect(opens).toBe(4);
+    const quiet = { text: '', pending: false };
+    expect(atOpen).toEqual([quiet, quiet, quiet, quiet]);
+    expect(atStream).toEqual([quiet, quiet, quiet, quiet]);
+    // 第一段讀到之後才寫:重讀了三次
+    expect(loading()).toBe('重新讀取 live.jsonl…(檔案在讀取時被改動,第 3 次重新讀取)');
+    await good.next(20);
+    expect((await p)?.header.scenarioId).toBe('E07_steering_failure');
+    await el.updateComplete;
+    expect(loading()).toBe('');
+    // 沒有重讀的那一次:第一段讀到之後是「讀取中…」
+    const once = steppedBlob(enc.encode(E07), 20_000);
+    const texts: string[] = [];
+    const q = el.loadSource({ name: 'once.jsonl', reopenable: true, open: () => (texts.push(inner.loadingText), Promise.resolve(once.blob)) }, NO_WAIT);
+    await el.updateComplete;
+    texts.push(loading());
+    await once.next(1);
+    await el.updateComplete;
+    texts.push(loading());
+    await once.next(20);
+    await q;
+    expect(texts).toEqual(['', '', '讀取中…']);
+    // 一般的檔案(不能重新取得,取得與開啟之間的時間與它無關):照舊馬上寫「讀取中…」
+    const plain = steppedBlob(enc.encode(E07), 20_000);
+    const r = el.loadBlob(plain.blob, 'plain.jsonl');
+    expect(inner.loadingText).toBe('讀取中…');
+    await plain.next(20);
+    await r;
+  }, 30_000);
+
+  it('每次都失敗:讀到上限就結束(不無限重試),工具列是中文說明(不是瀏覽器的英文錯誤),原本載入的紀錄不動', async () => {
+    const el = await mountView();
+    el.loadText(E01, 'good.jsonl');
+    await el.updateComplete;
+    const before = dataOf(el);
+    const blobs = Array.from({ length: 12 }, () => {
+      const b = { size: 250_000, stream: () => ({ getReader: () => ({ read: () => Promise.reject(networkError()), cancel: () => Promise.resolve() }) }) };
+      return b as unknown as Blob;
+    });
+    const source = reopenableSource('live.jsonl', blobs);
+    expect(await el.loadSource(source, NO_WAIT)).toBeNull();
+    await el.updateComplete;
+    expect(source.opens).toBe(6);
+    const error = el.shadowRoot!.querySelector('.toolbar .error')!;
+    expect(error.textContent).toBe('無法讀取「live.jsonl」:檔案持續被改動,重新讀取 5 次後仍讀不到(請待練習結束後再開啟,或稍後重新選取一次)');
+    expect(error.textContent).not.toMatch(/network error|TypeError/);
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')).toBeNull();
+    expect(dataOf(el)).toBe(before);
+    expect(toolbarText(el)).toContain('good.jsonl · SimCore JSON Lines');
+    // 次數可調
+    const three = reopenableSource('live.jsonl', blobs);
+    await el.loadSource(three, { ...NO_WAIT, maxAttempts: 3 });
+    await el.updateComplete;
+    expect(three.opens).toBe(3);
+    expect(el.shadowRoot!.querySelector('.toolbar .error')!.textContent).toContain('重新讀取 2 次後仍讀不到');
+    // 檔案不見了(重新取得時 NotFoundError):不再重試,說明是找不到檔案
+    let opens = 0;
+    const gone: RecordSource = { name: 'gone.jsonl', reopenable: true, open: () => (opens++ === 0 ? Promise.resolve(blobs[0]!) : Promise.reject(new DOMException('could not be found', 'NotFoundError'))) };
+    await el.loadSource(gone, NO_WAIT);
+    await el.updateComplete;
+    expect(opens).toBe(2);
+    expect(el.shadowRoot!.querySelector('.toolbar .error')!.textContent).toBe('無法讀取「gone.jsonl」:找不到檔案(已被刪除、改名或移走,或所在的磁碟已移除):請確認檔案還在之後重新選取一次');
+    expect(dataOf(el)).toBe(before);
+  });
+
+  it('一般檔案輸入的 File(loadBlob):讀取失敗不重讀(實測同一個 File 再讀幾次都一樣),TypeError: network error 顯示成中文說明', async () => {
+    const el = await mountView();
+    el.loadText(E01, 'good.jsonl');
+    await el.updateComplete;
+    const before = dataOf(el);
+    const stale = steppedBlob(enc.encode(E07), 20_000, { failAfter: 0, failWith: networkError() });
+    const p = el.loadBlob(stale.blob, 'live.jsonl');
+    await stale.next(1);
+    expect(await p).toBeNull();
+    await el.updateComplete;
+    expect(stale.state.opened).toBe(1);
+    expect(el.shadowRoot!.querySelector('.toolbar .error')!.textContent).toBe('無法讀取「live.jsonl」:檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)');
+    expect(dataOf(el)).toBe(before);
+  });
+
+  it('重讀期間又選了別的檔案:舊的那一次不再重讀、不蓋掉新的紀錄,也不留下它的進度或錯誤', async () => {
+    const el = await mountView();
+    // (1) 等待重讀的期間被取代:不再取得檔案
+    let release: () => void = () => undefined;
+    const waiting = new Promise<void>((r) => (release = r));
+    const stale = steppedBlob(enc.encode(E07), 20_000, { failAfter: 0, failWith: networkError() });
+    const never = steppedBlob(enc.encode(E07), 20_000);
+    const source = reopenableSource('slow-live.jsonl', [stale.blob, never.blob]);
+    let sleeping = false;
+    const first = el.loadSource(source, { delaysMs: [50], random: () => 0.5, sleep: () => ((sleeping = true), waiting) });
+    await stale.next(1);
+    await el.updateComplete;
+    // 正在等待重讀(開啟就失敗的重讀不改字)
+    expect(sleeping).toBe(true);
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')).toBeNull();
+    const second = await el.loadBlob(new Blob([enc.encode(E01)]), 'user-E01.jsonl');
+    expect(second?.header.scenarioId).toBe('E01_baseline');
+    release();
+    expect(await first).toBeNull();
+    await el.updateComplete;
+    expect(source.opens).toBe(1);
+    expect(never.state.opened).toBe(0);
+    expect(dataOf(el)?.header.scenarioId).toBe('E01_baseline');
+    expect(toolbarText(el)).toContain('user-E01.jsonl');
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    // (2) 重讀的那一次讀到一半時被取代:下一段中止,不套用
+    const stale2 = steppedBlob(enc.encode(E07), 20_000, { failAfter: 1, failWith: networkError() });
+    const retry2 = steppedBlob(enc.encode(E07), 20_000);
+    const source2 = reopenableSource('slow-live-2.jsonl', [stale2.blob, retry2.blob]);
+    const third = el.loadSource(source2, NO_WAIT);
+    await stale2.next(2);
+    await retry2.next(2);
+    expect(retry2.state.delivered).toBe(2);
+    el.loadText(E01, 'text-E01.jsonl');
+    await retry2.next(2);
+    expect(await third).toBeNull();
+    expect(retry2.state.cancelled).toBe(true);
+    expect(source2.opens).toBe(2);
+    await el.updateComplete;
+    expect(toolbarText(el)).toContain('text-E01.jsonl');
+    expect(dataOf(el)?.header.scenarioId).toBe('E01_baseline');
+    expect(el.shadowRoot!.querySelector('.toolbar .loading')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    // (3) 被取代之後才用完重讀次數:不顯示它的錯誤
+    const dead = Array.from({ length: 8 }, () => steppedBlob(enc.encode(E07), 20_000, { failAfter: 0, failWith: networkError() }));
+    const source3 = reopenableSource('dead.jsonl', dead.map((d) => d.blob));
+    const fourth = el.loadSource(source3, NO_WAIT);
+    await dead[0]!.next(1);
+    el.loadText(E07, 'last-E07.jsonl');
+    for (const d of dead.slice(1)) await d.next(1);
+    expect(await fourth).toBeNull();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    expect(toolbarText(el)).toContain('last-E07.jsonl');
+    expect(source3.opens).toBeLessThanOrEqual(2);
+  }, 30_000);
+
+  it('「紀錄檔」:瀏覽器有 showOpenFilePicker 時改開它(拿到檔案 handle,讀取失敗可以重讀);用不了時退回檔案輸入自己的對話框', async () => {
+    let n = 0;
+    const getFile = vi.fn(() => Promise.resolve((n++ === 0 ? { name: 'live.jsonl', size: 250_000, stream: () => ({ getReader: () => ({ read: () => Promise.reject(networkError()), cancel: () => Promise.resolve() }) }) } : new File([enc.encode(E07)], 'live.jsonl')) as File));
+    const show = vi.fn((_options?: unknown) => Promise.resolve([{ kind: 'file', name: 'live.jsonl', getFile }]));
+    vi.stubGlobal('showOpenFilePicker', show);
+    const el = await mountView();
+    const input = el.shadowRoot!.querySelector<HTMLInputElement>('input.file-input')!;
+    const click = new Event('click', { bubbles: true, cancelable: true });
+    input.dispatchEvent(click);
+    // 檔案輸入自己的對話框不開(preventDefault),改開 showOpenFilePicker
+    expect(click.defaultPrevented).toBe(true);
+    expect(show).toHaveBeenCalledWith({ multiple: false, id: 'simosa-brm-records', types: [{ description: '練習紀錄', accept: { 'application/json': ['.jsonl', '.json', '.txt'] } }] });
+    for (let i = 0; i < 400 && !el.loaded; i++) await new Promise((r) => setTimeout(r, 5));
+    await el.updateComplete;
+    // 第一次取得的檔案讀不到(被改動)→ 重新 getFile() 再讀
+    expect(getFile).toHaveBeenCalledTimes(2);
+    expect(toolbarText(el)).toContain('live.jsonl · SimCore JSON Lines · E07_steering_failure');
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    // 使用者取消(AbortError,對話框開了一段時間):什麼都不做,下次仍用 showOpenFilePicker
+    vi.useRealTimers();
+    show.mockImplementationOnce(() => new Promise((_r, reject) => setTimeout(() => reject(new DOMException('The user aborted a request.', 'AbortError')), 130)));
+    const before = dataOf(el);
+    input.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 180));
+    expect(dataOf(el)).toBe(before);
+    // 對話框一開就被取消(開不起來;自動化攔截):改開檔案輸入自己的對話框,之後不再攔
+    show.mockImplementationOnce(() => Promise.reject(new DOMException('Intercepted by Page.setInterceptFileChooserDialog().', 'AbortError')));
+    const fallbackClicks: boolean[] = [];
+    input.click = () => {
+      const ev = new Event('click', { bubbles: true, cancelable: true });
+      input.dispatchEvent(ev);
+      fallbackClicks.push(ev.defaultPrevented);
+    };
+    const third = new Event('click', { bubbles: true, cancelable: true });
+    input.dispatchEvent(third);
+    expect(third.defaultPrevented).toBe(true);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fallbackClicks).toEqual([false]);
+    const calls = show.mock.calls.length;
+    const fourth = new Event('click', { bubbles: true, cancelable: true });
+    input.dispatchEvent(fourth);
+    expect(fourth.defaultPrevented).toBe(false);
+    expect(show.mock.calls.length).toBe(calls);
+  });
+
+  it('在「紀錄檔」上按兩下(對話框還開著又按一下):不停用 showOpenFilePicker、不另開檔案輸入自己的對話框;選到的檔案照常載入、讀取失敗照常重讀', async () => {
+    // 實測(Chromium):對話框開著時再呼叫 showOpenFilePicker 會以「NotAllowedError: … File picker already active.」拒絕
+    let n = 0;
+    const getFile = vi.fn(() => Promise.resolve((n++ === 0 ? { name: 'live.jsonl', size: 250_000, stream: () => ({ getReader: () => ({ read: () => Promise.reject(networkError()), cancel: () => Promise.resolve() }) }) } : new File([enc.encode(E07)], 'live.jsonl')) as File));
+    let choose: (handles: unknown[]) => void = () => undefined;
+    let active = false;
+    const show = vi.fn((_options?: unknown) => {
+      if (active) return Promise.reject(new DOMException("Failed to execute 'showOpenFilePicker' on 'Window': File picker already active.", 'NotAllowedError'));
+      active = true;
+      return new Promise<unknown[]>((resolve) => {
+        choose = (handles) => {
+          active = false;
+          resolve(handles);
+        };
+      });
+    });
+    vi.stubGlobal('showOpenFilePicker', show);
+    const el = await mountView();
+    const input = el.shadowRoot!.querySelector<HTMLInputElement>('input.file-input')!;
+    const fallbackClicks: number[] = [];
+    input.click = () => fallbackClicks.push(1);
+    const clicks = [0, 1, 2].map(() => new Event('click', { bubbles: true, cancelable: true }));
+    input.dispatchEvent(clicks[0]!);
+    await new Promise((r) => setTimeout(r, 5));
+    // 第二、三下:對話框還開著
+    input.dispatchEvent(clicks[1]!);
+    await new Promise((r) => setTimeout(r, 30));
+    input.dispatchEvent(clicks[2]!);
+    await new Promise((r) => setTimeout(r, 30));
+    // 三下都攔下檔案輸入自己的對話框;沒有退回(input.click()),也沒有再向瀏覽器要第二個對話框
+    expect(clicks.map((c) => c.defaultPrevented)).toEqual([true, true, true]);
+    expect(fallbackClicks).toEqual([]);
+    expect(show).toHaveBeenCalledTimes(1);
+    // 使用者在(唯一的)對話框選了檔案:照常載入,第一次取得的檔案讀不到 → 重新取得再讀
+    choose([{ kind: 'file', name: 'live.jsonl', getFile }]);
+    for (let i = 0; i < 400 && !el.loaded; i++) await new Promise((r) => setTimeout(r, 5));
+    await el.updateComplete;
+    expect(getFile).toHaveBeenCalledTimes(2);
+    expect(toolbarText(el)).toContain('live.jsonl · SimCore JSON Lines · E07_steering_failure');
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
+    expect(fallbackClicks).toEqual([]);
+    // 之後再按:仍然開 showOpenFilePicker(沒有被停用)
+    const calls = show.mock.calls.length;
+    const later = new Event('click', { bubbles: true, cancelable: true });
+    input.dispatchEvent(later);
+    expect(later.defaultPrevented).toBe(true);
+    expect(show.mock.calls.length).toBe(calls + 1);
+    choose([]);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fallbackClicks).toEqual([]);
+  });
+
+  it('把紀錄檔拖進重播檢視:與選檔案相同(有 handle 時讀取失敗可以重讀);不是檔案的拖曳不攔', async () => {
+    const el = await mountView();
+    let n = 0;
+    const getFile = vi.fn(() => Promise.resolve((n++ === 0 ? { name: 'dropped.jsonl', size: 250_000, stream: () => ({ getReader: () => ({ read: () => Promise.reject(networkError()), cancel: () => Promise.resolve() }) }) } : new File([enc.encode(E07)], 'dropped.jsonl')) as File));
+    const file = new File([enc.encode(E07)], 'dropped.jsonl');
+    const dataTransfer = { types: ['Files'], dropEffect: 'none', files: [file], items: [{ kind: 'file', getAsFile: () => file, getAsFileSystemHandle: () => Promise.resolve({ kind: 'file', name: 'dropped.jsonl', getFile }) }] };
+    const fire = (type: string, dt: unknown) => {
+      const ev = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'dataTransfer', { value: dt });
+      el.dispatchEvent(ev);
+      return ev;
+    };
+    expect(fire('dragover', dataTransfer).defaultPrevented).toBe(true);
+    expect(dataTransfer.dropEffect).toBe('copy');
+    expect(fire('dragover', { types: ['text/plain'], files: [], items: [] }).defaultPrevented).toBe(false);
+    expect(fire('drop', { types: ['text/plain'], files: [], items: [] }).defaultPrevented).toBe(false);
+    expect(fire('drop', dataTransfer).defaultPrevented).toBe(true);
+    for (let i = 0; i < 400 && !el.loaded; i++) await new Promise((r) => setTimeout(r, 5));
+    await el.updateComplete;
+    expect(getFile).toHaveBeenCalledTimes(2);
+    expect(toolbarText(el)).toContain('dropped.jsonl · SimCore JSON Lines · E07_steering_failure');
+    expect(el.shadowRoot!.querySelector('.toolbar .error')).toBeNull();
   });
 });
 

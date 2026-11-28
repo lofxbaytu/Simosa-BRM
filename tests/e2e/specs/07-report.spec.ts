@@ -2,11 +2,14 @@
 // 教官站「講評報告」鈕 → 新分頁 report.html?from=instructor 載入交接紀錄;
 // 最近載入的紀錄在 IndexedDB 存 Blob(不存整份文字),重新整理後由 Blob 還原;舊版存的整份文字仍讀得進來並改存成 Blob;
 // 大檔讀取中主執行緒有讓出(狀態列畫得出小於 100% 的進度);核心仍在寫入的紀錄另存失敗時不會留下前一份(重新整理不還原成別的練習)。
+// 核心仍在寫入的紀錄(第三十一輪):瀏覽器在選取檔案的當下記下修改時間,開啟時不同就讀不到(TypeError: network error),同一個 File 再讀也一樣;
+// 來源是檔案 handle(拖放、showOpenFilePicker)時頁面重新取得檔案再讀 —— 每 20 ms 被附加的紀錄一次就載入;
+// 一般的檔案輸入做不到,顯示中文說明(請重新選取一次),重新選取就載入。
 import fs from 'node:fs';
 import path from 'node:path';
 import { OUT, ROOT, instructorUrl, reportUrl } from '../support/env.ts';
 import { ensureRunning, expect, test } from '../support/fixtures.ts';
-import { PageErrors, waitConnected } from '../support/pages.ts';
+import { PageErrors, dropFiles, selectThenModify, waitConnected } from '../support/pages.ts';
 
 /** 本輪產生、已寫 footer 的最新核心紀錄;沒有則退回 --record 的第一份紀錄 */
 function latestClosedRecord(recordsDir: string, startedUtc: string, fallback: string): string {
@@ -196,6 +199,11 @@ test('核心仍在寫入的紀錄(選取後內容持續變動):照樣載入;另�
   // 第三十輪審查 A-rA-1:把仍在變動的檔案寫進 IndexedDB 時,請求的 onsuccess 先觸發、交易之後才中止(Failed to write blobs),
   // 修正前 record:last 留著前一份紀錄,重新整理後畫面是另一份練習而沒有任何訊息。瀏覽器是否拒絕取決於寫入當下檔案有沒有變動
   // (這裡每 20 ms 附加一行,實測都會拒絕);兩種結果都必須一致:記下的是這一份(沒有說明),或什麼都沒記下(有說明)—— 不可以是前一份。
+  //
+  // 進行中的紀錄以**拖放**開啟(頁面拿到檔案 handle;與「開啟檔案…」的 showOpenFilePicker 同一種來源):瀏覽器在取得檔案的當下記下修改時間,
+  // 開啟時不同就讀不到 —— 每 20 ms 附加時每一次約 3–9% 會這樣(實測),頁面這時重新取得檔案再讀,所以一次就載入。
+  // 原本用 setInputFiles(一般的檔案輸入):那種 File 讀不到就是讀不到,重讀沒有用,這個案例因此約每 14 次失敗 1 次(100 次裡 7 次;
+  // 訊息是「TypeError: network error」)。一般檔案輸入的行為由下一個案例驗(不靠時機)。
   test.setTimeout(120_000);
   const dir = path.join(OUT, 'tmp');
   fs.mkdirSync(dir, { recursive: true });
@@ -223,7 +231,7 @@ test('核心仍在寫入的紀錄(選取後內容持續變動):照樣載入;另�
     await expect(app.locator('.msg')).toContainText('已載入 report-earlier-record.jsonl', { timeout: 15_000 });
     await expect.poll(() => page.evaluate(LAST_RECORD)).toMatchObject({ name: 'report-earlier-record.jsonl', isBlob: true });
 
-    await app.locator('input.file-input').setInputFiles(live);
+    await dropFiles(page, app, [live]);
     await expect(app.locator('.msg')).toContainText('已載入 report-live-record.jsonl', { timeout: 30_000 });
     await expect(app.locator('.msg')).not.toHaveClass(/error/);
     await expect(app.locator('.msg')).toContainText('E05');
@@ -262,6 +270,42 @@ test('核心仍在寫入的紀錄(選取後內容持續變動):照樣載入;另�
   } finally {
     clearInterval(timer);
   }
+  fs.rmSync(live, { force: true });
+  fs.rmSync(earlier, { force: true });
+});
+
+test('一般的檔案輸入選的紀錄在選取後被改動(核心仍在寫入):中文說明而不是瀏覽器的英文錯誤,原本載入的紀錄不動;重新選取一次就載入', async ({ page, env }) => {
+  // 實測 Chromium:檔案輸入給的 File 記著選取當下的修改時間,之後檔案被改動就讀不到(Blob.stream() 是「TypeError: network error」),
+  // 同一個 File 再讀幾次都一樣,頁面沒有辦法自己重讀 —— 修正前畫面上就是那句英文。這裡不靠時機:攔下 change 事件、附加一行、再放行。
+  const dir = path.join(OUT, 'tmp');
+  fs.mkdirSync(dir, { recursive: true });
+  const earlier = path.join(dir, 'report-stale-earlier.jsonl');
+  fs.copyFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E07-core.jsonl'), earlier);
+  const src = fs.readFileSync(path.join(ROOT, 'src/Instruments.Web/tests/fixtures/record-E05-core.jsonl'), 'utf8').split('\n').filter((l) => l.trim());
+  const body = src.filter((l) => !l.startsWith('{"kind":"summary"') && !l.startsWith('{"kind":"footer"'));
+  const stateLine = body.filter((l) => l.startsWith('{"kind":"state"')).at(-1)!;
+  const live = path.join(dir, 'report-stale-live.jsonl');
+  fs.writeFileSync(live, `${body.join('\n')}\n`);
+  const errors = new PageErrors(page);
+  await page.goto(reportUrl(env));
+  const app = page.locator('brm-report-app');
+  const input = app.locator('input.file-input');
+  await input.setInputFiles(earlier);
+  await expect(app.locator('.msg')).toContainText('已載入 report-stale-earlier.jsonl', { timeout: 15_000 });
+
+  await selectThenModify(input, live, `${stateLine}\n`);
+  await expect(app.locator('.msg')).toHaveClass(/error/, { timeout: 15_000 });
+  await expect(app.locator('.msg')).toHaveText('無法載入「report-stale-live.jsonl」:檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)');
+  await expect(app.locator('.msg')).not.toContainText(/network error|TypeError/);
+  // 原本載入的紀錄不動
+  expect(await page.evaluate(`document.querySelector('brm-report-app').recordName`)).toBe('report-stale-earlier.jsonl');
+  await expect.poll(() => page.evaluate(LAST_RECORD)).toMatchObject({ name: 'report-stale-earlier.jsonl' });
+  // 照說明重新選取一次(檔案這時沒有在變動):載入,內容含剛才附加的那一行
+  await input.setInputFiles(live);
+  await expect(app.locator('.msg')).toContainText('已載入 report-stale-live.jsonl', { timeout: 15_000 });
+  await expect(app.locator('.msg')).not.toHaveClass(/error/);
+  await expect(app.locator('.msg')).toContainText(`狀態 ${body.filter((l) => l.startsWith('{"kind":"state"')).length + 1} 筆`);
+  errors.expectNone();
   fs.rmSync(live, { force: true });
   fs.rmSync(earlier, { force: true });
 });

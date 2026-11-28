@@ -547,6 +547,25 @@ export function yieldToEventLoop(): Promise<void> {
   });
 }
 
+// ---- 讀取端的失敗(瀏覽器讀不到檔案)與解析端的例外要分得開:前者可以換一份新取得的檔案重讀(lib/record-source.ts),後者是內容或程式的事,重讀也一樣。
+// 不另包一層錯誤物件(呼叫端與測試看到的仍是瀏覽器原本的錯誤),只把錯誤物件記在這個集合裡。
+const readFailures = new WeakSet<object>();
+
+/** 把 err 記成「讀取端的失敗」並回傳(不是物件的錯誤值包成 Error 才記得住)。 */
+export function markRecordReadFailure(err: unknown): unknown {
+  const e = typeof err === 'object' && err !== null ? err : new Error(String(err));
+  readFailures.add(e);
+  return e;
+}
+
+/**
+ * err 是不是讀取端的失敗:Blob.stream() 的 read() 被拒絕、讀到的位元組比檔案大小少、(沒有 stream 時)slice 讀取被拒絕、
+ * 或重新取得檔案失敗(lib/record-source.ts)。onChunk / onProgress / 解析器擲出的例外不是。
+ */
+export function isRecordReadFailure(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && readFailures.has(err);
+}
+
 /**
  * 把 Blob / File 一段一段解碼成文字(UTF-8;開頭的 BOM 去掉、不合法的位元組換成 U+FFFD,與 Blob.text() 相同),
  * 各段依序交給 onChunk(文字、已讀位元組)。
@@ -555,15 +574,22 @@ export function yieldToEventLoop(): Promise<void> {
  * 整個讀取成為一個長任務(實測 Chromium:337 MB 的核心紀錄全程 2.4 s 中頁面停住 2.2 s,計時器與畫面都不動,進度只畫得出「100%」)。
  * 因此每累計 yieldEveryMs 毫秒的工作就明確讓出一次(yieldToEventLoop);0 = 每段之後都讓出,Infinity = 不讓出。
  *
- * 以 Blob.stream() 讀:整個檔案只開啟一次。不能改成每段各自 Blob.slice().arrayBuffer() —— Chromium 每次讀取都核對檔案的修改時間,
- * 核心仍在寫入的紀錄(build/records 下正在變大的 .jsonl)在選取之後又被寫入,第二段起就會以 NotReadableError 失敗
- * (實測:slice 分次讀失敗;stream 讀到選取當下的大小為止,與原本一次 file.text() 相同)。沒有 stream() 的環境才退回 slice。
+ * 以 Blob.stream() 讀:整個檔案只開啟一次。瀏覽器(實測 Chromium 153)在使用者選取檔案的當下記下檔案的修改時間,之後**每次開啟**都核對:
+ *  - 開啟時修改時間與選取當下不同 → 第一次 read() 就以 `TypeError: network error` 失敗,一個位元組都不交出(FileReader 那一系 ——
+ *    Blob.text() / arrayBuffer() / slice().arrayBuffer() —— 同樣的情形是 NotReadableError;檔案已經不在時 stream 仍是 TypeError: network error,
+ *    FileReader 那一系是 NotFoundError)。同一個 File 物件之後再讀幾次都一樣失敗(修改時間的紀錄不會更新),要重新向瀏覽器取得檔案才讀得到。
+ *  - 開啟成功之後檔案再被附加(核心仍在寫入的紀錄)不受影響:讀到 blob.size(第一次取用 size 當下的大小)為止。
+ *  所以不能改成每段各自 Blob.slice().arrayBuffer():每一段都是一次新的開啟,核心仍在寫入的紀錄第二段起就讀不到。沒有 stream() 的環境才退回 slice。
+ *  核心仍在寫入的紀錄因此**偶爾**在第一次 read() 失敗(選取到開啟之間約 1 毫秒,剛好有一次寫入落在裡面;失敗率 ≈ 這段時間 ÷ 寫入的間隔,
+ *  數字見 README「紀錄讀取」)—— 由 lib/record-source.ts 換一份新取得的檔案重讀。
  *
  * 讀到的位元組比 blob.size 少 = 讀取失敗:檔案在讀取途中被截短(別的程序把它覆寫成較短的內容)時,Chromium 的 stream **不報錯**,
  * 交出一部分就結束(實測:337 MB 的紀錄讀到 20% 時截成 4 KB,stream 交出 73 MB 後 done、沒有 error;原本一次 file.text() 會以
  * NotReadableError 失敗)。不核對的話半份紀錄會被當成讀完的整份(30 分鐘的練習顯示成 6 分半;第三十一輪審查 MEM-2)。
- * 這時擲出 name 為 NotReadableError 的錯誤(recordReadErrorText 有中文說明)。核心仍在寫入(只會變長)的紀錄讀到選取當下的大小,不受影響。
+ * 這時擲出 name 為 NotReadableError 的錯誤(recordReadErrorText 有中文說明)。
  * 只核對 stream 這條路:退回 slice 的那條路,瀏覽器在檔案被改動時本來就會以 NotReadableError 失敗(見上)。
+ *
+ * 讀取端的失敗(read() 被拒絕、位元組不足、slice 讀取被拒絕)都記成 isRecordReadFailure;onChunk 擲出的例外原樣往外丟、不記。
  */
 export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, bytesRead: number) => void, chunkBytes = RECORD_CHUNK_BYTES, yieldEveryMs = RECORD_YIELD_MS): Promise<void> {
   const decoder = new TextDecoder('utf-8');
@@ -576,12 +602,23 @@ export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, b
     sliceStart = nowMs();
   };
   if (typeof blob.stream === 'function') {
-    const reader = blob.stream().getReader();
+    let reader: ReadableStreamDefaultReader<Uint8Array>;
+    try {
+      reader = blob.stream().getReader();
+    } catch (err) {
+      throw markRecordReadFailure(err);
+    }
     let read = 0;
     try {
       for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        let step: ReadableStreamReadResult<Uint8Array>;
+        try {
+          step = await reader.read();
+        } catch (err) {
+          throw markRecordReadFailure(err);
+        }
+        if (step.done) break;
+        const value = step.value;
         for (let offset = 0; offset < value.byteLength; offset += chunkBytes) {
           const part = offset === 0 && value.byteLength <= chunkBytes ? value : value.subarray(offset, offset + chunkBytes);
           read += part.byteLength;
@@ -594,11 +631,17 @@ export async function forEachBlobTextChunk(blob: Blob, onChunk: (text: string, b
       await reader.cancel().catch(() => undefined);
       throw err;
     }
-    if (read < size) throw shortReadError(read, size);
+    if (read < size) throw markRecordReadFailure(shortReadError(read, size));
   } else {
     for (let offset = 0; offset < size; offset += chunkBytes) {
       const end = Math.min(size, offset + chunkBytes);
-      onChunk(decoder.decode(await blob.slice(offset, end).arrayBuffer(), { stream: true }), end);
+      let buffer: ArrayBuffer;
+      try {
+        buffer = await blob.slice(offset, end).arrayBuffer();
+      } catch (err) {
+        throw markRecordReadFailure(err);
+      }
+      onChunk(decoder.decode(buffer, { stream: true }), end);
       await breathe();
     }
   }
@@ -643,13 +686,41 @@ export async function parseReplayBlob<S extends ReplayStateBase = OwnShipState>(
 /** 讀取中顯示進度的檔案大小下限(位元組;小檔案一閃而過,不顯示)。講評報告頁與重播檢視共用。 */
 export const RECORD_PROGRESS_MIN_BYTES = 8 * 1024 * 1024;
 
+/** 檔案在選取後被改動(或讀不到)的說明:教官要做的事是重新選取一次,或等練習結束。 */
+export const RECORD_CHANGED_TEXT = '檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)';
+/** 檔案已經不在原來的位置的說明。 */
+export const RECORD_GONE_TEXT = '找不到檔案(已被刪除、改名或移走,或所在的磁碟已移除):請確認檔案還在之後重新選取一次';
+/** 讀取失敗但認不出原因時的說明(後面附原始錯誤)。 */
+export const RECORD_UNREADABLE_TEXT = '無法讀取檔案(請重新選取一次;核心仍在寫入這份紀錄時也可以待練習結束後再開啟)';
+
+function errorName(err: unknown): string {
+  const name = typeof err === 'object' && err !== null ? (err as { name?: unknown }).name : undefined;
+  return typeof name === 'string' ? name : '';
+}
+
 /**
- * 讀檔失敗的說明。NotReadableError:檔案在選取之後被改動(瀏覽器以選取當下的修改時間核對),最常見的是核心仍在寫入這份紀錄
- * (build/records 下正在變大的 .jsonl)——重新選取一次通常就能讀到當下的內容;其餘錯誤照原樣顯示。
+ * 讀檔失敗的說明(講評報告頁與重播檢視共用;顯示在「無法載入「檔名」:」之後)。瀏覽器的原始錯誤是英文而且看不出原因
+ * (Chromium 的 stream 讀不到檔案時一律是「TypeError: network error」),教官要知道的是怎麼做:
+ *  - 檔案在選取後被改動:NotReadableError(FileReader 那一系、讀到的位元組比檔案大小少),或讀取端的 `TypeError: network error`
+ *    (Blob.stream();檔案被刪除、改名、所在的磁碟被移除時 stream 也是這個錯誤,分不出來,所以說明寫「被改動或無法讀取」)→ 請重新選取一次,或待練習結束後再開啟;
+ *  - 檔案不在了:NotFoundError(重新取得檔案時、FileReader 那一系);
+ *  - 重讀到上限仍讀不到(RecordReadRetryError,lib/record-source.ts):寫明重讀了幾次;
+ *  - 其他讀取端的失敗(認不出來):中文說明之後附原始錯誤,方便回報問題;
+ *  - 不是讀取端的失敗(解析器或程式的例外):照原樣顯示。
  */
 export function recordReadErrorText(err: unknown): string {
-  if (typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'NotReadableError') return '檔案在選取後被改動或無法讀取(核心仍在寫入這份紀錄時請重新選取一次,或待練習結束後再開啟)';
-  return String(err);
+  const name = errorName(err);
+  if (name === 'RecordReadRetryError') {
+    const e = err as { attempts?: unknown; cause?: unknown };
+    const cause = recordReadErrorText(e.cause);
+    const raw = cause === RECORD_CHANGED_TEXT ? '' : `;最後一次:${cause}`;
+    return `檔案持續被改動,重新讀取 ${Number(e.attempts) - 1} 次後仍讀不到(請待練習結束後再開啟,或稍後重新選取一次)${raw}`;
+  }
+  if (name === 'NotReadableError') return RECORD_CHANGED_TEXT;
+  if (name === 'NotFoundError') return RECORD_GONE_TEXT;
+  if (!isRecordReadFailure(err)) return String(err);
+  if (name === 'TypeError' && /network error/i.test(String((err as { message?: unknown }).message ?? ''))) return RECORD_CHANGED_TEXT;
+  return `${RECORD_UNREADABLE_TEXT};原始錯誤:${String(err)}`;
 }
 
 /** 位元組 → MB 的顯示文字(10 MB 以下一位小數)。 */

@@ -7,6 +7,8 @@
 // 列印:瀏覽器「列印 → 另存為 PDF」(A4,@media print 只印 .sheet);資料只在本機 IndexedDB 與匯出檔,不連網。
 // 練習紀錄一律分段讀取(lib/record-stream.ts:教官站交接的 Blob、「開啟檔案」選的檔案、重新整理後還原的最近紀錄都走同一條路),
 // 不把整份紀錄讀成一個字串;每筆狀態只留講評累計用到的欄位(lib/debrief.ts DebriefState);最近載入的紀錄在 IndexedDB 存 Blob。
+// 「開啟檔案…」在瀏覽器支援時開 showOpenFilePicker(拿到檔案 handle),檔案也可以直接拖進頁面:核心仍在寫入的紀錄讀取失敗時重新取得檔案、
+// 從頭重讀(lib/record-source.ts;一般檔案輸入給的 File 重讀沒有用,那條路只顯示中文說明)。
 // 使用 light DOM(createRenderRoot 回傳 this),讓 report.css 的列印樣式直接套用整頁。
 
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
@@ -16,6 +18,7 @@ import { downloadText, fileStamp } from '../lib/download.js';
 import { formatSimTime } from '../lib/format.js';
 import { debriefState } from '../lib/debrief.js';
 import { rawEventCount } from '../lib/event-merge.js';
+import { blobRecordSource, dataTransferHasFiles, readRecordSource, RecordFilePicker, recordSourcesFromDataTransfer, type RecordReadResult, type RecordReadRetryOptions, type RecordSource } from '../lib/record-source.js';
 import { megabytesText as megabytes, parseReplayBlob, parseReplayText, recordReadErrorText as readErrorText, RECORD_PROGRESS_MIN_BYTES as PROGRESS_MIN_BYTES, type ReplayStreamResult } from '../lib/record-stream.js';
 import { applyTheme, isTheme } from '../lib/theme.js';
 import {
@@ -84,6 +87,9 @@ export function isReportTab(v: unknown): v is ReportTab {
  * 這些檔案很小,辨識出來後以整份文字匯入(importText);其餘一律當作練習紀錄,由分段解析的結果直接載入。
  */
 const DOCUMENT_FORMATS: ReadonlySet<unknown> = new Set(['simosa-brm-marker-form', 'simosa-brm-marker-forms', 'simosa-brm-markers', COURSE_SESSION_FORMAT, ROSTER_FORMAT, ADMIN_RECORDS_FORMAT]);
+
+/** 「開啟檔案…」的檔案輸入 accept 與檔案對話框的副檔名(同一份) */
+const RECORD_EXTENSIONS = ['.jsonl', '.json', '.txt'] as const;
 
 /** 「最近載入的紀錄」沒有寫進瀏覽器儲存時,接在狀態列訊息後的說明(rememberRecord) */
 export const NOT_REMEMBERED_NOTE = '這份紀錄未能另存於瀏覽器(檔案內容仍在變動,或儲存空間不足),重新整理後請重新開啟檔案';
@@ -203,11 +209,15 @@ export class ReportApp extends LitElement {
     applyTheme(isTheme(theme) ? theme : 'day', false);
     const tab = params.get('tab');
     if (isReportTab(tab)) this.tab = tab;
+    this.addEventListener('dragover', this.onDragOver);
+    this.addEventListener('drop', this.onDrop);
     void this.init(params.get('from') === 'instructor');
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.removeEventListener('dragover', this.onDragOver);
+    this.removeEventListener('drop', this.onDrop);
     if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.adminSaveTimer) clearTimeout(this.adminSaveTimer);
     this.pageStyle?.remove();
@@ -325,16 +335,21 @@ export class ReportApp extends LitElement {
     return true;
   }
 
-  /** 分段讀取並解析一份紀錄(每筆狀態只留講評累計用到的欄位);大檔案在狀態列顯示進度。 */
-  private parseRecordBlob(blob: Blob, name: string, seq: number): Promise<ReplayStreamResult<ReportReplayData['states'][number]>> {
+  /**
+   * 分段讀取並解析一份紀錄(每筆狀態只留講評累計用到的欄位);大檔案在狀態列顯示進度。
+   * attempt:第幾次讀(由 1 起;重讀時進度訊息寫明是重新讀取,進度從 0% 重新算 —— 讀到一半才失敗時,原本的百分比留到重讀的第一段讀到為止,
+   * 不會無聲地跳回 0%)。每次呼叫都是新的解析器。訊息只在讀到一段之後才更新(見 importSource)。
+   */
+  private parseRecordBlob(blob: Blob, name: string, seq: number, attempt = 1): Promise<ReplayStreamResult<ReportReplayData['states'][number]>> {
     let shown = -1;
+    const again = attempt > 1 ? `(檔案在讀取時被改動,第 ${attempt - 1} 次重新讀取)` : '';
     const onProgress =
       blob.size >= PROGRESS_MIN_BYTES
         ? (read: number, total: number) => {
             const pct = Math.floor((read / total) * 100);
             if (pct === shown || seq < this.appliedSeq) return;
             shown = pct;
-            this.say(`讀取 ${name}… ${pct}%(共 ${megabytes(total)} MB)`);
+            this.say(`${attempt > 1 ? '重新讀取' : '讀取'} ${name}… ${pct}%(共 ${megabytes(total)} MB)${again}`);
           }
         : undefined;
     return parseReplayBlob(blob, { project: debriefState, ...(onProgress ? { onProgress } : {}) });
@@ -404,18 +419,38 @@ export class ReportApp extends LitElement {
     this.say(this.message.startsWith(`已載入 ${name}`) ? `${this.message};${NOT_REMEMBERED_NOTE}` : `「${name}」${NOT_REMEMBERED_NOTE}`);
   }
 
-  /** 開啟一個檔案(見 importBlob)。 */
+  /** 開啟一個檔案(見 importSource)。 */
   async openFile(file: File): Promise<void> {
     await this.importBlob(file, file.name);
   }
 
+  /** 讀取並匯入一個 Blob / File(一般的檔案輸入選的檔案、測試;讀取失敗時不重讀,見 importSource)。 */
+  importBlob(blob: Blob, name: string): Promise<void> {
+    return this.importSource(blobRecordSource(blob, name));
+  }
+
   /**
-   * 分段讀取一個檔案並依內容判斷種類:評估表、BRM 標記、班次紀錄、名冊、教官與證書(頂層 format 欄;小檔案)以整份文字匯入;
+   * 分段讀取一個來源並依內容判斷種類:評估表、BRM 標記、班次紀錄、名冊、教官與證書(頂層 format 欄;小檔案)以整份文字匯入;
    * 其餘當作練習紀錄,由分段解析的結果直接載入(不把整份紀錄讀成字串)。判斷與 importText 相同。
+   *
+   * 可以重新取得檔案的來源(檔案對話框的 handle、拖放;lib/record-source.ts)讀取失敗時 —— 核心仍在寫入的紀錄偶爾在開啟的瞬間被改動 ——
+   * 重新取得檔案、從頭重讀(每次都是新的解析器),重讀的進度寫明是重新讀取(parseRecordBlob);另存的是讀成功的那一份。讀取失敗以例外往外丟
+   * (openSources 顯示說明);這段時間使用者已經開了別的紀錄時不再重讀、也不報錯(不蓋掉後來那一份的畫面與訊息)。
+   * 取得檔案之前與各次重讀之間**不更新狀態列**(訊息只在讀到一段之後的進度與最後的結果):瀏覽器在取得檔案的當下記下修改時間、開啟時核對,
+   * 中間插進一次畫面重繪,檔案被改動的機會就變大(重播檢視實測是 4–6 倍;lib/record-source.ts 檔頭)。開啟就失敗的那幾次什麼都還沒有顯示,不必說明。
+   * retry:重讀的次數、等待與時鐘(由呼叫端注入;預設見 record-source.ts)。
    */
-  async importBlob(blob: Blob, name: string): Promise<void> {
+  async importSource(source: RecordSource, retry: RecordReadRetryOptions = {}): Promise<void> {
     const seq = ++this.loadSeq;
-    const res = await this.parseRecordBlob(blob, name, seq);
+    const name = source.name;
+    let read: RecordReadResult<ReplayStreamResult<ReportReplayData['states'][number]>>;
+    try {
+      read = await readRecordSource(source, (blob, attempt) => this.parseRecordBlob(blob, name, seq, attempt), { ...retry, isCurrent: () => seq >= this.appliedSeq });
+    } catch (err) {
+      if (seq < this.appliedSeq) return;
+      throw err;
+    }
+    const { value: res, blob } = read;
     if (res.jsonObject && DOCUMENT_FORMATS.has(res.jsonFormat)) {
       this.importText(await blob.text(), name);
       return;
@@ -429,15 +464,23 @@ export class ReportApp extends LitElement {
     if (ok) await this.rememberRecord(name, blob);
   }
 
-  /** 依序開啟多個檔案;某個檔案讀取或解析失敗時記下錯誤並繼續處理其餘檔案,最後彙總顯示。 */
-  async openFiles(files: readonly File[]): Promise<void> {
+  /** 依序開啟多個檔案(一般的檔案輸入選的 File;見 openSources)。 */
+  openFiles(files: readonly File[]): Promise<void> {
+    return this.openSources(files.map((f) => blobRecordSource(f, f.name)));
+  }
+
+  /**
+   * 依序開啟多個來源;某一個讀取或解析失敗時記下錯誤並繼續處理其餘的,最後彙總顯示。
+   * 讀取失敗的說明是中文(readErrorText:請重新選取一次,或待練習結束後再開啟),認不出來的錯誤才在後面附原始訊息。
+   */
+  async openSources(sources: readonly RecordSource[], retry: RecordReadRetryOptions = {}): Promise<void> {
     const errors: string[] = [];
-    for (const f of files) {
+    for (const src of sources) {
       try {
-        await this.openFile(f);
-        if (this.messageLevel === 'error' && this.message.includes(f.name)) errors.push(this.message);
+        await this.importSource(src, retry);
+        if (this.messageLevel === 'error' && this.message.includes(src.name)) errors.push(this.message);
       } catch (err) {
-        errors.push(`無法載入「${f.name}」:${readErrorText(err)}`);
+        errors.push(`無法載入「${src.name}」:${readErrorText(err)}`);
       }
     }
     this.fileErrors = errors;
@@ -602,6 +645,44 @@ export class ReportApp extends LitElement {
     void this.openFiles(files);
   }
 
+  /** 檔案對話框(showOpenFilePicker;不支援或用不了時退回檔案輸入自己的對話框) */
+  private readonly picker = new RecordFilePicker();
+
+  /**
+   * 按「開啟檔案…」:瀏覽器支援時改開 showOpenFilePicker —— 拿到的是檔案 handle,核心仍在寫入的紀錄讀取失敗時可以重新取得檔案再讀
+   * (一般檔案輸入給的 File 做不到;見 lib/record-source.ts)。不支援時不攔,就是檔案輸入自己的對話框(onFileInput)。
+   */
+  private onOpenClick(e: Event): void {
+    if (!this.picker.available) return;
+    e.preventDefault();
+    void this.pickFiles(e.currentTarget as HTMLInputElement);
+  }
+
+  private async pickFiles(input: HTMLInputElement): Promise<void> {
+    const sources = await this.picker.pick({ multiple: true, description: '練習紀錄與匯出檔', extensions: RECORD_EXTENSIONS });
+    if (sources === null) {
+      // 這個環境的 showOpenFilePicker 用不了(picker.available 之後是 false):改開檔案輸入自己的對話框
+      input.click();
+      return;
+    }
+    if (sources.length > 0) await this.openSources(sources);
+  }
+
+  /** 把檔案拖進頁面 = 「開啟檔案…」(有檔案才接受;文字等其他拖曳不攔)。 */
+  private readonly onDragOver = (e: DragEvent): void => {
+    if (!dataTransferHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+
+  private readonly onDrop = (e: DragEvent): void => {
+    if (!e.dataTransfer || !dataTransferHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    // 來源要在事件處理函式裡同步取出(事件結束後 DataTransfer 就不能取用)
+    const pending = recordSourcesFromDataTransfer(e.dataTransfer);
+    void pending.then((sources) => (sources.length > 0 ? this.openSources(sources) : undefined));
+  };
+
   // ------------------------------------------------------------ 評估表
   formsForRecord(): MarkerForm[] {
     const k = this.key;
@@ -704,7 +785,7 @@ export class ReportApp extends LitElement {
           ${(Object.keys(TAB_LABEL) as ReportTab[]).map((t) => html`<button role="tab" class="tab-${t} ${this.tab === t ? 'active' : ''}" aria-selected=${this.tab === t} @click=${() => (this.tab = t)}>${TAB_LABEL[t]}</button>`)}
         </nav>
         <span class="rp-spacer"></span>
-        <label class="rp-btn file-btn">開啟檔案…<input class="file-input" type="file" multiple accept=".jsonl,.json,.txt,application/json" @change=${this.onFileInput} /></label>
+        <label class="rp-btn file-btn" title="也可以把檔案拖進頁面">開啟檔案…<input class="file-input" type="file" multiple accept=${`${RECORD_EXTENSIONS.join(',')},application/json`} @click=${this.onOpenClick} @change=${this.onFileInput} /></label>
         <button class="rp-btn primary print-btn" @click=${this.printDoc}>列印 / 另存 PDF</button>
         <span class="rp-notice">訓練模擬器,非航行設備</span>
       </header>
