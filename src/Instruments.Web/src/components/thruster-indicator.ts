@@ -39,7 +39,7 @@ export class ThrusterIndicator extends LitElement {
         display: flex;
         justify-content: space-between;
       }
-      /* conning 條單列:「實際」「令」兩組放得下時同一行(各靠一邊);方塊窄於 240 px(「實際 P 100% 令 P 100%」一行放不下)時
+      /* conning 條單列:「實際」「令」兩組放得下時同一行(各靠一邊);方塊 239 px 以下(「實際 P 100% 令 P 100%」一行放不下)時
          固定一組一行、數值靠右,不隨推力的位數(0% / S 45% / P 100%)跳動;數值字級不超過方塊寬度的 14.7%
          (123 px 的方塊約 18 px),「實際 P 100%」一行放得下;再放不下時數值換到標籤的下一行。
          原本兩組硬排在同一行,10 至 13 格時滿推力的讀數比方塊寬 14 至 69 px */
@@ -67,32 +67,30 @@ export class ThrusterIndicator extends LitElement {
           flex-basis: 100%;
         }
       }
-      /* conning 條兩列:方塊窄於 240 px(與單列同一門檻;「實際 P 100% 令 P 100%」一行放不下 —— 數值的字級跟著視窗寬度變大,
-         1900 寬以下的艏側推方塊都窄於 240 px)時「實際」「令」各一行、數值靠右,不隨推力的位數(0% / S 45% / P 100%)在一行與兩行之間跳動;
-         240 px 以上兩組在同一行(各靠一邊)。原本兩組硬排在同一行,放不下時在標籤與數值之間折行(1366 寬以下),
+      /* conning 條兩列:「實際」「令」一律各一行、數值靠右(不看方塊寬度),不隨推力的位數(0% / S 45% / P 100%)在一行與兩行之間跳動。
+         兩列時艏側推方塊最寬約 252 px(1900 px 寬的 10 至 12 格),數值的字級又跟著視窗寬度變大(1819 px 以上是上限 20 px):
+         「實際 S 100% 令 P 100%」排一行在 CI 的字型下要 224 至 226 px 的內容寬度(方塊 242 至 244 px),字距再加大 3 % 就比方塊寬。
+         原本與單列用同一個門檻(方塊 239 px 以下才各一行),視窗 1803 至 1827 px 寬時方塊是 239.1 至 242.4 px,排成一行而比
+         .readouts 寬 2 至 3 px(第三十一輪審查發現)。再更早是兩組硬排在同一行,放不下時在標籤與數值之間折行(1366 寬以下),
          CI 的字型下 7 欄時兩個「S 100%」並排比方塊寬。推力條吃剩下的高度(至少 14 px);各列的行高固定 */
       @container style(--brm-conning-single: 0) {
         .bar {
           min-height: 14px;
         }
         .readouts {
+          flex-direction: column;
           gap: 0 8px;
           line-height: 16px;
           white-space: nowrap;
-        }
-        .tile > .label {
-          line-height: 13px;
-        }
-      }
-      @container style(--brm-conning-single: 0) and (max-width: 239px) {
-        .readouts {
-          flex-direction: column;
         }
         .readouts > span {
           display: flex;
           align-items: baseline;
           justify-content: space-between;
           gap: 0 4px;
+        }
+        .tile > .label {
+          line-height: 13px;
         }
       }
     `,

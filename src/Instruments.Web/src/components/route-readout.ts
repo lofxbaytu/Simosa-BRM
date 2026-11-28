@@ -128,7 +128,10 @@ export class RouteReadout extends LitElement {
          - 偏移的數值、左右、限值在同一行(限值靠右);放不下(偏移五位數以上)時限值換到下一行。數值的行高 = 字級,字級另以方塊高度設上限(20cqb);
          - 位置條上下的間距 3 → 2 px;
          - 下方各列的行高固定 13 px:「下一航點」一列用整個方塊寬度(名稱與距離放不下時換到標籤的下一行);「方位 / 航段」一列;
-           「速限」與「能見度」排在同一列(各佔左右一半;只有其中一項時佔整列)—— 四列變三列 */
+           「速限」與「能見度」排在同一列 —— 四列變三列。這一列是兩組「標籤 + 數值」:「速限」在左、數值緊接在標籤後面(靠左),
+           「能見度」與它的數值靠右,多出來的寬度留在兩組之間(格線的欄是 標籤 / 數值(吃剩下的寬度)/ 標籤 / 數值)。
+           速限的數值若照其他列靠右,會離自己的標籤 200 px 以上、卻貼著「能見度」(畫面上讀成「速限 ……… 10 kn 能見度 5.0 nm」,
+           第三十一輪審查發現);只有其中一項時那一項佔整列,數值照其他列靠右 */
       @container style(--brm-conning-single: 0) {
         .xtd {
           flex-wrap: wrap;
@@ -178,16 +181,21 @@ export class RouteReadout extends LitElement {
         .rows .v.k-brg {
           grid-column: 3 / span 2;
         }
-        .rows .label.k-vis {
-          padding-left: 6px;
+        /* 速限的數值緊接在「速限」後面(間距 6 px);「能見度」離前面的數值至少 18 px(欄距 6 px + 這裡的 12 px) */
+        .rows .v.k-lim {
+          text-align: left;
         }
-        /* 只有「速限」或只有「能見度」時,數值佔到方塊的右緣 */
+        .rows .label.k-vis {
+          padding-left: 12px;
+        }
+        /* 只有「速限」或只有「能見度」時,數值佔到方塊的右緣(靠右,與其他列相同) */
         .rows:not(:has(.k-lim)) .label.k-vis {
           padding-left: 0;
         }
         .rows:not(:has(.k-lim)) .v.k-vis,
         .rows:not(:has(.k-vis)) .v.k-lim {
           grid-column: 2 / -1;
+          text-align: right;
         }
       }
     `,

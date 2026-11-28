@@ -3,7 +3,7 @@
 // (tests/e2e/specs/01-bridge.spec.ts「操船台 1920×1080(conning 條單列)…」「操船台 1366×768、1536×864 與 1093×614(conning 條兩列)…」、
 // 02-instructor.spec.ts 的重播檢視與完整教官站案例)。
 //  - brm-conning-bar:單列是 flex,13 個方塊各有「基本寬度 + 比例」,基本寬度的總和 = 13 格在 1901 px 視窗的可用寬度(1817 px);
-//    單列設 --brm-conning-single: 1,兩列(≤ 1900 px)改回格線並設 0;八種格數組合的每一格都有寬度規則;
+//    單列設 --brm-conning-single: 1,兩列(≤ 1900 px)設 0(同一個 flex 容器折成兩行,見下面「兩列」);八種格數組合的每一格都有寬度規則;
 //  - 13 個方塊元件都帶 conningTileStyles(單列專用的規則以 @container style(--brm-conning-single: 1) 包住);
 //  - 比平常多一位數的數值加 long 類別(ROT ≥ 100 °/min、UKC ≥ 100 m);
 //  - 可以在內部換行的數值裡不拆開的一段以 .nb 包住(模擬時間、航線的距離 / 方位 / 速限 / 能見度、交互作用的 Y / N、橫搖週期 / 角速度),
@@ -21,6 +21,10 @@
 //  - 13 個方塊都帶兩列的樣式查詢(@container style(--brm-conning-single: 0));兩列的規則沒有新增會讓內容看不到的宣告;
 //  - 各方塊兩列專用的規則(行高固定、大字的字級以方塊高度設上限、圖形可以縮短、排法只看方塊寬度)都包在兩列的樣式查詢裡;
 //  - 樣板的文字內容不變(航線方塊的標籤與數值多了 k-brg / k-lim / k-vis 類別,文字相同)。
+// 兩列審查後補(檔尾「兩列:審查後的修正」):
+//  - 併排的兩組「標籤 + 數值」裡,數值緊接在自己的標籤後面:航線的「速限」(與「能見度」同一列)、UKC 兩欄時的各列;
+//  - UKC 的大字在標題列與下方各列之間上下置中(警報的紅底不貼著數字的上緣);
+//  - 艏側推的「實際」「令」在兩列一律各一行(不看方塊寬度);風方塊在兩列時 190 px 以下玫瑰圖在數值上方(單列仍是 185 px)。
 // @vitest-environment happy-dom
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { CSSResult, CSSResultGroup } from 'lit';
@@ -538,7 +542,7 @@ describe('兩列(視窗 ≤ 1900 px)的排法', () => {
     expect(twoRowBody('brm-thruster', '.bar')).toMatch(/min-height:\s*14px/);
   });
 
-  it('文字列的行高固定(不隨字型的行高而變):各方塊的標籤與最後一列', () => {
+  it('文字列的行高寫成固定的 px(每一列的高度可以直接相加;原本是字級的 1.3 倍或 1.0 倍,也不隨字型而變):各方塊的標籤與最後一列', () => {
     expect(twoRowBody('brm-heading', '.sub')).toMatch(/line-height:\s*13px/);
     expect(twoRowBody('brm-speed', '.rows .label')).toMatch(/line-height:\s*13px/);
     expect(twoRowBody('brm-engine', '.bottom')).toMatch(/line-height:\s*16px/);
@@ -563,8 +567,8 @@ describe('兩列(視窗 ≤ 1900 px)的排法', () => {
     expect(twoRowBody('brm-sea', '.interaction .value')).toMatch(/font-size:\s*clamp\(11px, min\(0\.85vw, 7\.5cqi, 12cqb\), 16px\)/);
     expect(twoRowBody('brm-inclinometer', '.readouts .value')).toMatch(/font-size:\s*clamp\(11px, min\(0\.9vw, 9cqi, 13\.5cqb\), 16px\)/);
     expect(twoRowBody('brm-inclinometer', '.readouts .value.main')).toMatch(/font-size:\s*clamp\(12px, min\(1\.1vw, 11cqi, 16cqb\), 20px\)/);
-    // 風方塊沒有兩列專用的規則(原本就放得下;只有共用的標題列規則)
-    expect(rulesOf(cssOf('brm-wind')).filter((r) => inTwoRows(r) && !['.tile-title', '.tile-title .zh', '.nb'].includes(r.selector))).toEqual([]);
+    // 風方塊沒有以方塊高度設字級上限的規則(原本就放得下);兩列專用的只有「玫瑰圖在上」的門檻(檔尾「兩列:審查後的修正」)
+    expect(rulesOf(cssOf('brm-wind')).filter((r) => inTwoRows(r) && /font-size|line-height/.test(r.body) && !['.tile-title', '.tile-title .zh', '.nb'].includes(r.selector))).toEqual([]);
     // 船速方塊省略標籤中文部分的規則仍只有 125 px 的那一條(兩列沒有新增)
     expect(rulesOf(cssOf('brm-speed')).filter((r) => r.selector === '.label .zh').map((r) => r.at.join(' '))).toEqual(['@container (max-width: 125px)']);
   });
@@ -573,9 +577,9 @@ describe('兩列(視窗 ≤ 1900 px)的排法', () => {
     // 主機:窄於 210 px 時車鐘位置獨占一行(主機狀態在下一行、靠右)
     expect(twoRowBody('brm-engine', '.bottom .teleg', 'max-width: 209px')).toMatch(/flex-basis:\s*100%/);
     expect(twoRowBody('brm-engine', '.bottom > :last-child')).toMatch(/margin-left:\s*auto/);
-    // 艏側推:窄於 240 px 時「實際」「令」各一行(與單列同一門檻)
-    expect(twoRowBody('brm-thruster', '.readouts', 'max-width: 239px')).toMatch(/flex-direction:\s*column/);
-    expect(twoRowBody('brm-thruster', '.readouts > span', 'max-width: 239px')).toMatch(/justify-content:\s*space-between/);
+    // 艏側推:「實際」「令」各一行、數值靠右(門檻在檔尾「兩列:審查後的修正」)
+    expect(twoRowBody('brm-thruster', '.readouts')).toMatch(/flex-direction:\s*column/);
+    expect(twoRowBody('brm-thruster', '.readouts > span')).toMatch(/justify-content:\s*space-between/);
     // UKC:215 px 以上下方各列排兩欄
     const rows = twoRowBody('brm-depth', '.rows', 'min-width: 215px');
     expect(rows).toMatch(/display:\s*grid/);
@@ -637,6 +641,78 @@ describe('兩列(視窗 ≤ 1900 px)的排法', () => {
     const visOnly = await mount('brm-route', { visibility: 8 });
     expect(text(visOnly.shadowRoot!.querySelector('.rows'))).toBe('能見度8.0 nm');
     expect([...visOnly.shadowRoot!.querySelectorAll('.rows > *')].map((c) => c.className.replace(/\s+/g, ' ').trim())).toEqual(['label k-vis', 'v k-vis']);
+  });
+
+  describe('兩列:審查後的修正', () => {
+    it('航線:「速限」的數值緊接在標籤後面(靠左),「能見度」離它至少 18 px;只有其中一項時數值照其他列靠右', () => {
+      // 欄:標籤 / 數值(吃剩下的寬度)/ 標籤 / 數值。速限的數值若照其他列靠右,會離自己的標籤 200 px 以上、卻貼著「能見度」
+      expect(twoRowBody('brm-route', '.rows')).toMatch(/grid-template-columns:\s*auto minmax\(0, 1fr\) auto auto/);
+      expect(twoRowBody('brm-route', '.rows .v.k-lim')).toMatch(/text-align:\s*left/);
+      expect(twoRowBody('brm-route', '.rows .label.k-vis')).toMatch(/padding-left:\s*12px/);
+      const only = twoRowBody('brm-route', '.rows:not(:has(.k-vis)) .v.k-lim');
+      expect(only).toMatch(/grid-column:\s*2 \/ -1/);
+      expect(only).toMatch(/text-align:\s*right/);
+      expect(twoRowBody('brm-route', '.rows:not(:has(.k-lim)) .label.k-vis')).toMatch(/padding-left:\s*0/);
+      // 其他列的數值仍靠右(共用的規則沒有動);單列沒有這些規則
+      expect(rulesOf(cssOf('brm-route')).find((r) => r.selector === '.rows .v' && r.at.length === 0)!.body).toMatch(/text-align:\s*right/);
+      expect(singleRowBody('brm-route', '.rows .v.k-lim')).toBe('');
+    });
+
+    it('UKC 兩欄(215 px 以上):每一格的數值緊接在自己的標籤後面,兩欄之間至少 14 px;單欄與單列的各列仍是標籤靠左、數值靠右', () => {
+      const cond = 'min-width: 215px';
+      expect(twoRowBody('brm-depth', '.rows .row', cond)).toMatch(/justify-content:\s*flex-start/);
+      expect(twoRowBody('brm-depth', '.rows', cond)).toMatch(/column-gap:\s*14px/);
+      // 只有兩欄時才改:沒有尺寸條件的兩列規則與單列的規則都不動各列的對齊(共用的 .row 是 space-between)
+      expect(twoRowBody('brm-depth', '.rows .row')).toBe('');
+      expect(singleRowBody('brm-depth', '.rows .row')).toBe('');
+      expect(rulesOf(cssOf('brm-depth')).find((r) => r.selector === '.row' && r.at.length === 0)!.body).toMatch(/justify-content:\s*space-between/);
+    });
+
+    it('UKC 的大字在標題列與下方各列之間上下置中(一列的格線;與「擱淺」仍對齊基線):警報的紅底不貼著數字的上緣', () => {
+      const main = twoRowBody('brm-depth', '.main');
+      expect(main).toMatch(/display:\s*grid/);
+      expect(main).toMatch(/grid-auto-flow:\s*column/);
+      expect(main).toMatch(/align-content:\s*safe center/);
+      expect(main).toMatch(/flex:\s*1 1 auto/);
+      // 水平置中與基線對齊沿用共用的規則;單列仍是 flex(放不下時換行)
+      const base = rulesOf(cssOf('brm-depth')).find((r) => r.selector === '.main' && r.at.length === 0)!.body;
+      expect(base).toMatch(/justify-content:\s*center/);
+      expect(base).toMatch(/align-items:\s*baseline/);
+      expect(singleRowBody('brm-depth', '.main')).not.toMatch(/display:\s*grid/);
+      // 警報的紅底沒有另外加上下內距(高度預算不變)
+      expect(rulesOf(cssOf('brm-depth')).filter((r) => inTwoRows(r) && r.selector.includes('.main.alarm'))).toEqual([]);
+    });
+
+    it('艏側推:兩列時「實際」「令」一律各一行(沒有方塊寬度的條件);單列仍是 239 px 以下才各一行', () => {
+      const two = rulesOf(cssOf('brm-thruster')).filter(inTwoRows);
+      // 兩列的規則都不帶尺寸條件:1803 至 1827 px 寬的視窗方塊是 239.1 至 242.4 px,原本的門檻(239 px)讓它排成一行而比方塊寬
+      for (const r of two) expect(r.at.every((a) => !a.includes(' and ')), `${r.at.join(' ')} ${r.selector}`).toBe(true);
+      expect(twoRowBody('brm-thruster', '.readouts')).toMatch(/flex-direction:\s*column/);
+      const span = twoRowBody('brm-thruster', '.readouts > span');
+      expect(span).toMatch(/display:\s*flex/);
+      expect(span).toMatch(/justify-content:\s*space-between/);
+      const single = rulesOf(cssOf('brm-thruster')).filter((r) => inSingleRow(r) && r.at.some((a) => a.includes('(max-width: 239px)')));
+      expect(single.map((r) => `${r.selector} { ${r.body} }`)).toEqual(['.readouts > span { flex-basis: 100%; }']);
+    });
+
+    it('風:兩列時 190 px 以下玫瑰圖在數值上方(原本的 185 px 門檻不變,單列與不在 conning 條內時仍用它)', () => {
+      const cond = 'max-width: 190px';
+      const body = twoRowBody('brm-wind', '.body', cond);
+      expect(body).toMatch(/flex-direction:\s*column/);
+      expect(body).toMatch(/align-items:\s*stretch/);
+      const rose = twoRowBody('brm-wind', '.rose', cond);
+      expect(rose).toMatch(/width:\s*28px/);
+      expect(rose).toMatch(/height:\s*28px/);
+      expect(rose).toMatch(/align-self:\s*center/);
+      // 風方塊兩列專用的規則只有這兩條(加上共用的標題列規則);字級沒有動
+      expect(rulesOf(cssOf('brm-wind')).filter((r) => inTwoRows(r) && !['.tile-title', '.tile-title .zh', '.nb'].includes(r.selector)).map((r) => `${r.at.join(' ')} ${r.selector}`)).toEqual([
+        `@container style(${TWO}) and (${cond}) .rose`,
+        `@container style(${TWO}) and (${cond}) .body`,
+      ]);
+      // 原本的門檻(不在樣式查詢裡)與單列的字級規則沒有動
+      expect(rulesOf(cssOf('brm-wind')).filter((r) => r.selector === '.body' && r.at.length === 1 && r.at[0] === '@container (max-width: 185px)').length).toBe(1);
+      expect(rulesOf(cssOf('brm-wind')).filter((r) => inSingleRow(r)).map((r) => r.at.join(' '))).toContain(`@container style(${SINGLE}) and (max-width: 185px)`);
+    });
   });
 
   it('八種格數組合的樣板:方塊的順序與文字不因兩列的排法而變(兩列與單列是同一份樣板,只靠樣式分列)', async () => {

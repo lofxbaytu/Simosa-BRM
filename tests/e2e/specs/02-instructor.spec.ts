@@ -18,6 +18,7 @@
 // (瀏覽器沒有全螢幕,conning 條只有 170 / 150 px 高)平常的數值下內容不比方塊高。
 // conning 條兩列(視窗 ≤ 1900 px;第三十一輪):完整教官站 1366×768 / 1536×864(另 1536×730 與 1900×700)合成的平常數值與狀態、
 // 教官站按「凍結」後駕駛台與教官站的時間方塊(真實流程)、重播檢視載入有流場與航線的夾具(E06b),讀數列各方塊不被方塊邊界水平或垂直裁切。
+// 審查後補:方塊寬度剛好在排法門檻上緣的兩種視窗(1550×872 的 13 格:風方塊;1813×1020 的 10 格:艏側推)、UKC 兩欄時數值緊接在自己的標籤後面。
 import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -903,13 +904,45 @@ test('完整教官站 1366×768 與 1536×864(conning 條兩列 11 與 13 格;�
     }
   }
   // 1536×730(1536×864 的筆電、瀏覽器沒有全螢幕)與 1900×700(兩列裡最寬而最矮的:字級照視窗寬度到上限,方塊仍是 107 px 高):
-  // 10 格、船速兩位數;這個高度左欄的「載入」本來就要捲動,只判定 conning 條
+  // 10 格與 13 格、船速兩位數;這個高度左欄的「載入」本來就要捲動,只判定 conning 條
   for (const size of [{ width: 1536, height: 730 }, { width: 1900, height: 700 }]) {
     await page.setViewportSize(size);
     expect(await page.evaluate(overrideConning, { patch: { ...CONNING_NONE, ...CONNING_TWO_ROW_STATUSES }, config: { rudderMax_deg: 35 }, setHeading: 288 })).toBe(10);
     const short = await expectConningTwoRows(page, INSTRUCTOR_LAYOUT, `完整教官站 ${size.width}×${size.height} 10 格、各種狀態`, { cells: 10, scope: 'conning' });
     expect(short.height, `${size.width}×${size.height}:conning 條的高度(px;下限 220)`).toBeLessThanOrEqual(221);
+    // 13 格(航線、浪、橫搖):十三個方塊都在最矮的高度、最大的字級下量一次。傾斜儀原本刻度在上、數值在下,這個高度下比方塊高 7 至 9 px
+    // (逐項突變時只換回傾斜儀,其餘視窗在本機字型下都放得下,只有 107 px 高的方塊看得出來)
+    expect(await page.evaluate(overrideConning, { patch: { ...CONNING_NONE, ...CONNING_TWO_ROW_STATUSES, ...extra13 }, config: { rudderMax_deg: 35 }, setHeading: 288 })).toBe(13);
+    await expectConningTwoRows(page, INSTRUCTOR_LAYOUT, `完整教官站 ${size.width}×${size.height} 13 格(航線、浪、橫搖)、各種狀態`, { cells: 13, scope: 'conning' });
   }
+  // 審查後的修正:方塊寬度剛好在排法門檻上緣的兩種視窗(九種量測視窗都不在這兩段裡,所以原本沒有量到)
+  // 1) 1550×872 的 13 格:風方塊約 187 px。原本 185 px 以下玫瑰圖才移到數值上方,185 至 189 px 時玫瑰圖在左、數值列只剩約 122 px,
+  //    CI 的字型下風速兩位數就由一行折成兩行(9.9 kn 以下是一行:排法隨位數跳動)。兩列時門檻改成 190 px
+  await page.setViewportSize({ width: 1550, height: 872 });
+  expect(await page.evaluate(overrideConning, { patch: { ...CONNING_NONE, ...CONNING_TWO_ROW_STATUSES, ...extra13 }, config: { rudderMax_deg: 35 }, setHeading: 288 })).toBe(13);
+  await expectConningTwoRows(page, INSTRUCTOR_LAYOUT, '完整教官站 1550×872 13 格、各種狀態', { cells: 13 });
+  const wind = await tile('brm-wind').evaluate((host) => {
+    const root = host.shadowRoot!;
+    const rows = [...root.querySelectorAll('.rows .row')].map((row) => row.getBoundingClientRect());
+    return { width: host.getBoundingClientRect().width, roseBottom: root.querySelector('.rose')!.getBoundingClientRect().bottom, rowTops: rows.map((r) => r.top), rowHeights: rows.map((r) => r.height), values: [...root.querySelectorAll('.rows .value')].map((v) => (v.textContent ?? '').replace(/\s+/g, ' ').trim()) };
+  });
+  expect(wind.width, '1550×872 13 格:風方塊的寬度(px;在原本的門檻 185 px 與新的 190 px 之間)').toBeGreaterThan(185);
+  expect(wind.width, '1550×872 13 格:風方塊的寬度(px)').toBeLessThanOrEqual(190);
+  expect(wind.values, '風方塊的數值(風速兩位數)').toEqual(['040° 12.0kn', '327° 22.1kn']);
+  expect(wind.roseBottom, '1550×872 13 格:風方塊的玫瑰圖在數值上方(玫瑰圖的下緣不低於第一列的上緣)').toBeLessThanOrEqual(wind.rowTops[0]! + 1);
+  for (const h of wind.rowHeights) expect(h, '1550×872 13 格:風方塊每一列是一行(px)').toBeLessThan(24);
+  // 2) 1813×1020 的 10 格:艏側推方塊約 240.6 px。原本 239 px 以下「實際」「令」才各一行,239.1 至 242.4 px(視窗 1803 至 1827 px 寬)排成一行,
+  //    CI 的字型下字距加大 3 % 時比 .readouts 寬 2 至 3 px(版面判定 4)。兩列時一律各一行
+  await page.setViewportSize({ width: 1813, height: 1020 });
+  expect(await page.evaluate(overrideConning, { patch: { ...CONNING_NONE, ...CONNING_TWO_ROW_STATUSES }, config: { rudderMax_deg: 35 }, setHeading: 288 })).toBe(10);
+  await expectConningTwoRows(page, INSTRUCTOR_LAYOUT, '完整教官站 1813×1020 10 格、各種狀態', { cells: 10 });
+  const thruster = await tile('brm-thruster').evaluate((host) => {
+    const spans = [...host.shadowRoot!.querySelectorAll('.readouts > span')].map((s) => s.getBoundingClientRect());
+    return { width: host.getBoundingClientRect().width, tops: spans.map((s) => s.top), bottoms: spans.map((s) => s.bottom), texts: [...host.shadowRoot!.querySelectorAll('.readouts .value')].map((v) => (v.textContent ?? '').trim()) };
+  });
+  expect(thruster.width, '1813×1020 10 格:艏側推方塊的寬度(px;在原本的門檻 239 px 之上)').toBeGreaterThan(239);
+  expect(thruster.texts, '艏側推的讀數(兩邊滿推力)').toEqual(['S 100%', 'S 100%']);
+  expect(thruster.tops[1], '1813×1020 10 格:艏側推的「令」在「實際」的下一行').toBeGreaterThanOrEqual(thruster.bottoms[0]! - 1);
   errors.expectNone();
 });
 
@@ -996,6 +1029,29 @@ test('重播檢視載入 E06b 核心紀錄夾具(有流場來源、潮高與航�
       });
       expect(depth.rows.length, `${label}:UKC 方塊下方的列數`).toBe(4);
       for (const row of depth.rows) expect(row.bottom, `${label}:UKC 方塊「${row.text}」的下緣在方塊的內容框裡`).toBeLessThanOrEqual(depth.tileBottom - 5);
+      // 審查後的修正:1366 與 1536 寬時 UKC 方塊是兩欄(249 / 281 px)。每一格的數值緊接在自己的標籤後面,同一行右邊那一格的標籤離左邊的數值
+      // 至少 14 px(原本數值靠欄的右緣:「18.0」離「水深」62 px、離「潮高」14 px,畫面上讀成「水深 ……… 18.0 潮高」)
+      if (width >= 1366) {
+        const cells = await view.locator('brm-depth').evaluate((host) => {
+          const textOf = (el: Element) => {
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const b = range.getBoundingClientRect();
+            return { left: b.left, right: b.right, top: b.top };
+          };
+          return [...host.shadowRoot!.querySelectorAll('.rows .row')].map((row) => ({ name: (row.children[0]!.textContent ?? '').trim(), label: textOf(row.children[0]!), value: textOf(row.children[1]!) }));
+        });
+        for (const cell of cells) {
+          const own = cell.value.left - cell.label.right;
+          expect(own, `${label}:UKC「${cell.name}」的數值到標籤的距離(px)`).toBeGreaterThanOrEqual(0);
+          expect(own, `${label}:UKC「${cell.name}」的數值到標籤的距離(px)`).toBeLessThanOrEqual(8);
+        }
+        // 兩欄:水深 | 潮高、Squat | 吃水 F/A
+        for (const [left, right] of [[cells[0]!, cells[1]!], [cells[2]!, cells[3]!]] as const) {
+          expect(Math.abs(left.label.top - right.label.top), `${label}:UKC「${left.name}」與「${right.name}」在同一行`).toBeLessThan(2);
+          expect(right.label.left - left.value.right, `${label}:UKC「${right.name}」到「${left.name}」的數值的距離(px)`).toBeGreaterThanOrEqual(14);
+        }
+      }
     }
   }
   errors.expectNone();

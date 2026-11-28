@@ -81,6 +81,24 @@ export class WindReadout extends LitElement {
           font-size: clamp(11px, min(0.95vw, 9.5cqi), 18px);
         }
       }
+      /* conning 條兩列:玫瑰圖移到數值上方的門檻由 185 px 提高到 190 px(排法與上面 185 px 以下的相同)。兩列重新分配寬度之後,
+         13 格時風方塊在視窗 1537 至 1565 px 寬是 185.1 至 188.6 px,剛好落在門檻的上緣:玫瑰圖在左、數值列只剩約 122 px,
+         CI 的字型下風速到兩位數(「009° 10.0 kn」)就由一行折成兩行,9.9 kn 以下是一行(排法隨位數跳動;第三十一輪審查發現)。
+         190 px 以上並排時三種量測字型的兩位數風速都是一行。門檻沒有再提高,是為了不動船上與教官筆電常用視窗的排法:
+         13 格的 1600×900 是 192.7 px、12 格的 1536×864 是 194 px,仍是並排(九種量測視窗 × 三個頁面裡因此改成玫瑰圖在上的只有
+         駕駛台 1152×648 的 11 格,方塊 185.5 px)。字距再加大 3 % 時 CI 的字型在 190 至 198 px 仍會折成兩行(不被裁切) */
+      @container style(--brm-conning-single: 0) and (max-width: 190px) {
+        .rose {
+          width: 28px;
+          height: 28px;
+          align-self: center;
+        }
+        .body {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 2px;
+        }
+      }
     `,
   ];
 

@@ -6,7 +6,7 @@
 // 1920×1080(conning 條單列 10 至 13 格):真實核心的狀態與極端數值下讀數列各方塊不被水平裁切,字距加大 3 % 仍通過(第三十一輪);
 // 審查後補:顯示的內容沒有少(浪向玫瑰、船速方塊的中文標籤)、橫搖角警報等級看得到字、UKC 六個字元與沒有空白的長字串不被裁切。
 // 1366×768、1536×864 與 1093×614(conning 條兩列;船上文書筆電與教官筆電實際看到的排法):平常會出現的數值與狀態下
-// 讀數列各方塊不被方塊邊界水平或垂直裁切(第三十一輪)。
+// 讀數列各方塊不被方塊邊界水平或垂直裁切(第三十一輪)。審查後補:航線方塊速限的數值緊接在自己的標籤後面、擱淺時 UKC 的大字在紅底裡上下置中。
 import type { Locator, Page } from '@playwright/test';
 import { bridgeUrl, instructorUrl } from '../support/env.ts';
 import { ensureRunning, ensureScenario, expect, scenarioPath, test } from '../support/fixtures.ts';
@@ -489,10 +489,39 @@ test('操船台 1366×768、1536×864 與 1093×614(conning 條兩列 10 至 13 
           const routeBoxes = await page.locator('brm-route').evaluate((host) => {
             const root = host.shadowRoot!;
             const r = (sel: string) => root.querySelector(sel)!.getBoundingClientRect();
-            return { side: r('.xtd .side'), limit: r('.rows .label.k-lim'), vis: r('.rows .label.k-vis') };
+            // 文字本身的範圍(標籤與數值的格子比文字寬:數值的欄吃剩下的寬度、「能見度」的左邊有內距)
+            const textOf = (sel: string) => {
+              const range = document.createRange();
+              range.selectNodeContents(root.querySelector(sel)!);
+              const b = range.getBoundingClientRect();
+              return { left: b.left, right: b.right };
+            };
+            return { side: r('.xtd .side'), limit: r('.rows .label.k-lim'), vis: r('.rows .label.k-vis'), limitText: textOf('.rows .label.k-lim'), limitValue: textOf('.rows .v.k-lim'), visText: textOf('.rows .label.k-vis') };
           });
           expect(routeBoxes.side.height, `${label}:「L 偏左」的高度(px;一行)`).toBeLessThan(20);
           expect(Math.abs(routeBoxes.limit.top - routeBoxes.vis.top), `${label}:「速限」與「能見度」在同一列`).toBeLessThan(2);
+          // 審查後的修正:速限的數值緊接在「速限」後面,離「能見度」比離自己的標籤遠(原本數值靠右:離自己的標籤 200 px 以上、離「能見度」12 px,
+          // 畫面上讀成「速限 ……… 12.5 kn 能見度 0.2 nm」)
+          const own = routeBoxes.limitValue.left - routeBoxes.limitText.right;
+          const next = routeBoxes.visText.left - routeBoxes.limitValue.right;
+          expect(own, `${label}:速限的數值到「速限」的距離(px)`).toBeGreaterThanOrEqual(0);
+          expect(own, `${label}:速限的數值到「速限」的距離(px)`).toBeLessThanOrEqual(8);
+          expect(next, `${label}:「能見度」到速限的數值的距離(px;至少 18,而且比速限的數值到自己的標籤遠)`).toBeGreaterThanOrEqual(Math.max(17.5, own + 6));
+        }
+        // 審查後的修正:UKC 的大字在標題列與下方各列之間上下置中 —— 擱淺(警報)時紅底(.main)的上緣不貼著數字。原本大字排在 .main 的最上面,
+        // 行高 0.82 的數字幾乎沒有上緣的留白(CI 的字型下比紅底高出 0.5 px),下面卻空著。多出來的高度有 8 px 以上時(10 格兩欄約 30 px)判定
+        const ukc = await page.locator('brm-depth').evaluate((host) => {
+          const root = host.shadowRoot!;
+          const main = root.querySelector('.main')!;
+          const m = main.getBoundingClientRect();
+          const v = root.querySelector('.main .value.big')!.getBoundingClientRect();
+          return { alarm: main.classList.contains('alarm'), above: v.top - m.top, below: m.bottom - v.bottom };
+        });
+        expect(ukc.alarm, `${label}:擱淺時 UKC 是警報的紅底`).toBe(true);
+        if (combo.cells === 10) expect(ukc.above + ukc.below, `${label}:UKC 大字上下多出來的高度(px;10 格時兩欄)`).toBeGreaterThanOrEqual(8);
+        if (ukc.above + ukc.below >= 8) {
+          expect(ukc.above, `${label}:UKC 大字的行框上緣離紅底上緣(px)`).toBeGreaterThanOrEqual(2);
+          expect(Math.abs(ukc.above - ukc.below), `${label}:UKC 大字上下的留白相差(px;「擱淺」的降部讓下面多最多 4 px)`).toBeLessThanOrEqual(4.5);
         }
         // 倒俥、滿舵 70°、緊急全速倒車 -150 並「啟動中 100%」、艏側推 P 100%、航向可疑
         expect(await page.evaluate(overrideConning, { patch: { ...none, ...CONNING_TWO_ROW_ASTERN, ...combo.extra }, config: { rudderMax_deg: 70 }, issues: ['heading'], setHeading: 359 })).toBe(combo.cells);
